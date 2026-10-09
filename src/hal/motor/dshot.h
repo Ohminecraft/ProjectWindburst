@@ -22,6 +22,11 @@
 #include "hal/gpio_ll.h"
 #include "soc/rmt_struct.h"
 #include "soc/gpio_struct.h"
+#include "soc/rmt_periph.h"             // rmt_periph_signals: the GPIO-matrix signal of every RMT channel
+#include "soc/gpio_periph.h"            // GPIO_PIN_MUX_REG
+#include "soc/io_mux_reg.h"             // PIN_INPUT_ENABLE / DISABLE
+#include "esp_rom_gpio.h"
+#include "rom/ets_sys.h"
 // The RMT symbol memory (8 channels x 48 words on the ESP32-S3: transmitters 0..3, receivers 4..7). The address comes from the
 // SDK's linker script; the SDK only declares it in a private header, so it is declared here under our own name.
 extern "C" { extern volatile uint32_t wb_rmt_mem[] __asm__("RMTMEM"); }
@@ -68,6 +73,7 @@ public:
         for (int c = 0; c < kMaxCh; c++) {
             if (rx_[c]) {
                 rmt_ll_rx_enable(&RMT, rx_id_[c], false); rmt_del_channel(rx_[c]); rx_[c] = nullptr;
+                PIN_INPUT_DISABLE(iomux_[c]);
                 gpio_ll_set_output_enable_ctrl(&GPIO, pin_[c], true, false);   // output enable back to the peripheral, as a one-way channel has it
             }
             if (tx_[c]) { rmt_del_channel(tx_[c]); tx_[c] = nullptr; }
@@ -86,8 +92,25 @@ public:
         a.alarm_count = us; a.flags.auto_reload_on_alarm = false;        // one shot: the hardware disarms it when it fires
         gptimer_set_alarm_action(timer_, &a);
     }
-    WB_FAST void drive(int c) { gpio_ll_output_enable(&GPIO, pin_[c]); }
-    WB_FAST void release(int c) { gpio_ll_output_disable(&GPIO, pin_[c]); }
+    // The pin changes hands the way esp-fc does it (EscDriverEsp32: enableTx / enableRx), the bidirectional DShot driver known to
+    // work on the ESP32-S3: every switch routes the pad through the GPIO matrix again. Talking: input path off, the transmitter's
+    // signal connected, output on. Listening: output off, input path on, the receiver's signal connected. (Before 0.8.2 both
+    // signals stayed connected and only the output enable was switched: on the board the ESC then took no frame at all.)
+    // The output enable is the GPIO_ENABLE bit (OEN_SEL = 1), so gpio_ll_output_disable() really lets go of the line.
+    WB_FAST void drive(int c) {
+        if (!bidir_) { gpio_ll_output_enable(&GPIO, pin_[c]); return; }          // one-way: as in 0.6 - 0.8.1, the path known to spin motors
+        PIN_INPUT_DISABLE(iomux_[c]);
+        esp_rom_gpio_connect_out_signal(pin_[c], tx_sig_[c], false, false);
+        gpio_ll_set_output_enable_ctrl(&GPIO, pin_[c], false, false);
+        gpio_ll_output_enable(&GPIO, pin_[c]);
+    }
+    WB_FAST void release(int c) {
+        gpio_ll_output_disable(&GPIO, pin_[c]);
+        PIN_INPUT_ENABLE(iomux_[c]);
+        esp_rom_gpio_connect_in_signal(pin_[c], rx_sig_[c], false);
+    }
+    // start-up check only: also listen while driving (an ESP32 pad reads back the level it drives)
+    void listen(int c) { PIN_INPUT_ENABLE(iomux_[c]); esp_rom_gpio_connect_in_signal(pin_[c], rx_sig_[c], false); }
     WB_FAST void tx_load(int c, const uint32_t* w, int n) {
         volatile uint32_t* m = wb_rmt_mem + tx_id_[c] * SOC_RMT_MEM_WORDS_PER_CHANNEL;
         for (int i = 0; i < n; i++) m[i] = w[i];
@@ -152,6 +175,10 @@ private:
         if (filter_ticks > 255) filter_ticks = 255;
         for (int c = 0; c < count_; c++) {
             const int t = tx_id_[c];
+            // cached in RAM: the flash tables cannot be read from the timer interrupt while the flash is busy
+            iomux_[c] = GPIO_PIN_MUX_REG[pin_[c]];
+            tx_sig_[c] = (uint16_t)rmt_periph_signals.groups[0].channels[t].tx_sig;
+            rx_sig_[c] = bidir_ ? (uint16_t)rmt_periph_signals.groups[0].channels[rx_id_[c] + SOC_RMT_TX_CANDIDATES_PER_GROUP].rx_sig : 0;
             rmt_ll_enable_interrupt(&RMT, RMT_LL_EVENT_TX_MASK(t) | RMT_LL_EVENT_TX_ERROR(t), false);
             rmt_ll_tx_enable_loop(&RMT, t, false);
             rmt_ll_tx_fix_idle_level(&RMT, t, bidir_ ? 1 : 0, true);
@@ -164,10 +191,8 @@ private:
                 rmt_ll_rx_set_idle_thres(&RMT, r, idle_ticks);
                 rmt_ll_rx_set_mem_owner(&RMT, r, RMT_LL_MEM_OWNER_HW);
                 rmt_ll_rx_enable(&RMT, r, false);
-                gpio_ll_input_enable(&GPIO, pin_[c]);
-                gpio_pullup_en((gpio_num_t)pin_[c]);
-                gpio_ll_set_output_enable_ctrl(&GPIO, pin_[c], false, false);   // output enable = the GPIO enable bit, so drive()/release() is one register write
-                gpio_ll_output_enable(&GPIO, pin_[c]);
+                gpio_pullup_en((gpio_num_t)pin_[c]);                        // the line idles high while the ESC has it
+                drive(c);
             }
         }
         if (bidir_) {
@@ -188,6 +213,7 @@ private:
     rmt_channel_handle_t tx_[kMaxCh] = {}, rx_[kMaxCh] = {};
     int tx_id_[kMaxCh] = {}, rx_id_[kMaxCh] = {};
     uint8_t pin_[kMaxCh] = {};
+    uint32_t iomux_[kMaxCh] = {}; uint16_t tx_sig_[kMaxCh] = {}, rx_sig_[kMaxCh] = {};
     gptimer_handle_t timer_ = nullptr;
     AlarmFn fn_ = nullptr; void* arg_ = nullptr;
     int count_ = 0; bool bidir_ = false; uint32_t tick_hz_ = 80000000;
@@ -202,9 +228,12 @@ public:
     ~DshotHw() override { end(); }
     void set_driver(uint8_t d) override { want_ = d == DRV_IDF ? DRV_IDF : DRV_DIRECT; }
     const char* name() const override {
-        if (drv_ == DRV_IDF) return wanted_bidir_ ? "DShot/RMT IDF (one-way only)" : "DShot/RMT IDF";
-        if (note_[0]) { snprintf(name_, sizeof(name_), "%s (%s)", bidir_ ? "DShot/RMT direct, bidirectional" : "DShot/RMT direct", note_); return name_; }
-        return bidir_ ? "DShot/RMT direct, bidirectional" : "DShot/RMT direct";
+        const char* base = proto_ == motor::PROTO_PROSHOT1000 ? (drv_ == DRV_IDF ? "ProShot1000/RMT IDF" : "ProShot1000/RMT direct")
+                         : drv_ == DRV_IDF ? (wanted_bidir_ ? "DShot/RMT IDF (one-way only)" : "DShot/RMT IDF")
+                         : bidir_ ? "DShot/RMT direct, bidirectional" : "DShot/RMT direct";
+        const char* note = note_[0] ? note_ : (proto_ == motor::PROTO_PROSHOT1000 && wanted_bidir_) ? "bidirectional needs DShot" : "";
+        if (!*note) return base;
+        snprintf(name_, sizeof(name_), "%s (%s)", base, note); return name_;
     }
     const char* note() const { return note_; }      // what the start-up check found / why bidirectional DShot is off
     WB_FAST bool bidirectional() const override { return bidir_; }
@@ -235,7 +264,7 @@ public:
 #if WB_DSHOT_DIRECT
         if (drv_ == DRV_DIRECT) {
             note_[0] = 0;
-            bidir_ = bidirectional;
+            bidir_ = bidirectional && motor::is_dshot_wire(proto);
             if (bidir_) {
                 // bidirectional: set up, then prove on the board that every pin carries the frames and is heard by its receiver.
                 // Anything wrong: one-way DShot instead (the motors must still spin and beep), and the boot report says why.
@@ -282,14 +311,14 @@ public:
             Ch& c = ch_[s];
             if (!c.tx) continue;
             motor::Sym sym[16];
-            motor::dshot_symbols(motor::dshot_packet(f.value[s], f.telem_request[s], false), proto_, tick_hz_, false, sym);
+            const int ns = motor::digital_symbols(motor::dshot_packet(f.value[s], f.telem_request[s], false), proto_, tick_hz_, false, sym);
             rmt_symbol_word_t* w = c.buf[c.bi];
-            for (int b = 0; b < 16; b++) { w[b].duration0 = sym[b].dur0; w[b].level0 = sym[b].lvl0; w[b].duration1 = sym[b].dur1; w[b].level1 = sym[b].lvl1; }
+            for (int b = 0; b < ns; b++) { w[b].duration0 = sym[b].dur0; w[b].level0 = sym[b].lvl0; w[b].duration1 = sym[b].dur1; w[b].level1 = sym[b].lvl1; }
             c.bi = (uint8_t)((c.bi + 1) % 3);
             rmt_transmit_config_t tc = {};
             tc.loop_count = 0;
             tc.flags.eot_level = 0;                                        // idle level after the frame
-            if (rmt_transmit(c.tx, c.enc, w, 16 * sizeof(rmt_symbol_word_t), &tc) != ESP_OK) skipped_++;
+            if (rmt_transmit(c.tx, c.enc, w, (size_t)ns * sizeof(rmt_symbol_word_t), &tc) != ESP_OK) skipped_++;
         }
         t_tx_ = micros(); started_ = true; frames_++;
     }

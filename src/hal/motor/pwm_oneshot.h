@@ -8,7 +8,7 @@
 #include "motor_hw.h"
 
 // ============================================================================
-// PWM / Oneshot125 / Oneshot42 / Multishot on the LEDC peripheral (hardware PWM, zero CPU cost, up to 8 motors on ESP32-S3).
+// PWM / Oneshot125 / Oneshot42 / Multishot / Brushed (duty cycle, 16 kHz) on the LEDC peripheral (hardware PWM, zero CPU cost, up to 8 motors on ESP32-S3).
 // The ESC sees a pulse train at pulse_hz whose width is set by write(). Pulse widths: motor::pulse_us().
 // Values come in as the app's 1000..2000 scale (0 = no pulse, used for "not armed"), so arm/disarm/max endpoints are all the manager's job.
 // ============================================================================
@@ -32,8 +32,8 @@ public:
     void write(const motor::Frame& f) override {
         if (!f.send) return;
         for (int i = 0; i < count_; i++) {
-            const float us = motor::pulse_us(proto_, (float)f.value[i]);
-            uint32_t duty = (uint32_t)lroundf(us * 1e-6f * (float)hz_ * (float)(1u << bits_));
+            const float frac = proto_ == motor::PROTO_BRUSHED ? motor::brushed_duty((float)f.value[i]) : motor::pulse_us(proto_, (float)f.value[i]) * 1e-6f * (float)hz_;
+            uint32_t duty = (uint32_t)lroundf(frac * (float)(1u << bits_));
             const uint32_t maxd = (1u << bits_) - 1; if (duty > maxd) duty = maxd;
             ledcWrite(pins_[i], duty);
         }

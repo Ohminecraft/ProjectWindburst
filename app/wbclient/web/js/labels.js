@@ -312,14 +312,14 @@ export const NOT_IMPLEMENTED = {
 };
 
 export const ENUM_LABELS = {
-  layout: { QUAD_X: 'Quad X', QUAD_PLUS: 'Quad +', HEX_X: 'Hexa X' },
+  layout: { QUAD_X: 'Quad X', QUAD_PLUS: 'Quad +', HEX_X: 'Hexa X', HEX_PLUS: 'Hexa + (Betaflight)', HEX_X_BF: 'Hexa X (thứ tự Betaflight)', HEX_H: 'Hexa H', Y6: 'Y6 (đồng trục)', Y4: 'Y4', OCTO_X8: 'Octo X8 (đồng trục)', OCTO_FLAT_PLUS: 'Octo phẳng +', OCTO_FLAT_X: 'Octo phẳng X', VTAIL4: 'V-tail quad', ATAIL4: 'A-tail quad', QUAD_X_1234: 'Quad X (thứ tự 1234)' },
   align: { CW0: '0°', CW90: '90°', CW180: '180°', CW270: '270°', CW0_FLIP: '0° lật úp', CW90_FLIP: '90° lật úp', CW180_FLIP: '180° lật úp', CW270_FLIP: '270° lật úp' },
   rx_protocol: { SPEKTRUM: 'Spektrum 2048 (DSMX, DSM2 11 ms)', SPEKTRUM1024: 'Spektrum 1024 (DSM2 22 ms)', PPM: 'PPM (một chân)', PWM: 'PWM (mỗi kênh một chân)' },
   dshot_driver: { DIRECT: 'Trực tiếp (có hai chiều)', IDF: 'ESP-IDF (chỉ một chiều)' },
   bidir_state: { OFF: 'tắt', ACTIVE: 'đang chạy', UNAVAILABLE: 'đã bật nhưng không chạy (driver IDF chỉ một chiều, hoặc kiểm tra lúc khởi động không đạt: xem dòng motors ở tab Tổng quan); motor chạy DShot một chiều' },
   failsafe: { NONE: 'không', GUARD: 'đang chờ', DESCENT: 'đang tự hạ cánh', LANDED: 'đã hạ cánh, motor tắt' },
   fs_cause: { LINK: 'mất sóng', SWITCH: 'công tắc Failsafe', BATTERY: 'pin dưới mức tối thiểu' },
-  esc_protocol: { PWM: 'PWM', ONESHOT125: 'Oneshot125', ONESHOT42: 'Oneshot42', MULTISHOT: 'Multishot', DSHOT150: 'DShot150', DSHOT300: 'DShot300', DSHOT600: 'DShot600', DSHOT1200: 'DShot1200' },
+  esc_protocol: { PWM: 'PWM', ONESHOT125: 'Oneshot125', ONESHOT42: 'Oneshot42', MULTISHOT: 'Multishot', DSHOT150: 'DShot150', DSHOT300: 'DShot300', DSHOT600: 'DShot600', DSHOT1200: 'DShot1200', PROSHOT1000: 'ProShot1000', BRUSHED: 'Brushed (motor chổi than, MOSFET)' },
   airmode: { OFF: 'Tắt (cần ga ở min = motor idle)', AUTO: 'Khi đang bay (tự tắt lúc đứng trên mặt đất)', ALWAYS: 'Luôn bật tới khi disarm (Betaflight)' },
   slider_mode: { OFF: 'Tắt (nhập tay mọi trục)', RP: 'Roll và pitch', RPY: 'Roll, pitch và yaw' },
   lpf_type: { PT1: 'PT1', BIQUAD: 'Biquad', PT2: 'PT2', PT3: 'PT3' },

@@ -18,7 +18,7 @@
 #endif
 #define WB_FW_MAJOR 0
 #define WB_FW_MINOR 8
-#define WB_FW_PATCH 1
+#define WB_FW_PATCH 2
 
 #if defined(_WINDBURST_TX)
 

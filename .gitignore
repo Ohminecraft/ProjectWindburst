@@ -7,3 +7,4 @@
 .vscode/ipch
 compile_commands.json
 external_source
+app/wbclient/__pycache__

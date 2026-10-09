@@ -53,7 +53,7 @@ def both(tmp_path_factory):
 
 def test_motor_layouts_match_the_mixer(both):
     ref, js = both
-    assert set(js["layouts"]) == {"QUAD_X", "QUAD_PLUS", "HEX_X"}
+    assert set(js["layouts"]) == {"QUAD_X", "QUAD_PLUS", "HEX_X", "HEX_PLUS", "HEX_X_BF", "HEX_H", "Y6", "Y4", "OCTO_X8", "OCTO_FLAT_PLUS", "OCTO_FLAT_X", "VTAIL4", "ATAIL4", "QUAD_X_1234"}
     for name, rows in ref["layouts"].items():
         for i, (a, b) in enumerate(zip(rows, js["layouts"][name])):
             assert a == pytest.approx(b, abs=1e-5), "%s motor %d: firmware %s, page %s" % (name, i + 1, a, b)

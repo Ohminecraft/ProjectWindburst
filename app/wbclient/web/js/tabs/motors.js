@@ -23,23 +23,31 @@ function diagram() {
     const svg = s('svg', { viewBox: '-140 -152 280 292', role: 'img', 'aria-label': tr('Khung {layout} nhìn từ trên xuống, {n} motor', { layout: m.layout, n }) });
     svg.append(s('path', { d: 'M0 -150 l-12 20 h24 z', class: 'nose' }), s('text', { x: 0, y: -116, class: 'nose-t', 'text-anchor': 'middle' }, tr('mũi')));
     fills = [];
+    // where motor i is drawn: its arm (r: fraction of a full arm); the lower motor of a coaxial pair sits a little inwards and
+    // off to the side, so that both discs stay visible
+    const pos = (i) => {
+      const ang = L.angles[i], under = L.under && L.under[i], rr = (L.r ? L.r[i] : 1) * (under ? 0.72 : 1), a = ((ang + (under ? 14 : 0)) * Math.PI) / 180;
+      return [Math.sin(a) * 92 * rr, -Math.cos(a) * 92 * rr];
+    };
+    const big = n > 6, disc = big ? 26 : 36;
     L.angles.forEach((ang, i) => {
-      const a = (ang * Math.PI) / 180, x = Math.sin(a) * 92, y = -Math.cos(a) * 92;
+      if (L.under && L.under[i]) return;
+      const [x, y] = pos(i);
       svg.append(s('line', { x1: 0, y1: 0, x2: x, y2: y, class: 'arm' }));
     });
     svg.append(s('rect', { x: -20, y: -30, width: 40, height: 60, rx: 6, class: 'hub' }));
     L.angles.forEach((ang, i) => {
-      const a = (ang * Math.PI) / 180, x = Math.sin(a) * 92, y = -Math.cos(a) * 92;
+      const [x, y] = pos(i), under = !!(L.under && L.under[i]), k = disc / 36;
       const ccw = (L.spin[i] > 0) !== !!m.props_out;          // +1 = counter-clockwise prop; props-out flips every motor
-      const g = s('g', { transform: `translate(${x} ${y})`, 'data-motor': i, 'data-spin': ccw ? 'ccw' : 'cw' });
-      const C = 2 * Math.PI * 36;
-      const fill = s('circle', { r: 36, class: 'cmd', 'stroke-dasharray': `0 ${C}`, transform: 'rotate(-90)' });
+      const g = s('g', { transform: `translate(${x} ${y})`, 'data-motor': i, 'data-spin': ccw ? 'ccw' : 'cw', 'data-under': under ? '1' : '0' });
+      const C = 2 * Math.PI * disc;
+      const fill = s('circle', { r: disc, class: 'cmd', 'stroke-dasharray': `0 ${C}`, transform: 'rotate(-90)' });
       fills.push({ fill, C });
       // arrow along the top of the disc: pointing right = clockwise, pointing left = counter-clockwise
-      const arc = ccw ? 'M 26 -15 A 30 30 0 0 0 -26 -15' : 'M -26 -15 A 30 30 0 0 1 26 -15';
-      const tip = ccw ? 'M -26 -15 l 11 -4 l -2 11 z' : 'M 26 -15 l -11 -4 l 2 11 z';
-      g.append(s('circle', { r: 36, class: 'disc' }), fill, s('path', { d: arc, class: 'spin' }), s('path', { d: tip, class: 'spin-tip' }),
-        s('text', { y: 12, 'text-anchor': 'middle', class: 'mnum' }, String(i + 1)));
+      const arc = ccw ? `M ${26 * k} ${-15 * k} A ${30 * k} ${30 * k} 0 0 0 ${-26 * k} ${-15 * k}` : `M ${-26 * k} ${-15 * k} A ${30 * k} ${30 * k} 0 0 1 ${26 * k} ${-15 * k}`;
+      const tip = ccw ? `M ${-26 * k} ${-15 * k} l ${11 * k} ${-4 * k} l ${-2 * k} ${11 * k} z` : `M ${26 * k} ${-15 * k} l ${-11 * k} ${-4 * k} l ${2 * k} ${11 * k} z`;
+      g.append(s('circle', { r: disc, class: under ? 'disc under' : 'disc' }), fill, s('path', { d: arc, class: 'spin' }), s('path', { d: tip, class: 'spin-tip' }),
+        s('text', { y: 12 * k, 'text-anchor': 'middle', class: 'mnum' }, String(i + 1) + (under ? '↓' : '')));
       svg.append(g);
     });
     box.replaceChildren(svg, h('p', { class: 'help' }, tr('Mũi tên là chiều mỗi cánh PHẢI quay (nhìn từ trên xuống). Vòng tô đậm là lệnh đang gửi tới ESC.')));
@@ -205,7 +213,13 @@ export default {
   mount(view) {
     const pulse = h('div', { id: 'pulse-fields' }, fields('motors', ['pulse_disarmed', 'pulse_armed', 'pulse_max', 'pulse_hz']));
     const dshot = h('div', { id: 'dshot-fields' }, fields('motors', ['dshot_driver', 'bidirectional', 'pole_count', 'edt', 'dir_cmd_extended', 'dyn_idle_min_rpm', 'dyn_idle_p', 'dyn_idle_i', 'dyn_idle_d', 'dyn_idle_max_inc']));
-    const which = () => { const d = String(store.settings.motors.protocol).startsWith('DSHOT'); pulse.hidden = d; dshot.hidden = !d; };
+    const tooMany = h('p', { class: 'note bad', id: 'dshot-count' });
+    const which = () => {
+      const m = store.settings.motors, d = /^(DSHOT|PROSHOT)/.test(String(m.protocol));
+      pulse.hidden = d; dshot.hidden = !d;
+      const n = motorCount(m.layout); tooMany.hidden = !(d && n > 4);
+      tooMany.textContent = tr('Khung này có {n} motor: DShot / ProShot trên ESP32-S3 chỉ chạy được 4 (4 bộ phát RMT). Chọn PWM, Oneshot hoặc Multishot.', { n });
+    };
     listen('settings:motors', which); which();
     view.append(h('div', { class: 'cols' },
       h('div', {},
@@ -213,7 +227,7 @@ export default {
         motorTest(),
         vibration()),
       h('div', {},
-        block('ESC', fields('motors', ['protocol', 'idle_x10', 'output_limit']), pulse, dshot,
+        block('ESC', fields('motors', ['protocol', 'idle_x10', 'output_limit']), tooMany, pulse, dshot,
           note(tr('Kiểu khung, giao thức ESC và thứ tự motor có hiệu lực sau khi lưu và khởi động lại. DShot qua RMT của ESP32-S3 chạy được tối đa 4 motor.'))),
         perMotor(),
         servos())));

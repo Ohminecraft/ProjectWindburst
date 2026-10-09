@@ -244,7 +244,37 @@ static void t_telemetry() {
     floor_ = d.idle_fraction(ms + 1000, true); CHECK(floor_ == 0.03f, "rpm timeout => static idle (%f)", floor_);
 }
 
+// ProShot1000 and brushed: numbers worked out by hand from Betaflight's pwm_output_dshot_shared.c (loadDmaBufferProshot: 24 MHz
+// timer, 96 ticks = 4 us a nibble, high for 24 + 3 x nibble ticks) and its brushed duty (1000..2000 = 0..100 %).
+static void t_proshot_brushed() {
+    printf("[proshot / brushed] nibble pulses, duty, which protocol can do what\n");
+    const uint16_t pk = dshot_packet(1047, false, false);
+    Sym s[16]; const int n = digital_symbols(pk, PROTO_PROSHOT1000, 80000000, false, s);
+    bool ok = n == 4;
+    for (int i = 0; i < 4 && ok; i++) {
+        const unsigned nib = (pk >> (12 - 4 * i)) & 0xF;
+        ok = s[i].lvl0 == 1 && s[i].lvl1 == 0 && s[i].dur0 + s[i].dur1 == 320 && s[i].dur0 == 80 + nib * 10;      // 80 MHz: 1 us = 80, 125 ns = 10, 4 us = 320
+    }
+    CHECK(ok, "ProShot: 4 pulses, most significant nibble first, high 1 us + nibble x 125 ns in 4 us slots (packet 0x%04x)", pk);
+    { Sym z[16]; digital_symbols(dshot_packet(0, false, false), PROTO_PROSHOT1000, 40000000, false, z);
+      CHECK(z[3].dur0 + z[3].dur1 == 160, "40 MHz ticks: slot 160"); }
+    // decode the pulses back the way an ESC measures them: the packet and its checksum survive
+    { uint16_t back = 0; for (int i = 0; i < 4; i++) back = (uint16_t)((back << 4) | (uint16_t)lroundf((s[i].dur0 / 80.0f - 1.0f) / 0.125f));
+      CHECK(back == pk && dshot_packet_valid(back, false), "read back: 0x%04x", back); }
+    CHECK(is_dshot(PROTO_PROSHOT1000) && !is_dshot_wire(PROTO_PROSHOT1000) && is_dshot_wire(PROTO_DSHOT600) && !is_dshot(PROTO_BRUSHED) && !is_dshot(PROTO_MULTISHOT),
+          "ProShot carries DShot packets (commands, beacons) but has no bidirectional variant; brushed is neither");
+    CHECK(brushed_duty(0) == 0 && brushed_duty(1000) == 0 && fabsf(brushed_duty(1500) - 0.5f) < 1e-6f && brushed_duty(2000) == 1 && brushed_duty(2500) == 1, "brushed: 1000..2000 = 0..100 %% duty");
+    CHECK(default_pulse_hz(PROTO_BRUSHED) == 16000 && pulse_period_min_us(PROTO_BRUSHED) == 0, "brushed at 16 kHz (Betaflight's default for brushed motors)");
+    PulseEndpoints pe; Endpoints e = endpoints(PROTO_BRUSHED, pe, 0.05f, 1.0f);
+    CHECK(e.disarm == 0 && fabsf(e.low - 1050) < 0.01f && e.high == 2000, "brushed endpoints: off, idle 5 %% duty, full");
+    e = endpoints(PROTO_PROSHOT1000, pe, 0.055f, 1.0f);
+    CHECK(fabsf(e.low - (48 + 0.055f * 1999)) < 0.01f && e.high == 2047, "ProShot uses the DShot values");
+    MotorOutputManager m; m.cfg.protocol = PROTO_PROSHOT1000; m.cfg.count = 4; m.begin();
+    CHECK(m.beacon(0, 3), "ProShot: a beacon can be queued (it is a DShot command)");
+    m.cfg.protocol = PROTO_BRUSHED; CHECK(!m.beacon(0, 3), "brushed: no beacon");
+}
+
 int main() {
-    t_frame(); t_gcr(); t_pulse(); t_manager(); t_commands(); t_telemetry();
+    t_frame(); t_gcr(); t_pulse(); t_manager(); t_commands(); t_telemetry(); t_proshot_brushed();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

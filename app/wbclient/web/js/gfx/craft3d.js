@@ -71,8 +71,8 @@ export function craftView(get, height = 300) {
 
     const L = LAYOUTS[a.layout] || LAYOUTS.QUAD_X;
     // shadow of each prop on the ground: shows the tilt at a glance
-    for (const ang of L.angles) {
-      const c = mul(R, [Math.cos(ang * RAD), Math.sin(ang * RAD), 0]);
+    for (const [i, ang] of L.angles.entries()) {
+      const rr = L.r ? L.r[i] : 1, c = mul(R, [rr * Math.cos(ang * RAD), rr * Math.sin(ang * RAD), 0]);
       const s = ring(c[0], c[1], G, 0.40, 14).map(proj);
       ctx.fillStyle = cInk; ctx.globalAlpha = 0.08;
       ctx.beginPath(); s.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]))); ctx.closePath(); ctx.fill();
@@ -80,8 +80,8 @@ export function craftView(get, height = 300) {
     ctx.globalAlpha = 1;
 
     // arms
-    L.angles.forEach((ang) => {
-      const c = Math.cos(ang * RAD), s = Math.sin(ang * RAD), wd = 0.07;
+    L.angles.forEach((ang, i) => {
+      const rr = L.r ? L.r[i] : 1, c = rr * Math.cos(ang * RAD), s = rr * Math.sin(ang * RAD), wd = 0.07;
       add([[-s * wd, c * wd, -0.03], [c - s * wd, s + c * wd, -0.03], [c + s * wd, s - c * wd, -0.03], [s * wd, -c * wd, -0.03]], cFrame);
       add([[-s * wd, c * wd, 0.03], [c - s * wd, s + c * wd, 0.03], [c + s * wd, s - c * wd, 0.03], [s * wd, -c * wd, 0.03]], cFrame);
     });
@@ -94,10 +94,10 @@ export function craftView(get, height = 300) {
     // nose arrow on top of the body
     add([[0.34, 0, zt - 0.012], [0.02, -0.14, zt - 0.012], [0.02, 0.14, zt - 0.012]], cFront, { flat: true, bias: R[2][2] > 0 ? -0.6 : 0.6 });   // on top unless the craft is upside down
     // motors and prop discs: the front ones carry the accent colour
-    L.angles.forEach((ang) => {
-      const x = Math.cos(ang * RAD), y = Math.sin(ang * RAD), front = x > 0.01;
-      add(ring(x, y, -0.10, 0.13, 12), cFrame, { bias: -0.03 });
-      add(ring(x, y, -0.13, 0.40, 20), front ? cFront : cRear, { flat: true, alpha: 0.42, bias: -0.04, stroke: front ? cFront : cRear });
+    L.angles.forEach((ang, i) => {
+      const rr = L.r ? L.r[i] : 1, under = L.under && L.under[i], x = rr * Math.cos(ang * RAD), y = rr * Math.sin(ang * RAD), front = x > 0.01;
+      add(ring(x, y, under ? 0.10 : -0.10, 0.13, 12), cFrame, { bias: -0.03 });                 // (the lower motor of a coaxial pair: under the arm)
+      add(ring(x, y, under ? 0.13 : -0.13, 0.40, 20), front ? cFront : cRear, { flat: true, alpha: 0.42, bias: -0.04, stroke: front ? cFront : cRear });
     });
 
     polys.sort((p, q) => q.depth - p.depth);

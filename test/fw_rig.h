@@ -45,9 +45,9 @@ struct Firmware {
     // logmem: the flash region of the blackbox (nullptr = a board whose partition table has none)
     // sdcard: the SD card socket (nullptr = a board without one)
     Firmware(VirtualBoard& b, wbp::Storage& st, wbp::Transport& tx, bb::BlockStore* logmem, bb::FileStore* sdcard = nullptr, uint32_t card_buffer_bytes = 512 * 1024)
-        : store(st), host(app.link, &Firmware::wait, this, &Firmware::now), server(settings, &store, host, tx, wbp::ROLE_RX, 0, 8, 1, "Windburst RX (sim)",
+        : store(st), host(app.link, &Firmware::wait, this, &Firmware::now), server(settings, &store, host, tx, wbp::ROLE_RX, 0, 8, 2, "Windburst RX (sim)",
                                                                                  wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER),
-          blackbox(app.blackbox, tx), bb_header{&settings, "Windburst RX (sim)", 0, 8, 1}, board(b) {
+          blackbox(app.blackbox, tx), bb_header{&settings, "Windburst RX (sim)", 0, 8, 2}, board(b) {
         load = store.load(settings);
         app.usb_link = g_rig_usb_link;
         app.uart0 = g_rig_usb_link ? &Serial0 : nullptr;       // as main.cpp: with the app on USB, UART0 is free for a sensor

@@ -5,16 +5,45 @@
 // Frame geometry: motor angle in degrees clockwise from the nose (seen from above), and prop direction (+1 = counter-clockwise).
 // Source: src/core/mixer.h, mixer_row().
 // Quads follow Betaflight's default build ("props in"): X = 1 rear-right CW, 2 front-right CCW, 3 rear-left CCW, 4 front-left CW.
+// The frames after HEX_X (0.8.2) are Betaflight's tables (rows: roll, pitch, yaw per motor, src/core/mixer.h layout_table());
+// angles / r (arm fraction) / under (lower motor of a coaxial pair) only place them in the drawing.
+const D = 0.7071068;
 export const LAYOUTS = {
   QUAD_X: { angles: [135, 45, 225, 315], spin: [-1, 1, 1, -1] },
   QUAD_PLUS: { angles: [180, 90, 270, 0], spin: [-1, 1, 1, -1] },
   HEX_X: { angles: [30, 90, 150, 210, 270, 330], spin: [1, -1, 1, -1, 1, -1] },
+  HEX_PLUS: { angles: [120, 60, 240, 300, 0, 180], spin: [1, -1, 1, -1, 1, -1],
+    rows: [[-0.866025, 0.5, 1], [-0.866025, -0.5, -1], [0.866025, 0.5, 1], [0.866025, -0.5, -1], [0, -1, 1], [0, 1, -1]] },
+  HEX_X_BF: { angles: [150, 30, 210, 330, 90, 270], spin: [1, 1, -1, -1, -1, 1],
+    rows: [[-0.5, 0.866025, 1], [-0.5, -0.866025, 1], [0.5, 0.866025, -1], [0.5, -0.866025, -1], [-1, 0, -1], [1, 0, 1]] },
+  HEX_H: { angles: [135, 45, 225, 315, 90, 270], r: [1, 1, 1, 1, D, D], spin: [-1, 1, 1, -1, 1, -1],
+    rows: [[-1, 1, -1], [-1, -1, 1], [1, 1, 1], [1, -1, -1], [0, 0, 0], [0, 0, 0]] },
+  Y6: { angles: [180, 60, 300, 180, 60, 300], under: [0, 0, 0, 1, 1, 1], spin: [1, -1, -1, -1, 1, 1],
+    rows: [[0, 1.333333, 1], [-1, -0.666667, -1], [1, -0.666667, -1], [0, 1.333333, -1], [-1, -0.666667, 1], [1, -0.666667, 1]] },
+  Y4: { angles: [180, 45, 180, 315], r: [D, 1, D, 1], under: [0, 0, 1, 0], spin: [-1, 1, 1, -1],
+    rows: [[0, 1, -1], [-1, -1, 0], [0, 1, 1], [1, -1, 0]] },
+  OCTO_X8: { angles: [135, 45, 225, 315, 135, 45, 225, 315], under: [0, 0, 0, 0, 1, 1, 1, 1], spin: [-1, 1, 1, -1, 1, -1, -1, 1],
+    rows: [[-1, 1, -1], [-1, -1, 1], [1, 1, 1], [1, -1, -1], [-1, 1, 1], [-1, -1, -1], [1, 1, -1], [1, -1, 1]] },
+  OCTO_FLAT_PLUS: { angles: [315, 45, 135, 225, 0, 90, 180, 270], spin: [1, 1, 1, 1, -1, -1, -1, -1],
+    rows: [[0.707107, -0.707107, 1], [-0.707107, -0.707107, 1], [-0.707107, 0.707107, 1], [0.707107, 0.707107, 1], [0, -1, -1], [-1, 0, -1], [0, 1, -1], [1, 0, -1]] },
+  OCTO_FLAT_X: { angles: [292.5, 22.5, 112.5, 202.5, 337.5, 67.5, 157.5, 247.5], spin: [1, 1, 1, 1, -1, -1, -1, -1],
+    rows: [[1, -0.414178, 1], [-0.414178, -1, 1], [-1, 0.414178, 1], [0.414178, 1, 1], [0.414178, -1, -1], [-1, -0.414178, -1], [-0.414178, 1, -1], [1, 0.414178, -1]] },
+  VTAIL4: { angles: [150, 45, 210, 315], r: [0.9, 1, 0.9, 1], spin: [1, -1, -1, 1],
+    rows: [[-0.58, 0.58, 1], [-0.46, -0.39, -0.5], [0.58, 0.58, -1], [0.46, -0.39, 0.5]] },
+  ATAIL4: { angles: [160, 45, 200, 315], r: [0.9, 1, 0.9, 1], spin: [1, 1, -1, -1],
+    rows: [[0, 1, 1], [-1, -1, 0], [0, 1, -1], [1, -1, 0]] },
+  QUAD_X_1234: { angles: [315, 45, 135, 225], spin: [-1, 1, -1, 1], rows: [[1, -1, -1], [-1, -1, 1], [-1, 1, -1], [1, 1, 1]] },
 };
-export const motorCount = (layout) => LAYOUTS[layout].angles.length;
+export const motorCount = (layout) => (LAYOUTS[layout] || LAYOUTS.QUAD_X).angles.length;
 
 // Mixer row of motor m: how much it answers to +roll (right wing down), +pitch (nose down), +yaw (nose right).
 export function mixerRow(layout, m, propsOut = false) {
   const L = LAYOUTS[layout], rad = Math.PI / 180;
+  if (L.rows) {                                            // Betaflight's table, each axis scaled so that its largest |value| is 1
+    const mx = [0, 1, 2].map((k) => Math.max(...L.rows.map((r) => Math.abs(r[k]))));
+    const v = L.rows[m].map((x, k) => (mx[k] > 0 ? x / mx[k] : 0));
+    return { roll: v[0], pitch: v[1], yaw: v[2] * (propsOut ? -1 : 1) };
+  }
   let rmax = 0, pmax = 0;
   for (const a of L.angles) { rmax = Math.max(rmax, Math.abs(Math.sin(a * rad))); pmax = Math.max(pmax, Math.abs(Math.cos(a * rad))); }
   let roll = -Math.sin(L.angles[m] * rad) / rmax, pitch = -Math.cos(L.angles[m] * rad) / pmax;

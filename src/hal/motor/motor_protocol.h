@@ -19,8 +19,13 @@ namespace motor {
 enum Protocol : uint8_t {
     PROTO_PWM, PROTO_ONESHOT125, PROTO_ONESHOT42, PROTO_MULTISHOT,
     PROTO_DSHOT150, PROTO_DSHOT300, PROTO_DSHOT600, PROTO_DSHOT1200,
+    PROTO_PROSHOT1000, PROTO_BRUSHED,                                  // (appended in 0.8.2: the stored numbers of the others stay)
 };
-inline bool is_dshot(Protocol p) { return p >= PROTO_DSHOT150; }
+// is_dshot(): a digital protocol that carries DShot packets - values 48..2047, the commands (beacon, direction...), checksum.
+// DShot itself and ProShot1000 (Betaflight counts ProShot as a DShot protocol: the same 16-bit packet, sent as 4 nibble pulses).
+inline bool is_dshot(Protocol p) { return (p >= PROTO_DSHOT150 && p <= PROTO_DSHOT1200) || p == PROTO_PROSHOT1000; }
+// is_dshot_wire(): the DShot bit encoding itself - the only one with a bidirectional (inverted, ESC answers) variant
+inline bool is_dshot_wire(Protocol p) { return p >= PROTO_DSHOT150 && p <= PROTO_DSHOT1200; }
 
 constexpr int kMaxMotors = 8;
 constexpr uint16_t kDshotMinThrottle = 48;      // 1..47 are commands
@@ -66,10 +71,10 @@ inline bool dshot_packet_valid(uint16_t pkt, bool bidirectional) {
 }
 
 WB_FAST inline uint32_t dshot_bit_ns(Protocol p) {
-    switch (p) { case PROTO_DSHOT150: return 6667; case PROTO_DSHOT300: return 3333; case PROTO_DSHOT600: return 1667; default: return 833; }
-}
+    switch (p) { case PROTO_DSHOT150: return 6667; case PROTO_DSHOT300: return 3333; case PROTO_DSHOT600: return 1667; case PROTO_PROSHOT1000: return 1000; default: return 833; }
+}   // (ProShot: 4 nibbles of 4 us = 16 us a frame, the same as 16 "bits" of 1 us)
 inline uint32_t dshot_kbps(Protocol p) {
-    switch (p) { case PROTO_DSHOT150: return 150; case PROTO_DSHOT300: return 300; case PROTO_DSHOT600: return 600; default: return 1200; }
+    switch (p) { case PROTO_DSHOT150: return 150; case PROTO_DSHOT300: return 300; case PROTO_DSHOT600: return 600; case PROTO_PROSHOT1000: return 1000; default: return 1200; }
 }
 
 // One RMT-style symbol: level0 for dur0 ticks, then level1 for dur1 ticks.
@@ -87,6 +92,24 @@ WB_FAST inline void dshot_symbols(uint16_t packet, Protocol p, uint32_t tick_hz,
         out[b].dur0 = hi; out[b].lvl0 = inverted ? 0 : 1;
         out[b].dur1 = (uint16_t)(t - hi); out[b].lvl1 = inverted ? 1 : 0;
     }
+}
+
+// ProShot1000 (Betaflight pwm_output_dshot_shared.c, loadDmaBufferProshot): the same 16-bit packet as 4 nibbles, most significant
+// first, one pulse each in a 4 us slot: high for 1 us + nibble x 125 ns, then low. 16 us a frame. One-way only.
+constexpr uint32_t kProshotSlotNs = 4000, kProshotBaseNs = 1000, kProshotStepNs = 125;
+WB_FAST inline void proshot_symbols(uint16_t packet, uint32_t tick_hz, Sym out[4]) {
+    const float k = 1e-9f * (float)tick_hz;
+    const uint16_t slot = (uint16_t)lroundf(kProshotSlotNs * k);
+    for (int i = 0; i < 4; i++) {
+        const uint32_t nib = (packet >> (12 - 4 * i)) & 0xF;
+        const uint16_t hi = (uint16_t)lroundf((float)(kProshotBaseNs + nib * kProshotStepNs) * k);
+        out[i].dur0 = hi; out[i].lvl0 = 1; out[i].dur1 = (uint16_t)(slot - hi); out[i].lvl1 = 0;
+    }
+}
+// Both digital encodings: 16 symbols (DShot) or 4 (ProShot). Returns the number written.
+WB_FAST inline int digital_symbols(uint16_t packet, Protocol p, uint32_t tick_hz, bool inverted, Sym out[16]) {
+    if (p == PROTO_PROSHOT1000) { proshot_symbols(packet, tick_hz, out); return 4; }
+    dshot_symbols(packet, p, tick_hz, inverted, out); return 16;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -196,14 +219,16 @@ inline float pulse_us(Protocol p, float v) {
     case PROTO_ONESHOT125: return v * 0.125f;               // 125..250 us
     case PROTO_ONESHOT42:  return v * (1.0f / 24.0f);       // 41.7..83.3 us
     case PROTO_MULTISHOT:  return 5.0f + (v - 1000.0f) * 0.02f;   // 5..25 us
-    default:               return 0.0f;
+    default:               return 0.0f;                     // (BRUSHED is a duty cycle, not a pulse width: brushed_duty())
     }
 }
+// Brushed motors (a MOSFET per motor, Betaflight BRUSHED): 1000..2000 on the app's scale = 0..100 % duty at pulse_hz (16 kHz)
+inline float brushed_duty(float v) { return v <= 1000.0f ? 0.0f : v >= 2000.0f ? 1.0f : (v - 1000.0f) * 0.001f; }
 inline uint16_t default_pulse_hz(Protocol p) {
-    switch (p) { case PROTO_PWM: return 400; case PROTO_ONESHOT125: return 2000; case PROTO_ONESHOT42: return 4000; default: return 4000; }
+    switch (p) { case PROTO_PWM: return 400; case PROTO_ONESHOT125: return 2000; case PROTO_ONESHOT42: return 4000; case PROTO_BRUSHED: return 16000; default: return 4000; }
 }
 inline float pulse_period_min_us(Protocol p) {              // frame period must exceed the longest pulse
-    switch (p) { case PROTO_PWM: return 2100; case PROTO_ONESHOT125: return 260; case PROTO_ONESHOT42: return 90; default: return 30; }
+    switch (p) { case PROTO_PWM: return 2100; case PROTO_ONESHOT125: return 260; case PROTO_ONESHOT42: return 90; case PROTO_BRUSHED: return 0; default: return 30; }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

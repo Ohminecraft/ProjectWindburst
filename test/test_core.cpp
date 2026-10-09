@@ -264,10 +264,10 @@ static void t_rc() {
 }
 
 // physics check of the mixer: apply a unit command with an exact-thrust plant and look at the resulting angular acceleration
-static void mixer_physics(Layout l, int plant_layout, const char* name) {
+static void mixer_physics(Layout l, int plant_layout, const char* name, const Plant* geo = nullptr) {
     Mixer m; m.cfg.layout = l; m.configure(); MotorLimits lim; lim.idle = 0.0f; lim.limit = 1.0f;
     for (int axis = 0; axis < 3; axis++) {
-        Plant pl(plant_layout); pl.lag = 0.0005f; float out[kMaxMotors];
+        Plant pl = geo ? *geo : Plant(plant_layout); pl.lag = 0.0005f; float out[kMaxMotors];
         float cmd[3] = {0, 0, 0}; cmd[axis] = 0.1f;
         m.mix(lim, 0.5f, cmd[0], cmd[1], cmd[2], out);
         const float base = 0.5f * pl.n * pl.Tmax; pl.step(out, 0.0005f);
@@ -301,6 +301,51 @@ static void t_mixer() {
       CHECK(pr > 0 && fabs(pp / pr - 0.2) < 0.03, "headroom exceeded: ALL axes are scaled together, the roll:pitch ratio survives (%.3f, want 0.2)", pp / pr); }
     { Mixer m; m.cfg.props_out = true; m.configure(); Plant pl(0); for (auto& s : pl.spin) s = -s; pl.lag = 0.0005f; float o[kMaxMotors]; m.mix({0, 1}, 0.5f, 0, 0, 0.1f, o); pl.step(o, 0.0005f);
       CHECK(pl.w[2] > 0.0005f, "props-out frame (all spins reversed) + props_out flag: yaw right still turns right"); }
+}
+
+// The frames added in 0.8.2 (Betaflight's tables): each checked against a plant built from where the motors really sit and which
+// way their props turn - roll, pitch and yaw commands turn the right way, do not leak into the other axes, do not change the
+// total thrust. (V-tail / A-tail have tilted motors, which the plant cannot build: their tables are checked literally.)
+static void t_layouts() {
+    printf("[mixer] the Betaflight frames: hex +, hex X (Betaflight order), H6, Y6, Y4, octo X8, octo flat + / X, quad X 1234\n");
+    const float d = 0.7071068f;
+    struct G { Layout l; const char* name; Plant p; } g[] = {
+        {HEX_PLUS, "hex +", Plant({120, 60, 240, 300, 0, 180}, {1, -1, 1, -1, 1, -1})},
+        {HEX_X_BF, "hex X (Betaflight order)", Plant({150, 30, 210, 330, 90, 270}, {1, 1, -1, -1, -1, 1})},
+        {HEX_H, "H6", Plant({135, 45, 225, 315, 90, 270}, {-1, 1, 1, -1, 1, -1}, {1, 1, 1, 1, d, d})},
+        {Y6, "Y6", Plant({180, 60, 300, 180, 60, 300}, {1, -1, -1, -1, 1, 1})},
+        {OCTO_X8, "octo X8", Plant({135, 45, 225, 315, 135, 45, 225, 315}, {-1, 1, 1, -1, 1, -1, -1, 1})},
+        {OCTO_FLAT_PLUS, "octo flat +", Plant({315, 45, 135, 225, 0, 90, 180, 270}, {1, 1, 1, 1, -1, -1, -1, -1})},
+        {OCTO_FLAT_X, "octo flat X", Plant({292.5f, 22.5f, 112.5f, 202.5f, 337.5f, 67.5f, 157.5f, 247.5f}, {1, 1, 1, 1, -1, -1, -1, -1})},
+        {QUAD_X_1234, "quad X 1234", Plant({315, 45, 135, 225}, {-1, 1, -1, 1})},
+    };
+    for (auto& x : g) {
+        CHECK(mixer_motor_count(x.l) == x.p.n, "[%s] %d motors", x.name, mixer_motor_count(x.l));
+        mixer_physics(x.l, 0, x.name, &x.p);
+    }
+    auto eq = [](float a, float b) { return fabsf(a - b) < 1e-4f; };
+    { MixRow a = mixer_row(HEX_PLUS, 0), f = mixer_row(HEX_PLUS, 4);
+      CHECK(eq(a.roll, -1) && eq(a.pitch, 0.5f) && a.yaw == 1 && eq(f.roll, 0) && eq(f.pitch, -1) && f.yaw == 1, "hex +: Betaflight HEX6 normalised (rear-right roll -0.866 -> -1, front pitch -1)"); }
+    { MixRow r5 = mixer_row(HEX_H, 4), r0 = mixer_row(HEX_H, 0); CHECK(r5.roll == 0 && r5.pitch == 0 && r5.yaw == 0 && eq(r0.roll, -1) && eq(r0.pitch, 1) && r0.yaw == -1, "H6: the two middle motors only lift (Betaflight HEX6H)"); }
+    { MixRow v1 = mixer_row(VTAIL4, 1), v0 = mixer_row(VTAIL4, 0), a1 = mixer_row(ATAIL4, 1), a0 = mixer_row(ATAIL4, 0);
+      CHECK(eq(v0.roll, -1) && eq(v0.pitch, 1) && v0.yaw == 1 && eq(v1.roll, -0.46f / 0.58f) && eq(v1.pitch, -0.39f / 0.58f) && eq(v1.yaw, -0.5f), "V-tail: Betaflight VTAIL4, each axis scaled by its largest value");
+      CHECK(a0.roll == 0 && a0.pitch == 1 && a0.yaw == 1 && a1.roll == -1 && a1.yaw == 0, "A-tail: Betaflight ATAIL4"); }
+    { MixRow y0 = mixer_row(Y4, 0), y1 = mixer_row(Y4, 1); CHECK(y0.yaw == -1 && y1.yaw == 0 && y1.roll == -1, "Y4: yaw only from the rear pair");
+      // Betaflight's Y4 is not decoupled: rolling speeds one front prop up and the other (turning the other way) down, which also
+      // yaws a little - the yaw loop takes it out. Here only: every command turns the right way, the total thrust stays.
+      Mixer m; m.cfg.layout = Y4; m.configure();
+      for (int axis = 0; axis < 3; axis++) {
+          Plant pl({180, 45, 180, 315}, {-1, 1, 1, -1}, {d, 1, d, 1}); pl.lag = 0.0005f; float out[kMaxMotors]; float cmd[3] = {0, 0, 0}; cmd[axis] = 0.1f;
+          m.mix({0, 1}, 0.5f, cmd[0], cmd[1], cmd[2], out); const float base = 0.5f * pl.n * pl.Tmax; pl.step(out, 0.0005f);
+          const float want = axis == 0 ? pl.w[0] : axis == 1 ? -pl.w[1] : pl.w[2];
+          CHECK(want > 0 && fabsf(pl.total_thrust - base) < 0.02f * base, "[Y4] +%s turns the right way, total thrust kept", axis == 0 ? "roll" : axis == 1 ? "pitch" : "yaw");
+      } }
+    { float sum[3] = {0, 0, 0};
+      for (int l = HEX_PLUS; l < LAYOUT_COUNT; l++) for (int k = 0; k < 3; k++) { if (l == VTAIL4 && k == 1) continue;         /* (V-tail: tilted motors, Betaflight's pitch column does not sum to 0) */ float z = 0; for (int i = 0; i < mixer_motor_count((Layout)l); i++) { const MixRow r = mixer_row((Layout)l, i); z += k == 0 ? r.roll : k == 1 ? r.pitch : r.yaw; } sum[k] += fabsf(z); }
+      CHECK(sum[0] < 1e-3f && sum[1] < 0.02f && sum[2] < 1e-3f, "every frame: each axis sums to zero over its motors (a command never changes the total thrust; V-tail pitch excepted) (%g %g %g)", sum[0], sum[1], sum[2]); }
+    { Mixer m; m.cfg.layout = OCTO_X8; m.configure(); float o[kMaxMotors]; m.mix({0.05f, 1.0f}, 0.5f, 0.1f, 0, 0, o);
+      CHECK(m.motor_count() == 8 && o[0] < o[2] && o[4] < o[6] && o[0] == o[4], "octo X8: 8 outputs; roll right lowers both right-hand motors of each pair"); }
+    CHECK(mixer_motor_count((Layout)200) == 4, "an unknown layout number: treated as a quad (never past the tables)");
 }
 
 static void t_safety() {
@@ -645,6 +690,6 @@ static void t_althold_edges() {
 }
 
 int main() {
-    t_filters(); t_ahrs(); t_ahrs_trust(); t_vertical(); t_horizontal(); t_rc(); t_mixer(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges();
+    t_filters(); t_ahrs(); t_ahrs_trust(); t_vertical(); t_horizontal(); t_rc(); t_mixer(); t_layouts(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

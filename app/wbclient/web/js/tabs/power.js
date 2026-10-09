@@ -178,7 +178,7 @@ function beeperColumn() {
 
   // what the craft has to make noise with (pins and ESC protocol need a reboot, so the stored settings are what runs)
   const hasBuzzer = () => !!(store.settings.pins && store.settings.pins.buzzer !== 255);
-  const dshot = () => /^DSHOT/.test((store.settings.motors || {}).protocol || '');
+  const dshot = () => /^(DSHOT|PROSHOT)/.test((store.settings.motors || {}).protocol || '');
   const have = h('p', { class: 'note', id: 'sounders' });
   const paintHave = () => {
     const b = hasBuzzer(), m = dshot();

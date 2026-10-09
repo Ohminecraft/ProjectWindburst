@@ -21,7 +21,7 @@ typedef enum
     MPU9520_SPI,
     ICM20601_SPI,
     ICM20602_SPI,
-    ICM20602_FAKE_SPI,
+    ICM20602_FAKE_SPI,  // for testing on a ICM20602 with a broken WHO_AM_I register
     ICM42622P_SPI,
     ICM42686P_SPI,
     ICM42688P_SPI,

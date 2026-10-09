@@ -187,7 +187,7 @@ private:
         case MPU9520_SPI:                   drv_ = &d_mpu9250_; break;
         case ICM20601_SPI:                  drv_ = &d_icm20601_; break;
         case ICM20602_SPI:                  drv_ = &d_icm20602_; break;
-        case ICM20602_FAKE_SPI:             drv_ = &d_icm20602_fake_; break;
+        case ICM20602_FAKE_SPI:             drv_ = &d_icm20602_fake_; break;  // for testing on a ICM20602 with a broken WHO_AM_I register
         case ICM42622P_SPI:                 drv_ = &d_icm42622_; break;
         case ICM42686P_SPI:                 drv_ = &d_icm42686_; break;
         case ICM42688P_SPI:                 drv_ = &d_icm42688_; break;
@@ -208,7 +208,7 @@ private:
     Mpu6500Icm2060xAccGyro d_mpu9250_{proxy_, Mpu6500Icm2060xAccGyro::Variant::MPU9250};
     Mpu6500Icm2060xAccGyro d_icm20601_{proxy_, Mpu6500Icm2060xAccGyro::Variant::ICM20601};
     Mpu6500Icm2060xAccGyro d_icm20602_{proxy_, Mpu6500Icm2060xAccGyro::Variant::ICM20602};
-    Mpu6500Icm2060xAccGyro d_icm20602_fake_{proxy_, Mpu6500Icm2060xAccGyro::Variant::ICM20602_FAKE};
+    Mpu6500Icm2060xAccGyro d_icm20602_fake_{proxy_, Mpu6500Icm2060xAccGyro::Variant::ICM20602_FAKE};  // for testing on a ICM20602 with a broken WHO_AM_I register
     Icm426xxAccGyro d_icm42622_{proxy_, Icm426xxAccGyro::Variant::ICM42622P};
     Icm426xxAccGyro d_icm42686_{proxy_, Icm426xxAccGyro::Variant::ICM42686P};
     Icm426xxAccGyro d_icm42688_{proxy_, Icm426xxAccGyro::Variant::ICM42688P};

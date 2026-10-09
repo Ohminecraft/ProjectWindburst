@@ -10,7 +10,7 @@ using fc::Vec3;
 
 struct Plant {
     int n = 4;
-    std::vector<float> ang, spin;
+    std::vector<float> ang, spin, rad;                             // rad: arm length of each motor as a fraction of `arm` (empty = all 1); coaxial motors share an angle
     float q0 = 1, q1 = 0, q2 = 0, q3 = 0, w[3] = {0, 0, 0}, T[8] = {};
     float Tmax = 4.9f, arm = 0.12f, kyaw = 0.02f, Ixx = 0.010f, Iyy = 0.010f, Izz = 0.020f, lag = 0.02f, mass = 1.0f;
     float gain[8] = {1, 1, 1, 1, 1, 1, 1, 1};                     // thrust of each motor relative to the others (a tired motor, a chipped prop)
@@ -37,6 +37,8 @@ struct Plant {
         else if (layout == 1) { n = 4; ang = {180, 90, 270, 0}; spin = {-1, +1, +1, -1}; Tmax = 4.9f; }
         else { n = 6; ang = {30, 90, 150, 210, 270, 330}; spin = {+1, -1, +1, -1, +1, -1}; Tmax = 3.27f; Izz = 0.03f; }
     }
+    // any frame from its geometry: motor angles (clockwise from the nose), prop spins (+1 CCW), arm fractions
+    Plant(std::vector<float> a, std::vector<float> sp, std::vector<float> r = {}) : n((int)a.size()), ang(a), spin(sp), rad(r) { Tmax = 4.9f * 4.0f / (float)n; }
     // The craft Betaflight's default tune is made for: a 5-inch quad, 650 g, 1.2 kg of thrust per motor (thrust : weight = 7),
     // light and stiff. The default Plant is the opposite end: 1 kg with thrust : weight = 2 (a camera craft with small motors).
     void make_five_inch() { n = 4; Tmax = 12.0f; arm = 0.11f; Ixx = Iyy = 0.004f; Izz = 0.007f; mass = 0.65f; lag = 0.025f; kyaw = 0.012f; rotor_j = 5e-6f; rotor_kt = 1.9e-6f; }
@@ -50,7 +52,8 @@ struct Plant {
             T[i] += (Tmax * gain[i] * cmd[i] - T[i]) * (dt / lag);
             // a rotor that speeds up pushes the frame the other way: on a small fast quad this is as strong as the drag torque itself
             if (rotor_j > 0) tq[2] += spin[i] * rotor_j * (sqrtf(fmaxf(T[i], 0.0f) / rotor_kt) - sqrtf(fmaxf(T0, 0.0f) / rotor_kt)) / dt;
-            const float x = arm * cosf(ang[i] * fc::kDeg2Rad), y = arm * sinf(ang[i] * fc::kDeg2Rad);
+            const float ri = (size_t)i < rad.size() ? rad[i] : 1.0f;
+            const float x = arm * ri * cosf(ang[i] * fc::kDeg2Rad), y = arm * ri * sinf(ang[i] * fc::kDeg2Rad);
             tq[0] += -y * T[i];                                     // r x F with F = (0,0,-T)
             tq[1] += +x * T[i];
             tq[2] += spin[i] * kyaw * T[i];

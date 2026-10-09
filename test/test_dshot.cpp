@@ -26,6 +26,7 @@ struct SimPort {
     void tx_load(int c, const uint32_t* words, int n); void tx_start(int c);
     void rx_start(int c); int rx_stop(int c, uint32_t* words, int max);
     void delay_us(uint32_t us);
+    void listen(int) {}                           // (the model's receiver always hears the wire)
 };
 
 struct Wire {
@@ -436,11 +437,27 @@ static void t_loopback() {
     { Rig r; r.begin(PROTO_DSHOT600, false); int words = 0; CHECK(r.d.loopback(0, 0, words) == DshotDirect<SimPort>::kLoopNothing && r.w.ch[0].frames.empty(), "one-way: no check (there is no receiver), nothing sent"); }
 }
 
+static void t_proshot() {
+    printf("[ProShot1000 through the same sequencer: 4 nibble pulses, one-way]\n");
+    Rig r; CHECK(r.begin(PROTO_PROSHOT1000, true), "begin (bidirectional asked for)");
+    CHECK(r.d.cycle_us() == 16 + 30 && r.d.frame_us() == 16, "16 us a frame + 30 us pause (%u)", (unsigned)r.d.cycle_us());
+    r.value[0] = 1047; r.value[1] = 48; r.value[2] = 0; r.value[3] = 2047; r.run(3, 250, 0, false);
+    bool ok = r.w.isr_runs == 0;
+    for (int c = 0; c < 4 && ok; c++) {
+        const uint16_t pk = dshot_packet(r.value[c], false, false); const auto& f = r.w.ch[c].frames.back();
+        for (int i = 0; i < 4; i++) { uint32_t d0, d1; int l0, l1; Wire::word(f.w[i], d0, l0, d1, l1); ok = ok && l0 == 1 && l1 == 0 && d0 + d1 == 320 && d0 == 80 + ((pk >> (12 - 4 * i)) & 0xF) * 10; }
+        uint32_t d0, d1; int l0, l1; Wire::word(f.w[4], d0, l0, d1, l1); ok = ok && d0 == 0 && l0 == 0;
+    }
+    CHECK(ok, "every motor: its packet as 4 pulses, then the end mark, line low; no timer (one-way, whatever was asked for)");
+    CHECK(!r.d.responsive(0) && r.d.stats().replies == 0, "no replies expected");
+}
+
 int main() {
     t_words();
     t_oneway();
     t_bidir();
     t_loopback();
+    t_proshot();
     t_timing();
     printf("\n%d checks, %d failed\n", g_pass + g_fail, g_fail);
     return g_fail ? 1 : 0;

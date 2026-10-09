@@ -33,6 +33,7 @@
 //   void rx_start(int ch);                     capture from the next edge on
 //   int  rx_stop(int ch, uint32_t* words, int max);       stop capturing, copy the captured words, return how many
 //   void delay_us(uint32_t us);                busy wait (only used by loopback(), at start-up)
+//   void listen(int ch);                       while driving, let the receiver hear the pin too (only used by loopback())
 // A word is one RMT symbol: duration0 (15 bits) | level0 << 15 | duration1 << 16 | level1 << 31; duration 0 = end.
 // ============================================================================
 namespace motor {
@@ -72,8 +73,8 @@ public:
     bool begin(Port& port, int count, Protocol proto, bool bidirectional) {
         port_ = &port; count_ = 0;
         if (!is_dshot(proto) || count < 1 || count > kMaxCh) return false;
-        proto_ = proto; bidir_ = bidirectional; count_ = count;
-        frame_us_ = dshot_frame_us(proto); cycle_us_ = dshot_cycle_us(proto, bidirectional);
+        proto_ = proto; bidir_ = bidirectional && is_dshot_wire(proto); count_ = count;          // (ProShot: one-way only)
+        frame_us_ = dshot_frame_us(proto); cycle_us_ = dshot_cycle_us(proto, bidir_);
         reply_bit_q4_ = (uint32_t)(((uint64_t)reply_bit_ns(proto) * port.tick_hz() * 16u + 500000000ull) / 1000000000ull);      // one reply bit in 1/16 timer tick
         started_ = false; pending_ = false; stats_ = Stats();
         for (int c = 0; c < kMaxCh; c++) { rx_on_[c] = false; has_reply_[c] = false; silent_[c] = 0; }
@@ -98,11 +99,11 @@ public:
         const uint8_t idle = bidir_ ? 1 : 0;
         for (int c = 0; c < count_; c++) {
             Sym sym[16];
-            dshot_symbols(dshot_packet(value[c], telem_request && telem_request[c], bidir_), proto_, tick, bidir_, sym);
+            const int ns = digital_symbols(dshot_packet(value[c], telem_request && telem_request[c], bidir_), proto_, tick, bidir_, sym);   // 16 (DShot) or 4 (ProShot)
             uint32_t w[kDshotTxWords];
-            for (int b = 0; b < 16; b++) w[b] = rmt_word(sym[b].dur0, sym[b].lvl0, sym[b].dur1, sym[b].lvl1);
-            w[16] = rmt_word(0, idle, 0, idle);
-            port_->tx_load(c, w, kDshotTxWords);
+            for (int b = 0; b < ns; b++) w[b] = rmt_word(sym[b].dur0, sym[b].lvl0, sym[b].dur1, sym[b].lvl1);
+            w[ns] = rmt_word(0, idle, 0, idle);
+            port_->tx_load(c, w, ns + 1);
         }
         for (int c = 0; c < count_; c++) port_->tx_start(c);                    // back to back: the motors get their frames within a microsecond or two
         t_tx_ = port_->micros();
@@ -140,7 +141,7 @@ public:
         uint32_t w[kDshotTxWords];
         for (int b = 0; b < 16; b++) w[b] = rmt_word(sym[b].dur0, sym[b].lvl0, sym[b].dur1, sym[b].lvl1);
         w[16] = rmt_word(0, 1, 0, 1);
-        port_->drive(c); port_->rx_start(c);
+        port_->drive(c); port_->listen(c); port_->rx_start(c);
         port_->tx_load(c, w, kDshotTxWords); port_->tx_start(c);
         port_->delay_us(frame_us_ + kDshotSwitchMarginUs); port_->release(c);           // as in flight: the line is the ESC's 30 us after the frame
         port_->delay_us(kDshotReplyDelayUs + dshot_reply_us(proto_) + dshot_idle_gap_us(proto_));

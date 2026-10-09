@@ -22,7 +22,7 @@ public:
 
     const char* name() const override {
         switch (v_) { case Variant::MPU6500: return "MPU6500"; case Variant::MPU9250: return "MPU9250";
-                      case Variant::ICM20601: return "ICM20601"; case Variant::ICM20602: return "ICM20602"; case Variant::ICM20602_FAKE: return "ICM20602_FAKE"; default: return "unknown"; }
+                      case Variant::ICM20601: return "ICM20601"; case Variant::ICM20602_FAKE: return "ICM20602_FAKE"; default: return "ICM20602"; }
     }
 
     bool init(const AgInitConfig& cfg) override {

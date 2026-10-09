@@ -8,8 +8,9 @@
 int main() {
     using namespace fc;
     printf("{\n \"layouts\": {");
-    const char* names[] = {"QUAD_X", "QUAD_PLUS", "HEX_X"};
-    for (int l = 0; l < 3; l++) {
+    const char* names[] = {"QUAD_X", "QUAD_PLUS", "HEX_X", "HEX_PLUS", "HEX_X_BF", "HEX_H", "Y6", "Y4", "OCTO_X8", "OCTO_FLAT_PLUS", "OCTO_FLAT_X", "VTAIL4", "ATAIL4", "QUAD_X_1234"};
+    static_assert(sizeof(names) / sizeof(names[0]) == LAYOUT_COUNT, "one name per layout");
+    for (int l = 0; l < LAYOUT_COUNT; l++) {
         printf("%s\n  \"%s\": [", l ? "," : "", names[l]);
         for (int m = 0; m < mixer_motor_count((Layout)l); m++) { MixRow r = mixer_row((Layout)l, m); printf("%s[%.6f, %.6f, %.6f]", m ? ", " : "", (double)r.roll, (double)r.pitch, (double)r.yaw); }
         printf("]");

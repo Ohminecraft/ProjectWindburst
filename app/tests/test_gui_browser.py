@@ -852,6 +852,26 @@ def test_gps_baud_is_a_list(gui):
     pg.wait_for_function("document.getElementById('save').textContent === 'Lưu và khởi động lại'")
 
 
+def test_betaflight_frames_and_protocols_on_the_motor_tab(gui):
+    pg = gui.connect().page
+    gui.tab("motors")
+    opts = pg.locator('[data-field="motors.layout"] option').all_inner_texts()
+    assert "Octo X8 (đồng trục)" in opts and "Hexa H" in opts and "Quad X (thứ tự 1234)" in opts and len(opts) == 14, opts
+    assert "ProShot1000" in pg.locator('[data-field="motors.protocol"] option').all_inner_texts()
+    pg.select_option('[data-field="motors.layout"]', "OCTO_X8")
+    pg.wait_for_function("document.querySelectorAll('#view [data-motor]').length === 8")
+    assert pg.locator('#view [data-motor][data-under="1"]').count() == 4, "the lower motor of each coaxial pair is marked"
+    assert pg.is_visible("#dshot-count") and "8 motor" in pg.inner_text("#dshot-count"), "DShot cannot drive 8 motors: said before saving"
+    pg.select_option('[data-field="motors.protocol"]', "ONESHOT125")
+    pg.wait_for_function("document.getElementById('dshot-count').hidden")
+    assert pg.is_visible("#pulse-fields") and not pg.is_visible("#dshot-fields")
+    pg.select_option('[data-field="motors.protocol"]', "PROSHOT1000")
+    pg.wait_for_function("!document.getElementById('dshot-count').hidden && !document.getElementById('dshot-fields').hidden")
+    gui.wait(lambda: gui.setting("motors", "layout") == "OCTO_X8" and gui.setting("motors", "protocol") == "PROSHOT1000", what="stored")
+    pg.select_option('[data-field="motors.layout"]', "Y4")
+    pg.wait_for_function("document.querySelectorAll('#view [data-motor]').length === 4 && document.getElementById('dshot-count').hidden")
+
+
 def test_current_sensor_and_servos_on_the_page(gui):
     pg = gui.connect().page
     # ---- the pins: a current sensor on GPIO3, a servo on GPIO1 (both need a restart)

@@ -69,7 +69,7 @@ static void t_schema() {
     CHECK(fixed == 5 && t.general.loop_hz == 8000 && t.general.max_arm_angle == 5 && t.general.board_align == 7 && t.general.airmode == 2 && t.general.board_trim_yaw == -1800, "validation clamps ranges, enums and bools (%d fixed)", fixed);
     t.motors.protocol = 200; t.motors.order[3] = 99; t.pid.p[1] = 255; t.pid.f[0] = 5000; t.pid.ff_smooth_factor = 200; t.pid.iterm_relax = 9; t.pid.slider_d = 201; t.pid.stab_p[1] = 50.0f; t.pid.stab_p[2] = NAN; t.pid.iterm_windup = 5;
     validate_section(t, SEC_MOTORS); validate_section(t, SEC_PID);
-    CHECK(t.motors.protocol == 7 && t.motors.order[3] == 7 && t.pid.p[1] == 250 && t.pid.f[0] == 1000 && t.pid.ff_smooth_factor == 95 && t.pid.iterm_relax == ITERM_RELAX_RPY_INC && t.pid.slider_d == 200 && t.pid.stab_p[1] == 12.0f &&
+    CHECK(t.motors.protocol == ESC_PROTOCOL_BRUSHED && t.motors.order[3] == 7 && t.pid.p[1] == 250 && t.pid.f[0] == 1000 && t.pid.ff_smooth_factor == 95 && t.pid.iterm_relax == ITERM_RELAX_RPY_INC && t.pid.slider_d == 200 && t.pid.stab_p[1] == 12.0f &&
           t.pid.stab_p[2] == 4.5f && t.pid.iterm_windup == 30, "motors / pid clamps (a NaN gain becomes the default)");
     t.filters.gyro_lpf1_type = 9; t.filters.gyro_lpf2_hz = 4000; t.filters.dyn_notch_count = 20; t.filters.rpm_harmonics = 5; t.filters.rpm_q = 10; t.filters.slider_gyro_mult = 3; t.filters.rpm_weights[2] = 180; validate_section(t, SEC_FILTERS);
     CHECK(t.filters.gyro_lpf1_type == LPF_TYPE_PT3 && t.filters.gyro_lpf2_hz == 1000 && t.filters.dyn_notch_count == 7 && t.filters.rpm_harmonics == 3 && t.filters.rpm_q == 250 && t.filters.slider_gyro_mult == 10 && t.filters.rpm_weights[2] == 100, "filter clamps");

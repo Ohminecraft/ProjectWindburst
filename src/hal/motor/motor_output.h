@@ -236,7 +236,7 @@ public:
     // ---------------------------------------------------------------- idle for the mixer
     // Call once per flight cycle. Returns absolute idle fraction to put into mixer.idle.
     WB_FAST float idle_fraction(uint32_t now_ms, bool throttle_raised) {
-        if (cfg.dyn.min_rpm_100 == 0 || !cfg.bidirectional || !is_dshot(cfg.protocol)) return cfg.idle;
+        if (cfg.dyn.min_rpm_100 == 0 || !cfg.bidirectional || !is_dshot_wire(cfg.protocol)) return cfg.idle;
         const bool ok = rpm_all_valid(now_ms);
         float min_hz = 1e9f;
         for (int i = 0; i < cfg.count; i++) { const float hz = telemetry(i, now_ms).rpm / 60.0f; if (hz < min_hz) min_hz = hz; }

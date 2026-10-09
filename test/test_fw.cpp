@@ -831,6 +831,15 @@ static void t_motor_beeper() {
       const uint32_t t0 = millis(); CHECK(r.command(CMD_BEEP, {beep::GYRO_CALIBRATED}).err == ERR_OK, "BEEP on the bench"); r.run(2.0);
       CHECK(b.tones(t0, millis(), 1).size() == 3, "the test button is played by the motors there as well (%zu tones)", b.tones(t0, millis(), 1).size()); }
 
+    { // ProShot1000 carries DShot packets: the motors are the sounder, a beacon goes out as a command value
+      Rig r; no_buzzer(r, [](wbp::Settings& s) { s.motors.protocol = ESC_PROTOCOL_PROSHOT1000; s.motors.bidirectional = 1; }); VirtualBoard& b = r.board; r.run(3.0);
+      CHECK(r.app().status.motor_beep && has_line(r, "beeper: motors (DShot beacon") && r.tel().bidir_state == BIDIR_STATE_OFF, "ProShot1000: the motors beep; bidirectional asked for but not possible (state %u)", r.tel().bidir_state);
+      const size_t n0 = b.esc_cmds.size(); CHECK(r.command(CMD_MOTOR_BEACON, {1}).err == ERR_OK, "beacon button"); r.run(0.5);
+      CHECK(b.esc_cmds.size() == n0 + 1 && b.esc_cmds.back().cmd == 2, "one beacon command (tone 2) went out to the ESC"); }
+    { // brushed motors: duty cycle on LEDC, no DShot, nothing to beep with
+      Rig r; no_buzzer(r, [](wbp::Settings& s) { s.motors.protocol = ESC_PROTOCOL_BRUSHED; }); r.run(2.0);
+      CHECK(!r.app().status.motor_beep && r.app().status.motors && r.command(CMD_MOTOR_BEACON, {0}).err == ERR_NOT_SUPPORTED, "brushed: motors run, no beacon (NOT_SUPPORTED)"); }
+
     { // PWM-type ESCs cannot beep: said in the report, the test button says there is no sounder
       Rig r; no_buzzer(r, [](wbp::Settings& s) { s.motors.protocol = ESC_PROTOCOL_ONESHOT125; }); r.run(3.0);
       CHECK(has_line(r, "beeper: FAILED - no buzzer pin set, and the motors can only beep with a DShot protocol") && !r.app().status.motor_beep, "Oneshot125 and no buzzer: no sounder, said in the boot report");
@@ -916,7 +925,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.8.1" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.8.2" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -1753,6 +1762,19 @@ static void t_ports() {
       CHECK(has_line(*r, "gps: UART1") && has_line(*r, "rx: CRSF on UART2") && r->tel().rc_link, "AUTO (the default): the table is not looked at - an old settings record that held anything there changes nothing"); }
 }
 
+static void t_frames() {
+    printf("[frames] the Betaflight layouts at boot: 6 / 8 motors on Oneshot, refused on DShot (4 RMT transmitters)\n");
+    const uint8_t extra[4] = {39, 40, 41, 42};
+    { auto r = nav_rig([&](wbp::Settings& s, VirtualBoard&) { s.motors.layout = LAYOUT_OCTO_X8; s.motors.protocol = ESC_PROTOCOL_ONESHOT125; for (int i = 0; i < 4; i++) s.pins.motor[4 + i] = extra[i]; });
+      CHECK(has_line(*r, "motors: host x8") && r->app().status.motors && r->app().motors.cfg().count == 8, "octo X8 on Oneshot125: 8 outputs"); }
+    { auto r = nav_rig([&](wbp::Settings& s, VirtualBoard&) { s.motors.layout = LAYOUT_HEX_PLUS; s.motors.protocol = ESC_PROTOCOL_DSHOT600; s.pins.motor[4] = 39; s.pins.motor[5] = 40; });
+      CHECK(has_line(*r, "motors: FAILED - DShot / ProShot drive at most 4 motors on the ESP32-S3 (4 RMT transmitters); this frame has 6") && !r->app().status.motors, "hex + on DShot600: refused, and the report says why"); }
+    { auto r = nav_rig([&](wbp::Settings& s, VirtualBoard&) { s.motors.layout = LAYOUT_HEX_H; s.motors.protocol = ESC_PROTOCOL_MULTISHOT; s.pins.motor[4] = 39; });
+      CHECK(has_line(*r, "motors: FAILED - the pin of motor slot 6 is not set (Pins tab)"), "H6 with only 5 motor pins: the missing slot is named"); }
+    { auto r = nav_rig([&](wbp::Settings& s, VirtualBoard&) { s.motors.layout = LAYOUT_QUAD_X_1234; });
+      CHECK(has_line(*r, "motors: host x4") && r->app().status.motors, "quad X 1234 (4 motors, DShot): runs"); }
+}
+
 static void t_crsf_telemetry() {
     printf("[crsf telemetry] battery, attitude, flight mode, GPS, vario back to the receiver; ten rounds a second; only with a TX pin, only on CRSF\n");
     { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { s.pins.curr_adc = 3; g_stub_adc_mv[3] = 480; (void)b; });     // 12 A
@@ -1967,6 +1989,7 @@ int main() {
         if (!strcmp(only, "current")) t_current();
         if (!strcmp(only, "receivers")) t_receivers();
         if (!strcmp(only, "crsf")) t_crsf_telemetry();
+        if (!strcmp(only, "frames")) t_frames();
         if (!strcmp(only, "ports")) t_ports();
         if (!strcmp(only, "gpsbaud")) t_gps_baud();
         printf("%d checks, %d failed (only '%s')\n", g_pass + g_fail, g_fail, only); return 1;
@@ -1999,6 +2022,7 @@ int main() {
     t_current();
     t_receivers();
     t_crsf_telemetry();
+    t_frames();
     t_ports();
     t_gps_baud();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);

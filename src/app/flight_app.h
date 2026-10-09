@@ -193,8 +193,17 @@ public:
         // ---- core + motors
         core.configure();
         status.motors = motors.begin(1.0f / core.cfg.loop_hz);
-        say(status.motors, "motors", motors.backend(), "motor pins not set or output driver failed (settings: pins.motor / motors.protocol)", "%s x%d", motors.backend(), (int)motors.cfg().count);
-        edt_wanted_ = status.motors && s.motors.edt && s.motors.bidirectional && motor::is_dshot(motors.cfg().protocol); edt_asked_ = false;
+        {   // why the outputs did not start, as precisely as it can be said
+            static char why[150]; why[0] = 0;
+            const motor::MotorConfig& mc = motors.cfg();
+            uint8_t mp[8]; hw.getMotorPins(mp);
+            for (int i = 0; i < mc.count && !why[0]; i++) if (mp[i] == GPIO_UNUSED) snprintf(why, sizeof(why), "the pin of motor slot %d is not set (Pins tab)", i + 1);
+            if (!why[0] && motor::is_dshot(mc.protocol) && mc.count > 4)
+                snprintf(why, sizeof(why), "DShot / ProShot drive at most 4 motors on the ESP32-S3 (4 RMT transmitters); this frame has %d: use PWM, Oneshot or Multishot", (int)mc.count);
+            if (!why[0]) snprintf(why, sizeof(why), "output driver failed: %s", motors.backend());
+            say(status.motors, "motors", motors.backend(), why, "%s x%d", motors.backend(), (int)mc.count);
+        }
+        edt_wanted_ = status.motors && s.motors.edt && s.motors.bidirectional && motor::is_dshot_wire(motors.cfg().protocol); edt_asked_ = false;
 
         // ---- battery voltage and buzzer
         status.battery = battery.begin();
@@ -744,7 +753,7 @@ private:
         if (battery.monitor.present()) h |= wbp::HEALTH_BATTERY;
         tel_.health = h;
         tel_.esc_volt = mm.esc_voltage(now_ms); tel_.dyn_idle = mm.dyn_idle_increase();
-        tel_.bidir_state = !(mm.cfg.bidirectional && motor::is_dshot(mm.cfg.protocol)) ? wbp::BIDIR_STATE_OFF : motors.bidirectionalActive() ? wbp::BIDIR_STATE_ACTIVE : wbp::BIDIR_STATE_UNAVAILABLE;
+        tel_.bidir_state = !(mm.cfg.bidirectional && motor::is_dshot_wire(mm.cfg.protocol)) ? wbp::BIDIR_STATE_OFF : motors.bidirectionalActive() ? wbp::BIDIR_STATE_ACTIVE : wbp::BIDIR_STATE_UNAVAILABLE;
         { uint8_t ans = 0; for (int i = 0; i < mm.cfg.count; i++) if (motors.escAnswers(mm.cfg.order[i])) ans |= (uint8_t)(1u << i); tel_.esc_answers = ans; }
         tel_.batt_v = battery.monitor.voltage(); tel_.cell_v = battery.monitor.cell_voltage(); tel_.batt_cells = battery.monitor.cells();
         tel_.batt_state = (uint8_t)battery.monitor.state(); tel_.batt_source = (uint8_t)battery.source(); tel_.batt_pin_mv = battery.pinMv();

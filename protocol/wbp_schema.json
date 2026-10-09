@@ -1,11 +1,22 @@
 {
  "version": 1,
- "hash": "0x6DA721E0",
+ "hash": "0x44955247",
  "enums": {
   "layout": [
    "QUAD_X",
    "QUAD_PLUS",
-   "HEX_X"
+   "HEX_X",
+   "HEX_PLUS",
+   "HEX_X_BF",
+   "HEX_H",
+   "Y6",
+   "Y4",
+   "OCTO_X8",
+   "OCTO_FLAT_PLUS",
+   "OCTO_FLAT_X",
+   "VTAIL4",
+   "ATAIL4",
+   "QUAD_X_1234"
   ],
   "esc_protocol": [
    "PWM",
@@ -15,7 +26,9 @@
    "DSHOT150",
    "DSHOT300",
    "DSHOT600",
-   "DSHOT1200"
+   "DSHOT1200",
+   "PROSHOT1000",
+   "BRUSHED"
   ],
   "rx_protocol": [
    "CRSF",

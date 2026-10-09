@@ -2152,6 +2152,24 @@ export const EN = {
     "The firmware finds the u-blox module at whatever rate it runs (with \"Detect baud\" on) and switches it to this one; 115200 is recommended. An NMEA module must already be set to this rate. Takes effect after saving and restarting.",
   "Trả lời nhận được / hỏng mỗi giây: ":
     "Replies received / garbled per second: ",
+  "Brushed (motor chổi than, MOSFET)":
+    "Brushed (brushed motors, MOSFET)",
+  "Khung này có {n} motor: DShot / ProShot trên ESP32-S3 chỉ chạy được 4 (4 bộ phát RMT). Chọn PWM, Oneshot hoặc Multishot.":
+    "This frame has {n} motors: DShot / ProShot on the ESP32-S3 can drive only 4 (4 RMT transmitters). Pick PWM, Oneshot or Multishot.",
+  "Hexa + (Betaflight)":
+    "Hexa + (Betaflight)",
+  "Hexa X (thứ tự Betaflight)":
+    "Hexa X (Betaflight order)",
+  "Y6 (đồng trục)":
+    "Y6 (coaxial)",
+  "Octo X8 (đồng trục)":
+    "Octo X8 (coaxial)",
+  "Octo phẳng +":
+    "Octo flat +",
+  "Octo phẳng X":
+    "Octo flat X",
+  "Quad X (thứ tự 1234)":
+    "Quad X (1234 order)",
 };
 
 // Strings that read the same in both languages (units, protocol names, terms pilots use in English).
@@ -2172,4 +2190,6 @@ export const SAME = [
   "Throttle boost", "Throttle boost cutoff", "Tracking", "Yaw lowpass", "dynamic notch {axis}", "°/s²",
   "optical flow", "m", "°/s", "1/s", "PSC_NE_VEL_P.", "PSC_NE_VEL_D.", "m/s", "GPS Rescue", "PMW3901 (SPI)", "VL53L1X", "VL53L0X",
   "mA", "mAh",
+  "ProShot1000",
+  "Hexa H", "Y4", "V-tail quad", "A-tail quad",
 ];
