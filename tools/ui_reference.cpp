@@ -1,0 +1,101 @@
+// Prints, as JSON, what the FIRMWARE computes for the things the configurator previews: mixer rows per frame layout,
+// the rate curve, the throttle curve and the stick deadband. app/tests/test_gui_math.py compares these numbers with
+// app/wbclient/web/js/gfx/fwmath.js, so the pictures in the GUI can not drift away from the flight code.
+//   g++ -std=c++17 tools/ui_reference.cpp -o build/ui_reference && build/ui_reference
+#include <stdio.h>
+#include "../src/proto/settings_apply.h"
+
+int main() {
+    using namespace fc;
+    printf("{\n \"layouts\": {");
+    const char* names[] = {"QUAD_X", "QUAD_PLUS", "HEX_X"};
+    for (int l = 0; l < 3; l++) {
+        printf("%s\n  \"%s\": [", l ? "," : "", names[l]);
+        for (int m = 0; m < mixer_motor_count((Layout)l); m++) { MixRow r = mixer_row((Layout)l, m); printf("%s[%.6f, %.6f, %.6f]", m ? ", " : "", (double)r.roll, (double)r.pitch, (double)r.yaw); }
+        printf("]");
+    }
+    // props_out is applied inside Mixer::mix(): measure it through the mixer itself (yaw command only)
+    printf("\n },\n \"yaw_response\": {");
+    for (int po = 0; po < 2; po++) {
+        Mixer mx; mx.cfg.layout = QUAD_X; mx.cfg.props_out = po != 0; mx.configure();
+        float lo[kMaxMotors], hi[kMaxMotors]; MotorLimits lim{0.0f, 1.0f};
+        mx.mix(lim, 0.5f, 0, 0, -0.1f, lo); mx.mix(lim, 0.5f, 0, 0, 0.1f, hi);
+        printf("%s\"%s\": [", po ? ", " : "", po ? "props_out" : "normal");
+        for (int m = 0; m < 4; m++) printf("%s%.6f", m ? ", " : "", (double)((hi[m] - lo[m]) / 0.2f));
+        printf("]");
+    }
+    printf("},\n \"rate\": [");
+    bool first = true;
+    const int cs[] = {70, 10, 200, 500}, mr[] = {670, 100, 1998, 400}, ex[] = {0, 35, 100};
+    for (int a = 0; a < 4; a++) for (int e = 0; e < 3; e++) for (int k = -10; k <= 10; k++) {
+        wbp::Settings s; wbp::defaults(s); CoreConfig cfg; RcInterpreter rc;
+        s.rates.center_sens[1] = (uint16_t)cs[a]; s.rates.max_rate[1] = (uint16_t)mr[a]; s.rates.expo[1] = (uint8_t)ex[e];
+        wbp::apply_core(s, cfg, rc);
+        const float st = k / 10.0f;
+        printf("%s\n  [%d, %d, %d, %.3f, %.5f]", first ? "" : ",", cs[a], mr[a], ex[e], (double)st, (double)apply_actual_rate(cfg.rates, PITCH, st)); first = false;
+    }
+    printf("\n ],\n \"throttle\": ["); first = true;
+    const int mid[] = {50, 30, 70}, tex[] = {0, 40, 100}, lim[] = {100, 60};
+    for (int a = 0; a < 3; a++) for (int e = 0; e < 3; e++) for (int l = 0; l < 2; l++) for (int k = 0; k <= 10; k++) {
+        wbp::Settings s; wbp::defaults(s); CoreConfig cfg; RcInterpreter rc;
+        s.rates.throttle_mid = (uint8_t)mid[a]; s.rates.throttle_expo = (uint8_t)tex[e]; s.rates.throttle_limit = (uint8_t)lim[l];
+        wbp::apply_core(s, cfg, rc);
+        printf("%s\n  [%d, %d, %d, %.2f, %.6f]", first ? "" : ",", mid[a], tex[e], lim[l], k / 10.0, (double)rc.curve(k / 10.0f)); first = false;
+    }
+    printf("\n ],\n \"stick\": ["); first = true;
+    const int db[] = {0, 2, 10, 20};
+    for (int d = 0; d < 4; d++) for (int us = 900; us <= 2100; us += 37) {
+        wbp::Settings s; wbp::defaults(s); CoreConfig cfg; RcInterpreter rc;
+        s.receiver.deadband = (uint8_t)db[d];
+        wbp::apply_core(s, cfg, rc);
+        uint16_t ch[16]; for (int i = 0; i < 16; i++) ch[i] = 1500; ch[2] = 1000; ch[0] = (uint16_t)us; ch[2] = (uint16_t)us;
+        const RcCommand c = rc.process(ch, true);
+        printf("%s\n  [%d, %d, %.6f, %.6f]", first ? "" : ",", us, db[d], (double)c.roll, (double)c.throttle_raw); first = false;
+    }
+    // attitude: for a spread of orientations, the angles the telemetry would report and the true body->world rotation (rows: north, east, down)
+    printf("\n ],\n \"attitude\": ["); first = true;
+    uint32_t seed = 12345;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return (float)((seed >> 8) & 0xFFFF) / 32768.0f - 1.0f; };
+    for (int k = 0; k < 60; k++) {
+        float q[4] = {rnd(), rnd(), rnd(), rnd()}; const float n = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+        if (n < 0.2f) continue;
+        Ahrs a; a.q0 = q[0] / n; a.q1 = q[1] / n; a.q2 = q[2] / n; a.q3 = q[3] / n;
+        const EulerDeg e = a.euler_user();
+        if (fabsf(e.pitch) > 80.0f) continue;                       // the angles are not unique at the poles
+        const float q0 = a.q0, q1 = a.q1, q2 = a.q2, q3 = a.q3;
+        const float R[9] = {1 - 2 * (q2 * q2 + q3 * q3), 2 * (q1 * q2 - q0 * q3), 2 * (q1 * q3 + q0 * q2),
+                            2 * (q1 * q2 + q0 * q3), 1 - 2 * (q1 * q1 + q3 * q3), 2 * (q2 * q3 - q0 * q1),
+                            2 * (q1 * q3 - q0 * q2), 2 * (q2 * q3 + q0 * q1), 1 - 2 * (q1 * q1 + q2 * q2)};
+        // the same matrix must agree with what the estimator itself uses: tilt from vertical = R[2][2]
+        if (fabsf(R[8] - a.up_cos()) > 1e-5f) { fprintf(stderr, "rotation convention mismatch\n"); return 1; }
+        printf("%s\n  [%.5f, %.5f, %.5f", first ? "" : ",", (double)e.roll, (double)e.pitch, (double)e.yaw); first = false;
+        for (int i = 0; i < 9; i++) printf(", %.6f", (double)R[i]);
+        printf("]");
+    }
+    // beeper patterns: name -> on/off durations (unit 10 ms), exactly the table the buzzer plays
+    printf("\n ],\n \"beeper\": {"); first = true;
+    for (int m = 0; m < beep::MODE_COUNT; m++) {
+        if (!beep::has_sound((uint8_t)m)) continue;
+        printf("%s\n  \"%s\": [", first ? "" : ",", beep::kTable[m].name); first = false;
+        for (const uint8_t* s = beep::kTable[m].sequence; *s != beep::kStop; s++) printf("%s%u", s == beep::kTable[m].sequence ? "" : ", ", (unsigned)*s);
+        printf("]");
+    }
+    printf("\n },\n \"beeper_order\": [");
+    for (int m = 0; m < beep::MODE_COUNT; m++) printf("%s\"%s\"", m ? ", " : "", beep::kTable[m].name);
+    // the motors as the sounder: which conditions they can never play, the default set, and how many ESC tones each pattern becomes
+    // (counted by playing it on a Beeper set up like the firmware's motor sounder)
+    printf("],\n \"motor_never\": ["); first = true;
+    for (int m = 0; m < beep::MODE_COUNT; m++) if ((beep::kMotorNever >> m) & 1u) { printf("%s\"%s\"", first ? "" : ", ", beep::kTable[m].name); first = false; }
+    printf("],\n \"motor_default\": ["); first = true;
+    { wbp::S_beeper sb; wbp::defaults(sb); for (int m = 0; m < beep::MODE_COUNT; m++) if ((sb.motor_conditions >> m) & 1u) { printf("%s\"%s\"", first ? "" : ", ", beep::kTable[m].name); first = false; } }
+    printf("],\n \"motor_tones\": {"); first = true;
+    for (int m = 0; m < beep::MODE_COUNT; m++) {
+        if (!beep::has_sound((uint8_t)m)) continue;
+        beep::Beeper b; wbp::Settings s; wbp::defaults(s); beep::Beeper buzzer; wbp::apply_beeper(s, buzzer, b);
+        b.force((uint8_t)m); int tones = 0; uint32_t ms = 0, first_ms = 0, last_ms = 0;
+        for (; ms < 20000 && (ms == 0 || b.current() != beep::NO_MODE); ms++) { b.update(ms); if (b.take_start()) { if (!tones) first_ms = ms; last_ms = ms; tones++; } }
+        printf("%s\n  \"%s\": [%d, %u]", first ? "" : ",", beep::kTable[m].name, tones, (unsigned)(last_ms - first_ms)); first = false;
+    }
+    printf("\n },\n \"beacon_slot_ms\": %u\n}\n", (unsigned)beep::kBeaconIntervalMs);
+    return 0;
+}

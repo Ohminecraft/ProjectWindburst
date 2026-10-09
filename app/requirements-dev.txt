@@ -1,0 +1,4 @@
+# only for running the tests (make apptest); the configurator itself needs requirements.txt only
+-r requirements.txt
+pytest
+playwright        # then: playwright install chromium   (browser tests are skipped without it)

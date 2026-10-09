@@ -1,0 +1,3639 @@
+{
+ "version": 1,
+ "hash": "0x6DA721E0",
+ "enums": {
+  "layout": [
+   "QUAD_X",
+   "QUAD_PLUS",
+   "HEX_X"
+  ],
+  "esc_protocol": [
+   "PWM",
+   "ONESHOT125",
+   "ONESHOT42",
+   "MULTISHOT",
+   "DSHOT150",
+   "DSHOT300",
+   "DSHOT600",
+   "DSHOT1200"
+  ],
+  "rx_protocol": [
+   "CRSF",
+   "SBUS",
+   "IBUS",
+   "SPEKTRUM",
+   "NRF24",
+   "PPM",
+   "PWM",
+   "SPEKTRUM1024"
+  ],
+  "align": [
+   "CW0",
+   "CW90",
+   "CW180",
+   "CW270",
+   "CW0_FLIP",
+   "CW90_FLIP",
+   "CW180_FLIP",
+   "CW270_FLIP"
+  ],
+  "gps_provider": [
+   "NMEA",
+   "UBLOX",
+   "MSP",
+   "VIRTUAL"
+  ],
+  "sbas": [
+   "AUTO",
+   "EGNOS",
+   "WAAS",
+   "MSAS",
+   "GAGAN",
+   "NONE"
+  ],
+  "gps_model": [
+   "PORTABLE",
+   "STATIONARY",
+   "PEDESTRIAN",
+   "AUTOMOTIVE",
+   "AT_SEA",
+   "AIRBORNE_1G",
+   "AIRBORNE_2G",
+   "AIRBORNE_4G"
+  ],
+  "utc": [
+   "AUTO",
+   "USNO",
+   "EU",
+   "SU",
+   "NTSC"
+  ],
+  "range_model": [
+   "AUTO",
+   "VL53L1X",
+   "VL53L0X",
+   "MSP"
+  ],
+  "mag_model": [
+   "AUTO",
+   "HMC5883L",
+   "QMC5883L",
+   "QMC5883P",
+   "AK8963_MPU9250"
+  ],
+  "port_function": [
+   "NONE",
+   "SERIAL_RX",
+   "GPS",
+   "TELEMETRY",
+   "FLOW_MSP"
+  ],
+  "mode": [
+   "ARM",
+   "ANGLE",
+   "STABILIZE",
+   "ALTHOLD",
+   "POSHOLD",
+   "FAILSAFE",
+   "BEEPER",
+   "BLACKBOX",
+   "CALIB",
+   "RESCUE"
+  ],
+  "failsafe": [
+   "NONE",
+   "GUARD",
+   "DESCENT",
+   "LANDED"
+  ],
+  "ah_state": [
+   "STOPPED",
+   "LANDED_IDLE",
+   "LANDED_PRE_TAKEOFF",
+   "TAKEOFF",
+   "FLYING"
+  ],
+  "gps_state": [
+   "UNKNOWN",
+   "INITIALIZED",
+   "DETECT_BAUD",
+   "CHANGE_BAUD",
+   "CONFIGURE",
+   "RECEIVING_DATA",
+   "LOST_COMMUNICATION"
+  ],
+  "cal_kind": [
+   "NONE",
+   "GYRO",
+   "ACCEL",
+   "MAG"
+  ],
+  "cal_state": [
+   "IDLE",
+   "RUNNING",
+   "DONE",
+   "FAILED"
+  ],
+  "mag_cal_result": [
+   "OK",
+   "TOO_FEW_SAMPLES",
+   "POOR_COVERAGE",
+   "SINGULAR",
+   "NOT_ELLIPSOID",
+   "TOO_DISTORTED",
+   "BAD_FIELD_STRENGTH",
+   "BAD_FIT"
+  ],
+  "batt_source": [
+   "AUTO",
+   "ADC",
+   "ESC",
+   "NONE"
+  ],
+  "batt_state": [
+   "NOT_PRESENT",
+   "OK",
+   "WARNING",
+   "CRITICAL"
+  ],
+  "buzzer_type": [
+   "ACTIVE",
+   "PASSIVE"
+  ],
+  "beeper_cond": [
+   "GYRO_CALIBRATED",
+   "RX_LOST",
+   "RX_LOST_LANDING",
+   "DISARMING",
+   "ARMING",
+   "ARMING_GPS_FIX",
+   "ARMING_GPS_NO_FIX",
+   "BAT_CRIT_LOW",
+   "BAT_LOW",
+   "RX_SET",
+   "ACC_CALIBRATION",
+   "ACC_CALIBRATION_FAIL",
+   "READY_BEEP",
+   "ARMED",
+   "SYSTEM_INIT",
+   "ARM_REFUSED",
+   "BLACKBOX_ERASE",
+   "USB"
+  ],
+  "bb_device": [
+   "NONE",
+   "FLASH",
+   "SDCARD"
+  ],
+  "bb_trigger": [
+   "SWITCH",
+   "ARMED",
+   "ALWAYS"
+  ],
+  "bb_state": [
+   "OFF",
+   "NO_STORAGE",
+   "NEEDS_ERASE",
+   "IDLE",
+   "LOGGING",
+   "STREAMING",
+   "ERASING",
+   "FULL"
+  ],
+  "bb_field": [
+   "GYRO",
+   "GYRO_RAW",
+   "SETPOINT",
+   "PID",
+   "RC",
+   "MOTORS",
+   "ATTITUDE",
+   "ACC",
+   "RPM",
+   "TIMING",
+   "ALT",
+   "BATTERY",
+   "GPS",
+   "MAG",
+   "NAV"
+  ],
+  "sd_mode": [
+   "SPI",
+   "SDMMC_1BIT"
+  ],
+  "lpf_type": [
+   "PT1",
+   "BIQUAD",
+   "PT2",
+   "PT3"
+  ],
+  "iterm_relax": [
+   "OFF",
+   "RP",
+   "RPY",
+   "RP_INC",
+   "RPY_INC"
+  ],
+  "iterm_relax_type": [
+   "GYRO",
+   "SETPOINT"
+  ],
+  "ff_averaging": [
+   "OFF",
+   "2_POINT",
+   "3_POINT",
+   "4_POINT"
+  ],
+  "tpa_mode": [
+   "PD",
+   "D"
+  ],
+  "slider_mode": [
+   "OFF",
+   "RP",
+   "RPY"
+  ],
+  "airmode": [
+   "OFF",
+   "AUTO",
+   "ALWAYS"
+  ],
+  "air_state": [
+   "GROUND",
+   "AIR",
+   "AIRMODE"
+  ],
+  "dshot_driver": [
+   "DIRECT",
+   "IDF"
+  ],
+  "bidir_state": [
+   "OFF",
+   "ACTIVE",
+   "UNAVAILABLE"
+  ],
+  "flow_type": [
+   "NONE",
+   "PMW3901",
+   "MSP"
+  ],
+  "flow_align": [
+   "CW0",
+   "CW90",
+   "CW180",
+   "CW270"
+  ],
+  "flow_reject": [
+   "OK",
+   "QUALITY",
+   "HEIGHT",
+   "TILT",
+   "TURNING",
+   "NO_GYRO",
+   "NO_SAMPLE"
+  ],
+  "ph_axis": [
+   "PILOT",
+   "BRAKE",
+   "BRAKE_READY",
+   "TO_LOITER",
+   "LOITER",
+   "TO_PILOT"
+  ],
+  "rescue_phase": [
+   "IDLE",
+   "CLIMB",
+   "ROTATE",
+   "FLY_HOME",
+   "DESCENT",
+   "LANDING",
+   "FAILED"
+  ],
+  "rescue_fail": [
+   "NONE",
+   "NO_POSITION",
+   "NO_HEADING",
+   "NO_ALTITUDE",
+   "GPS_LOST",
+   "LOW_SATS",
+   "STALLED",
+   "FLYAWAY"
+  ],
+  "rescue_alt": [
+   "MAX",
+   "FIXED",
+   "CURRENT"
+  ],
+  "fs_procedure": [
+   "LAND",
+   "RESCUE"
+  ],
+  "servo_source": [
+   "OFF",
+   "CH1",
+   "CH2",
+   "CH3",
+   "CH4",
+   "CH5",
+   "CH6",
+   "CH7",
+   "CH8",
+   "CH9",
+   "CH10",
+   "CH11",
+   "CH12",
+   "CH13",
+   "CH14",
+   "CH15",
+   "CH16"
+  ],
+  "curr_source": [
+   "AUTO",
+   "ADC",
+   "ESC",
+   "NONE"
+  ],
+  "port_assign": [
+   "AUTO",
+   "TABLE"
+  ]
+ },
+ "bits": {
+  "arm_blocker": [
+   "NO_IMU",
+   "GYRO_NOT_CAL",
+   "RX_LOST",
+   "THROTTLE_HIGH",
+   "ANGLE_TOO_HIGH",
+   "FAILSAFE",
+   "ALTHOLD_NO_BARO",
+   "BATT_LOW",
+   "ARM_SWITCH_ON",
+   "CONFIG_UNSAVED",
+   "CALIBRATING",
+   "POSHOLD_NO_GPS",
+   "MAG_NOT_CALIBRATED",
+   "PIN_CONFLICT",
+   "LOOP_RATE",
+   "RUNAWAY_TAKEOFF",
+   "RESCUE_NO_FIX",
+   "RESCUE_NO_COMPASS"
+  ],
+  "health": [
+   "IMU",
+   "GYRO_CAL",
+   "BARO",
+   "RANGE",
+   "GPS",
+   "MAG_READY",
+   "MAG_CAL",
+   "RX",
+   "MOTORS",
+   "ESC_TELEMETRY",
+   "ACC_CAL",
+   "BATTERY",
+   "FLOW"
+  ],
+  "settings_flags": [
+   "DIRTY",
+   "REBOOT_REQUIRED"
+  ],
+  "est_valid": [
+   "ALT",
+   "POS",
+   "YAW_FROM_MAG",
+   "VEL",
+   "FLOW",
+   "TILT_AIDED"
+  ],
+  "fs_cause": [
+   "LINK",
+   "SWITCH",
+   "BATTERY"
+  ],
+  "nav_flags": [
+   "POSHOLD",
+   "POSHOLD_UNAVAILABLE",
+   "RESCUE",
+   "RESCUE_AVAILABLE",
+   "NAV_LEAN"
+  ]
+ },
+ "sections": [
+  {
+   "id": 1,
+   "name": "general",
+   "desc": "Loop rates, arming, failsafe, board alignment",
+   "fields": [
+    {
+     "n": "loop_hz",
+     "t": "u16",
+     "d": 4000,
+     "min": 500,
+     "max": 8000,
+     "desc": "gyro / PID loop frequency (Hz)"
+    },
+    {
+     "n": "est_hz",
+     "t": "u16",
+     "d": 500,
+     "min": 100,
+     "max": 1000,
+     "desc": "estimator rate (Hz)"
+    },
+    {
+     "n": "max_arm_angle",
+     "t": "u8",
+     "d": 25,
+     "min": 5,
+     "max": 180,
+     "desc": "arming refused above this tilt (deg)"
+    },
+    {
+     "n": "board_align",
+     "t": "u8",
+     "d": 0,
+     "enum": "align",
+     "desc": "how the IMU chip sits on the board"
+    },
+    {
+     "n": "board_trim_roll",
+     "t": "i16",
+     "d": 0,
+     "min": -450,
+     "max": 450,
+     "scale": 0.1,
+     "desc": "board alignment trim (deg)"
+    },
+    {
+     "n": "board_trim_pitch",
+     "t": "i16",
+     "d": 0,
+     "min": -450,
+     "max": 450,
+     "scale": 0.1
+    },
+    {
+     "n": "board_trim_yaw",
+     "t": "i16",
+     "d": 0,
+     "min": -1800,
+     "max": 1800,
+     "scale": 0.1
+    },
+    {
+     "n": "fs_guard_ms",
+     "t": "u16",
+     "d": 500,
+     "min": 100,
+     "max": 5000
+    },
+    {
+     "n": "fs_recover_ms",
+     "t": "u16",
+     "d": 1000,
+     "min": 100,
+     "max": 10000
+    },
+    {
+     "n": "fs_max_descent_s",
+     "t": "u16",
+     "d": 60,
+     "min": 5,
+     "max": 600
+    },
+    {
+     "n": "fs_fallback_throttle",
+     "t": "u8",
+     "d": 85,
+     "min": 30,
+     "max": 100,
+     "desc": "% of hover throttle when no altitude estimate"
+    },
+    {
+     "n": "airmode",
+     "t": "u8",
+     "d": 1,
+     "enum": "airmode",
+     "desc": "stay stabilised (full authority, I-terms) with the throttle stick at the bottom: OFF = never (stick down = motors at idle); AUTO = while the craft is in the air (ends when it stands still on the ground); ALWAYS = from the first throttle-up until the disarm, as Betaflight (on the ground / the bench the motors then run up by themselves)"
+    },
+    {
+     "n": "airmode_start_throttle",
+     "t": "u8",
+     "d": 25,
+     "min": 0,
+     "max": 100,
+     "desc": "throttle (%) that counts as 'in the air' at once; below it the craft is taken to be flying after 1 s of any throttle above low (Betaflight airmode_start_throttle_percent)"
+    },
+    {
+     "n": "runaway_takeoff",
+     "t": "bool",
+     "d": 1,
+     "desc": "runaway take-off prevention (Betaflight): until a normal flight has been seen, a PID sum at its limit while the craft turns disarms it after 75 ms - what a wrong motor order, a wrong prop direction or a reversed gyro axis do on the first take-off"
+    }
+   ],
+   "live": false
+  },
+  {
+   "id": 2,
+   "name": "receiver",
+   "desc": "Receiver protocol and channel map",
+   "fields": [
+    {
+     "n": "protocol",
+     "t": "u8",
+     "d": 0,
+     "enum": "rx_protocol"
+    },
+    {
+     "n": "ch_roll",
+     "t": "u8",
+     "d": 0,
+     "min": 0,
+     "max": 15
+    },
+    {
+     "n": "ch_pitch",
+     "t": "u8",
+     "d": 1,
+     "min": 0,
+     "max": 15
+    },
+    {
+     "n": "ch_throttle",
+     "t": "u8",
+     "d": 2,
+     "min": 0,
+     "max": 15
+    },
+    {
+     "n": "ch_yaw",
+     "t": "u8",
+     "d": 3,
+     "min": 0,
+     "max": 15
+    },
+    {
+     "n": "ch_aux0",
+     "t": "u8",
+     "d": 4,
+     "min": 0,
+     "max": 8,
+     "desc": "first of 8 consecutive aux channels"
+    },
+    {
+     "n": "deadband",
+     "t": "u8",
+     "d": 2,
+     "min": 0,
+     "max": 20,
+     "desc": "stick deadband (%)"
+    },
+    {
+     "n": "rx_timeout_ms",
+     "t": "u16",
+     "d": 500,
+     "min": 50,
+     "max": 5000,
+     "desc": "no frame for this long = link lost"
+    },
+    {
+     "n": "rc_smoothing",
+     "t": "bool",
+     "d": 1,
+     "desc": "low-pass the stick steps of the receiver frames (PT3, cutoff follows the measured frame rate)"
+    },
+    {
+     "n": "rc_smoothing_factor",
+     "t": "u8",
+     "d": 30,
+     "min": 0,
+     "max": 250,
+     "desc": "smoothness of roll / pitch / yaw: cutoff = frame rate x 1.5 / (1 + factor / 10), at least 15 Hz"
+    },
+    {
+     "n": "rc_smoothing_throttle",
+     "t": "u8",
+     "d": 30,
+     "min": 0,
+     "max": 250,
+     "desc": "the same for the throttle"
+    }
+   ],
+   "live": false,
+   "compat": 9
+  },
+  {
+   "id": 3,
+   "name": "modes",
+   "desc": "Flight modes on aux ranges (255 = unused entry)",
+   "fields": [
+    {
+     "n": "mode",
+     "t": "u8",
+     "count": 16,
+     "d": 255,
+     "enum": "mode",
+     "optional": true,
+     "desc": "255 = unused slot"
+    },
+    {
+     "n": "aux",
+     "t": "u8",
+     "count": 16,
+     "d": 0,
+     "min": 0,
+     "max": 7
+    },
+    {
+     "n": "lo",
+     "t": "u16",
+     "count": 16,
+     "d": 1000,
+     "min": 900,
+     "max": 2100
+    },
+    {
+     "n": "hi",
+     "t": "u16",
+     "count": 16,
+     "d": 1000,
+     "min": 900,
+     "max": 2100
+    }
+   ],
+   "live": true
+  },
+  {
+   "id": 4,
+   "name": "rates",
+   "desc": "Rates, throttle curve, angle limits",
+   "fields": [
+    {
+     "n": "center_sens",
+     "t": "u16",
+     "count": 3,
+     "d": [
+      70,
+      70,
+      70
+     ],
+     "min": 10,
+     "max": 500,
+     "desc": "deg/s near centre"
+    },
+    {
+     "n": "max_rate",
+     "t": "u16",
+     "count": 3,
+     "d": [
+      670,
+      670,
+      400
+     ],
+     "min": 100,
+     "max": 1998,
+     "desc": "deg/s at full stick"
+    },
+    {
+     "n": "expo",
+     "t": "u8",
+     "count": 3,
+     "d": [
+      0,
+      0,
+      0
+     ],
+     "min": 0,
+     "max": 100
+    },
+    {
+     "n": "throttle_mid",
+     "t": "u8",
+     "d": 50,
+     "min": 10,
+     "max": 90
+    },
+    {
+     "n": "throttle_expo",
+     "t": "u8",
+     "d": 0,
+     "min": 0,
+     "max": 100
+    },
+    {
+     "n": "throttle_limit",
+     "t": "u8",
+     "d": 100,
+     "min": 25,
+     "max": 100
+    },
+    {
+     "n": "angle_limit",
+     "t": "u8",
+     "d": 45,
+     "min": 10,
+     "max": 80,
+     "desc": "tilt at full stick in Angle and Stabilize (deg)"
+    }
+   ],
+   "live": true,
+   "compat": 27
+  },
+  {
+   "id": 5,
+   "name": "pid",
+   "desc": "Rate PID in Betaflight units (roll, pitch, yaw), tuning sliders, PID controller options, Angle and Stabilize",
+   "fields": [
+    {
+     "n": "slider_mode",
+     "t": "u8",
+     "d": 2,
+     "enum": "slider_mode",
+     "desc": "which axes the tuning sliders set: while an axis is under the sliders the firmware computes its p / i / d / d_max / f from them and ignores what is written to those fields"
+    },
+    {
+     "n": "slider_d",
+     "t": "u8",
+     "d": 100,
+     "min": 0,
+     "max": 200,
+     "desc": "Damping (D gains), % of the default"
+    },
+    {
+     "n": "slider_pi",
+     "t": "u8",
+     "d": 100,
+     "min": 0,
+     "max": 200,
+     "desc": "Tracking (P and I gains)"
+    },
+    {
+     "n": "slider_ff",
+     "t": "u8",
+     "d": 100,
+     "min": 0,
+     "max": 200,
+     "desc": "Stick response (feedforward gains)"
+    },
+    {
+     "n": "slider_d_max",
+     "t": "u8",
+     "d": 100,
+     "min": 0,
+     "max": 200,
+     "desc": "Dynamic damping (D max)"
+    },
+    {
+     "n": "slider_i",
+     "t": "u8",
+     "d": 100,
+     "min": 0,
+     "max": 200,
+     "desc": "Drift - wobble (I gains)"
+    },
+    {
+     "n": "slider_pitch_d",
+     "t": "u8",
+     "d": 100,
+     "min": 0,
+     "max": 200,
+     "desc": "Pitch damping (pitch : roll D)"
+    },
+    {
+     "n": "slider_pitch_pi",
+     "t": "u8",
+     "d": 100,
+     "min": 0,
+     "max": 200,
+     "desc": "Pitch tracking (pitch : roll P, I and feedforward)"
+    },
+    {
+     "n": "slider_master",
+     "t": "u8",
+     "d": 100,
+     "min": 0,
+     "max": 200,
+     "desc": "Master multiplier: everything together"
+    },
+    {
+     "n": "p",
+     "t": "u8",
+     "d": [
+      45,
+      47,
+      45
+     ],
+     "min": 0,
+     "max": 250,
+     "count": 3
+    },
+    {
+     "n": "i",
+     "t": "u8",
+     "d": [
+      80,
+      84,
+      80
+     ],
+     "min": 0,
+     "max": 250,
+     "count": 3
+    },
+    {
+     "n": "d",
+     "t": "u8",
+     "d": [
+      30,
+      34,
+      0
+     ],
+     "min": 0,
+     "max": 250,
+     "count": 3,
+     "desc": "D (Betaflight: the base D, used when nothing is moving fast)"
+    },
+    {
+     "n": "d_max",
+     "t": "u8",
+     "d": [
+      40,
+      46,
+      0
+     ],
+     "min": 0,
+     "max": 250,
+     "count": 3,
+     "desc": "the D that fast gyro / stick movement raises D to; at or below d = no boost"
+    },
+    {
+     "n": "f",
+     "t": "u16",
+     "d": [
+      120,
+      125,
+      120
+     ],
+     "min": 0,
+     "max": 1000,
+     "count": 3,
+     "desc": "feedforward"
+    },
+    {
+     "n": "iterm_relax",
+     "t": "u8",
+     "d": 1,
+     "enum": "iterm_relax",
+     "desc": "axes on which the I-term is held back while the stick moves; _INC = only its growth is held back"
+    },
+    {
+     "n": "iterm_relax_type",
+     "t": "u8",
+     "d": 1,
+     "enum": "iterm_relax_type"
+    },
+    {
+     "n": "iterm_relax_cutoff",
+     "t": "u8",
+     "d": 15,
+     "min": 1,
+     "max": 50,
+     "desc": "Hz; lower for big, slow craft (10 for 7 inch, 3 - 5 for X-class)"
+    },
+    {
+     "n": "iterm_windup",
+     "t": "u8",
+     "d": 80,
+     "min": 30,
+     "max": 100,
+     "desc": "I-term limit, % of the PID sum limit"
+    },
+    {
+     "n": "anti_gravity",
+     "t": "bool",
+     "d": 1,
+     "desc": "boost I (and P) while the throttle moves fast, so the nose does not dip or rise on a punch"
+    },
+    {
+     "n": "anti_gravity_gain",
+     "t": "u8",
+     "d": 80,
+     "min": 0,
+     "max": 250
+    },
+    {
+     "n": "anti_gravity_p_gain",
+     "t": "u8",
+     "d": 100,
+     "min": 0,
+     "max": 250
+    },
+    {
+     "n": "anti_gravity_cutoff",
+     "t": "u8",
+     "d": 5,
+     "min": 2,
+     "max": 50,
+     "desc": "Hz"
+    },
+    {
+     "n": "d_max_gain",
+     "t": "u8",
+     "d": 0,
+     "min": 0,
+     "max": 100,
+     "desc": "how strongly fast gyro movement (propwash, bounce-back) raises D towards d_max"
+    },
+    {
+     "n": "d_max_advance",
+     "t": "u8",
+     "d": 35,
+     "min": 0,
+     "max": 200,
+     "desc": "how strongly fast stick movement raises D towards d_max"
+    },
+    {
+     "n": "ff_transition",
+     "t": "u8",
+     "d": 0,
+     "min": 0,
+     "max": 100,
+     "desc": "% of stick travel around centre over which feedforward fades in; 0 = full everywhere"
+    },
+    {
+     "n": "ff_averaging",
+     "t": "u8",
+     "d": 1,
+     "enum": "ff_averaging"
+    },
+    {
+     "n": "ff_smooth_factor",
+     "t": "u8",
+     "d": 65,
+     "min": 0,
+     "max": 95
+    },
+    {
+     "n": "ff_jitter_factor",
+     "t": "u8",
+     "d": 7,
+     "min": 0,
+     "max": 20,
+     "desc": "stick steps below which feedforward is reduced (hides finger tremor)"
+    },
+    {
+     "n": "ff_boost",
+     "t": "u8",
+     "d": 15,
+     "min": 0,
+     "max": 50
+    },
+    {
+     "n": "ff_max_rate_limit",
+     "t": "u8",
+     "d": 90,
+     "min": 0,
+     "max": 200,
+     "desc": "cuts feedforward when the stick is about to reach its end; 0 = off"
+    },
+    {
+     "n": "ff_yaw_hold_gain",
+     "t": "u8",
+     "d": 15,
+     "min": 0,
+     "max": 100
+    },
+    {
+     "n": "ff_yaw_hold_time",
+     "t": "u8",
+     "d": 100,
+     "min": 10,
+     "max": 250,
+     "desc": "ms"
+    },
+    {
+     "n": "tpa_mode",
+     "t": "u8",
+     "d": 1,
+     "enum": "tpa_mode",
+     "desc": "what TPA reduces: P and D, or D only"
+    },
+    {
+     "n": "tpa_rate",
+     "t": "u8",
+     "d": 65,
+     "min": 0,
+     "max": 100,
+     "desc": "% reduction at full throttle"
+    },
+    {
+     "n": "tpa_breakpoint",
+     "t": "u8",
+     "d": 35,
+     "min": 0,
+     "max": 100,
+     "desc": "% throttle above which TPA starts (Betaflight 1350 = 35)"
+    },
+    {
+     "n": "tpa_low_rate",
+     "t": "u8",
+     "d": 20,
+     "min": 0,
+     "max": 100,
+     "desc": "% reduction at zero throttle"
+    },
+    {
+     "n": "tpa_low_breakpoint",
+     "t": "u8",
+     "d": 5,
+     "min": 0,
+     "max": 100,
+     "desc": "% throttle below which the low-throttle reduction acts"
+    },
+    {
+     "n": "tpa_low_always",
+     "t": "bool",
+     "d": 0,
+     "desc": "off = the low-throttle reduction only acts until the throttle first rises past its breakpoint"
+    },
+    {
+     "n": "throttle_boost",
+     "t": "u8",
+     "d": 5,
+     "min": 0,
+     "max": 100,
+     "desc": "adds the fast part of a throttle movement on top of it; 0 = off"
+    },
+    {
+     "n": "throttle_boost_cutoff",
+     "t": "u8",
+     "d": 15,
+     "min": 5,
+     "max": 50,
+     "desc": "Hz"
+    },
+    {
+     "n": "angle_strength",
+     "t": "u8",
+     "d": 50,
+     "min": 0,
+     "max": 200,
+     "desc": "Angle mode: rate = strength / 10 x angle error (Betaflight level P)"
+    },
+    {
+     "n": "angle_feedforward",
+     "t": "u8",
+     "d": 50,
+     "min": 0,
+     "max": 200,
+     "desc": "Angle mode: % of the stick speed added to the levelling rate"
+    },
+    {
+     "n": "angle_ff_smoothing",
+     "t": "u8",
+     "d": 80,
+     "min": 10,
+     "max": 250,
+     "desc": "ms"
+    },
+    {
+     "n": "angle_earth_ref",
+     "t": "u8",
+     "d": 100,
+     "min": 0,
+     "max": 100,
+     "desc": "% of yaw co-ordination while tilted"
+    },
+    {
+     "n": "stab_p",
+     "t": "f32",
+     "d": [
+      4.5,
+      4.5,
+      4.5
+     ],
+     "min": 1,
+     "max": 12,
+     "count": 3,
+     "desc": "Stabilize Roll / Pitch / Yaw P (ArduPilot ATC_ANG_RLL_P, ATC_ANG_PIT_P, ATC_ANG_YAW_P): deg/s per degree of error"
+    },
+    {
+     "n": "stab_accel_rp",
+     "t": "u16",
+     "d": 1100,
+     "min": 100,
+     "max": 3000,
+     "desc": "Stabilize: largest roll / pitch acceleration asked for, deg/s^2 (ATC_ACCEL_R_MAX / P_MAX)"
+    },
+    {
+     "n": "stab_accel_yaw",
+     "t": "u16",
+     "d": 270,
+     "min": 20,
+     "max": 1000,
+     "desc": "the same for yaw (ATC_ACCEL_Y_MAX)"
+    },
+    {
+     "n": "stab_input_tc",
+     "t": "u8",
+     "d": 15,
+     "min": 0,
+     "max": 100,
+     "scale": 0.01,
+     "desc": "Stabilize: softness of the stick response, s (ATC_INPUT_TC: 0.10 crisp, 0.15 medium, 0.30 very soft)"
+    },
+    {
+     "n": "stab_rate_ff",
+     "t": "bool",
+     "d": 1,
+     "desc": "Stabilize: shaped attitude target with rate feedforward (ATC_RATE_FF_ENAB)"
+    }
+   ],
+   "live": true
+  },
+  {
+   "id": 6,
+   "name": "motors",
+   "desc": "Layout, ESC protocol, reversal, pulse endpoints, dynamic idle",
+   "fields": [
+    {
+     "n": "layout",
+     "t": "u8",
+     "d": 0,
+     "enum": "layout"
+    },
+    {
+     "n": "props_out",
+     "t": "bool",
+     "d": 0
+    },
+    {
+     "n": "protocol",
+     "t": "u8",
+     "d": 5,
+     "enum": "esc_protocol"
+    },
+    {
+     "n": "reversed_mask",
+     "t": "u8",
+     "d": 0,
+     "desc": "bit i = logical motor i spins the wrong way (sent to the ESC as a DShot command)"
+    },
+    {
+     "n": "order",
+     "t": "u8",
+     "count": 8,
+     "d": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+     ],
+     "min": 0,
+     "max": 7,
+     "desc": "logical motor -> hardware slot"
+    },
+    {
+     "n": "pulse_disarmed",
+     "t": "u16",
+     "d": 0,
+     "min": 0,
+     "max": 2000
+    },
+    {
+     "n": "pulse_armed",
+     "t": "u16",
+     "d": 1000,
+     "min": 800,
+     "max": 2000
+    },
+    {
+     "n": "pulse_max",
+     "t": "u16",
+     "d": 2000,
+     "min": 1000,
+     "max": 2200
+    },
+    {
+     "n": "pulse_hz",
+     "t": "u16",
+     "d": 0,
+     "min": 0,
+     "max": 32000,
+     "desc": "0 = protocol default"
+    },
+    {
+     "n": "bidirectional",
+     "t": "bool",
+     "d": 0
+    },
+    {
+     "n": "edt",
+     "t": "bool",
+     "d": 0,
+     "desc": "extended DShot telemetry (voltage / current / temperature)"
+    },
+    {
+     "n": "pole_count",
+     "t": "u8",
+     "d": 14,
+     "min": 2,
+     "max": 64
+    },
+    {
+     "n": "idle_x10",
+     "t": "u16",
+     "d": 55,
+     "min": 0,
+     "max": 300,
+     "desc": "motor idle in 0.1 % (55 = 5.5 %)"
+    },
+    {
+     "n": "output_limit",
+     "t": "u8",
+     "d": 100,
+     "min": 10,
+     "max": 100
+    },
+    {
+     "n": "dyn_idle_min_rpm",
+     "t": "u16",
+     "d": 0,
+     "min": 0,
+     "max": 600,
+     "desc": "x100 rpm, 0 = off (needs bidirectional DShot)"
+    },
+    {
+     "n": "dyn_idle_p",
+     "t": "u8",
+     "d": 50,
+     "min": 1,
+     "max": 250
+    },
+    {
+     "n": "dyn_idle_i",
+     "t": "u8",
+     "d": 50,
+     "min": 1,
+     "max": 250
+    },
+    {
+     "n": "dyn_idle_d",
+     "t": "u8",
+     "d": 50,
+     "min": 0,
+     "max": 250
+    },
+    {
+     "n": "dyn_idle_max_inc",
+     "t": "u16",
+     "d": 150,
+     "min": 10,
+     "max": 400
+    },
+    {
+     "n": "dir_cmd_extended",
+     "t": "bool",
+     "d": 0,
+     "desc": "use DShot commands 20/21 (AM32) instead of 7/8 for spin direction"
+    },
+    {
+     "n": "dshot_driver",
+     "t": "u8",
+     "d": 0,
+     "enum": "dshot_driver",
+     "desc": "how DShot frames reach the pins: DIRECT = written straight into the RMT peripheral (needed for bidirectional DShot, a few microseconds per cycle); IDF = through the ESP-IDF driver, one way only (fallback)"
+    }
+   ],
+   "live": false,
+   "compat": 34
+  },
+  {
+   "id": 7,
+   "name": "sensors",
+   "desc": "Module enables and models",
+   "fields": [
+    {
+     "n": "baro_enabled",
+     "t": "bool",
+     "d": 1
+    },
+    {
+     "n": "mag_enabled",
+     "t": "bool",
+     "d": 0
+    },
+    {
+     "n": "range_enabled",
+     "t": "bool",
+     "d": 1
+    },
+    {
+     "n": "gps_enabled",
+     "t": "bool",
+     "d": 1
+    },
+    {
+     "n": "mag_model",
+     "t": "u8",
+     "d": 0,
+     "enum": "mag_model"
+    },
+    {
+     "n": "mag_align",
+     "t": "u8",
+     "d": 0,
+     "enum": "align"
+    },
+    {
+     "n": "mag_trim_roll",
+     "t": "i16",
+     "d": 0,
+     "min": -1800,
+     "max": 1800,
+     "scale": 0.1
+    },
+    {
+     "n": "mag_trim_pitch",
+     "t": "i16",
+     "d": 0,
+     "min": -1800,
+     "max": 1800,
+     "scale": 0.1
+    },
+    {
+     "n": "mag_trim_yaw",
+     "t": "i16",
+     "d": 0,
+     "min": -1800,
+     "max": 1800,
+     "scale": 0.1
+    },
+    {
+     "n": "mag_declination",
+     "t": "i16",
+     "d": 0,
+     "min": -1800,
+     "max": 1800,
+     "scale": 0.1,
+     "desc": "magnetic declination, east positive (deg)"
+    },
+    {
+     "n": "range_model",
+     "t": "u8",
+     "d": 0,
+     "enum": "range_model"
+    },
+    {
+     "n": "range_l1x_mode",
+     "t": "u8",
+     "d": 2,
+     "min": 0,
+     "max": 2,
+     "desc": "0 short, 1 medium, 2 long"
+    }
+   ],
+   "live": false
+  },
+  {
+   "id": 8,
+   "name": "gps",
+   "desc": "GPS provider, baud, auto config, home point",
+   "fields": [
+    {
+     "n": "provider",
+     "t": "u8",
+     "d": 1,
+     "enum": "gps_provider"
+    },
+    {
+     "n": "baud",
+     "t": "u32",
+     "d": 115200,
+     "min": 9600,
+     "max": 230400,
+     "desc": "the baud rate the GPS runs at: a u-blox module is found at whatever rate it has (auto_baud) and switched to this one ($PUBX,41); NMEA: the module must already be at it. 9600 / 19200 / 38400 / 57600 / 115200 / 230400 (another value: the nearest of these)"
+    },
+    {
+     "n": "rate_hz",
+     "t": "u8",
+     "d": 10,
+     "min": 1,
+     "max": 25
+    },
+    {
+     "n": "auto_baud",
+     "t": "bool",
+     "d": 1
+    },
+    {
+     "n": "auto_config",
+     "t": "bool",
+     "d": 1
+    },
+    {
+     "n": "sbas",
+     "t": "u8",
+     "d": 5,
+     "enum": "sbas"
+    },
+    {
+     "n": "sbas_integrity",
+     "t": "bool",
+     "d": 0
+    },
+    {
+     "n": "use_galileo",
+     "t": "bool",
+     "d": 0
+    },
+    {
+     "n": "acquire_model",
+     "t": "u8",
+     "d": 1,
+     "enum": "gps_model"
+    },
+    {
+     "n": "flight_model",
+     "t": "u8",
+     "d": 7,
+     "enum": "gps_model"
+    },
+    {
+     "n": "utc_standard",
+     "t": "u8",
+     "d": 0,
+     "enum": "utc"
+    },
+    {
+     "n": "set_home_once",
+     "t": "bool",
+     "d": 0
+    },
+    {
+     "n": "use_3d_speed",
+     "t": "bool",
+     "d": 0
+    },
+    {
+     "n": "min_sats",
+     "t": "u8",
+     "d": 8,
+     "min": 4,
+     "max": 20
+    }
+   ],
+   "live": false
+  },
+  {
+   "id": 9,
+   "name": "beeper",
+   "desc": "Beeper: which conditions sound on the buzzer and on the motors (DShot beacon), buzzer type",
+   "fields": [
+    {
+     "n": "conditions",
+     "t": "u32",
+     "d": 131071,
+     "bits": "beeper_cond",
+     "desc": "bit set = this condition beeps. USB: beep also on the bench (app connected, no battery)"
+    },
+    {
+     "n": "type",
+     "t": "u8",
+     "d": 0,
+     "enum": "buzzer_type",
+     "desc": "ACTIVE = beeps by itself when powered (pin on/off); PASSIVE = piezo that needs a tone (PWM)"
+    },
+    {
+     "n": "inverted",
+     "t": "bool",
+     "d": 0,
+     "desc": "the buzzer sounds when the pin is LOW"
+    },
+    {
+     "n": "frequency",
+     "t": "u16",
+     "d": 2700,
+     "min": 200,
+     "max": 8000,
+     "desc": "PASSIVE: tone (Hz)"
+    },
+    {
+     "n": "volume",
+     "t": "u8",
+     "d": 100,
+     "min": 0,
+     "max": 100,
+     "desc": "PASSIVE: loudness (%), sets the PWM duty"
+    },
+    {
+     "n": "dshot_beacon_tone",
+     "t": "u8",
+     "d": 1,
+     "min": 1,
+     "max": 5,
+     "desc": "which of the 5 ESC beacon tones the motors play"
+    },
+    {
+     "n": "motor_conditions",
+     "t": "u32",
+     "d": 106379,
+     "bits": "beeper_cond",
+     "desc": "bit set = the MOTORS play this condition (the ESCs beep on a DShot beacon command): a craft without a buzzer. Only while disarmed and only with a DShot protocol; one tone per beep of the pattern. Conditions of an armed craft (ARMING..., ARMED, RX_LOST_LANDING) cannot be played by motors"
+    }
+   ],
+   "live": true
+  },
+  {
+   "id": 10,
+   "name": "ports",
+   "desc": "Serial ports: which UART serves the GPS, the serial receiver and an MSP flow sensor",
+   "fields": [
+    {
+     "n": "function",
+     "t": "u8",
+     "count": 3,
+     "d": [
+      0,
+      2,
+      0
+     ],
+     "enum": "port_function",
+     "desc": "TABLE: what each UART (0, 1, 2) serves; TELEMETRY is not used; UART0 only when the app link is on native USB"
+    },
+    {
+     "n": "baud",
+     "t": "u32",
+     "count": 3,
+     "d": [
+      115200,
+      115200,
+      115200
+     ],
+     "min": 1200,
+     "max": 2000000,
+     "desc": "not used: each device sets its own baud rate (GPS: auto, receiver: its protocol, flow sensor: flow.baud)"
+    },
+    {
+     "n": "assign",
+     "t": "u8",
+     "d": 0,
+     "enum": "port_assign",
+     "desc": "AUTO = GPS on UART1, serial receiver on UART2, MSP flow sensor on the UART left; TABLE = as the function table says"
+    }
+   ],
+   "live": false,
+   "compat": 15
+  },
+  {
+   "id": 11,
+   "name": "pins",
+   "desc": "GPIO map (255 = unused)",
+   "fields": [
+    {
+     "n": "imu_cs",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "imu_miso",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "imu_mosi",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "imu_sck",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "imu_int",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "i2c_sda",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "i2c_scl",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "gps_rx",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "gps_tx",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "rx_rx",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "rx_tx",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "ppm",
+     "t": "u8",
+     "d": 255,
+     "desc": "PPM receiver input (receiver.protocol = PPM)"
+    },
+    {
+     "n": "motor",
+     "t": "u8",
+     "count": 8,
+     "d": 255
+    },
+    {
+     "n": "buzzer",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "led",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "batt_adc",
+     "t": "u8",
+     "d": 255
+    },
+    {
+     "n": "sd_cs",
+     "t": "u8",
+     "d": 255,
+     "desc": "SD card, SPI mode: chip select (CS / DAT3). Not used in SDMMC mode (the card's DAT3 then needs a pull-up)"
+    },
+    {
+     "n": "sd_clk",
+     "t": "u8",
+     "d": 255,
+     "desc": "SD card clock (SPI: SCK, SDMMC: CLK)"
+    },
+    {
+     "n": "sd_cmd",
+     "t": "u8",
+     "d": 255,
+     "desc": "SD card: SPI MOSI (card DI) / SDMMC CMD"
+    },
+    {
+     "n": "sd_d0",
+     "t": "u8",
+     "d": 255,
+     "desc": "SD card: SPI MISO (card DO) / SDMMC D0"
+    },
+    {
+     "n": "flow_cs",
+     "t": "u8",
+     "d": 255,
+     "desc": "optical flow PMW3901: chip select. The sensor has an SPI bus of its own (flow_sck / flow_miso / flow_mosi): on the IMU's bus every one of its slow transfers would hold up a control cycle"
+    },
+    {
+     "n": "flow_sck",
+     "t": "u8",
+     "d": 255,
+     "desc": "optical flow PMW3901: SPI clock"
+    },
+    {
+     "n": "flow_miso",
+     "t": "u8",
+     "d": 255,
+     "desc": "optical flow PMW3901: SPI MISO (sensor MISO / SDO)"
+    },
+    {
+     "n": "flow_mosi",
+     "t": "u8",
+     "d": 255,
+     "desc": "optical flow PMW3901: SPI MOSI (sensor MOSI / SDI)"
+    },
+    {
+     "n": "flow_rx",
+     "t": "u8",
+     "d": 255,
+     "desc": "optical flow on a UART (MSP: MicoAir MTF-01 / MTF-02, Matek 3901-L0X): the pin that RECEIVES (sensor TX)"
+    },
+    {
+     "n": "flow_tx",
+     "t": "u8",
+     "d": 255,
+     "desc": "optical flow on a UART: the pin that sends (sensor RX); may stay unset, the sensor is not configured over it"
+    },
+    {
+     "n": "servo",
+     "t": "u8",
+     "count": 4,
+     "d": 255,
+     "desc": "servo outputs 1..4 (any output GPIO; each takes one of the 8 LEDC PWM channels)"
+    },
+    {
+     "n": "curr_adc",
+     "t": "u8",
+     "d": 255,
+     "desc": "current sensor (ADC pin; ESP32-S3: GPIO1..GPIO20)"
+    },
+    {
+     "n": "rx_pwm",
+     "t": "u8",
+     "count": 8,
+     "d": 255,
+     "desc": "PWM receiver: one pin per channel (channel 1 first); receiver.protocol = PWM"
+    }
+   ],
+   "live": false,
+   "compat": [
+    37,
+    33,
+    27
+   ]
+  },
+  {
+   "id": 12,
+   "name": "calibration",
+   "desc": "Stored sensor calibration (written by calibration commands)",
+   "fields": [
+    {
+     "n": "mag_valid",
+     "t": "bool",
+     "d": 0
+    },
+    {
+     "n": "mag_offset",
+     "t": "f32",
+     "count": 3,
+     "d": [
+      0,
+      0,
+      0
+     ],
+     "min": -4,
+     "max": 4
+    },
+    {
+     "n": "mag_matrix",
+     "t": "f32",
+     "count": 9,
+     "d": [
+      1,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      1
+     ],
+     "min": -10,
+     "max": 10
+    },
+    {
+     "n": "mag_radius",
+     "t": "f32",
+     "d": 0.0,
+     "min": 0,
+     "max": 4
+    },
+    {
+     "n": "acc_valid",
+     "t": "bool",
+     "d": 0
+    },
+    {
+     "n": "acc_offset",
+     "t": "f32",
+     "count": 3,
+     "d": [
+      0,
+      0,
+      0
+     ],
+     "min": -0.5,
+     "max": 0.5
+    },
+    {
+     "n": "acc_scale",
+     "t": "f32",
+     "count": 3,
+     "d": [
+      1,
+      1,
+      1
+     ],
+     "min": 0.8,
+     "max": 1.25
+    },
+    {
+     "n": "acc_trim_roll",
+     "t": "i16",
+     "d": 0,
+     "min": -300,
+     "max": 300,
+     "scale": 0.1,
+     "desc": "level trim (deg)"
+    },
+    {
+     "n": "acc_trim_pitch",
+     "t": "i16",
+     "d": 0,
+     "min": -300,
+     "max": 300,
+     "scale": 0.1
+    }
+   ],
+   "live": true
+  },
+  {
+   "id": 13,
+   "name": "battery",
+   "desc": "Battery: voltage source, cell count, per-cell thresholds, ADC divider; current sensor, capacity",
+   "live": true,
+   "fields": [
+    {
+     "n": "source",
+     "t": "u8",
+     "d": 0,
+     "enum": "batt_source",
+     "desc": "AUTO = the ADC pin when pins.batt_adc is set, otherwise the voltage reported by the ESCs (extended DShot telemetry)"
+    },
+    {
+     "n": "cells",
+     "t": "u8",
+     "d": 0,
+     "min": 0,
+     "max": 8,
+     "desc": "0 = detect from the voltage when the battery is connected"
+    },
+    {
+     "n": "cell_max_mv",
+     "t": "u16",
+     "d": 4300,
+     "min": 3500,
+     "max": 4500,
+     "desc": "a full cell (mV); used to detect the cell count"
+    },
+    {
+     "n": "cell_warning_mv",
+     "t": "u16",
+     "d": 3500,
+     "min": 2500,
+     "max": 4300,
+     "desc": "below this per cell: warning beeps, arming refused"
+    },
+    {
+     "n": "cell_min_mv",
+     "t": "u16",
+     "d": 3300,
+     "min": 2500,
+     "max": 4000,
+     "desc": "below this per cell: critical - land now (failsafe landing if land_on_critical)"
+    },
+    {
+     "n": "warning_delay",
+     "t": "u8",
+     "d": 5,
+     "min": 0,
+     "max": 100,
+     "scale": 0.1,
+     "desc": "the voltage must stay below the warning level this long (s)"
+    },
+    {
+     "n": "critical_delay",
+     "t": "u8",
+     "d": 20,
+     "min": 0,
+     "max": 100,
+     "scale": 0.1,
+     "desc": "the voltage must stay below the minimum this long (s): a throttle punch sags the pack for a moment"
+    },
+    {
+     "n": "land_on_critical",
+     "t": "bool",
+     "d": 1,
+     "desc": "critical battery while armed starts the failsafe landing"
+    },
+    {
+     "n": "divider",
+     "t": "u16",
+     "d": 1100,
+     "min": 100,
+     "max": 10000,
+     "scale": 0.01,
+     "desc": "ADC: battery voltage / voltage at the pin (11.00 for a 10k:1k divider)"
+    },
+    {
+     "n": "current_source",
+     "t": "u8",
+     "d": 0,
+     "enum": "curr_source",
+     "desc": "AUTO = the ADC current sensor when pins.curr_adc is set, otherwise the sum of the currents the ESCs report (extended DShot telemetry)"
+    },
+    {
+     "n": "current_scale",
+     "t": "i16",
+     "d": 400,
+     "min": -16000,
+     "max": 16000,
+     "desc": "ADC current sensor: 0.1 mV per amp (Betaflight ibata_scale: 400 = 40 mV/A)"
+    },
+    {
+     "n": "current_offset",
+     "t": "i16",
+     "d": 0,
+     "min": -16000,
+     "max": 16000,
+     "desc": "ADC current sensor: offset in mA (Betaflight ibata_offset)"
+    },
+    {
+     "n": "capacity_mah",
+     "t": "u16",
+     "d": 0,
+     "min": 0,
+     "max": 30000,
+     "desc": "battery capacity (mAh): what is left is worked out from the consumption; 0 = from the voltage"
+    }
+   ],
+   "compat": 13
+  },
+  {
+   "id": 14,
+   "name": "blackbox",
+   "desc": "Flight log: where it goes, when it runs, how fast, which fields",
+   "live": true,
+   "fields": [
+    {
+     "n": "device",
+     "t": "u8",
+     "d": 0,
+     "enum": "bb_device",
+     "desc": "NONE = no log on the craft (the app can still record a live stream); FLASH = the log partition of the on-board flash; SDCARD = files on an SD card (pins sd_*)"
+    },
+    {
+     "n": "trigger",
+     "t": "u8",
+     "d": 1,
+     "enum": "bb_trigger",
+     "desc": "SWITCH = while the BLACKBOX mode switch is on; ARMED = whenever armed; ALWAYS = from power-on"
+    },
+    {
+     "n": "rate_hz",
+     "t": "u16",
+     "d": 250,
+     "min": 10,
+     "max": 2000,
+     "desc": "fast records per second (rounded to a whole divisor of the loop rate)"
+    },
+    {
+     "n": "fields",
+     "t": "u32",
+     "d": 24189,
+     "bits": "bb_field",
+     "desc": "which groups of values the records contain"
+    },
+    {
+     "n": "sd_mode",
+     "t": "u8",
+     "d": 0,
+     "enum": "sd_mode",
+     "desc": "how the SD card is wired: SPI (4 wires, works with every card module) or SDMMC 1-bit (3 wires, faster; needs pull-ups on CMD / D0 / D3)"
+    },
+    {
+     "n": "sd_mhz",
+     "t": "u8",
+     "d": 20,
+     "min": 1,
+     "max": 40,
+     "desc": "SD card clock (MHz). Lower it (4 .. 10) when the card is on long wires and fails to mount"
+    }
+   ],
+   "compat": 8
+  },
+  {
+   "id": 15,
+   "name": "filters",
+   "desc": "Gyro and D-term filters (Betaflight names and units), filter sliders",
+   "live": true,
+   "fields": [
+    {
+     "n": "slider_gyro",
+     "t": "bool",
+     "d": 1,
+     "desc": "the gyro filter slider is in charge: the firmware computes the gyro low-pass cutoffs from slider_gyro_mult"
+    },
+    {
+     "n": "slider_gyro_mult",
+     "t": "u8",
+     "d": 100,
+     "min": 10,
+     "max": 200,
+     "desc": "% of the default gyro low-pass cutoffs: lower = more filtering (less noise, more delay)"
+    },
+    {
+     "n": "slider_dterm",
+     "t": "bool",
+     "d": 1,
+     "desc": "the D-term filter slider is in charge"
+    },
+    {
+     "n": "slider_dterm_mult",
+     "t": "u8",
+     "d": 100,
+     "min": 10,
+     "max": 200
+    },
+    {
+     "n": "gyro_lpf1_type",
+     "t": "u8",
+     "d": 0,
+     "enum": "lpf_type"
+    },
+    {
+     "n": "gyro_lpf1_static_hz",
+     "t": "u16",
+     "d": 250,
+     "min": 0,
+     "max": 1000,
+     "desc": "gyro low-pass 1 when it is not dynamic; 0 = off"
+    },
+    {
+     "n": "gyro_lpf1_dyn_min_hz",
+     "t": "u16",
+     "d": 250,
+     "min": 0,
+     "max": 1000,
+     "desc": "dynamic gyro low-pass 1: cutoff at zero throttle; 0 = not dynamic (the static cutoff is used)"
+    },
+    {
+     "n": "gyro_lpf1_dyn_max_hz",
+     "t": "u16",
+     "d": 500,
+     "min": 0,
+     "max": 1000,
+     "desc": "cutoff at full throttle"
+    },
+    {
+     "n": "gyro_lpf1_dyn_expo",
+     "t": "u8",
+     "d": 5,
+     "min": 0,
+     "max": 10
+    },
+    {
+     "n": "gyro_lpf2_type",
+     "t": "u8",
+     "d": 0,
+     "enum": "lpf_type"
+    },
+    {
+     "n": "gyro_lpf2_hz",
+     "t": "u16",
+     "d": 500,
+     "min": 0,
+     "max": 1000,
+     "desc": "0 = off"
+    },
+    {
+     "n": "gyro_notch1_hz",
+     "t": "u16",
+     "d": 0,
+     "min": 0,
+     "max": 1000,
+     "desc": "static notch 1: centre; 0 = off"
+    },
+    {
+     "n": "gyro_notch1_cutoff",
+     "t": "u16",
+     "d": 0,
+     "min": 0,
+     "max": 1000,
+     "desc": "its lower -3 dB frequency (the notch is as wide above the centre)"
+    },
+    {
+     "n": "gyro_notch2_hz",
+     "t": "u16",
+     "d": 0,
+     "min": 0,
+     "max": 1000
+    },
+    {
+     "n": "gyro_notch2_cutoff",
+     "t": "u16",
+     "d": 0,
+     "min": 0,
+     "max": 1000
+    },
+    {
+     "n": "dyn_notch_count",
+     "t": "u8",
+     "d": 3,
+     "min": 0,
+     "max": 7,
+     "desc": "dynamic notches per axis; 0 = off"
+    },
+    {
+     "n": "dyn_notch_q",
+     "t": "u16",
+     "d": 300,
+     "min": 1,
+     "max": 1000,
+     "desc": "Q x 100: higher = narrower"
+    },
+    {
+     "n": "dyn_notch_min_hz",
+     "t": "u16",
+     "d": 100,
+     "min": 20,
+     "max": 250
+    },
+    {
+     "n": "dyn_notch_max_hz",
+     "t": "u16",
+     "d": 600,
+     "min": 200,
+     "max": 1000
+    },
+    {
+     "n": "rpm_harmonics",
+     "t": "u8",
+     "d": 3,
+     "min": 0,
+     "max": 3,
+     "desc": "RPM filter: harmonics per motor; 0 = off. Needs bidirectional DShot"
+    },
+    {
+     "n": "rpm_min_hz",
+     "t": "u8",
+     "d": 100,
+     "min": 30,
+     "max": 200
+    },
+    {
+     "n": "rpm_q",
+     "t": "u16",
+     "d": 500,
+     "min": 250,
+     "max": 3000,
+     "desc": "Q x 100"
+    },
+    {
+     "n": "rpm_fade_range_hz",
+     "t": "u16",
+     "d": 50,
+     "min": 0,
+     "max": 1000,
+     "desc": "a notch fades out over this range above rpm_min_hz"
+    },
+    {
+     "n": "rpm_lpf_hz",
+     "t": "u16",
+     "d": 150,
+     "min": 100,
+     "max": 500,
+     "desc": "smoothing of the motor frequency the ESC reports"
+    },
+    {
+     "n": "rpm_weights",
+     "t": "u8",
+     "d": [
+      100,
+      100,
+      100
+     ],
+     "min": 0,
+     "max": 100,
+     "count": 3,
+     "desc": "% effect of harmonic 1 / 2 / 3"
+    },
+    {
+     "n": "dterm_lpf1_type",
+     "t": "u8",
+     "d": 0,
+     "enum": "lpf_type"
+    },
+    {
+     "n": "dterm_lpf1_static_hz",
+     "t": "u16",
+     "d": 75,
+     "min": 0,
+     "max": 1000
+    },
+    {
+     "n": "dterm_lpf1_dyn_min_hz",
+     "t": "u16",
+     "d": 75,
+     "min": 0,
+     "max": 1000
+    },
+    {
+     "n": "dterm_lpf1_dyn_max_hz",
+     "t": "u16",
+     "d": 150,
+     "min": 0,
+     "max": 1000
+    },
+    {
+     "n": "dterm_lpf1_dyn_expo",
+     "t": "u8",
+     "d": 5,
+     "min": 0,
+     "max": 10
+    },
+    {
+     "n": "dterm_lpf2_type",
+     "t": "u8",
+     "d": 0,
+     "enum": "lpf_type"
+    },
+    {
+     "n": "dterm_lpf2_hz",
+     "t": "u16",
+     "d": 150,
+     "min": 0,
+     "max": 1000
+    },
+    {
+     "n": "dterm_notch_hz",
+     "t": "u16",
+     "d": 0,
+     "min": 0,
+     "max": 1000
+    },
+    {
+     "n": "dterm_notch_cutoff",
+     "t": "u16",
+     "d": 0,
+     "min": 0,
+     "max": 1000
+    },
+    {
+     "n": "yaw_lowpass_hz",
+     "t": "u16",
+     "d": 100,
+     "min": 0,
+     "max": 500,
+     "desc": "low-pass on the yaw P term; 0 = off"
+    }
+   ]
+  },
+  {
+   "id": 16,
+   "name": "flow",
+   "desc": "Optical flow sensor: which one, and its UART speed (read at power-up)",
+   "live": false,
+   "fields": [
+    {
+     "n": "type",
+     "t": "u8",
+     "d": 0,
+     "enum": "flow_type",
+     "desc": "NONE, PMW3901 (SPI, pins flow_cs / flow_sck / flow_miso / flow_mosi; needs a separate lidar) or MSP (UART, pin flow_rx: MicoAir MTF-01 / MTF-02, Matek 3901-L0X - these carry their own lidar)"
+    },
+    {
+     "n": "baud",
+     "t": "u32",
+     "d": 115200,
+     "min": 9600,
+     "max": 921600,
+     "desc": "UART sensors: baud rate"
+    }
+   ]
+  },
+  {
+   "id": 17,
+   "name": "nav",
+   "desc": "Position Hold, GPS Rescue, how optical flow is used (mounting direction, quality, height)",
+   "live": true,
+   "fields": [
+    {
+     "n": "flow_align",
+     "t": "u8",
+     "d": 0,
+     "enum": "flow_align",
+     "desc": "how far the flow sensor is turned clockwise (seen from above) from its normal mounting direction"
+    },
+    {
+     "n": "flow_flip",
+     "t": "bool",
+     "d": 0,
+     "desc": "the flow sensor's picture is mirrored (left / right exchanged): set it when sideways motion reads the wrong way after `flow_align` is right"
+    },
+    {
+     "n": "flow_scale",
+     "t": "u16",
+     "d": 100,
+     "min": 20,
+     "max": 500,
+     "desc": "percent: correction of the speed the flow sensor measures (lens). 100 = as the sensor reports"
+    },
+    {
+     "n": "flow_quality_min",
+     "t": "u8",
+     "d": 30,
+     "min": 0,
+     "max": 100,
+     "desc": "flow samples with a surface quality below this (0..100) are not used"
+    },
+    {
+     "n": "flow_max_height",
+     "t": "u16",
+     "d": 400,
+     "min": 30,
+     "max": 1200,
+     "scale": 0.01,
+     "desc": "above this height over the ground (m) the flow is not used (focus, resolution; also limited by the range sensor)"
+    },
+    {
+     "n": "tilt_aid",
+     "t": "bool",
+     "d": 1,
+     "desc": "correct the attitude estimate with the acceleration measured by GPS / optical flow while flying (the accelerometer alone gives way a few degrees when the craft speeds up or brakes)"
+    },
+    {
+     "n": "ph_angle_max",
+     "t": "u8",
+     "d": 30,
+     "min": 10,
+     "max": 45,
+     "desc": "Position Hold / GPS Rescue: largest lean the autopilot may command (deg)"
+    },
+    {
+     "n": "ph_brake_rate",
+     "t": "u8",
+     "d": 8,
+     "min": 4,
+     "max": 12,
+     "desc": "Position Hold: how fast the craft leans back to brake after the stick is let go (deg/s) - ArduCopter PHLD_BRAKE_RATE"
+    },
+    {
+     "n": "ph_brake_angle",
+     "t": "u8",
+     "d": 30,
+     "min": 15,
+     "max": 45,
+     "desc": "Position Hold: largest lean while braking (deg) - ArduCopter PHLD_BRAKE_ANGLE"
+    },
+    {
+     "n": "pos_p",
+     "t": "u8",
+     "d": 10,
+     "min": 1,
+     "max": 30,
+     "scale": 0.1,
+     "desc": "position error -> speed (1/s) - ArduCopter PSC_NE_POS_P"
+    },
+    {
+     "n": "vel_p",
+     "t": "u8",
+     "d": 20,
+     "min": 1,
+     "max": 60,
+     "scale": 0.1,
+     "desc": "speed error -> acceleration - ArduCopter PSC_NE_VEL_P"
+    },
+    {
+     "n": "vel_i",
+     "t": "u8",
+     "d": 10,
+     "min": 0,
+     "max": 30,
+     "scale": 0.1,
+     "desc": "ArduCopter PSC_NE_VEL_I: what stands against a steady wind"
+    },
+    {
+     "n": "vel_d",
+     "t": "u8",
+     "d": 25,
+     "min": 0,
+     "max": 100,
+     "scale": 0.01,
+     "desc": "ArduCopter PSC_NE_VEL_D"
+    },
+    {
+     "n": "fs_procedure",
+     "t": "u8",
+     "d": 0,
+     "enum": "fs_procedure",
+     "desc": "what a lost link / the failsafe switch does: LAND where the craft is, or RESCUE = fly home and land there (GPS + compass; falls back to LAND when that is not possible)"
+    },
+    {
+     "n": "rescue_alt_mode",
+     "t": "u8",
+     "d": 0,
+     "enum": "rescue_alt",
+     "desc": "return height: MAX = highest point of this flight + rescue_initial_climb, FIXED = rescue_return_alt, CURRENT = the present height + rescue_initial_climb"
+    },
+    {
+     "n": "rescue_initial_climb",
+     "t": "u8",
+     "d": 10,
+     "min": 0,
+     "max": 100,
+     "desc": "m"
+    },
+    {
+     "n": "rescue_return_alt",
+     "t": "u8",
+     "d": 30,
+     "min": 5,
+     "max": 150,
+     "desc": "m above the take-off point (FIXED)"
+    },
+    {
+     "n": "rescue_ascend_rate",
+     "t": "u8",
+     "d": 50,
+     "min": 10,
+     "max": 100,
+     "scale": 0.1,
+     "desc": "m/s"
+    },
+    {
+     "n": "rescue_descend_rate",
+     "t": "u8",
+     "d": 15,
+     "min": 5,
+     "max": 50,
+     "scale": 0.1,
+     "desc": "m/s near the ground; up to three times as fast high up"
+    },
+    {
+     "n": "rescue_ground_speed",
+     "t": "u8",
+     "d": 75,
+     "min": 20,
+     "max": 200,
+     "scale": 0.1,
+     "desc": "m/s on the way home"
+    },
+    {
+     "n": "rescue_descent_dist",
+     "t": "u8",
+     "d": 20,
+     "min": 5,
+     "max": 100,
+     "desc": "m from home: closer than this the craft starts to come down"
+    },
+    {
+     "n": "rescue_min_start_dist",
+     "t": "u8",
+     "d": 15,
+     "min": 5,
+     "max": 30,
+     "desc": "m: a rescue started closer to home than this climbs and comes down on the spot"
+    },
+    {
+     "n": "rescue_landing_alt",
+     "t": "u8",
+     "d": 4,
+     "min": 1,
+     "max": 15,
+     "desc": "m: below this the last, slow part of the descent begins"
+    },
+    {
+     "n": "rescue_min_sats",
+     "t": "u8",
+     "d": 5,
+     "min": 4,
+     "max": 12,
+     "desc": "fewer satellites than this for 15 s during a rescue: it gives up (landing on the spot)"
+    },
+    {
+     "n": "rescue_allow_no_fix",
+     "t": "bool",
+     "d": 0,
+     "desc": "allow arming without a GPS fix although a rescue is set up (then there is no home point: the rescue cannot fly)"
+    }
+   ]
+  },
+  {
+   "id": 18,
+   "name": "servo",
+   "desc": "Servo outputs (gimbal, camera tilt, a gripper...): each follows one RC channel. Pins: pins.servo",
+   "live": true,
+   "fields": [
+    {
+     "n": "source",
+     "t": "u8",
+     "count": 4,
+     "d": 0,
+     "enum": "servo_source",
+     "desc": "the RC channel this servo follows (OFF = no pulse)"
+    },
+    {
+     "n": "min_us",
+     "t": "u16",
+     "count": 4,
+     "d": 1000,
+     "min": 500,
+     "max": 2500,
+     "desc": "pulse for the channel at 1000 us (stick / switch at one end)"
+    },
+    {
+     "n": "max_us",
+     "t": "u16",
+     "count": 4,
+     "d": 2000,
+     "min": 500,
+     "max": 2500,
+     "desc": "pulse for the channel at 2000 us"
+    },
+    {
+     "n": "reverse",
+     "t": "bool",
+     "count": 4,
+     "d": 0,
+     "desc": "turn the other way (min and max swapped)"
+    },
+    {
+     "n": "rate_hz",
+     "t": "u16",
+     "d": 50,
+     "min": 50,
+     "max": 330,
+     "desc": "pulses per second: 50 for analog servos, up to 330 for digital ones (read at power-up)"
+    }
+   ]
+  }
+ ],
+ "streams": [
+  {
+   "id": 1,
+   "name": "attitude",
+   "rate": 50,
+   "max": 200,
+   "desc": "attitude (user convention) and filtered gyro",
+   "fields": [
+    {
+     "n": "roll",
+     "t": "i16",
+     "scale": 0.01
+    },
+    {
+     "n": "pitch",
+     "t": "i16",
+     "scale": 0.01
+    },
+    {
+     "n": "yaw",
+     "t": "i16",
+     "scale": 0.01
+    },
+    {
+     "n": "gyro",
+     "t": "i16",
+     "count": 3,
+     "scale": 0.1,
+     "desc": "filtered gyro roll/pitch/yaw rate (deg/s)"
+    },
+    {
+     "n": "sp",
+     "t": "i16",
+     "count": 3,
+     "scale": 0.1,
+     "desc": "rate setpoints (deg/s)"
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "name": "rc",
+   "rate": 20,
+   "max": 100,
+   "desc": "receiver channels in microseconds",
+   "fields": [
+    {
+     "n": "ch",
+     "t": "u16",
+     "count": 16
+    },
+    {
+     "n": "link",
+     "t": "u8"
+    },
+    {
+     "n": "rssi",
+     "t": "u8"
+    },
+    {
+     "n": "rate",
+     "t": "u16",
+     "desc": "valid receiver frames per second"
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "name": "status",
+   "rate": 10,
+   "max": 50,
+   "desc": "arming, failsafe, modes, health, timing",
+   "fields": [
+    {
+     "n": "armed",
+     "t": "u8"
+    },
+    {
+     "n": "blockers",
+     "t": "u32",
+     "bits": "arm_blocker"
+    },
+    {
+     "n": "failsafe",
+     "t": "u8",
+     "enum": "failsafe"
+    },
+    {
+     "n": "modes",
+     "t": "u32",
+     "bits": "mode"
+    },
+    {
+     "n": "health",
+     "t": "u16",
+     "bits": "health"
+    },
+    {
+     "n": "ah_state",
+     "t": "u8",
+     "enum": "ah_state"
+    },
+    {
+     "n": "loop_us",
+     "t": "u16",
+     "desc": "execution time of the last control cycle (us)"
+    },
+    {
+     "n": "loop_max_us",
+     "t": "u16",
+     "desc": "longest control cycle in the last second (us)"
+    },
+    {
+     "n": "gap_max_us",
+     "t": "u16",
+     "desc": "longest time between the starts of two control cycles in the last second (us): shows a stalled loop"
+    },
+    {
+     "n": "loop_hz",
+     "t": "u16",
+     "desc": "control cycles really executed in the last second"
+    },
+    {
+     "n": "cell_mv",
+     "t": "u16"
+    },
+    {
+     "n": "settings_dirty",
+     "t": "u8",
+     "bits": "settings_flags"
+    },
+    {
+     "n": "throttle",
+     "t": "u16",
+     "scale": 0.001
+    },
+    {
+     "n": "cpu",
+     "t": "u8",
+     "desc": "load of the flight-loop core, percent of the last second"
+    },
+    {
+     "n": "ram",
+     "t": "u8",
+     "desc": "internal RAM in use, percent"
+    },
+    {
+     "n": "heap_free",
+     "t": "u16",
+     "desc": "free internal RAM (kB)"
+    },
+    {
+     "n": "psram_free",
+     "t": "u16",
+     "desc": "free external RAM (kB), 0 = no PSRAM"
+    },
+    {
+     "n": "psram_total",
+     "t": "u16",
+     "desc": "external RAM size (kB), 0 = no PSRAM"
+    },
+    {
+     "n": "t_imu",
+     "t": "u16",
+     "desc": "time to read the IMU, average of the last second (us)"
+    },
+    {
+     "n": "t_core",
+     "t": "u16",
+     "desc": "filters + estimator + PID + mixer (us)"
+    },
+    {
+     "n": "t_motor",
+     "t": "u16",
+     "desc": "motor output incl. ESC replies (us)"
+    },
+    {
+     "n": "t_rest",
+     "t": "u16",
+     "desc": "flight log + telemetry (us)"
+    },
+    {
+     "n": "t_slow_max",
+     "t": "u16",
+     "desc": "longest pass of the sensor / receiver / app-request thread in the last second (us)"
+    },
+    {
+     "n": "overruns",
+     "t": "u16",
+     "desc": "control cycles that were lost in the last second because the previous one was not finished"
+    },
+    {
+     "n": "loop_target",
+     "t": "u16",
+     "desc": "configured loop rate (Hz)"
+    },
+    {
+     "n": "fs_cause",
+     "t": "u8",
+     "bits": "fs_cause",
+     "desc": "why the failsafe is active: LINK = receiver lost, SWITCH = the failsafe switch, BATTERY = pack at its minimum (forced landing, the pilot keeps steering)"
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "name": "motors",
+   "rate": 20,
+   "max": 100,
+   "desc": "motor commands, rpm, errors",
+   "fields": [
+    {
+     "n": "cmd",
+     "t": "u16",
+     "count": 8,
+     "scale": 0.001
+    },
+    {
+     "n": "rpm",
+     "t": "u16",
+     "count": 8,
+     "desc": "mechanical rpm (sent as rpm/10)",
+     "scale": 10
+    },
+    {
+     "n": "err",
+     "t": "u8",
+     "count": 8,
+     "desc": "invalid telemetry packets (%)"
+    },
+    {
+     "n": "temp",
+     "t": "u8",
+     "count": 8
+    },
+    {
+     "n": "volt",
+     "t": "u16",
+     "count": 1,
+     "scale": 0.01,
+     "desc": "ESC reported pack voltage (V)"
+    },
+    {
+     "n": "dyn_idle",
+     "t": "u16",
+     "scale": 0.001
+    },
+    {
+     "n": "bidir",
+     "t": "u8",
+     "enum": "bidir_state",
+     "desc": "bidirectional DShot: OFF, ACTIVE, or UNAVAILABLE (switched on but the selected output driver cannot listen)"
+    },
+    {
+     "n": "answers",
+     "t": "u8",
+     "desc": "bit i = the ESC of logical motor i answered recently"
+    },
+    {
+     "n": "skipped",
+     "t": "u16",
+     "desc": "motor updates in the last second that came before the previous frame (and its reply) was over"
+    },
+    {
+     "n": "late",
+     "t": "u16",
+     "desc": "frames in the last second whose reply was lost because the pin was handed to the ESC too late"
+    },
+    {
+     "n": "replies",
+     "t": "u16",
+     "desc": "bidirectional DShot: ESC replies captured in the last second (all motors, valid or not)"
+    },
+    {
+     "n": "garbled",
+     "t": "u16",
+     "desc": "of those, replies that were not 21 clean bits"
+    },
+    {
+     "n": "servo",
+     "t": "u16",
+     "count": 4,
+     "desc": "pulse sent to servo 1..4 (us), 0 = off"
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "name": "sensors",
+   "rate": 50,
+   "max": 200,
+   "desc": "raw-ish sensor values for the Monitor tab",
+   "fields": [
+    {
+     "n": "gyro",
+     "t": "i16",
+     "count": 3,
+     "scale": 0.1
+    },
+    {
+     "n": "acc",
+     "t": "i16",
+     "count": 3,
+     "scale": 0.001
+    },
+    {
+     "n": "mag",
+     "t": "i16",
+     "count": 3,
+     "scale": 0.001,
+     "desc": "calibrated gauss"
+    },
+    {
+     "n": "baro_alt",
+     "t": "i16",
+     "scale": 0.01
+    },
+    {
+     "n": "baro_pa",
+     "t": "u32"
+    },
+    {
+     "n": "temp",
+     "t": "i16",
+     "scale": 0.01
+    },
+    {
+     "n": "range",
+     "t": "i16",
+     "scale": 0.001
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "name": "gps",
+   "rate": 5,
+   "max": 25,
+   "desc": "GPS solution",
+   "fields": [
+    {
+     "n": "fix",
+     "t": "u8"
+    },
+    {
+     "n": "sats",
+     "t": "u8"
+    },
+    {
+     "n": "lat",
+     "t": "i32",
+     "scale": 1e-07
+    },
+    {
+     "n": "lon",
+     "t": "i32",
+     "scale": 1e-07
+    },
+    {
+     "n": "alt",
+     "t": "i32",
+     "scale": 0.01
+    },
+    {
+     "n": "gs",
+     "t": "u16",
+     "scale": 0.01
+    },
+    {
+     "n": "course",
+     "t": "u16",
+     "scale": 0.1
+    },
+    {
+     "n": "hdop",
+     "t": "u16",
+     "scale": 0.01
+    },
+    {
+     "n": "hacc",
+     "t": "u16",
+     "scale": 0.001
+    },
+    {
+     "n": "home_dist",
+     "t": "u16"
+    },
+    {
+     "n": "home_dir",
+     "t": "u16",
+     "scale": 0.1
+    },
+    {
+     "n": "state",
+     "t": "u8",
+     "enum": "gps_state"
+    },
+    {
+     "n": "baud",
+     "t": "u32"
+    }
+   ]
+  },
+  {
+   "id": 7,
+   "name": "estimate",
+   "rate": 20,
+   "max": 100,
+   "desc": "height / climb rate / local position",
+   "fields": [
+    {
+     "n": "z",
+     "t": "i16",
+     "scale": 0.01
+    },
+    {
+     "n": "vz",
+     "t": "i16",
+     "scale": 0.01
+    },
+    {
+     "n": "z_sigma",
+     "t": "u16",
+     "scale": 0.001
+    },
+    {
+     "n": "valid",
+     "t": "u8",
+     "bits": "est_valid"
+    },
+    {
+     "n": "pos_n",
+     "t": "i16",
+     "scale": 0.1
+    },
+    {
+     "n": "pos_e",
+     "t": "i16",
+     "scale": 0.1
+    },
+    {
+     "n": "vel_n",
+     "t": "i16",
+     "scale": 0.01
+    },
+    {
+     "n": "vel_e",
+     "t": "i16",
+     "scale": 0.01
+    }
+   ]
+  },
+  {
+   "id": 8,
+   "name": "gyro_fast",
+   "rate": 0,
+   "max": 1000,
+   "desc": "gyro raw + filtered, decimated, for the vibration graph (off by default)",
+   "fields": [
+    {
+     "n": "raw",
+     "t": "i16",
+     "count": 3,
+     "scale": 0.1
+    },
+    {
+     "n": "filt",
+     "t": "i16",
+     "count": 3,
+     "scale": 0.1
+    }
+   ]
+  },
+  {
+   "id": 9,
+   "name": "calibration",
+   "rate": 10,
+   "max": 20,
+   "desc": "progress of the running calibration",
+   "fields": [
+    {
+     "n": "kind",
+     "t": "u8",
+     "enum": "cal_kind"
+    },
+    {
+     "n": "progress",
+     "t": "u8"
+    },
+    {
+     "n": "state",
+     "t": "u8",
+     "enum": "cal_state"
+    },
+    {
+     "n": "raw",
+     "t": "i16",
+     "count": 3,
+     "scale": 0.001,
+     "desc": "mag: raw gauss for the 3D view; accel: averaged g of the running point"
+    },
+    {
+     "n": "mask",
+     "t": "u8",
+     "desc": "accel: one bit per captured face, in the order +X -X +Y -Y +Z -Z (sign of the raw reading on that chip axis)"
+    },
+    {
+     "n": "inflight_trim",
+     "t": "u8",
+     "desc": "in-flight level trim (mode CALIB): 0 = idle, 1..99 = % of the measurement while the switch is on, 100 = measured, applied at the next disarm"
+    }
+   ]
+  },
+  {
+   "id": 10,
+   "name": "battery",
+   "rate": 2,
+   "max": 20,
+   "desc": "battery voltage and state",
+   "fields": [
+    {
+     "n": "voltage",
+     "t": "u16",
+     "scale": 0.001,
+     "desc": "pack voltage, filtered (V)"
+    },
+    {
+     "n": "cell",
+     "t": "u16",
+     "scale": 0.001,
+     "desc": "per cell (V), 0 = not measured"
+    },
+    {
+     "n": "cells",
+     "t": "u8",
+     "desc": "cell count in use (set or detected), 0 = no battery"
+    },
+    {
+     "n": "state",
+     "t": "u8",
+     "enum": "batt_state"
+    },
+    {
+     "n": "source",
+     "t": "u8",
+     "enum": "batt_source",
+     "desc": "where the voltage comes from right now (ADC, ESC or NONE)"
+    },
+    {
+     "n": "pin_mv",
+     "t": "u16",
+     "desc": "ADC: voltage at the pin (mV), before the divider"
+    },
+    {
+     "n": "beeping",
+     "t": "u8",
+     "desc": "index of the beeper condition sounding now + 1, 0 = silent"
+    },
+    {
+     "n": "motor_beeping",
+     "t": "u8",
+     "desc": "condition the motors are playing + 1, 0 = none"
+    },
+    {
+     "n": "current",
+     "t": "i16",
+     "scale": 0.01,
+     "desc": "A (filtered); 0 without a current source"
+    },
+    {
+     "n": "mah",
+     "t": "u16",
+     "desc": "consumption since power-up (mAh)"
+    },
+    {
+     "n": "remaining",
+     "t": "u8",
+     "desc": "what is left of the battery (%)"
+    },
+    {
+     "n": "current_source",
+     "t": "u8",
+     "enum": "curr_source",
+     "desc": "the current source in use (AUTO resolved)"
+    },
+    {
+     "n": "current_mv",
+     "t": "u16",
+     "desc": "voltage at the current sensor pin (mV), for calibrating"
+    }
+   ]
+  },
+  {
+   "id": 11,
+   "name": "blackbox",
+   "rate": 2,
+   "max": 10,
+   "desc": "state of the flight log",
+   "fields": [
+    {
+     "n": "state",
+     "t": "u8",
+     "enum": "bb_state"
+    },
+    {
+     "n": "capacity",
+     "t": "u32",
+     "desc": "size of the log memory (bytes)"
+    },
+    {
+     "n": "used",
+     "t": "u32",
+     "desc": "bytes that hold data"
+    },
+    {
+     "n": "sessions",
+     "t": "u16",
+     "desc": "sessions stored"
+    },
+    {
+     "n": "rate_hz",
+     "t": "u16",
+     "desc": "fast records really produced in the last second"
+    },
+    {
+     "n": "record_bytes",
+     "t": "u16",
+     "desc": "size of one fast record with the fields selected now"
+    },
+    {
+     "n": "dropped",
+     "t": "u32",
+     "desc": "records lost since boot because the queue was full"
+    },
+    {
+     "n": "erase_pct",
+     "t": "u8",
+     "desc": "progress of a running erase"
+    },
+    {
+     "n": "byte_rate",
+     "t": "u32",
+     "desc": "bytes written or streamed in the last second"
+    },
+    {
+     "n": "device",
+     "t": "u8",
+     "enum": "bb_device",
+     "desc": "the storage this status describes"
+    },
+    {
+     "n": "capacity_kb",
+     "t": "u32",
+     "desc": "size of the storage in kB (capacity / used saturate at 4 GB)"
+    },
+    {
+     "n": "used_kb",
+     "t": "u32"
+    },
+    {
+     "n": "buffer_pct",
+     "t": "u8",
+     "desc": "SD card: highest fill level of the write buffer during the last second (100 = records were lost)"
+    }
+   ]
+  },
+  {
+   "id": 12,
+   "name": "tuning",
+   "rate": 0,
+   "max": 50,
+   "desc": "live state of the filters and the PID helpers (off by default)",
+   "fields": [
+    {
+     "n": "gyro_lpf1_hz",
+     "t": "u16",
+     "desc": "cutoff of gyro low-pass 1 right now (dynamic: follows the throttle)"
+    },
+    {
+     "n": "dterm_lpf1_hz",
+     "t": "u16"
+    },
+    {
+     "n": "dyn_notch_hz",
+     "t": "u16",
+     "count": 9,
+     "desc": "centre of the first three dynamic notches of roll, pitch, yaw (0 = off)"
+    },
+    {
+     "n": "rpm_hz",
+     "t": "u16",
+     "count": 8,
+     "desc": "frequency of the fundamental RPM notch of each motor (0 = faded out / no telemetry)"
+    },
+    {
+     "n": "tpa",
+     "t": "u8",
+     "desc": "TPA factor, %"
+    },
+    {
+     "n": "anti_gravity",
+     "t": "u16",
+     "scale": 0.01,
+     "desc": "anti-gravity boost right now"
+    },
+    {
+     "n": "rc_rate",
+     "t": "u16",
+     "desc": "smoothed receiver frame rate (Hz)"
+    },
+    {
+     "n": "rc_cutoff",
+     "t": "u16",
+     "desc": "RC smoothing cutoff (Hz)"
+    },
+    {
+     "n": "air_state",
+     "t": "u8",
+     "enum": "air_state",
+     "desc": "GROUND = armed with every motor at idle (standing on the ground, throttle down) or disarmed; AIR = the rate loop flies the craft; AIRMODE = flying with the throttle stick at the bottom"
+    },
+    {
+     "n": "pid_sum",
+     "t": "i16",
+     "count": 3,
+     "scale": 0.1,
+     "desc": "P + I + D + F per axis before the limit (1000 = the full motor range)"
+    },
+    {
+     "n": "hover",
+     "t": "u8",
+     "desc": "throttle (%) at which the craft hovers, as the firmware measures it in flight (the guess 37 % before the first flight)"
+    }
+   ]
+  },
+  {
+   "id": 13,
+   "name": "nav",
+   "rate": 10,
+   "max": 50,
+   "desc": "optical flow, Position Hold, GPS Rescue",
+   "fields": [
+    {
+     "n": "flags",
+     "t": "u8",
+     "bits": "nav_flags"
+    },
+    {
+     "n": "flow_quality",
+     "t": "u8",
+     "desc": "surface quality of the latest flow sample, 0..100"
+    },
+    {
+     "n": "flow_reject",
+     "t": "u8",
+     "enum": "flow_reject",
+     "desc": "why the latest sample was not used (OK = it was; NO_SAMPLE = the sensor delivers none)"
+    },
+    {
+     "n": "flow_rate",
+     "t": "u8",
+     "desc": "flow samples received in the last second"
+    },
+    {
+     "n": "flow_fwd",
+     "t": "i16",
+     "scale": 0.01,
+     "desc": "speed over the ground as the flow sensor measures it, forwards (m/s; a quarter second of samples averaged, 0 while none is used)"
+    },
+    {
+     "n": "flow_right",
+     "t": "i16",
+     "scale": 0.01,
+     "desc": "... to the right (m/s)"
+    },
+    {
+     "n": "ph_roll",
+     "t": "u8",
+     "enum": "ph_axis"
+    },
+    {
+     "n": "ph_pitch",
+     "t": "u8",
+     "enum": "ph_axis"
+    },
+    {
+     "n": "lean_roll",
+     "t": "i16",
+     "scale": 0.1,
+     "desc": "lean the autopilot asks for (deg, right side down +)"
+    },
+    {
+     "n": "lean_pitch",
+     "t": "i16",
+     "scale": 0.1,
+     "desc": "... nose down +"
+    },
+    {
+     "n": "target_n",
+     "t": "i16",
+     "scale": 0.1,
+     "desc": "the held position (m, north of home / of where the estimate started)"
+    },
+    {
+     "n": "target_e",
+     "t": "i16",
+     "scale": 0.1
+    },
+    {
+     "n": "wind_n",
+     "t": "i16",
+     "scale": 0.01,
+     "desc": "acceleration learned to stand against the wind (m/s^2, north)"
+    },
+    {
+     "n": "wind_e",
+     "t": "i16",
+     "scale": 0.01
+    },
+    {
+     "n": "rescue_phase",
+     "t": "u8",
+     "enum": "rescue_phase"
+    },
+    {
+     "n": "rescue_fail",
+     "t": "u8",
+     "enum": "rescue_fail"
+    },
+    {
+     "n": "home_dist",
+     "t": "u16",
+     "scale": 0.1,
+     "desc": "m"
+    },
+    {
+     "n": "return_alt",
+     "t": "u16",
+     "scale": 0.1,
+     "desc": "the height the rescue flies home at (m)"
+    }
+   ]
+  }
+ ],
+ "commands": [
+  {
+   "id": 1,
+   "name": "GYRO_CAL",
+   "args": [],
+   "desc": "craft must be still; ~1 s, progress in the calibration stream"
+  },
+  {
+   "id": 2,
+   "name": "ACC_CAL_POINT",
+   "args": [],
+   "desc": "average ~1 s of accel with the craft still on one of its 6 faces; the face is detected automatically (see calibration.mask)"
+  },
+  {
+   "id": 3,
+   "name": "ACC_CAL_FINISH",
+   "args": [],
+   "desc": "needs all 6 faces; fits offset+scale and stores them in the calibration section (RAM - save to keep)",
+   "writes": "calibration"
+  },
+  {
+   "id": 4,
+   "name": "LEVEL_TRIM",
+   "args": [],
+   "desc": "craft must sit level and still; stores acc_trim_roll/pitch (RAM - save to keep)",
+   "writes": "calibration"
+  },
+  {
+   "id": 5,
+   "name": "MAG_CAL_START",
+   "args": []
+  },
+  {
+   "id": 6,
+   "name": "MAG_CAL_FINISH",
+   "args": [],
+   "writes": "calibration",
+   "result": [
+    {
+     "n": "reason",
+     "t": "u8",
+     "enum": "mag_cal_result"
+    }
+   ],
+   "desc": "fits the ellipsoid; on success the calibration is in use and stored in the calibration section (RAM - save to keep). On ERR_FAILED `reason` says why and the calibration keeps collecting"
+  },
+  {
+   "id": 7,
+   "name": "MAG_CAL_CANCEL",
+   "args": [],
+   "armed_ok": true
+  },
+  {
+   "id": 8,
+   "name": "MOTOR_TEST",
+   "args": [
+    {
+     "n": "motor",
+     "t": "u8"
+    },
+    {
+     "n": "value",
+     "t": "u16"
+    }
+   ],
+   "desc": "motor = logical motor index, 255 = all; value 0..1000 = 0..100 %. Must be refreshed at least every 0.5 s or the motor stops. Refused while armed. REMOVE THE PROPELLERS"
+  },
+  {
+   "id": 9,
+   "name": "MOTOR_STOP",
+   "args": [],
+   "armed_ok": true
+  },
+  {
+   "id": 10,
+   "name": "MOTOR_DIRECTION",
+   "args": [
+    {
+     "n": "motor",
+     "t": "u8"
+    },
+    {
+     "n": "reversed",
+     "t": "u8"
+    }
+   ],
+   "desc": "queues the ESC spin-direction DShot command (disarmed only)"
+  },
+  {
+   "id": 11,
+   "name": "MOTOR_BEACON",
+   "args": [
+    {
+     "n": "motor",
+     "t": "u8"
+    }
+   ]
+  },
+  {
+   "id": 12,
+   "name": "SET_HOME",
+   "args": [],
+   "armed_ok": true
+  },
+  {
+   "id": 13,
+   "name": "ESC_TELEMETRY",
+   "args": [
+    {
+     "n": "enable",
+     "t": "u8"
+    }
+   ]
+  },
+  {
+   "id": 14,
+   "name": "APPLY_SETTINGS",
+   "args": [],
+   "desc": "re-apply the RAM settings to the running firmware (disarmed only)"
+  },
+  {
+   "id": 15,
+   "name": "REPORT",
+   "args": [],
+   "desc": "re-send the boot report (detected sensors / failure reasons) as LOG frames",
+   "armed_ok": true
+  },
+  {
+   "id": 16,
+   "name": "ACC_CAL_CANCEL",
+   "args": [],
+   "armed_ok": true
+  },
+  {
+   "id": 17,
+   "name": "BEEP",
+   "args": [
+    {
+     "n": "condition",
+     "t": "u8",
+     "enum": "beeper_cond",
+     "optional": true
+    }
+   ],
+   "desc": "play the sound of one beeper condition once on the buzzer and (when they can beep) the motors, even if that condition is switched off; 255 (none) = silence. Refused while armed"
+  },
+  {
+   "id": 18,
+   "name": "BLACKBOX_ERASE",
+   "args": [],
+   "desc": "erase the whole log memory (takes seconds; progress in the blackbox stream). Refused while armed or logging"
+  },
+  {
+   "id": 19,
+   "name": "BLACKBOX_STREAM",
+   "args": [
+    {
+     "n": "enable",
+     "t": "bool"
+    },
+    {
+     "n": "rate_hz",
+     "t": "u16"
+    }
+   ],
+   "armed_ok": true,
+   "desc": "send the log to the app as BB_HEADER / BB_DATA frames instead of storing it; rate_hz 0 = the configured rate. A running storage session is closed first (refused with BUSY while armed). Stops by itself when the app goes silent"
+  },
+  {
+   "id": 20,
+   "name": "BLACKBOX_SESSION",
+   "args": [
+    {
+     "n": "index",
+     "t": "u16"
+    }
+   ],
+   "result": [
+    {
+     "n": "start",
+     "t": "u32"
+    },
+    {
+     "n": "size",
+     "t": "u32"
+    }
+   ],
+   "armed_ok": true,
+   "desc": "position of stored session `index` (0 = oldest) in the log memory; BAD_ARG past the last one"
+  },
+  {
+   "id": 21,
+   "name": "BLACKBOX_READ",
+   "args": [
+    {
+     "n": "offset",
+     "t": "u32"
+    },
+    {
+     "n": "length",
+     "t": "u32"
+    }
+   ],
+   "desc": "start sending `length` bytes of the log memory from `offset` as BB_BLOB frames [offset u32][data]; length 0 cancels. Refused while armed, logging or erasing"
+  }
+ ],
+ "errors": [
+  "OK",
+  "UNKNOWN",
+  "BAD_ARG",
+  "ARMED",
+  "BUSY",
+  "NOT_SUPPORTED",
+  "BAD_SECTION",
+  "SIZE_MISMATCH",
+  "STORAGE",
+  "NO_SENSOR",
+  "BAD_STATE",
+  "FAILED"
+ ]
+}

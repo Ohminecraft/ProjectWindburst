@@ -1,0 +1,355 @@
+/*
+ * This file is part of Windburst Project
+ */
+
+#pragma once
+#include "../../config/fast_code.h"
+
+#include <Arduino.h>
+#include "driver/rmt_tx.h"
+#include "driver/rmt_rx.h"
+#include "driver/rmt_encoder.h"
+#include "motor_hw.h"
+#include "dshot_direct.h"
+
+#if CONFIG_IDF_TARGET_ESP32S3
+#define WB_DSHOT_DIRECT 1
+#include "driver/gptimer.h"
+#include "driver/gpio.h"
+#include "esp_private/rmt.h"            // rmt_get_channel_id()
+#include "esp_timer.h"
+#include "hal/rmt_ll.h"
+#include "hal/gpio_ll.h"
+#include "soc/rmt_struct.h"
+#include "soc/gpio_struct.h"
+// The RMT symbol memory (8 channels x 48 words on the ESP32-S3: transmitters 0..3, receivers 4..7). The address comes from the
+// SDK's linker script; the SDK only declares it in a private header, so it is declared here under our own name.
+extern "C" { extern volatile uint32_t wb_rmt_mem[] __asm__("RMTMEM"); }
+#else
+#define WB_DSHOT_DIRECT 0
+#endif
+
+// ============================================================================
+// DShot150/300/600/1200 on the ESP32 RMT peripheral. Two ways to run it (settings: motors.dshot_driver):
+//
+//   DIRECT (default, ESP32-S3)  The channels are created with the ESP-IDF driver (clock, channel numbers, pin routing), then the
+//                               driver is left out of the loop: each cycle the symbols are written straight into the RMT memory
+//                               and all transmitters are started back to back. No queue, no encoder, no interrupt per frame:
+//                               about 10 us per cycle for 4 motors instead of ~130 us, and all motors get their frame at once.
+//                               Bidirectional DShot: the pin is push-pull while the frame goes out, a timer interrupt right
+//                               after the last bit turns it into an input and starts the receiver (see dshot_direct.h).
+//   IDF                         Every frame goes through rmt_transmit(). One-way only. Kept as the fallback: it is the path
+//                               that is known to spin motors on real hardware.
+//
+// One TX channel per motor (ESP32-S3: 4 TX + 4 RX => max 4 DShot motors; hexa/octo need a parallel-output backend).
+// The legacy driver/rmt.h must NOT be mixed in (boot abort) - Arduino-ESP32 3.x itself uses the new driver.
+//
+// NOT yet confirmed on hardware: the DIRECT path, and with it bidirectional DShot.
+// ============================================================================
+
+#if WB_DSHOT_DIRECT
+// The hardware side of motor::DshotDirect on the ESP32-S3.
+class RmtDirectPort {
+public:
+    static constexpr int kMaxCh = 4;
+    typedef void (*AlarmFn)(void*);
+
+    bool begin(const uint8_t* pins, int count, bool bidir, motor::Protocol proto, AlarmFn fn, void* arg) {
+        end();
+        count_ = count; bidir_ = bidir; fn_ = fn; arg_ = arg;
+        for (uint32_t hz : {80000000u, 40000000u}) {                     // finer ticks first (DShot1200 needs ~12 ns)
+            if (create(pins, hz, proto)) return true;
+            end();
+        }
+        return false;
+    }
+    void end() {
+        if (timer_) { gptimer_stop(timer_); gptimer_disable(timer_); gptimer_del_timer(timer_); timer_ = nullptr; }
+        for (int c = 0; c < kMaxCh; c++) {
+            if (rx_[c]) {
+                rmt_ll_rx_enable(&RMT, rx_id_[c], false); rmt_del_channel(rx_[c]); rx_[c] = nullptr;
+                gpio_ll_set_output_enable_ctrl(&GPIO, pin_[c], true, false);   // output enable back to the peripheral, as a one-way channel has it
+            }
+            if (tx_[c]) { rmt_del_channel(tx_[c]); tx_[c] = nullptr; }
+        }
+        count_ = 0;
+    }
+
+    uint32_t micros() const { return (uint32_t)esp_timer_get_time(); }
+    void delay_us(uint32_t us) const { esp_rom_delay_us(us); }
+    const char* failStep() const { return fail_step_; }
+    esp_err_t failErr() const { return fail_err_; }
+    uint32_t tick_hz() const { return tick_hz_; }
+    WB_FAST void alarm_in(uint32_t us) {
+        gptimer_set_raw_count(timer_, 0);
+        gptimer_alarm_config_t a = {};
+        a.alarm_count = us; a.flags.auto_reload_on_alarm = false;        // one shot: the hardware disarms it when it fires
+        gptimer_set_alarm_action(timer_, &a);
+    }
+    WB_FAST void drive(int c) { gpio_ll_output_enable(&GPIO, pin_[c]); }
+    WB_FAST void release(int c) { gpio_ll_output_disable(&GPIO, pin_[c]); }
+    WB_FAST void tx_load(int c, const uint32_t* w, int n) {
+        volatile uint32_t* m = wb_rmt_mem + tx_id_[c] * SOC_RMT_MEM_WORDS_PER_CHANNEL;
+        for (int i = 0; i < n; i++) m[i] = w[i];
+    }
+    WB_FAST void tx_start(int c) { rmt_ll_tx_reset_pointer(&RMT, tx_id_[c]); rmt_ll_tx_start(&RMT, tx_id_[c]); }
+    WB_FAST void rx_start(int c) {
+        const int id = rx_id_[c];
+        rmt_ll_rx_set_mem_owner(&RMT, id, RMT_LL_MEM_OWNER_HW);
+        rmt_ll_rx_reset_pointer(&RMT, id);
+        rmt_ll_rx_enable(&RMT, id, true);
+    }
+    WB_FAST int rx_stop(int c, uint32_t* w, int max) {
+        const int id = rx_id_[c];
+        rmt_ll_rx_enable(&RMT, id, false);
+        int n = (int)rmt_ll_rx_get_memory_writer_offset(&RMT, id);
+        if (n < 0) n = 0;
+        if (n > max) n = max;
+        rmt_ll_rx_set_mem_owner(&RMT, id, RMT_LL_MEM_OWNER_SW);
+        const volatile uint32_t* m = wb_rmt_mem + (id + SOC_RMT_TX_CANDIDATES_PER_GROUP) * SOC_RMT_MEM_WORDS_PER_CHANNEL;
+        for (int i = 0; i < n; i++) w[i] = m[i];
+        rmt_ll_rx_set_mem_owner(&RMT, id, RMT_LL_MEM_OWNER_HW);
+        return n;
+    }
+
+private:
+    static bool IRAM_ATTR on_timer(gptimer_handle_t, const gptimer_alarm_event_data_t*, void* user) {
+        RmtDirectPort* p = (RmtDirectPort*)user;
+        p->fn_(p->arg_);
+        return false;
+    }
+
+    bool create(const uint8_t* pins, uint32_t hz, motor::Protocol proto) {
+        for (int c = 0; c < count_; c++) {
+            if (pins[c] == 255) { fail_step_ = "motor pin not set"; fail_err_ = ESP_ERR_INVALID_ARG; return false; }
+            pin_[c] = pins[c];
+            if (bidir_) {                                                  // receiver first: it sets the pin up as an input with pull-up
+                rmt_rx_channel_config_t rc = {};
+                rc.gpio_num = (gpio_num_t)pins[c];
+                rc.clk_src = RMT_CLK_SRC_DEFAULT;
+                rc.resolution_hz = hz;
+                rc.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
+                if ((fail_err_ = rmt_new_rx_channel(&rc, &rx_[c])) != ESP_OK) { fail_step_ = "rmt_new_rx_channel"; return false; }
+                if ((fail_err_ = rmt_get_channel_id(rx_[c], &rx_id_[c])) != ESP_OK) { fail_step_ = "rmt_get_channel_id (rx)"; return false; }
+            }
+            rmt_tx_channel_config_t tc = {};
+            tc.gpio_num = (gpio_num_t)pins[c];
+            tc.clk_src = RMT_CLK_SRC_DEFAULT;
+            tc.resolution_hz = hz;
+            tc.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
+            tc.trans_queue_depth = 1;
+            tc.flags.init_level = bidir_ ? 1 : 0;
+            if ((fail_err_ = rmt_new_tx_channel(&tc, &tx_[c])) != ESP_OK) { fail_step_ = "rmt_new_tx_channel"; return false; }
+            if ((fail_err_ = rmt_get_channel_id(tx_[c], &tx_id_[c])) != ESP_OK) { fail_step_ = "rmt_get_channel_id (tx)"; return false; }
+        }
+        uint32_t real = hz;
+        rmt_get_channel_resolution(tx_[0], &real);
+        tick_hz_ = real;
+        // The channels are never enabled in the driver, so the driver never transmits, receives or takes an interrupt for them.
+        // From here on the registers are ours.
+        const uint32_t idle_ticks = (uint32_t)(((uint64_t)tick_hz_ * motor::reply_bit_ns(proto) * 8) / 1000000000ull);
+        uint32_t filter_ticks = (uint32_t)((80000000ull * (motor::reply_bit_ns(proto) / 4)) / 1000000000ull);     // glitches shorter than a quarter bit; counted in 80 MHz source clocks
+        if (filter_ticks > 255) filter_ticks = 255;
+        for (int c = 0; c < count_; c++) {
+            const int t = tx_id_[c];
+            rmt_ll_enable_interrupt(&RMT, RMT_LL_EVENT_TX_MASK(t) | RMT_LL_EVENT_TX_ERROR(t), false);
+            rmt_ll_tx_enable_loop(&RMT, t, false);
+            rmt_ll_tx_fix_idle_level(&RMT, t, bidir_ ? 1 : 0, true);
+            RMT.chnconf0[t].conf_update_chn = 1;                           // idle level valid before the first frame
+            if (bidir_) {
+                const int r = rx_id_[c];
+                rmt_ll_enable_interrupt(&RMT, RMT_LL_EVENT_RX_MASK(r) | RMT_LL_EVENT_RX_ERROR(r), false);
+                rmt_ll_rx_set_filter_thres(&RMT, r, filter_ticks);
+                rmt_ll_rx_enable_filter(&RMT, r, true);
+                rmt_ll_rx_set_idle_thres(&RMT, r, idle_ticks);
+                rmt_ll_rx_set_mem_owner(&RMT, r, RMT_LL_MEM_OWNER_HW);
+                rmt_ll_rx_enable(&RMT, r, false);
+                gpio_ll_input_enable(&GPIO, pin_[c]);
+                gpio_pullup_en((gpio_num_t)pin_[c]);
+                gpio_ll_set_output_enable_ctrl(&GPIO, pin_[c], false, false);   // output enable = the GPIO enable bit, so drive()/release() is one register write
+                gpio_ll_output_enable(&GPIO, pin_[c]);
+            }
+        }
+        if (bidir_) {
+            gptimer_config_t gc = {};
+            gc.clk_src = GPTIMER_CLK_SRC_DEFAULT;
+            gc.direction = GPTIMER_COUNT_UP;
+            gc.resolution_hz = 1000000;
+            gc.intr_priority = 3;                                          // ahead of UART / SPI / USB interrupts: the ESC answers 30 us after the frame
+            if ((fail_err_ = gptimer_new_timer(&gc, &timer_)) != ESP_OK) { fail_step_ = "gptimer_new_timer"; return false; }
+            gptimer_event_callbacks_t cb = {};
+            cb.on_alarm = on_timer;
+            if ((fail_err_ = gptimer_register_event_callbacks(timer_, &cb, this)) != ESP_OK) { fail_step_ = "gptimer_register_event_callbacks"; return false; }
+            if ((fail_err_ = gptimer_enable(timer_)) != ESP_OK || (fail_err_ = gptimer_start(timer_)) != ESP_OK) { fail_step_ = "gptimer_enable / start"; return false; }
+        }
+        return true;
+    }
+
+    rmt_channel_handle_t tx_[kMaxCh] = {}, rx_[kMaxCh] = {};
+    int tx_id_[kMaxCh] = {}, rx_id_[kMaxCh] = {};
+    uint8_t pin_[kMaxCh] = {};
+    gptimer_handle_t timer_ = nullptr;
+    AlarmFn fn_ = nullptr; void* arg_ = nullptr;
+    int count_ = 0; bool bidir_ = false; uint32_t tick_hz_ = 80000000;
+    const char* fail_step_ = ""; esp_err_t fail_err_ = ESP_OK;
+};
+#endif // WB_DSHOT_DIRECT
+
+class DshotHw : public MotorHw {
+public:
+    enum Driver : uint8_t { DRV_DIRECT = 0, DRV_IDF = 1 };
+
+    ~DshotHw() override { end(); }
+    void set_driver(uint8_t d) override { want_ = d == DRV_IDF ? DRV_IDF : DRV_DIRECT; }
+    const char* name() const override {
+        if (drv_ == DRV_IDF) return wanted_bidir_ ? "DShot/RMT IDF (one-way only)" : "DShot/RMT IDF";
+        if (note_[0]) { snprintf(name_, sizeof(name_), "%s (%s)", bidir_ ? "DShot/RMT direct, bidirectional" : "DShot/RMT direct", note_); return name_; }
+        return bidir_ ? "DShot/RMT direct, bidirectional" : "DShot/RMT direct";
+    }
+    const char* note() const { return note_; }      // what the start-up check found / why bidirectional DShot is off
+    WB_FAST bool bidirectional() const override { return bidir_; }
+    motor::HwStats stats() const override {
+        motor::HwStats s;
+#if WB_DSHOT_DIRECT
+        if (drv_ == DRV_DIRECT) {
+            const auto& d = direct_.stats();
+            s.frames = d.frames; s.skipped = d.skipped; s.late_switch = d.late_switch; s.replies = d.replies; s.garbled = d.garbled;
+            return s;
+        }
+#endif
+        s.frames = frames_; s.skipped = skipped_;
+        return s;
+    }
+    bool rx_responsive(int slot) const override {
+#if WB_DSHOT_DIRECT
+        if (drv_ == DRV_DIRECT) return direct_.responsive(slot);
+#endif
+        (void)slot; return false;
+    }
+
+    bool begin(const uint8_t* pins, int count, motor::Protocol proto, uint16_t, bool bidirectional) override {
+        end();
+        if (!motor::is_dshot(proto) || count < 1 || count > kMaxCh) return false;
+        proto_ = proto; count_ = count; wanted_bidir_ = bidirectional;
+        drv_ = want_;
+#if WB_DSHOT_DIRECT
+        if (drv_ == DRV_DIRECT) {
+            note_[0] = 0;
+            bidir_ = bidirectional;
+            if (bidir_) {
+                // bidirectional: set up, then prove on the board that every pin carries the frames and is heard by its receiver.
+                // Anything wrong: one-way DShot instead (the motors must still spin and beep), and the boot report says why.
+                if (port_.begin(pins, count, true, proto, on_alarm, this) && direct_.begin(port_, count, proto, true)) {
+                    for (int c = 0; c < count; c++) {
+                        int words = 0; const uint16_t want = motor::dshot_packet(0, false, true);
+                        const uint32_t seen = direct_.loopback(c, 0, words);
+                        if (seen == want) continue;
+                        if (seen == decltype(direct_)::kLoopNothing) snprintf(note_, sizeof(note_), "bidirectional OFF: start-up check, the receiver of motor %d heard nothing (%d words)", c + 1, words);
+                        else if (seen == decltype(direct_)::kLoopGarbled) snprintf(note_, sizeof(note_), "bidirectional OFF: start-up check, motor %d: %d words, not a DShot frame", c + 1, words);
+                        else snprintf(note_, sizeof(note_), "bidirectional OFF: start-up check, motor %d sent 0x%04x, heard 0x%04x", c + 1, (unsigned)want, (unsigned)seen);
+                        break;
+                    }
+                    if (!note_[0]) { snprintf(note_, sizeof(note_), "start-up check OK on %d pin%s", count, count == 1 ? "" : "s"); return true; }
+                } else snprintf(note_, sizeof(note_), "bidirectional OFF: %s failed (%s)", port_.failStep(), esp_err_to_name(port_.failErr()));
+                port_.end(); bidir_ = false;
+            }
+            if (port_.begin(pins, count, false, proto, on_alarm, this) && direct_.begin(port_, count, proto, false)) return true;
+            snprintf(note_, sizeof(note_), "%s failed (%s)", port_.failStep(), esp_err_to_name(port_.failErr()));
+            port_.end();
+            return false;
+        }
+#else
+        drv_ = DRV_IDF;
+#endif
+        bidir_ = false;                                                    // the IDF path cannot listen: normal (not inverted) frames
+        cycle_us_ = motor::dshot_cycle_us(proto, false);
+        for (uint32_t hz : {80000000u, 40000000u}) {
+            tick_hz_ = hz;
+            if (create_idf(pins)) return true;
+            end();
+        }
+        return false;
+    }
+
+    WB_FAST void write(const motor::Frame& f) override {
+        if (!f.send) return;
+#if WB_DSHOT_DIRECT
+        if (drv_ == DRV_DIRECT) { direct_.send(f.value, f.telem_request); return; }
+#endif
+        const uint32_t now = micros();
+        if (started_ && (uint32_t)(now - t_tx_) < cycle_us_) { skipped_++; return; }   // never queue behind a frame that is still going out
+        for (int s = 0; s < count_; s++) {
+            Ch& c = ch_[s];
+            if (!c.tx) continue;
+            motor::Sym sym[16];
+            motor::dshot_symbols(motor::dshot_packet(f.value[s], f.telem_request[s], false), proto_, tick_hz_, false, sym);
+            rmt_symbol_word_t* w = c.buf[c.bi];
+            for (int b = 0; b < 16; b++) { w[b].duration0 = sym[b].dur0; w[b].level0 = sym[b].lvl0; w[b].duration1 = sym[b].dur1; w[b].level1 = sym[b].lvl1; }
+            c.bi = (uint8_t)((c.bi + 1) % 3);
+            rmt_transmit_config_t tc = {};
+            tc.loop_count = 0;
+            tc.flags.eot_level = 0;                                        // idle level after the frame
+            if (rmt_transmit(c.tx, c.enc, w, 16 * sizeof(rmt_symbol_word_t), &tc) != ESP_OK) skipped_++;
+        }
+        t_tx_ = micros(); started_ = true; frames_++;
+    }
+
+    WB_FAST bool poll_reply(int slot, uint32_t& gcr20) override {
+#if WB_DSHOT_DIRECT
+        if (drv_ == DRV_DIRECT && bidir_) return direct_.take_reply(slot, gcr20);
+#endif
+        (void)slot; (void)gcr20; return false;
+    }
+
+private:
+    static constexpr int kMaxCh = 4;                                     // ESP32-S3 / ESP32-S2 / ESP32 (C5: 2)
+    struct Ch {
+        rmt_channel_handle_t tx = nullptr;
+        rmt_encoder_handle_t enc = nullptr;                // one encoder per channel: an encoder keeps state while its frame is in the queue
+        rmt_symbol_word_t buf[3][16];
+        uint8_t bi = 0;
+    };
+
+#if WB_DSHOT_DIRECT
+    static void IRAM_ATTR on_alarm(void* self) { ((DshotHw*)self)->direct_.on_alarm(); }
+#endif
+
+    bool create_idf(const uint8_t* pins) {
+        for (int s = 0; s < count_; s++) {
+            Ch& c = ch_[s];
+            if (pins[s] == 255) return false;
+            rmt_copy_encoder_config_t ec = {};
+            if (rmt_new_copy_encoder(&ec, &c.enc) != ESP_OK) return false;
+            rmt_tx_channel_config_t tcfg = {};
+            tcfg.gpio_num = (gpio_num_t)pins[s];
+            tcfg.clk_src = RMT_CLK_SRC_DEFAULT;
+            tcfg.resolution_hz = tick_hz_;
+            tcfg.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
+            tcfg.trans_queue_depth = 2;
+            if (rmt_new_tx_channel(&tcfg, &c.tx) != ESP_OK) return false;
+            if (rmt_enable(c.tx) != ESP_OK) return false;
+        }
+        return true;
+    }
+    void end() {
+#if WB_DSHOT_DIRECT
+        port_.end();
+#endif
+        for (auto& c : ch_) {
+            if (c.tx) { rmt_disable(c.tx); rmt_del_channel(c.tx); c.tx = nullptr; }
+            if (c.enc) { rmt_del_encoder(c.enc); c.enc = nullptr; }
+        }
+        started_ = false;
+    }
+
+    Ch ch_[kMaxCh];
+#if WB_DSHOT_DIRECT
+    RmtDirectPort port_;
+    motor::DshotDirect<RmtDirectPort> direct_;
+#endif
+    motor::Protocol proto_ = motor::PROTO_DSHOT300;
+    Driver want_ = DRV_DIRECT, drv_ = DRV_DIRECT;
+    char note_[100] = {}; mutable char name_[140] = {};
+    int count_ = 0; bool bidir_ = false, wanted_bidir_ = false, started_ = false;
+    uint32_t tick_hz_ = 80000000, cycle_us_ = 100, t_tx_ = 0, frames_ = 0, skipped_ = 0;
+};

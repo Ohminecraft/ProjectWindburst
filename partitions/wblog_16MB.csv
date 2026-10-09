@@ -1,0 +1,9 @@
+# Windburst: one application slot (no OTA), the rest of the flash for the flight log ("wblog", used raw by src/blackbox).
+# Select it in platformio.ini:   board_build.partitions = partitions/wblog_16MB.csv
+# The firmware finds the partition by its label. Without such a table it falls back to the stock "spiffs" partition (1.4 .. 3.4 MB).
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0x200000,
+wblog,    data, spiffs,  0x210000,0xDE0000,
+coredump, data, coredump,0xFF0000,0x10000,
