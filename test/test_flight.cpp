@@ -35,6 +35,7 @@ struct Rig {
     int slow_every = 0, waited = 1; uint32_t slow_us = 1750, cycle_n = 0;             // every slow_every-th control cycle takes slow_us instead of 250 us (the craft flies on meanwhile)
     int motor_map[kMaxMotors] = {0, 1, 2, 3, 4, 5, 6, 7};                 // which output of the core is plugged to which motor of the craft
     bool gps = false; float gps_alt_err = 0;                              // a GPS (10 Hz) whose altitude is this far off
+    bool gps_vd = true;                                                   // the GPS reports a vertical velocity (u-blox; NMEA does not)
     float ground_level = 0;                                               // the ground under the craft lies this far above the take-off point (a table): what the range finder sees
     float prop_wash_m = 0;                                                // the barometer reads this much too low while the motors run and the craft is within 0.3 m of the ground
     // navigation sensors. ngps: a fix every 100 ms that shows where the craft was 150 ms ago; the position wanders slowly (multipath), the velocity is good
@@ -69,7 +70,7 @@ struct Rig {
             if (us / 20000 != prev / 20000) { drift += drift_rate * 0.02f; if (baro) core.on_baro(pl.z + drift + gauss(0.25f) - wash, 0.3f, in.now_ms); }
             if (us / 33000 != prev / 33000 && range && pl.z - ground_level < 3.5f && pl.z >= ground_level) core.on_range(pl.z - ground_level + gauss(0.03f), 0.03f, in.now_ms);
             if (us / 10000 != prev / 10000 && mag) { const double d = declination * M_PI / 180, Bef[3] = {0.30 * cos(d), 0.30 * sin(d), 0.38}; double bf[3]; pl.body_from_world(Bef, bf); core.on_mag({(float)bf[0], (float)bf[1], (float)bf[2]}, true, in.now_ms); }
-            if (us / 100000 != prev / 100000 && gps) { GpsMeas gm; gm.valid = true; gm.north_m = pl.pn; gm.east_m = pl.pe; gm.vn = pl.vn; gm.ve = pl.ve; gm.vd = -pl.vz; gm.alt_m = pl.z + gps_alt_err; gm.sigma_alt = 2.0f; core.on_gps(gm, in.now_ms); }
+            if (us / 100000 != prev / 100000 && gps) { GpsMeas gm; gm.valid = true; gm.north_m = pl.pn; gm.east_m = pl.pe; gm.vn = pl.vn; gm.ve = pl.ve; gm.vd = -pl.vz; gm.vd_valid = gps_vd; gm.alt_m = pl.z + gps_alt_err; gm.sigma_alt = 2.0f; core.on_gps(gm, in.now_ms); }
             if (us / 1000 != prev / 1000 && (ngps || flow)) {       // what the slow sensors will report later
                 if (past.empty()) past.resize(512);
                 past[past_i] = {pl.pn, pl.pe, pl.vn, pl.ve, pl.z, pl.vz, pl.w[0], pl.w[1], pl.v_forward(), pl.v_right(), (pl.z - ground_level) / fmaxf(pl.R22(), 0.3f)}; past_i = (past_i + 1) % past.size();
@@ -78,7 +79,7 @@ struct Rig {
                 const Past& a = ago(gps_delay); GpsMeas g; g.valid = gps_valid;
                 for (int k = 0; k < 2; k++) gps_bias[k] += -gps_bias[k] * (0.1f / 20.0f) + gauss(gps_wander * sqrtf(2.0f * 0.1f / 20.0f));     // wanders with a time constant of 20 s
                 g.north_m = a.pn + gps_bias[0] + gauss(gps_sigma_p); g.east_m = a.pe + gps_bias[1] + gauss(gps_sigma_p); g.alt_m = a.z + gauss(1.0f);
-                g.vn = a.vn + gauss(gps_sigma_v); g.ve = a.ve + gauss(gps_sigma_v); g.vd = -a.vz + gauss(0.1f); g.sigma_pos = 1.0f; g.sigma_vel = gps_sacc; g.sigma_alt = 2.0f; g.sats = gps_sats;
+                g.vn = a.vn + gauss(gps_sigma_v); g.ve = a.ve + gauss(gps_sigma_v); g.vd = -a.vz + gauss(0.1f); g.vd_valid = gps_vd; g.sigma_pos = 1.0f; g.sigma_vel = gps_sacc; g.sigma_alt = 2.0f; g.sats = gps_sats;
                 core.on_gps(g, in.now_ms);
             }
             if (flow && us / 20000 != prev / 20000 && us >= 600000) {
@@ -444,6 +445,11 @@ static void takeoff_to_hover(Rig& r) {
     p.arm = true; r.run(0.3f, p); p.thr = 0.8f; r.run(0.6f, p); p.thr = 0.5f; r.run(7.0f, p);
 }
 
+static void nav_takeoff(Rig& r, Pilot& p, float z) {
+    r.baro = true; r.h.baro_ok = true; p = Pilot(); p.mode = 1; p.althold = true; r.run(1.0f, p); p.arm = true; r.run(0.3f, p);
+    p.thr = 0.8f; for (int i = 0; i < 600 && r.pl.z < z - 0.4f; i++) r.run(0.05f, p);
+    p.thr = 0.5f; r.run(3.0f, p);
+}
 static void t_althold() {
     printf("[althold] baro + lidar through the full core (baro drifting 3 cm/s)\n");
     Rig r; r.drift_rate = 0.03f; Pilot p; p.mode = 1; p.althold = true; r.baro = true; r.range = true; r.h.baro_ok = true;
@@ -522,8 +528,31 @@ static void t_althold() {
             "%s, GPS altitude 3 m too high for 30 s: not used, the craft holds (%.2f m, then %.2f .. %.2f; fused as a height it would have come down by two metres - into the ground)", lidar ? "baro + lidar" : "baro only", z0, lo, hi); }
     { Rig r; r.range = true; r.gps = true; r.gps_alt_err = 3.0f; Pilot p; fly_up(r, p, 1); r.run(1.0f, p);
       CHECK(r.pl.z > 0.1f && r.pl.z < 3.0f && !r.core.vertical().state().gps_used && r.core.vertical().state().range_used && r.out.est.alt_valid && fabsf(r.out.est.z - r.pl.z) < 0.15f, "lidar and GPS without a barometer, the GPS 3 m off: the lidar is the height (%.2f, true %.2f)", r.out.est.z, r.pl.z); }
-    { Rig r; r.gps = true; r.gps_alt_err = 0.0f; Pilot p; p.mode = 1; r.run(0.5f, p); p.arm = true; r.run(0.2f, p); p.thr = r.pl.hover_cmd() * 1.2f; r.run(2.5f, p);
-      CHECK(r.core.vertical().state().gps_used && !r.out.est.alt_valid && fabsf(r.out.est.z - r.pl.z) < 1.5f, "a craft with GPS and nothing else: its altitude is all there is and goes into the estimate (%.2f, true %.2f) - too coarse to be called a valid height", r.out.est.z, r.pl.z); }
+    for (int mode = GA_OFF; mode <= GA_FALLBACK; mode++) { Rig r; r.core.cfg.gps_alt = (uint8_t)mode; r.gps = true; r.gps_alt_err = 0.0f; Pilot p; p.mode = 1; r.run(0.5f, p); p.arm = true; r.run(0.2f, p); p.thr = r.pl.hover_cmd() * 1.2f; r.run(2.5f, p);
+      if (mode == GA_FALLBACK) CHECK(r.core.vertical().state().gps_used && r.out.est.alt_valid && r.out.est.gps_alt_used && fabsf(r.out.est.z - r.pl.z) < 1.5f, "a craft with GPS and nothing else (FALLBACK): its height is the height (%.2f, true %.2f) and counts as valid - Betaflight's altitude_source DEFAULT does the same", r.out.est.z, r.pl.z);
+      else CHECK(!r.core.vertical().state().gps_used && !r.out.est.alt_valid && !r.out.est.gps_alt_used, "the same with the GPS height switched off (OFF): no height at all"); }
+    // ---- the GPS height in Altitude Hold (vertical_est.h "GPS"); the GPS here: 1 m of noise on each height, 150 ms late, vertical velocity 0.1 m/s
+    { auto gps_only = [](uint8_t mode, bool& active_all, float& dev, bool& flags) { Rig r; r.core.cfg.gps_alt = mode; r.ngps = true; r.h.gps_ok = true; Pilot p; p.mode = 1; r.run(1.0f, p); p.arm = true; r.run(0.3f, p);
+          p.thr = r.pl.hover_cmd() * 1.15f; for (int i = 0; i < 400 && r.pl.z < 5.0f; i++) r.run(0.05f, p);
+          p.thr = 0.5f; p.althold = true; r.run(3.0f, p); const float z0 = r.pl.z; active_all = true; dev = 0;
+          for (int k = 0; k < 400; k++) { r.run(0.05f, p); active_all &= r.out.althold_active; dev = fmaxf(dev, fabsf(r.pl.z - z0)); }
+          flags = r.out.est.gps_alt_used && r.out.est.gps_vz_used; return r.out.ah_state; };
+      bool all = false, fl = false; float dev = 0; const AhState st = gps_only(GA_FALLBACK, all, dev, fl);
+      CHECK(all && st == AhState::FLYING && dev < 1.5f && fl, "GPS only (no barometer), Altitude Hold at 5 m for 20 s: held within %.2f m on the GPS height and vertical velocity", dev);
+      gps_only(GA_OFF, all, dev, fl); CHECK(!all, "the same with the GPS height OFF: Altitude Hold has no height, the pilot keeps the throttle"); }
+    // the barometer drifts 1 m a minute for 3 minutes (weather, the board warming up): BLEND takes it out, FALLBACK does not
+    { auto drifting = [](uint8_t mode) { Rig r; r.core.cfg.gps_alt = mode; r.ngps = true; r.h.gps_ok = true; Pilot p; nav_takeoff(r, p, 5.0f);
+          const float z0 = r.pl.z; r.drift_rate = 1.0f / 60.0f; r.run(180.0f, p); return r.pl.z - z0; };
+      const float fb = drifting(GA_FALLBACK), bl = drifting(GA_BLEND);
+      CHECK(fb < -2.4f && fabsf(bl) < 1.0f, "Altitude Hold for 3 min with the barometer drifting 1 m/min: the craft sinks %.1f m with FALLBACK, moves %.2f m with BLEND", -fb, bl); }
+    // the barometer goes silent in flight (a loose wire, the I2C bus hung): the GPS height takes over without a step, Altitude Hold carries on
+    { Rig r; r.ngps = true; r.h.gps_ok = true; Pilot p; nav_takeoff(r, p, 5.0f); r.run(10.0f, p); const float z0 = r.pl.z;
+      r.baro = false; bool all = true, valid = true; float dev = 0;
+      for (int k = 0; k < 400; k++) { r.run(0.05f, p); all &= r.out.althold_active; valid &= r.out.est.alt_valid; dev = fmaxf(dev, fabsf(r.pl.z - z0)); }
+      CHECK(all && valid && dev < 1.5f && r.out.est.gps_alt_used && r.out.ah_state == AhState::FLYING, "barometer silent at 5 m: Altitude Hold never drops out, the height stays valid, the craft within %.2f m for 20 s on the GPS", dev); }
+    // a NMEA module has no vertical velocity: nothing of it is fused (vd would read 0 - a craft climbing at 2 m/s would be told it hovers)
+    { Rig r; r.ngps = true; r.gps_vd = false; r.h.gps_ok = true; Pilot p; nav_takeoff(r, p, 3.0f);
+      CHECK(!r.out.est.gps_vz_used && !r.core.vertical().state().gps_vel_used, "GPS without vertical velocity (NMEA): not used for the climb rate"); }
     // near the ground with the motors running the barometer reads wrong (the air is pushed against the ground): it counts for less there
     { auto dip = [](float ground_effect_s, int in_flight) { float sum = 0; for (int rep = 0; rep < 4; rep++) { Rig r; r.core.cfg.ground_effect_s = ground_effect_s; r.core.configure(); r.baro = true; r.h.baro_ok = true; Pilot p; p.mode = 1; r.run(1.5f, p);
               if (in_flight == 2) { r.drift -= 0.8f; r.run(0.25f, p); sum += -r.out.est.z; }               // disarmed: the air itself changed
@@ -684,11 +713,6 @@ static void t_motor_layer() {
 // late and wanders, an optical-flow sensor with a lidar, the whole FlightCore.
 // ---------------------------------------------------------------------------------------------------------------------
 // take off in Altitude Hold (+ Angle) and hover near z metres
-static void nav_takeoff(Rig& r, Pilot& p, float z) {
-    r.baro = true; r.h.baro_ok = true; p = Pilot(); p.mode = 1; p.althold = true; r.run(1.0f, p); p.arm = true; r.run(0.3f, p);
-    p.thr = 0.8f; for (int i = 0; i < 600 && r.pl.z < z - 0.4f; i++) r.run(0.05f, p);
-    p.thr = 0.5f; r.run(3.0f, p);
-}
 static float nav_dist(const Rig& r, float n, float e) { return hypotf(r.pl.pn - n, r.pl.pe - e); }
 
 static void t_position_hold() {

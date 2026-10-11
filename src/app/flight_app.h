@@ -526,6 +526,11 @@ private:
         tel_.hw_late = (uint16_t)(hs.late_switch - hw_mark_.late_switch > 65535u ? 65535u : hs.late_switch - hw_mark_.late_switch);
         tel_.hw_replies = (uint16_t)(hs.replies - hw_mark_.replies > 65535u ? 65535u : hs.replies - hw_mark_.replies);
         tel_.hw_garbled = (uint16_t)(hs.garbled - hw_mark_.garbled > 65535u ? 65535u : hs.garbled - hw_mark_.garbled);
+        // receiver: frames thrown away, UART overflows / line errors in the last second
+        { const uint32_t bad = rc.frameErrors(), ovf = rc.uartOverflows(), line = rc.uartLineErrors();
+          auto d16 = [](uint32_t now, uint32_t was) { const uint32_t d = now - was; return (uint16_t)(d > 65535u ? 65535u : d); };
+          tel_.rc_bad = d16(bad, rc_mark_[0]); tel_.rc_ovf = d16(ovf, rc_mark_[1]); tel_.rc_line = d16(line, rc_mark_[2]);
+          rc_mark_[0] = bad; rc_mark_[1] = ovf; rc_mark_[2] = line; }
         hw_mark_ = hs;
     }
 
@@ -695,6 +700,7 @@ private:
         g.valid = true; g.north_m = n * 0.01f; g.east_m = e * 0.01f; g.alt_m = (s.alt_cm - gnss.home().home().alt_cm) * 0.01f;
         g.vn = s.vel_n_cms * 0.01f; g.ve = s.vel_e_cms * 0.01f; g.vd = s.vel_d_cms * 0.01f;
         g.sigma_pos = s.h_acc_mm ? s.h_acc_mm * 0.001f : 2.0f; g.sigma_vel = s.s_acc_mm ? s.s_acc_mm * 0.001f : 0.3f; g.sigma_alt = s.v_acc_mm ? s.v_acc_mm * 0.001f : 3.0f;
+        g.vd_valid = s.has_vel_d;
         g.sats = s.num_sat;
         return g;
     }
@@ -710,6 +716,7 @@ private:
         tel_.z = e.z; tel_.vz = e.vz; tel_.z_sigma = e.z_sigma; tel_.alt_valid = e.alt_valid;
         tel_.pos_n = e.pos_n; tel_.pos_e = e.pos_e; tel_.vel_n = e.vel_n; tel_.vel_e = e.vel_e; tel_.pos_valid = e.pos_valid; tel_.yaw_from_mag = e.yaw_from_mag;
         tel_.vel_valid = e.vel_valid; tel_.flow_valid = e.flow_valid; tel_.tilt_aided = e.tilt_aided;
+        tel_.gps_alt_used = e.gps_alt_used; tel_.gps_vz_used = e.gps_vz_used;
     }
     void fill_slow(uint32_t now_ms) {
         // navigation (changes at the estimators' rate at most)
@@ -813,7 +820,7 @@ private:
     WB_FAST static uint16_t peak16(uint16_t was, uint32_t us) { return us > 65535u ? (uint16_t)65535 : us > was ? (uint16_t)us : was; }
     bool loop_slow_ = false, busy_other_ = false, busy_seen_ = false; uint8_t slow_seconds_ = 0, batt_state_ = 0, flow_quality_ = 0; uint32_t flow_tel_ms_ = 0;
     uint16_t servo_rc_[16] = {}; bool servo_have_rc_ = false;
-    fc::Health health_; motor::HwStats hw_mark_;
+    fc::Health health_; motor::HwStats hw_mark_; uint32_t rc_mark_[3] = {};
     fc::CoreOutput last_out_;
     uint32_t trim_ms_ = 0;
 };

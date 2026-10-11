@@ -32,6 +32,17 @@ struct RawPort {
     virtual size_t put(const uint8_t* d, size_t n) = 0;      // n <= room(); returns what was taken
 };
 
+// A port that has reported no room for `after_ms` is offered one byte anyway (USB Serial/JTAG, link_arduino.h: only a write
+// re-arms the interrupt that empties its ring). The byte is the next one of the queue: taken or not, nothing is lost or doubled.
+struct StallKick {
+    uint32_t after_ms = 0, since_ms = 0, kicks = 0;        // after_ms 0 = never
+    size_t room(int free_bytes, uint32_t now_ms) {
+        if (free_bytes > 0) { since_ms = now_ms; return (size_t)free_bytes; }
+        if (after_ms && (uint32_t)(now_ms - since_ms) >= after_ms) { since_ms = now_ms; kicks++; return 1; }
+        return 0;
+    }
+};
+
 class QueuedTransport : public wbp::Transport {
 public:
     static constexpr size_t kSize = 8192;                    // > 8 download frames of 492 bytes, or 0.35 s of a 230400 baud link

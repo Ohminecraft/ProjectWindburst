@@ -27,6 +27,8 @@ struct SimPort {
     void rx_start(int c); int rx_stop(int c, uint32_t* words, int max);
     void delay_us(uint32_t us);
     void listen(int) {}                           // (the model's receiver always hears the wire)
+    int level(int c);
+    void lock(); void unlock();
 };
 
 struct Wire {
@@ -38,6 +40,7 @@ struct Wire {
     uint16_t esc_value[4] = {0x123, 0x456, 0x789, 0xABC};     // 12-bit value each ESC answers with
     bool esc_noise[4] = {false, false, false, false};         // the reply carries one extra glitch-free but wrong edge
     bool esc_short[4] = {false, false, false, false};         // the ESC stops after 9 bits
+    bool esc_pulldown[4] = {false, false, false, false};      // the ESC input pulls the line down: a released line sits LOW, not at the pull-up
     ns_t isr_latency_ns = 4000;                   // timer alarm -> interrupt handler runs
     ns_t cost_load = 1500, cost_start = 400, cost_pin = 100, cost_rx_start = 300, cost_rx_stop = 800, cost_alarm = 2000;
     ns_t filter_ns = 150;                         // receiver glitch filter
@@ -47,7 +50,7 @@ struct Wire {
     static constexpr int kMem = 48;
     ns_t now = 0;
     DshotDirect<SimPort>* d = nullptr;
-    bool alarm_set = false, in_isr = false; ns_t alarm_t = 0;
+    bool alarm_set = false, in_isr = false, masked = false; ns_t alarm_t = 0;
     struct TxFrame { ns_t t0; uint32_t w[kMem]; bool settled = false, valid = false, replied = false, audited = false; uint16_t packet = 0; ns_t reply_t0 = 0; uint8_t reply_lv[22]; int reply_n = 0; };
     struct Chan {
         uint32_t mem[kMem];                       // the transmitter runs through its memory until it meets an end mark
@@ -66,13 +69,15 @@ struct Wire {
     // ---- time
     void tick_cost(ns_t cost) {
         now += cost;
-        if (alarm_set && !in_isr && alarm_t <= now) fire();
+        if (alarm_set && !in_isr && !masked && alarm_t <= now) fire();
     }
     void fire() { alarm_set = false; in_isr = true; isr_runs++; d->on_alarm(); in_isr = false; }
     void run_to(ns_t t) {
-        if (alarm_set && alarm_t <= t) { if (alarm_t > now) now = alarm_t; fire(); }
+        while (alarm_set && alarm_t <= t) { if (alarm_t > now) now = alarm_t; fire(); }      // (an interrupt may ask for the next one)
         if (t > now) now = t;
     }
+    // how long the pin of motor c was released (not driven by us) between t0 and t1
+    ns_t released_ns(int ci, ns_t t0, ns_t t1, ns_t step = 200) const { ns_t r = 0; for (ns_t t = t0; t < t1; t += step) if (!driving(ch[ci], t)) r += step; return r; }
     void spurious_isr() { in_isr = true; d->on_alarm(); in_isr = false; }     // an old interrupt that was held back
 
     // ---- waveform helpers
@@ -120,10 +125,11 @@ struct Wire {
         }
         return false;
     }
+    int released_level(const Chan& c) const { return esc_pulldown[&c - ch] ? 0 : 1; }     // pull-up, or the ESC's pull-down winning over it
     int wire(const Chan& c, ns_t t) const {
         if (driving(c, t)) return tx_level(c, t);
         int lv; if (esc_level(c, t, lv)) return lv;
-        return 1;                                                      // pull-up
+        return released_level(c);
     }
 
     // The ESC looks at the finished frame as it really was on the wire.
@@ -136,15 +142,18 @@ struct Wire {
             uint16_t p = 0; const ns_t T = bit_ns();
             for (int b = 0; b < 16; b++) {
                 const ns_t ts = f.t0 + b * T + T * 55 / 100;           // between the short (37.5 %) and the long (75 %) pulse
-                const int lv = driving(c, ts) ? tx_level(c, ts) : 1;
+                const int lv = driving(c, ts) ? tx_level(c, ts) : released_level(c);
                 const int active = bidir ? !lv : lv;
                 p = (uint16_t)((p << 1) | (active ? 1 : 0));
             }
             // the line must also really start with an active edge and return to idle at the end
-            const int first = driving(c, f.t0 + T / 10) ? tx_level(c, f.t0 + T / 10) : 1;
+            const int first = driving(c, f.t0 + T / 10) ? tx_level(c, f.t0 + T / 10) : released_level(c);
             f.packet = p;
             bool rests = true;                                             // an ESC finds the end of a frame by the pause after it
-            for (int k = 1; k <= 6; k++) { const ns_t ts = f.t0 + 16 * T + T * k / 4; if ((driving(c, ts) ? tx_level(c, ts) : 1) != idle_level()) rests = false; }
+            for (int k = 1; k <= 6; k++) { const ns_t ts = f.t0 + 16 * T + T * k / 4; if ((driving(c, ts) ? tx_level(c, ts) : released_level(c)) != idle_level()) rests = false; }
+            // ... and an ESC listening for INVERTED DShot also wants the line idle (high) for a while before the frame; one that sits
+            // low between frames looks like a normal (not inverted) signal to it
+            for (ns_t k = 1; bidir && k <= 8; k++) { const ns_t ts = f.t0 - k * T; if (ts > 0 && (driving(c, ts) ? tx_level(c, ts) : released_level(c)) != idle_level()) rests = false; }
             f.valid = dshot_packet_valid(p, bidir) && first == !idle_level() && rests && frame_len(f) < 17 * T;
             if (!f.valid) { c.bad++; continue; }
             c.good++; c.last_value = p >> 5; c.last_telem = (p >> 4) & 1;
@@ -234,6 +243,9 @@ void SimPort::tx_start(int c) {
     w->tick_cost(w->cost_start);
 }
 void SimPort::delay_us(uint32_t us) { w->run_to(w->now + (ns_t)us * 1000); }
+int SimPort::level(int c) { w->settle(c); return w->wire(w->ch[c], w->now); }
+void SimPort::lock() { w->masked = true; }
+void SimPort::unlock() { w->masked = false; if (w->alarm_set && !w->in_isr && w->alarm_t <= w->now) w->fire(); }
 void SimPort::rx_start(int c) { w->settle(c); w->ch[c].rx_on = true; w->ch[c].rx_t0 = w->now; w->tick_cost(w->cost_rx_start); }
 int SimPort::rx_stop(int c, uint32_t* words, int max) {
     w->settle(c);

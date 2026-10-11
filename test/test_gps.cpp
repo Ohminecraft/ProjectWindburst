@@ -53,6 +53,8 @@ static void t_nmea() {
     CHECK(abs(np.sol.lat - 481173000) <= 2 && abs(np.sol.lon - 115166667) <= 2, "lat/lon 48.1173 / 11.516667 -> %d %d", np.sol.lat, np.sol.lon);
     CHECK(np.sol.alt_cm == 54540 && np.sol.hdop == 90, "alt 545.4 m, hdop 0.9");
     CHECK(abs((int)np.sol.ground_speed_cms - 1152) <= 2 && np.sol.course_ddeg == 844, "22.4 kn = 11.52 m/s, course 84.4 (%u, %u)", np.sol.ground_speed_cms, np.sol.course_ddeg);
+    CHECK(abs(np.sol.vel_n_cms - 112) <= 2 && abs(np.sol.vel_e_cms - 1146) <= 2 && np.sol.vel_d_cms == 0 && !np.sol.has_vel_d,
+          "RMC speed + course -> north / east velocity %d / %d cm/s (the estimators need them; before 0.8.3 they stayed 0 with NMEA); no vertical velocity", np.sol.vel_n_cms, np.sol.vel_e_cms);
     CHECK(np.sol.date.valid && np.sol.date.day == 23 && np.sol.date.month == 3 && np.sol.date.year == 2094 && np.sol.date.hour == 12 && np.sol.date.minute == 35 && np.sol.date.second == 19, "RMC date/time (two-digit year 94 -> 20xx, like Betaflight)");
     feedline("GNGGA,123519.00,3351.000,S,15112.000,W,1,10,0.8,10.0,M,0,M,,");
     CHECK(abs(np.sol.lat + 338500000) <= 2 && abs(np.sol.lon + 1512000000) <= 2, "southern / western hemispheres negative: %d %d", np.sol.lat, np.sol.lon);
@@ -71,7 +73,7 @@ static void check_pvt_solution(const Engine& e, const SimTruth& t, const char* t
     CHECK(s.fix && s.fix_type == 3 && s.num_sat == t.sats, "%s fix/sats", tag);
     CHECK(abs(s.lat - (int32_t)llround(t.lat * 1e7)) <= 1 && abs(s.lon - (int32_t)llround(t.lon * 1e7)) <= 1, "%s position", tag);
     CHECK(abs(s.alt_cm - (int32_t)llround(t.alt_m * 100)) <= 2, "%s altitude MSL %d cm", tag, s.alt_cm);
-    CHECK(abs(s.vel_n_cms - (int)llround(t.vn * 100)) <= 1 && abs(s.vel_e_cms - (int)llround(t.ve * 100)) <= 1 && abs(s.vel_d_cms - (int)llround(t.vd * 100)) <= 1, "%s NED velocity %d %d %d", tag, s.vel_n_cms, s.vel_e_cms, s.vel_d_cms);
+    CHECK(abs(s.vel_n_cms - (int)llround(t.vn * 100)) <= 1 && abs(s.vel_e_cms - (int)llround(t.ve * 100)) <= 1 && abs(s.vel_d_cms - (int)llround(t.vd * 100)) <= 1 && s.has_vel_d, "%s NED velocity %d %d %d (vertical measured)", tag, s.vel_n_cms, s.vel_e_cms, s.vel_d_cms);
     const double gs = sqrt(t.vn * t.vn + t.ve * t.ve); CHECK(abs((int)s.ground_speed_cms - (int)llround(gs * 100)) <= 1, "%s ground speed %u", tag, s.ground_speed_cms);
     const double sp3 = sqrt(gs * gs + t.vd * t.vd); CHECK(abs((int)s.speed3d_cms - (int)llround(sp3 * 100)) <= 1, "%s 3D speed %u", tag, s.speed3d_cms);
     double hd = atan2(t.ve, t.vn) * 180 / M_PI; if (hd < 0) hd += 360; CHECK(abs((int)s.course_ddeg - (int)llround(hd * 10)) <= 1, "%s course %u vs %.1f", tag, s.course_ddeg, hd);
@@ -174,8 +176,11 @@ static void t_nmea_engine() {
     printf("[engine NMEA] provider with custom commands\n");
     SimGps sim; sim.version = UBX_M8; sim.module_baud = 38400; sim.engine_baud = 38400; sim.truth.fix_after_ms = 100;
     Engine e; e.cfg.provider = PROV_NMEA; e.cfg.baud = 38400; strcpy(e.cfg.nmea_custom_commands, "$PMTK220,100*2F $PMTK300,100,0,0,0,0*2C");
+    sim.truth.vn = 3.0; sim.truth.ve = -4.0; sim.truth.vd = -1.0;
     uint32_t t = 0; e.begin(sim, t); run(e, sim, t, 10000, [&] { return e.healthy() && e.solution().fix; });
+    run(e, sim, t, 1200, [&] { return false; });
     CHECK(e.healthy() && e.solution().fix && e.solution().num_sat == sim.truth.sats, "NMEA solution flows");
+    CHECK(abs(e.solution().vel_n_cms - 300) <= 3 && abs(e.solution().vel_e_cms + 400) <= 3 && !e.solution().has_vel_d, "NMEA: north / east velocity from RMC (%d / %d cm/s), no vertical one", e.solution().vel_n_cms, e.solution().vel_e_cms);
     CHECK(abs(e.solution().lat - (int32_t)llround(sim.truth.lat * 1e7)) <= 5 && abs(e.solution().lon - (int32_t)llround(sim.truth.lon * 1e7)) <= 5, "NMEA position within 0.5 m: %d %d", e.solution().lat, e.solution().lon);
     CHECK(sim.nmea_in.size() == 2 && sim.nmea_in[0] == "PMTK220,100*2F" && sim.nmea_in[1] == "PMTK300,100,0,0,0,0*2C", "custom commands sent one per line (%zu)", sim.nmea_in.size());
     bool ubx_sent = false; for (auto& r : sim.log) (void)r, ubx_sent = true; CHECK(!ubx_sent, "NMEA provider never sends UBX");

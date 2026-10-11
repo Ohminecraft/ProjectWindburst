@@ -172,6 +172,7 @@ def test_edit_clamp_save_and_reboot(gui):
     pg.wait_for_function("(document.querySelector('[data-field=\"motors.protocol\"]') || {}).value === 'DSHOT600'", timeout=8000)
     assert gui.setting("motors", "protocol") == "DSHOT600"
     assert any("DSHOT600" in l or "host" in l for l in gui.hub.report)
+    assert not gui.field("motors.ext_pullup").is_checked(), "external pull-up resistors: off by default"
     # throwing changes away
     gui.tab("tuning")
     gui.type_into("pid.tpa_rate", "40")
@@ -600,6 +601,8 @@ def test_position_tab(gui):
     assert geo[0]["full"] == 3 and abs(geo[0]["y"] - (100 - 2.5 / 3 * 76)) < 1e-6 and geo[0]["x"] == 100, geo
     assert geo[1]["full"] == 1 and geo[1]["x"] == 138 and geo[1]["y"] == 100, geo
     assert not gui.field("nav.ph_angle_max").is_disabled() and gui.field("nav.ph_angle_max").input_value() == "30" and gui.field("nav.rescue_ground_speed").input_value() == "7.5"
+    assert gui.field("nav.gps_alt").input_value() == "FALLBACK" and gui.field("nav.gps_vel_z").is_checked(), "GPS height: by default only without a barometer; the GPS vertical velocity on"
+    assert txt("#est-gps-alt") == "không dùng lúc này" and txt("#est-gps-vz") == "không dùng lúc này", "disarmed there is no home point, so no GPS height either"
     # ---- choose the sensor: read at power-up
     pg.select_option('[data-field="flow.type"]', "MSP")
     pg.wait_for_function("document.getElementById('flow-report').textContent === 'firmware chưa khởi động lại từ khi chọn cảm biến'")
@@ -646,6 +649,8 @@ def test_position_tab(gui):
     pg.wait_for_function("document.getElementById('ph-state').textContent === 'đang giữ vị trí' && document.getElementById('ph-state').classList.contains('ok')", timeout=8000)
     pg.wait_for_function("document.getElementById('ph-axes').textContent === 'đang giữ vị trí / đang giữ vị trí'", timeout=10000)
     pg.wait_for_function("document.getElementById('est-tilt').textContent === 'đang được chỉnh theo gia tốc đo từ GPS / optical flow'", timeout=6000)
+    pg.wait_for_function("document.getElementById('est-gps-vz').textContent === 'đang dùng trong ước lượng độ cao'", timeout=6000)
+    assert txt("#est-gps-alt") == "không dùng lúc này", "with a barometer the GPS height stays out (FALLBACK), its vertical velocity is in"
     assert "POSHOLD" in txt("#ready") and re.match(r"^-?\d+\.\d / -?\d+\.\d m$", txt("#ph-target")), (txt("#ready"), txt("#ph-target"))
     n0, e0 = float(gui.sim.state()["pn"]), float(gui.sim.state()["pe"])
     gui.sim.do("wind 0 4")                                       # the air moves east: the craft leans left (west) against it
@@ -718,6 +723,7 @@ def test_restore_and_defaults(gui, tmp_path):
     gui.tab("receiver")
     gui.sim.do("rc 1 1800")
     pg.wait_for_function("document.querySelector('#chans .chan').dataset.us === '1800'")
+    assert pg.inner_text("#rc-errors").count(": 0") == 3, "a clean simulated link: no bad frames, no UART overflows, no line errors: " + pg.inner_text("#rc-errors")
     pg.select_option("#chmap", "TAER")
     gui.wait(lambda: gui.setting("receiver", "ch_throttle") == 0 and gui.setting("receiver", "ch_roll") == 1, what="channel map preset")
 

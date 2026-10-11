@@ -94,7 +94,7 @@ App đăng ký từng stream với tần số mong muốn; firmware kẹp theo `
 | 4 | motors | 20 / 100 | lệnh thực gửi ESC (kể cả khi motor test), rpm, lỗi telemetry, nhiệt, điện áp, dynamic idle, **`bidir` (OFF / ACTIVE / UNAVAILABLE), `answers` (bit i = ESC của motor i trả lời), `skipped`, `late` (khung bỏ qua / lượt trả lời lỡ trong giây vừa rồi)** |
 | 5 | sensors | 50 / 200 | gyro thô, accel, la bàn, baro, nhiệt độ, sonar |
 | 6 | gps | 5 / 25 | fix, vệ tinh, lat/lon/alt, tốc độ, hướng, HDOP, khoảng cách/hướng về home, trạng thái driver |
-| 7 | estimate | 20 / 100 | độ cao, vận tốc đứng, sigma, vị trí/vận tốc ngang, cờ hợp lệ (`ALT`, `POS`, `YAW_FROM_MAG`, **`VEL`, `FLOW`, `TILT_AIDED`**) |
+| 7 | estimate | 20 / 100 | độ cao, vận tốc đứng, sigma, vị trí/vận tốc ngang, cờ hợp lệ (`ALT`, `POS`, `YAW_FROM_MAG`, **`VEL`, `FLOW`, `TILT_AIDED`**, 0.8.3: **`GPS_ALT`, `GPS_VZ`**) |
 | 8 | gyro_fast | 0 / 1000 | gyro thô + đã lọc cho đồ thị rung |
 | 9 | calibration | 10 / 20 | loại, tiến độ %, trạng thái, mặt nạ 6 mặt (accel), giá trị thô, **% của lần đo level trim khi bay** (100 = đã đo xong, chờ disarm) |
 | 10 | battery | 2 / 20 | điện áp, mỗi cell, số cell, trạng thái, nguồn đo, mV ở chân ADC, âm còi đang kêu, âm motor đang phát |

@@ -690,8 +690,8 @@ export const EN = {
     "the craft is tilted more than allowed",
   "đang failsafe":
     "failsafe is active",
-  "Altitude Hold đang bật nhưng không có barometer":
-    "Altitude Hold is on but there is no barometer",
+  "Altitude Hold đang bật nhưng không có barometer (và không có GPS fix để thay)":
+    "Altitude Hold is on but there is no barometer (and no GPS fix to stand in)",
   "công tắc ARM bật sẵn từ trước (gạt về OFF rồi bật lại)":
     "the ARM switch was already on (turn it OFF, then on again)",
   "cấu hình chưa lưu":
@@ -2170,6 +2170,44 @@ export const EN = {
     "Octo flat X",
   "Quad X (thứ tự 1234)":
     "Quad X (1234 order)",
+  "Dùng độ cao GPS":
+    "Use the GPS height",
+  "Không dùng: không bao giờ. Chỉ khi không có baro / lidar: máy không lắp barometer (hoặc barometer mất tín hiệu giữa chuyến bay) thì Altitude Hold chạy theo độ cao GPS. Trộn với baro: như trên, và khi có barometer thì độ cao GPS từ từ (khoảng một phút) sửa phần trôi theo thời tiết của barometer, cho các chuyến bay dài.":
+    "Off: never. Only without baro / lidar: a craft without a barometer (or whose barometer goes silent in flight) flies Altitude Hold on the GPS height. Blend with baro: as before, and next to a barometer the GPS height slowly (about a minute) takes out the barometer's weather drift, for long flights.",
+  "Dùng vận tốc lên / xuống của GPS":
+    "Use the GPS vertical velocity",
+  "Module u-blox đo được vận tốc đứng khá chính xác (0,1 đến 0,3 m/s), không bị gió cánh quạt làm nhiễu như barometer: tốc độ leo / hạ ước lượng ổn định hơn. Module NMEA không có số này nên không dùng được.":
+    "A u-blox module measures the vertical velocity quite well (0.1 to 0.3 m/s) and is not disturbed by prop wash as a barometer is: a steadier estimated climb rate. NMEA modules do not report it.",
+  "Chỉ khi không có baro / lidar":
+    "Only without baro / lidar",
+  "Trộn với baro (sửa trôi baro)":
+    "Blend with baro (corrects its drift)",
+  "Độ cao từ GPS":
+    "Height from the GPS",
+  "Độ cao GPS trôi một đến vài mét mỗi phút, barometer thì ổn định hơn trong vài giây nhưng trôi theo thời tiết. Vì vậy mặc định độ cao GPS chỉ dùng khi không có barometer / lidar; còn vận tốc lên / xuống của GPS (u-blox) thì luôn có ích, nhất là trong gió cánh quạt và khi leo nhanh.":
+    "The GPS height wanders by one to a few metres a minute; a barometer is steadier over seconds but drifts with the weather. So by default the GPS height is only used without a barometer / lidar, while the GPS vertical velocity (u-blox) always helps, above all in prop wash and fast climbs.",
+  "Độ cao GPS":
+    "GPS height",
+  "Vận tốc đứng GPS":
+    "GPS vertical velocity",
+  "đang dùng trong ước lượng độ cao":
+    "in use for the height estimate",
+  "không dùng lúc này":
+    "not in use now",
+  "Chỉ có điểm home (lúc arm, GPS đã fix) thì mới có độ cao GPS. Lần đầu dùng Altitude Hold chỉ với GPS: bay ở chỗ thoáng, cao trên 5 m, sẵn sàng tắt công tắc.":
+    "There is a GPS height only with a home point (GPS fix when arming). The first time you fly Altitude Hold on the GPS alone: open sky, above 5 m, ready to flip the switch off.",
+  "Có điện trở kéo lên ngoài":
+    "External pull-up resistors",
+  "DShot hai chiều: bật khi dây tín hiệu motor đã có điện trở kéo lên 3,3 V trên mạch (thường 1 đến 4,7 kΩ). Khi đó firmware tắt điện trở kéo lên bên trong chân (~45 kΩ). Có hiệu lực sau khi lưu và khởi động lại.":
+    "Bidirectional DShot: switch on when the motor signal lines already have pull-up resistors to 3.3 V on the board (usually 1 to 4.7 kOhm). The firmware then leaves the pins' internal pull-up (~45 kOhm) off. Takes effect after saving and restarting.",
+  "Khung hỏng mỗi giây: ":
+    "Bad frames per second: ",
+  "Tràn bộ đệm UART: ":
+    "UART buffer overflows: ",
+  "Lỗi đường truyền UART: ":
+    "UART line errors: ",
+  "Tốc độ khung thấp hơn tốc độ gói của receiver (ELRS: 150, 250, 500 Hz…): \"Khung hỏng\" tăng = byte bị mất hoặc sai. \"Tràn bộ đệm\" tăng = firmware đọc UART không kịp. \"Lỗi đường truyền\" tăng = nhiễu trên dây, sai baud hoặc sai đảo mức. Cả ba bằng 0 mà tốc độ vẫn thấp = receiver gửi ít khung hơn (xem tốc độ gói ở tay phát).":
+    "Frame rate below the receiver's packet rate (ELRS: 150, 250, 500 Hz…): \"Bad frames\" rising = bytes lost or corrupted. \"Buffer overflows\" rising = the firmware read the UART too late. \"Line errors\" rising = noise on the wire, wrong baud rate or wrong inversion. All three at 0 and the rate still low = the receiver sends fewer frames (check the packet rate on the transmitter).",
 };
 
 // Strings that read the same in both languages (units, protocol names, terms pilots use in English).

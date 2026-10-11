@@ -104,7 +104,7 @@ template <class P> struct TickLoop {
     WB_FAST void turn(P& p, uint32_t period_us) {
         if (!have_tick) p.wait_tick();
         have_tick = false;
-        const uint32_t t0 = p.now();
+        const uint32_t  t0 = p.now();
         const uint32_t idle = started ? t0 - end_us : period_us;
         p.cycle(t0);
         end_us = p.now(); started = true;

@@ -25,6 +25,8 @@ public:
     void (*on_write)() = nullptr;                                  // tests: e.g. let the output take time
     uint16_t silent[8] = {};                                       // frames in a row without a reply
     void set_driver(uint8_t d) override { driver = d; }
+    void set_pullup(bool internal) override { internal_pullup = internal; }
+    bool internal_pullup = true;                                  // (tests: what the firmware asked for)
     bool bidirectional() const override { return bidir && driver == 0; }
     motor::HwStats stats() const override { motor::HwStats s; s.frames = frames; return s; }
     uint8_t driver = 0;

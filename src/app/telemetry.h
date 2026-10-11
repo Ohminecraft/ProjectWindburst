@@ -25,7 +25,7 @@ struct Telemetry {
     float acc[3] = {};                                  // board frame, g
     // ---- receiver
     uint16_t rc[16] = {1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
-    bool rc_link = false; uint8_t rssi = 0; uint16_t rc_rate = 0;
+    bool rc_link = false; uint8_t rssi = 0; uint16_t rc_rate = 0, rc_bad = 0, rc_ovf = 0, rc_line = 0;      // rc_*: per second
     // ---- status
     bool armed = false; uint32_t blockers = 0; uint8_t failsafe = 0, fs_cause = 0; uint32_t modes = 0; uint16_t health = 0; uint8_t ah_state = 0;
     uint16_t loop_us = 0, loop_max_us = 0, gap_max_us = 0, loop_hz = 0; float throttle = 0;
@@ -45,7 +45,7 @@ struct Telemetry {
     uint32_t hacc_mm = 0, home_dist_m = 0; uint16_t home_dir_ddeg = 0; uint8_t gps_state = 0; uint32_t gps_baud = 0;
     // ---- estimator
     float z = 0, vz = 0, z_sigma = 0, pos_n = 0, pos_e = 0, vel_n = 0, vel_e = 0; bool alt_valid = false, pos_valid = false, yaw_from_mag = false;
-    bool vel_valid = false, flow_valid = false, tilt_aided = false;
+    bool vel_valid = false, flow_valid = false, tilt_aided = false, gps_alt_used = false, gps_vz_used = false;
     // ---- navigation: optical flow, Position Hold, GPS Rescue
     uint8_t nav_flags = 0, flow_quality = 0, flow_reject = wbp::FLOW_REJECT_NO_SAMPLE, flow_rate = 0, ph_state[2] = {}, rescue_phase = 0, rescue_fail = 0;
     float flow_fwd = 0, flow_right = 0, nav_roll = 0, nav_pitch = 0, nav_target_n = 0, nav_target_e = 0, nav_wind_n = 0, nav_wind_e = 0, nav_home_dist = 0, rescue_return_alt = 0;
@@ -79,6 +79,8 @@ inline uint8_t est_valid_bits(const Telemetry& t) {
     if (t.vel_valid) v |= wbp::EST_VALID_VEL;
     if (t.flow_valid) v |= wbp::EST_VALID_FLOW;
     if (t.tilt_aided) v |= wbp::EST_VALID_TILT_AIDED;
+    if (t.gps_alt_used) v |= wbp::EST_VALID_GPS_ALT;
+    if (t.gps_vz_used) v |= wbp::EST_VALID_GPS_VZ;
     return v;
 }
 inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_flags, uint8_t* out, uint16_t cap) {
@@ -92,7 +94,7 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
         memcpy(out, &o, sizeof(o)); break; }
     case STR_RC: {
         T_rc o; for (int i = 0; i < 16; i++) o.ch[i] = t.rc[i];
-        o.link = t.rc_link ? 1 : 0; o.rssi = t.rssi; o.rate = t.rc_rate;
+        o.link = t.rc_link ? 1 : 0; o.rssi = t.rssi; o.rate = t.rc_rate; o.bad_frames = t.rc_bad; o.uart_ovf = t.rc_ovf; o.uart_line = t.rc_line;
         memcpy(out, &o, sizeof(o)); break; }
     case STR_STATUS: {
         T_status o; o.armed = t.armed ? 1 : 0; o.blockers = t.blockers; o.failsafe = t.failsafe; o.modes = t.modes; o.health = t.health; o.ah_state = t.ah_state;

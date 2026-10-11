@@ -54,6 +54,21 @@ Có chân `pins.rx_tx` và giao thức `CRSF` → firmware gửi khung telemetry
 
 Cả danh sách gửi 10 lần mỗi giây, từng khung một (Betaflight: `CRSF_CYCLETIME_US` / số khung). Khung được dựng trong luồng cảm biến (giữ khoá, vài µs), ghi ra UART sau khi nhả khoá. Mất sóng thì không gửi. Báo cáo khởi động: `rx: CRSF on UART2, telemetry on its TX pin`. Kiểm chứng: `test_rx` `[CRSF telemetry]` (byte tính tay, kẹp giá trị, chuỗi chế độ, lịch gửi qua lúc đồng hồ tràn, không gửi dồn sau một lúc dừng), `test_fw` nhóm `crsf` (khung firmware ghi ra chân TX của mạch ảo được đọc lại bằng CRC riêng, so với telemetry của chính firmware và với mạch ảo: nghiêng 12°, 12 A, GPS fix, đang lên cao; không có TX / SBUS / mất sóng: không gửi). **Chưa thử với receiver và tay phát thật** (dấu của pitch trên màn hình tay phát, ELRS có chuyển hết các khung không).
 
+## Chẩn đoán khi tốc độ khung tụt (0.8.5)
+Người dùng báo tốc độ khung của receiver giảm khi bật DShot hai chiều (bản 0.8.2). Đọc mã không thấy đường nào nối thẳng hai thứ đó (receiver chạy ở luồng cảm biến, DShot ở task bay + một ngắt timer). Đường gián tiếp duy nhất là thời gian CPU trên nhân 1: DShot hai chiều thêm việc cho mỗi chu kỳ và một (từ 0.8.4: hai) ngắt mỗi khung, luồng cảm biến chạy ít hơn. Vì vậy:
+- **Chừa chỗ rộng hơn**: bộ đệm nhận của UART receiver 512 → **2048 byte** (48 ms CRSF ở tốc độ tối đa), FIFO phần cứng được chuyển sang bộ đệm mỗi **64 byte** (mặc định của Arduino ở tốc độ này là 120 / 128: chỉ còn 190 µs cho ngắt UART), mỗi lần `update()` đọc tới 1024 byte (trước 256).
+- **Đếm thứ bị mất**, mỗi giây, ở stream `rc` và tab Receiver: `bad_frames` (khung bộ giải mã bỏ: checksum, độ dài, đồng bộ), `uart_ovf` (driver UART hết chỗ: firmware đọc không kịp), `uart_line` (lỗi khung bit / chẵn lẻ: nhiễu trên dây, sai baud, sai đảo mức). Cả ba bằng 0 mà tốc độ vẫn thấp: receiver gửi ít khung hơn.
+- Task sự kiện serial của Arduino (nhận các lỗi đó) chạy ở **nhân 0, ưu tiên 2** (`platformio.ini`): mặc định của nó là ưu tiên cao nhất, nhân bất kỳ, sẽ chen vào vòng bay.
+
+Kiểm chứng: `test_fw` nhóm `rxdiag` (bộ đệm 2 kB và FIFO 64 byte được đặt; 30 khung hỏng, 2 lần tràn, 1 lỗi khung bit được đếm đúng và hiện ở stream `rc`). **Chưa biết** nguyên nhân thật trên mạch: cần ba con số này khi bật / tắt DShot hai chiều, cùng `loop_hz` ở tab Hệ thống.
+
+## Đọc UART theo khối (0.8.7)
+Số đo đầu tiên trên mạch với các bộ đếm của 0.8.5: 149 khung/s, **~100 lần tràn bộ đệm UART mỗi giây**, thường 1 khung hỏng, tay cầm "cập nhật chậm". Tràn bộ đệm mà gần như không mất khung nghĩa là firmware **đọc chậm hơn byte đến**: bộ đệm của driver luôn gần đầy, mỗi khung được đọc trễ đúng bằng lượng byte đang chờ trong đó (2 kB CRSF là hàng trăm mili giây), và mỗi lần driver không còn chỗ thì nó đếm một lần tràn.
+
+Nguyên nhân: mã cũ đọc **từng byte** (`available()` + `read()`). Trên Arduino-ESP32 3.x mỗi byte như vậy khoá mutex của cổng hai lần, rồi mutex của driver, đi qua ring buffer và kiểm tra tràn: vài micro giây mã trong flash cho một byte, mà luồng cảm biến chỉ có phần CPU còn lại của nhân 1 sau task bay. Từ 0.8.7 receiver đọc **từng khối** (`read(buf, n)`, tối đa 128 byte một lần, 2 kB mỗi lượt): chi phí đó trả một lần cho cả khối. GPS và cảm biến flow MSP cũng đọc theo khối (`src/hal/serial_block.h`).
+
+Kiểm chứng: `test_fw` nhóm `rxdiag` (286 khung trong 2 s, 286 lần gọi đọc, không lần nào đọc một byte; GPS cũng vậy). **Chưa đo trên mạch**: sau bản này "Tràn bộ đệm UART" phải về 0 và tốc độ khung phải bằng tốc độ gói đặt ở tay phát.
+
 ## Kiểm chứng
 
 `test/test_rx.cpp`: encoder viết độc lập (vòng lặp từng bit), các điểm chuẩn của Betaflight, 16 kênh khác nhau (bắt lỗi thứ tự bit/kênh), khung hỏng, header giả, 20 000 byte ngẫu nhiên không sinh khung ma, đọc từng byte, cờ SBUS, SBUS2, khung cụt + khoảng lặng, timeout qua thời điểm tràn `millis()`.

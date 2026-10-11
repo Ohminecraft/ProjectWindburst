@@ -40,6 +40,12 @@
 namespace fc {
 
 enum AirmodeSetting : uint8_t { AM_OFF = 0, AM_AUTO = 1, AM_ALWAYS = 2 };
+// How the GPS height is used for the height estimate (vertical_est.h, "GPS"):
+//   OFF      never
+//   FALLBACK only when there is no barometer and no range finder (none fitted, or one went silent in flight): then it is the
+//            height, and Altitude Hold / landing / GPS Rescue work on it
+//   BLEND    as FALLBACK, and next to the barometer it slowly takes out the baro's weather drift (long flights)
+enum GpsAltMode : uint8_t { GA_OFF = 0, GA_FALLBACK = 1, GA_BLEND = 2 };
 
 struct Health {                    // straight from the drivers' valid() / usable() / healthy()
     bool imu_ok = false, gyro_calibrated = false, calibrating = false;
@@ -57,6 +63,7 @@ struct GpsMeas {                   // metres / m/s relative to the home point, a
     bool valid = false;
     float north_m = 0, east_m = 0, alt_m = 0, vn = 0, ve = 0, vd = 0;
     float sigma_pos = 2.0f, sigma_vel = 0.3f, sigma_alt = 3.0f;
+    bool vd_valid = false;         // the module measures vertical velocity (u-blox); NMEA has none, vd is 0 then
     uint8_t sats = 0;
 };
 
@@ -77,6 +84,10 @@ struct CoreConfig {
     Ahrs::Config ahrs; KfConfig vertical; HorizontalConfig horizontal;
     bool use_mag = false; float declination_deg = 0.0f;
     float baro_stale_ms = 1000.0f, range_stale_ms = 250.0f, gps_stale_ms = 1500.0f, mag_stale_ms = 300.0f;
+    uint8_t gps_alt = GA_FALLBACK;                   // GpsAltMode
+    bool gps_vel_z = true;                           // fuse the GPS vertical velocity (when the module gives one)
+    float gps_alt_max_sigma = 8.0f;                  // a GPS height less sure than this (vAcc, m) is not used
+    float gps_vz_sigma_scale = 1.5f;                 // GPS vertical velocity sigma = the module's speed accuracy x this (vertical is the worse axis)
     float ground_effect_s = 1.5f;                    // the barometer counts for less from arming until the craft has been in the air this long
     AccelGainSchedule::Config ahrs_ground;           // how much more the accelerometer counts while disarmed (standing still it really shows gravity)
     // ---- navigation
@@ -113,6 +124,7 @@ struct Estimate {
     uint8_t flow_reject = FLOW_NO_SAMPLE; float flow_forward = 0, flow_right = 0;      // why the latest sample was not used (FlowReject: OK = it was, NO_SAMPLE = none came for flow_stale_ms), the velocity of the last used one (craft axes)
     bool tilt_aided = false;       // the attitude is corrected with the measured acceleration
     bool yaw_from_mag = false;
+    bool gps_alt_used = false, gps_vz_used = false;     // the GPS height / vertical velocity went into the height estimate within the last 2 s
 };
 
 struct CoreOutput {
@@ -186,7 +198,7 @@ public:
     void on_mag(const Vec3& board_gauss, bool ready, uint32_t now_ms) { mag_ = board_gauss; mag_ready_ = ready; mag_ms_ = now_ms; }
     void on_flow(const FlowSample& f, uint32_t now_ms) { flow_ = f; flow_ms_ = now_ms; flow_new_ = true; flow_seen_ = true; }
     // Re-zero the horizontal position (e.g. when the home point is set at arming).
-    void reset_position() { horiz_.reset(); tilt_aid_.restart(); have_gps_ = false; have_gps_xy_ = false; }
+    void reset_position() { horiz_.reset(); tilt_aid_.restart(); vert_.restart_gps_ref(); have_gps_ = false; have_gps_xy_ = false; }
     // Live re-tune of the navigation settings from the app (disarmed)
     void apply_nav() { ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue; tilt_aid_.cfg = cfg.tilt_aid; fs_.cfg = cfg.fs; }
 
@@ -235,7 +247,8 @@ public:
         ai.imu_ok = in.health.imu_ok; ai.gyro_calibrated = in.health.gyro_calibrated; ai.rx_ok = in.rc_link; ai.throttle_low = cmd.throttle_low;
         ai.tilt_deg = armed_ ? 0.0f : ahrs_.tilt_deg(); ai.max_arm_angle_deg = cfg.max_arm_angle_deg;
         ai.failsafe_active = fs_.get_stage() != FsStage::NONE;
-        ai.baro_ok = in.health.baro_ok; ai.gps_fix = in.health.gps_ok;
+        // (a height for Altitude Hold: the barometer, or - when the GPS height may stand in - a GPS fix; home and with it the GPS height come at arming)
+        ai.baro_ok = in.health.baro_ok || (cfg.gps_alt != GA_OFF && in.health.gps_ok); ai.gps_fix = in.health.gps_ok;
         // Position Hold needs a velocity over the ground: optical flow gives one by itself, a GPS only together with a compass
         const bool compass = cfg.use_mag && in.health.mag_calibrated;
         ai.pos_source = in.health.flow_ok || (in.health.gps_ok && compass);
@@ -480,9 +493,19 @@ private:
         // the craft's own axes and would not fit together with it. The tilt is never corrected from a GPS without a heading.
         const bool flow_fresh = have_flow_ && age_ms(now, flow_ok_ms_) <= (uint32_t)cfg.flow_stale_ms;
         if (gps_new_) {
-            // GPS altitude wanders by metres over a minute; a barometer does not. It is only a height for a craft that has
-            // nothing better (ArduPilot's default height source is the barometer, Betaflight lets GPS in with tau 200 s).
-            if (!baro_fresh && !range_fresh) vert_.update_gps(gps_.alt_m, gps_.sigma_alt);
+            // GPS height wanders by metres over a minute; a barometer does not (ArduPilot's default height source is the barometer,
+            // Betaflight lets the GPS in with a 200 s time constant). See GpsAltMode and vertical_est.h.
+            if (cfg.gps_alt != GA_OFF && gps_.sigma_alt <= cfg.gps_alt_max_sigma) {
+                const float sa = gps_.sigma_alt;
+                if (!baro_fresh && !range_fresh) {                 // the GPS is all there is: as the height (seamless when a baro was there a moment ago)
+                    if (vert_.gps_ref_ok()) vert_.update_gps_relative(gps_.alt_m, sa, true); else vert_.update_gps(gps_.alt_m, sa);
+                } else if (cfg.gps_alt == GA_BLEND && baro_fresh && !range_fresh) {
+                    vert_.update_gps_relative(gps_.alt_m, fmaxf(sa, cfg.vertical.gps_blend_sigma_min), true);
+                } else vert_.update_gps_relative(gps_.alt_m, sa, false);      // only keeps the reference
+            }
+            // GPS vertical velocity: measured gps_delay_s ago - brought forward with the acceleration since (as the horizontal estimator does)
+            if (cfg.gps_vel_z && gps_.vd_valid)
+                vert_.update_gps_vel(-gps_.vd + (aup - vert_.accel_bias()) * cfg.horizontal.gps_delay_s, gps_.sigma_vel * cfg.gps_vz_sigma_scale);
             if (heading_ok_ || !flow_fresh) {
                 horiz_.fuse_gps(gps_.north_m, gps_.east_m, gps_.vn, gps_.ve, gps_.sigma_pos, gps_.sigma_vel);
                 if (heading_ok_ && gps_.sigma_vel <= cfg.aid_max_sigma_vel) tilt_aid_.on_velocity(gps_.vn, gps_.ve, cfg.horizontal.gps_delay_s);
@@ -508,7 +531,11 @@ private:
         }
         const VerticalState vs = vert_.state();
         est_.z = vs.z; est_.vz = vs.v; est_.z_sigma = vert_.z_sigma();
-        est_.alt_valid = (baro_fresh || range_fresh) && est_.z_sigma < 3.0f;
+        est_.gps_alt_used = vs.gps_used; est_.gps_vz_used = vs.gps_vel_used;
+        // the GPS height counts when it is in use, or ready to take over this moment (its reference is set, the GPS is fresh):
+        // a barometer that goes silent in flight then hands over without Altitude Hold dropping out in between
+        const bool gps_height = cfg.gps_alt != GA_OFF && (vs.gps_used || (vert_.gps_ref_ok() && have_gps_ && age_ms(now, gps_ms_) <= (uint32_t)cfg.gps_stale_ms));
+        est_.alt_valid = (baro_fresh || range_fresh || gps_height) && est_.z_sigma < 3.0f;
         est_.pos_n = horiz_.pos_n(); est_.pos_e = horiz_.pos_e(); est_.vel_n = horiz_.vel_n(); est_.vel_e = horiz_.vel_e();
         est_.pos_valid = have_gps_ && have_gps_xy_ && age_ms(now, gps_xy_ms_) <= (uint32_t)cfg.gps_stale_ms && horiz_.initialised();
         const bool flow_now = have_flow_ && age_ms(now, flow_ok_ms_) <= (uint32_t)cfg.flow_stale_ms;

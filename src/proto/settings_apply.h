@@ -139,6 +139,7 @@ inline void apply_nav(const Settings& s, fc::CoreConfig& c) {
     bool on_switch = false;
     for (int i = 0; i < 16; i++) if (s.modes.mode[i] == MODE_RESCUE && s.modes.aux[i] < fc::kAuxCount && s.modes.hi[i] > s.modes.lo[i]) on_switch = true;
     c.rescue_configured = on_switch || n.fs_procedure == FS_PROCEDURE_RESCUE; c.rescue_allow_no_fix = n.rescue_allow_no_fix != 0;
+    c.gps_alt = n.gps_alt; c.gps_vel_z = n.gps_vel_z != 0;          // (read by the estimator every step: live)
 }
 
 inline void apply_core(const Settings& s, fc::CoreConfig& c, fc::RcInterpreter& rc) {
@@ -155,7 +156,7 @@ inline void apply_motors(const Settings& s, motor::MotorConfig& m) {
     m.protocol = (motor::Protocol)s.motors.protocol; m.count = (uint8_t)fc::mixer_motor_count((fc::Layout)s.motors.layout);
     for (int i = 0; i < motor::kMaxMotors; i++) { m.reversed[i] = ((s.motors.reversed_mask >> i) & 1) != 0; m.order[i] = s.motors.order[i]; }
     m.pulse.disarmed = s.motors.pulse_disarmed; m.pulse.armed = s.motors.pulse_armed; m.pulse.max = s.motors.pulse_max; m.pulse_hz = s.motors.pulse_hz;
-    m.bidirectional = s.motors.bidirectional != 0; m.dshot_driver = s.motors.dshot_driver; m.edt = s.motors.edt != 0; m.pole_count = s.motors.pole_count; m.dir_cmd_extended = s.motors.dir_cmd_extended != 0;
+    m.bidirectional = s.motors.bidirectional != 0; m.dshot_driver = s.motors.dshot_driver; m.ext_pullup = s.motors.ext_pullup != 0; m.edt = s.motors.edt != 0; m.pole_count = s.motors.pole_count; m.dir_cmd_extended = s.motors.dir_cmd_extended != 0;
     m.idle = s.motors.idle_x10 * 0.001f; m.output_limit = s.motors.output_limit * 0.01f;
     m.dyn.min_rpm_100 = s.motors.dyn_idle_min_rpm; m.dyn.p_gain = s.motors.dyn_idle_p; m.dyn.i_gain = s.motors.dyn_idle_i; m.dyn.d_gain = s.motors.dyn_idle_d; m.dyn.max_increase = s.motors.dyn_idle_max_inc;
 }

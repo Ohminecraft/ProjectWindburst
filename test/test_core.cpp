@@ -213,6 +213,78 @@ static void t_vertical() {
       CHECK(now && !kf.state().gps_used, "'GPS used' means within the last two seconds, not ever"); }
 }
 
+// GPS in the height estimate (vertical_est.h "GPS"): vertical velocity, the height as the only source, blended with a drifting barometer
+static void t_vertical_gps() {
+    printf("[vertical estimator: GPS]\n");
+    const float dt = 0.005f;
+    // GPS height error: wanders (first-order, ~1 m, 30 s) plus 0.5 m of noise on every reading - what a u-blox does outdoors
+    struct Wander { float e = 0; float next(float step_s) { e += -e * step_s / 30.0f + gauss(1.0f * sqrtf(2.0f * step_s / 30.0f)); return e + gauss(0.5f); } };
+    // climbs and descents of +-3 m/s, a 0.3 m/s^2 accelerometer bias, a noisy barometer (prop wash): RMS error of v
+    auto climbs = [&](bool baro, bool gps_vel, float& z_rms) {
+        VerticalEstimator kf; kf.reset(0); float z = 0, v = 0, e2 = 0, ez2 = 0; int n = 0;
+        for (int i = 0; i < 12000; i++) { const float t = i * dt, a = 3.0f * 0.6f * cosf(0.6f * t); v += a * dt; z += v * dt;
+            kf.predict(a + 0.3f + gauss(0.3f), dt);
+            if (baro && i % 8 == 0) kf.update_baro(z + gauss(0.6f), 0.6f);
+            if (gps_vel && i % 20 == 0) kf.update_gps_vel(v + gauss(0.1f), 0.15f);
+            if (t > 10) { e2 += (kf.state().v - v) * (kf.state().v - v); ez2 += (kf.state().z - z) * (kf.state().z - z); n++; } }
+        z_rms = sqrtf(ez2 / n); return sqrtf(e2 / n); };
+    { float zb, zg, zv; const float only_baro = climbs(true, false, zb), with_gps = climbs(true, true, zg), gps_alone = climbs(false, true, zv);
+      CHECK(with_gps < 0.6f * only_baro && with_gps < 0.12f, "climbing and descending at 3 m/s: climb-rate error %.3f m/s with the GPS vertical velocity, %.3f with the barometer alone", with_gps, only_baro);
+      CHECK(zg <= zb * 1.05f, "... and the height is no worse for it (%.2f vs %.2f m RMS)", zg, zb);
+      CHECK(gps_alone < 0.15f, "the GPS vertical velocity alone (no height at all) keeps the climb rate: %.3f m/s RMS", gps_alone); }
+    { VerticalEstimator kf; kf.reset(0); for (int i = 0; i < 2000; i++) { kf.predict(0, dt); if (i % 8 == 0) kf.update_baro(gauss(0.3f), 0.3f); if (i % 20 == 0) kf.update_gps_vel(gauss(0.1f), 0.15f); }
+      const bool took = kf.update_gps_vel(8.0f, 0.15f);
+      CHECK(!took && fabsf(kf.state().v) < 0.1f && kf.state().gps_vel_used, "a GPS vertical velocity of 8 m/s while hovering is gated out"); }
+
+    // hovering at 10 m for 5 minutes, the barometer drifting 1 m a minute (weather, the board warming)
+    auto hover = [&](int mode /*0 baro alone, 1 blend*/, float gps_offset, float jump_at_s, float jump_m, float& worst) {
+        VerticalEstimator kf; kf.reset(10.0f); Wander w; worst = 0;
+        for (int i = 0; i < 60000; i++) { const float t = i * dt, drift = t / 60.0f;
+            kf.predict(gauss(0.3f), dt);
+            if (i % 8 == 0) kf.update_baro(10.0f + drift + gauss(0.3f), 0.3f);
+            if (mode && i % 20 == 0) { const float g = 10.0f + gps_offset + w.next(0.1f) + (jump_at_s > 0 && t >= jump_at_s ? jump_m : 0.0f);
+                kf.update_gps_relative(g, fmaxf(1.5f, kf.cfg.gps_blend_sigma_min), true); }
+            if (t > 30) worst = fmaxf(worst, fabsf(kf.state().z - 10.0f)); }
+        return fabsf(kf.state().z - 10.0f); };
+    { float wb, wg; const float baro = hover(0, 0, 0, 0, wb), blend = hover(1, 0, 0, 0, wg);
+      CHECK(baro > 4.0f && blend < 1.5f && wg < 2.0f, "baro drifting 1 m/min for 5 min: off by %.1f m alone, by %.2f m with the GPS blended in (worst %.2f after the first 30 s)", baro, blend, wg); }
+    { float w; hover(1, 25.0f, 0, 0, w); float w0; hover(1, 0, 0, 0, w0);
+      CHECK(w < w0 + 0.3f, "a GPS height 25 m off from the start (home taken long ago, MSL vs. take-off): the reference takes it out (worst %.2f vs %.2f m)", w, w0); }
+    { auto jump = [&](float gate_m, uint32_t& resets) { VerticalEstimator kf; kf.cfg.gps_jump_m = gate_m; kf.reset(10.0f); Wander w; float worst = 0;
+          for (int i = 0; i < 24000; i++) { const float t = i * dt; kf.predict(gauss(0.3f), dt); if (i % 8 == 0) kf.update_baro(10.0f + gauss(0.3f), 0.3f);
+              if (i % 20 == 0) kf.update_gps_relative(10.0f + w.next(0.1f) + (t >= 60.0f ? 8.0f : 0.0f), 3.0f, true);
+              if (t >= 60) worst = fmaxf(worst, fabsf(kf.state().z - 10.0f)); }
+          resets = kf.gps_resets(); return worst; };
+      uint32_t r1 = 0, r2 = 0; const float kept = jump(4.0f, r1), dragged = jump(1e6f, r2);
+      CHECK(kept < 1.0f && r1 >= 1 && dragged > 2.5f, "the GPS height jumps by 8 m and stays there: a new reference, the estimate stays within %.2f m (resets %u); taken as a correction it would have moved %.1f m", kept, (unsigned)r1, dragged); }
+    { VerticalEstimator kf; kf.reset(0); int fused = 0;
+      for (int i = 0; i < 4000; i++) { kf.predict(0, dt); if (i % 8 == 0) kf.update_baro(gauss(0.3f), 0.3f); if (i % 20 == 0) fused += kf.update_gps_relative(gauss(0.5f), 1.0f, true); }
+      const int before = fused; for (int i = 0; i < 2000; i++) { kf.predict(0, dt); if (i % 8 == 0) kf.update_baro(gauss(0.3f), 0.3f); }      // 10 s without GPS
+      kf.update_gps_relative(5.0f, 1.0f, true);
+      CHECK(before == 200 - kf.cfg.gps_ref_samples && !kf.gps_ref_ok() && fabsf(kf.state().z) < 0.3f, "the first %d readings only set the reference (%d of 200 fused); after 10 s without GPS it starts again", kf.cfg.gps_ref_samples, before); }
+
+    // the barometer goes silent in flight: the GPS takes over from the reference it kept (FALLBACK), no step
+    { VerticalEstimator kf; kf.reset(0); Wander w; float z = 0, at = 0, worst = 0, end = 0;
+      for (int i = 0; i < 36000; i++) { const float t = i * dt; z = t < 20 ? t * 0.5f : 10.0f; const bool baro = t < 60;
+          kf.predict((t < 20 ? 0.0f : 0.0f) + gauss(0.3f), dt);
+          if (baro && i % 8 == 0) kf.update_baro(z + t / 60.0f + gauss(0.3f), 0.3f);
+          if (i % 20 == 0) { const float g = z + w.next(0.1f); if (baro) kf.update_gps_relative(g, 1.5f, false); else kf.update_gps_relative(g, 1.5f, true); }
+          if (i % 20 == 0) kf.update_gps_vel((t < 20 ? 0.5f : 0.0f) + gauss(0.1f), 0.15f);
+          if (fabsf(t - 59.99f) < dt) at = kf.state().z;
+          if (t > 60 && t < 62) worst = fmaxf(worst, fabsf(kf.state().z - at));
+          end = kf.state().z - z; }
+      CHECK(worst < 0.5f && kf.state().gps_used && fabsf(end) < 3.0f, "baro silent after 60 s: the estimate moves %.2f m in the next 2 s (the reference followed GPS - z), %.1f m off truth after 2 more minutes on GPS alone", worst, end); }
+
+    // a craft with GPS and nothing else: the GPS height IS the height
+    { VerticalEstimator kf; kf.reset(0); Wander w; float worst = 0;
+      for (int i = 0; i < 12000; i++) { const float t = i * dt; kf.predict(gauss(0.3f), dt);
+          if (i % 20 == 0) { kf.update_gps(5.0f + w.next(0.1f), 1.5f); kf.update_gps_vel(gauss(0.1f), 0.15f); }
+          if (t > 10) worst = fmaxf(worst, fabsf(kf.state().z - 5.0f)); }
+      CHECK(worst < 3.5f && kf.z_sigma() < 1.5f, "GPS alone, hovering at 5 m for a minute: within %.2f m (sigma %.2f)", worst, kf.z_sigma());
+      for (int i = 0; i < 400; i++) { kf.predict(gauss(0.3f), dt); if (i % 20 == 0) kf.update_gps(35.0f, 1.5f); }
+      CHECK(kf.gps_resets() == 1 && fabsf(kf.state().z - 35.0f) < 0.5f, "it jumps by 30 m and stays: after %d readings outside the gate the height is set to it (nothing better exists)", kf.cfg.gps_reref_after); }
+}
+
 static void t_horizontal() {
     printf("[horizontal estimator]\n");
     auto run = [&](float delay_cfg, bool maneuver, float outage_from, float outage_to, float& pos_err, float& vel_err, float& max_pos_err) {
@@ -690,6 +762,6 @@ static void t_althold_edges() {
 }
 
 int main() {
-    t_filters(); t_ahrs(); t_ahrs_trust(); t_vertical(); t_horizontal(); t_rc(); t_mixer(); t_layouts(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges();
+    t_filters(); t_ahrs(); t_ahrs_trust(); t_vertical(); t_vertical_gps(); t_horizontal(); t_rc(); t_mixer(); t_layouts(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

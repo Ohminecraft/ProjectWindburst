@@ -1,5 +1,6 @@
 // Minimal Arduino stand-in so src/hal/bus/*.h and IMUAccGyro compile and run on a PC (test_manager.cpp).
 #pragma once
+#include <functional>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -89,19 +90,27 @@ inline void stub_pin_edge(uint8_t pin, uint8_t level, uint64_t at_us) {
 struct StubUartDevice {
     virtual ~StubUartDevice() = default;
     virtual int dev_read() = 0;                                  // next byte the device sends, -1 = nothing
+    virtual int dev_pending() { return 0; }                      // bytes waiting after that one, if the device knows (what available() reports)
     virtual void dev_write(const uint8_t* d, size_t n) = 0;      // bytes the firmware sends to the device
     virtual void dev_config(uint32_t /*baud*/, uint32_t /*format*/, bool /*inverted*/) {}
 };
+typedef enum { UART_NO_ERROR, UART_BREAK_ERROR, UART_BUFFER_FULL_ERROR, UART_FIFO_OVF_ERROR, UART_FRAME_ERROR, UART_PARITY_ERROR } hardwareSerial_error_t;
 class HardwareSerial {
 public:
     StubUartDevice* dev = nullptr; uint32_t baud = 0, format = 0; int rx_pin = -1, tx_pin = -1; bool inverted = false, started = false;
-    void setRxBufferSize(size_t) {}
+    size_t rx_buffer = 256; uint8_t rx_fifo_full = 0; std::function<void(hardwareSerial_error_t)> on_error;
+    void setRxBufferSize(size_t n) { rx_buffer = n; }
+    bool setRxFIFOFull(uint8_t n) { rx_fifo_full = n; return true; }
+    void onReceiveError(std::function<void(hardwareSerial_error_t)> f) { on_error = f; }
+    void stub_error(hardwareSerial_error_t e) { if (on_error) on_error(e); }      // (tests: what the driver's event task would report)
     void setTxBufferSize(size_t) {}
     void begin(uint32_t b, uint32_t fmt = SERIAL_8N1, int rx = -1, int tx = -1, bool inv = false) { baud = b; format = fmt; rx_pin = rx; tx_pin = tx; inverted = inv; started = true; have_ = false; if (dev) dev->dev_config(b, fmt, inv); }
     void updateBaudRate(uint32_t b) { baud = b; if (dev) dev->dev_config(b, format, inverted); }
     void flush() {}
-    int available() { stub_io(); if (!have_ && dev && started) { const int c = dev->dev_read(); if (c >= 0) { peek_ = (uint8_t)c; have_ = true; } } return have_ ? 1 : 0; }
-    int read() { if (!available()) return -1; have_ = false; return peek_; }
+    int available() { stub_io(); if (!have_ && dev && started) { const int c = dev->dev_read(); if (c >= 0) { peek_ = (uint8_t)c; have_ = true; } } return have_ ? 1 + (dev ? dev->dev_pending() : 0) : 0; }
+    int read() { single_reads++; if (!available()) return -1; have_ = false; return peek_; }
+    size_t read(uint8_t* buf, size_t n) { block_reads++; size_t k = 0; while (k < n && available()) { have_ = false; buf[k++] = peek_; } return k; }
+    uint32_t single_reads = 0, block_reads = 0;                   // (tests: how the firmware reads)
     size_t write(const uint8_t* d, size_t n) { stub_io(); if (dev && started) dev->dev_write(d, n); return n; }
     size_t write(uint8_t c) { return write(&c, 1); }
 private:

@@ -35,13 +35,30 @@
 #define WB_LINK_BYTES_PER_S (WB_LINK_BAUD / 10u)
 #endif
 
+// USB Serial/JTAG (HWCDC): when its transmit ring is full and the interrupt that drains it is not armed (the USB link hiccuped:
+// a bus reset, a moment the host did not poll, the core's start-of-frame watchdog flapping), only a write() arms it again. A
+// sender that only writes when there is room then waits for ever: the app sees a firmware that never answers again. So after
+// kLinkKickMs without room one byte is offered anyway - it is a byte of the next frame, taken or not, nothing is lost or
+// doubled - and the core re-arms its interrupt. (The core's write timeout is 0 in this build: that write never waits.)
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT && defined(ARDUINO_USB_MODE) && ARDUINO_USB_MODE
+#define WB_LINK_KICK 1
+#else
+#define WB_LINK_KICK 0
+#endif
+static constexpr uint32_t kLinkKickMs = 50;
+static inline volatile uint32_t g_link_kicks = 0;               // how often the port had to be kicked (reported in the app's log)
+
 class StreamPort : public app::RawPort {
 public:
-    explicit StreamPort(Stream& s) : s_(s) {}
-    size_t room() override { const int w = s_.availableForWrite(); return w > 0 ? (size_t)w : 0; }
+    explicit StreamPort(Stream& s) : s_(s) { kick_.after_ms = WB_LINK_KICK ? kLinkKickMs : 0; }
+    size_t room() override {
+        const uint32_t k = kick_.kicks; const size_t r = kick_.room(s_.availableForWrite(), millis());
+        if (kick_.kicks != k) g_link_kicks = kick_.kicks;
+        return r;
+    }
     size_t put(const uint8_t* d, size_t n) override { return s_.write(d, n); }
 private:
-    Stream& s_;
+    Stream& s_; app::StallKick kick_;
 };
 
 class SerialTransport : public app::QueuedTransport {
@@ -72,7 +89,7 @@ public:
 
     // stack: the server keeps two ~520 byte frame buffers on the stack while answering, a log download another ~1 kB, and the
     // SD card's file system (FatFs with long file names on the stack) about 2 kB below that when a file is opened / listed / read
-    bool start(int core = 0, int priority = 1) { return xTaskCreatePinnedToCore(&LinkTask::entry, "wb_link", 12288, this, priority, &handle_, core) == pdPASS; }
+    bool start(int core = 0, int priority = 2) { return xTaskCreatePinnedToCore(&LinkTask::entry, "wb_link", 14000, this, priority, &handle_, core) == pdPASS; }
 
     static void wait_1ms(void*) { vTaskDelay(1); }           // app::Exchange::WaitFn
     static uint32_t now_ms() { return millis(); }
@@ -80,8 +97,12 @@ public:
 private:
     static void entry(void* self) { static_cast<LinkTask*>(self)->run(); }
     void run() {
-        uint32_t last_rx = millis();
+        uint32_t last_rx = millis(), kicks = g_link_kicks;
         for (;;) {
+            if (g_link_kicks != kicks) {                          // the port was stuck and had to be kicked: say so (it shows up in the app's log once it flows)
+                char line[96]; snprintf(line, sizeof(line), "link: the USB port took nothing for %lu ms and was restarted (%lu times since boot)", (unsigned long)kLinkKickMs, (unsigned long)g_link_kicks);
+                kicks = g_link_kicks; server_.log(2, line);
+            }
             uint8_t buf[128]; int n = 0;
             while (n < (int)sizeof(buf) && port_.available() > 0) buf[n++] = (uint8_t)port_.read();
             const uint32_t now = millis();

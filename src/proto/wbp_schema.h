@@ -8,7 +8,7 @@
 // so a struct is its own wire image). The Python client builds the same layouts from the same json.
 namespace wbp {
 constexpr uint8_t kProtocolVersion = 1;
-constexpr uint32_t kSchemaHash = 0x44955247u;
+constexpr uint32_t kSchemaHash = 0x1C71546Du;
 
 enum Err : uint8_t { ERR_OK, ERR_UNKNOWN, ERR_BAD_ARG, ERR_ARMED, ERR_BUSY, ERR_NOT_SUPPORTED, ERR_BAD_SECTION, ERR_SIZE_MISMATCH, ERR_STORAGE, ERR_NO_SENSOR, ERR_BAD_STATE, ERR_FAILED };
 enum Cmd : uint8_t { CMD_GYRO_CAL = 1, CMD_ACC_CAL_POINT = 2, CMD_ACC_CAL_FINISH = 3, CMD_LEVEL_TRIM = 4, CMD_MAG_CAL_START = 5, CMD_MAG_CAL_FINISH = 6, CMD_MAG_CAL_CANCEL = 7, CMD_MOTOR_TEST = 8, CMD_MOTOR_STOP = 9, CMD_MOTOR_DIRECTION = 10, CMD_MOTOR_BEACON = 11, CMD_SET_HOME = 12, CMD_ESC_TELEMETRY = 13, CMD_APPLY_SETTINGS = 14, CMD_REPORT = 15, CMD_ACC_CAL_CANCEL = 16, CMD_BEEP = 17, CMD_BLACKBOX_ERASE = 18, CMD_BLACKBOX_STREAM = 19, CMD_BLACKBOX_SESSION = 20, CMD_BLACKBOX_READ = 21 };
@@ -62,10 +62,11 @@ enum FS_PROCEDURE_E : uint8_t { FS_PROCEDURE_LAND, FS_PROCEDURE_RESCUE };
 enum SERVO_SOURCE_E : uint8_t { SERVO_SOURCE_OFF, SERVO_SOURCE_CH1, SERVO_SOURCE_CH2, SERVO_SOURCE_CH3, SERVO_SOURCE_CH4, SERVO_SOURCE_CH5, SERVO_SOURCE_CH6, SERVO_SOURCE_CH7, SERVO_SOURCE_CH8, SERVO_SOURCE_CH9, SERVO_SOURCE_CH10, SERVO_SOURCE_CH11, SERVO_SOURCE_CH12, SERVO_SOURCE_CH13, SERVO_SOURCE_CH14, SERVO_SOURCE_CH15, SERVO_SOURCE_CH16 };
 enum CURR_SOURCE_E : uint8_t { CURR_SOURCE_AUTO, CURR_SOURCE_ADC, CURR_SOURCE_ESC, CURR_SOURCE_NONE };
 enum PORT_ASSIGN_E : uint8_t { PORT_ASSIGN_AUTO, PORT_ASSIGN_TABLE };
+enum GPS_ALT_E : uint8_t { GPS_ALT_OFF, GPS_ALT_FALLBACK, GPS_ALT_BLEND };
 enum ARM_BLOCKER_B : uint32_t { ARM_BLOCKER_NO_IMU = 1u << 0, ARM_BLOCKER_GYRO_NOT_CAL = 1u << 1, ARM_BLOCKER_RX_LOST = 1u << 2, ARM_BLOCKER_THROTTLE_HIGH = 1u << 3, ARM_BLOCKER_ANGLE_TOO_HIGH = 1u << 4, ARM_BLOCKER_FAILSAFE = 1u << 5, ARM_BLOCKER_ALTHOLD_NO_BARO = 1u << 6, ARM_BLOCKER_BATT_LOW = 1u << 7, ARM_BLOCKER_ARM_SWITCH_ON = 1u << 8, ARM_BLOCKER_CONFIG_UNSAVED = 1u << 9, ARM_BLOCKER_CALIBRATING = 1u << 10, ARM_BLOCKER_POSHOLD_NO_GPS = 1u << 11, ARM_BLOCKER_MAG_NOT_CALIBRATED = 1u << 12, ARM_BLOCKER_PIN_CONFLICT = 1u << 13, ARM_BLOCKER_LOOP_RATE = 1u << 14, ARM_BLOCKER_RUNAWAY_TAKEOFF = 1u << 15, ARM_BLOCKER_RESCUE_NO_FIX = 1u << 16, ARM_BLOCKER_RESCUE_NO_COMPASS = 1u << 17 };
 enum HEALTH_B : uint32_t { HEALTH_IMU = 1u << 0, HEALTH_GYRO_CAL = 1u << 1, HEALTH_BARO = 1u << 2, HEALTH_RANGE = 1u << 3, HEALTH_GPS = 1u << 4, HEALTH_MAG_READY = 1u << 5, HEALTH_MAG_CAL = 1u << 6, HEALTH_RX = 1u << 7, HEALTH_MOTORS = 1u << 8, HEALTH_ESC_TELEMETRY = 1u << 9, HEALTH_ACC_CAL = 1u << 10, HEALTH_BATTERY = 1u << 11, HEALTH_FLOW = 1u << 12 };
 enum SETTINGS_FLAGS_B : uint32_t { SETTINGS_FLAGS_DIRTY = 1u << 0, SETTINGS_FLAGS_REBOOT_REQUIRED = 1u << 1 };
-enum EST_VALID_B : uint32_t { EST_VALID_ALT = 1u << 0, EST_VALID_POS = 1u << 1, EST_VALID_YAW_FROM_MAG = 1u << 2, EST_VALID_VEL = 1u << 3, EST_VALID_FLOW = 1u << 4, EST_VALID_TILT_AIDED = 1u << 5 };
+enum EST_VALID_B : uint32_t { EST_VALID_ALT = 1u << 0, EST_VALID_POS = 1u << 1, EST_VALID_YAW_FROM_MAG = 1u << 2, EST_VALID_VEL = 1u << 3, EST_VALID_FLOW = 1u << 4, EST_VALID_TILT_AIDED = 1u << 5, EST_VALID_GPS_ALT = 1u << 6, EST_VALID_GPS_VZ = 1u << 7 };
 enum FS_CAUSE_B : uint32_t { FS_CAUSE_LINK = 1u << 0, FS_CAUSE_SWITCH = 1u << 1, FS_CAUSE_BATTERY = 1u << 2 };
 enum NAV_FLAGS_B : uint32_t { NAV_FLAGS_POSHOLD = 1u << 0, NAV_FLAGS_POSHOLD_UNAVAILABLE = 1u << 1, NAV_FLAGS_RESCUE = 1u << 2, NAV_FLAGS_RESCUE_AVAILABLE = 1u << 3, NAV_FLAGS_NAV_LEAN = 1u << 4 };
 
@@ -475,8 +476,9 @@ struct __attribute__((packed)) S_motors {
     uint16_t dyn_idle_max_inc;
     uint8_t dir_cmd_extended;
     uint8_t dshot_driver;
+    uint8_t ext_pullup;
 };
-static_assert(sizeof(S_motors) == 35, "S_motors layout");
+static_assert(sizeof(S_motors) == 36, "S_motors layout");
 inline void defaults(S_motors& s) {
     s.layout = 0;
     s.props_out = 0;
@@ -506,6 +508,7 @@ inline void defaults(S_motors& s) {
     s.dyn_idle_max_inc = 150;
     s.dir_cmd_extended = 0;
     s.dshot_driver = 0;
+    s.ext_pullup = 0;
 }
 inline int validate(S_motors& s) {
     int fixed = 0; (void)s;
@@ -529,6 +532,7 @@ inline int validate(S_motors& s) {
     { if (s.dyn_idle_max_inc < 10) { s.dyn_idle_max_inc = 10; fixed++; } else if (s.dyn_idle_max_inc > 400) { s.dyn_idle_max_inc = 400; fixed++; } }
     { if (s.dir_cmd_extended > 1) { s.dir_cmd_extended = 1; fixed++; } }
     { if (s.dshot_driver > 1) { s.dshot_driver = 1; fixed++; } }
+    { if (s.ext_pullup > 1) { s.ext_pullup = 1; fixed++; } }
     return fixed;
 }
 
@@ -1058,8 +1062,10 @@ struct __attribute__((packed)) S_nav {
     uint8_t rescue_landing_alt;
     uint8_t rescue_min_sats;
     uint8_t rescue_allow_no_fix;
+    uint8_t gps_alt;
+    uint8_t gps_vel_z;
 };
-static_assert(sizeof(S_nav) == 27, "S_nav layout");
+static_assert(sizeof(S_nav) == 29, "S_nav layout");
 inline void defaults(S_nav& s) {
     s.flow_align = 0;
     s.flow_flip = 0;
@@ -1086,6 +1092,8 @@ inline void defaults(S_nav& s) {
     s.rescue_landing_alt = 4;
     s.rescue_min_sats = 5;
     s.rescue_allow_no_fix = 0;
+    s.gps_alt = 1;
+    s.gps_vel_z = 1;
 }
 inline int validate(S_nav& s) {
     int fixed = 0; (void)s;
@@ -1114,6 +1122,8 @@ inline int validate(S_nav& s) {
     { if (s.rescue_landing_alt < 1) { s.rescue_landing_alt = 1; fixed++; } else if (s.rescue_landing_alt > 15) { s.rescue_landing_alt = 15; fixed++; } }
     { if (s.rescue_min_sats < 4) { s.rescue_min_sats = 4; fixed++; } else if (s.rescue_min_sats > 12) { s.rescue_min_sats = 12; fixed++; } }
     { if (s.rescue_allow_no_fix > 1) { s.rescue_allow_no_fix = 1; fixed++; } }
+    { if (s.gps_alt > 2) { s.gps_alt = 2; fixed++; } }
+    { if (s.gps_vel_z > 1) { s.gps_vel_z = 1; fixed++; } }
     return fixed;
 }
 
@@ -1180,7 +1190,7 @@ inline void defaults(Settings& s) { defaults(s.general); defaults(s.receiver); d
 // up to that size (fields were only appended or cut at the end since): such a stored record is still loaded. 0 = none.
 struct SectionInfo { uint8_t id; const char* name; uint16_t size; bool live; uint16_t compat, compat2, compat3; };
 constexpr int kSectionCount = 18;
-constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 22, false, 0, 0, 0}, {SEC_RECEIVER, "receiver", 12, false, 9, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0}, {SEC_PID, "pid", 75, true, 0, 0, 0}, {SEC_MOTORS, "motors", 35, false, 34, 0, 0}, {SEC_SENSORS, "sensors", 16, false, 0, 0, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0}, {SEC_PINS, "pins", 46, false, 37, 33, 27}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0}, {SEC_NAV, "nav", 27, true, 0, 0, 0}, {SEC_SERVO, "servo", 26, true, 0, 0, 0}};
+constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 22, false, 0, 0, 0}, {SEC_RECEIVER, "receiver", 12, false, 9, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0}, {SEC_PID, "pid", 75, true, 0, 0, 0}, {SEC_MOTORS, "motors", 36, false, 35, 34, 0}, {SEC_SENSORS, "sensors", 16, false, 0, 0, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0}, {SEC_PINS, "pins", 46, false, 37, 33, 27}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0}, {SEC_NAV, "nav", 29, true, 27, 0, 0}, {SEC_SERVO, "servo", 26, true, 0, 0, 0}};
 inline const SectionInfo* find_section(uint8_t id) { for (const auto& s : kSections) if (s.id == id) return &s; return nullptr; }
 // pointer to / size of a section inside a Settings object (nullptr if unknown)
 inline uint8_t* section_ptr(Settings& st, uint8_t id) { switch (id) {
@@ -1258,8 +1268,11 @@ struct __attribute__((packed)) T_rc {
     uint8_t link;
     uint8_t rssi;
     uint16_t rate;
+    uint16_t bad_frames;
+    uint16_t uart_ovf;
+    uint16_t uart_line;
 };
-static_assert(sizeof(T_rc) == 36, "T_rc layout");
+static_assert(sizeof(T_rc) == 42, "T_rc layout");
 struct __attribute__((packed)) T_status {
     uint8_t armed;
     uint32_t blockers;
@@ -1482,6 +1495,6 @@ constexpr float nav_return_alt = 0.1f;
 } // namespace scale
 struct StreamInfo { uint8_t id; const char* name; uint16_t size; uint16_t default_rate; uint16_t max_rate; };
 constexpr int kStreamCount = 13;
-constexpr StreamInfo kStreams[kStreamCount] = {{STR_ATTITUDE, "attitude", 18, 50, 200}, {STR_RC, "rc", 36, 20, 100}, {STR_STATUS, "status", 49, 10, 50}, {STR_MOTORS, "motors", 70, 20, 100}, {STR_SENSORS, "sensors", 28, 50, 200}, {STR_GPS, "gps", 31, 5, 25}, {STR_ESTIMATE, "estimate", 15, 20, 100}, {STR_GYRO_FAST, "gyro_fast", 12, 0, 1000}, {STR_CALIBRATION, "calibration", 11, 10, 20}, {STR_BATTERY, "battery", 19, 2, 20}, {STR_BLACKBOX, "blackbox", 34, 2, 10}, {STR_TUNING, "tuning", 53, 0, 50}, {STR_NAV, "nav", 28, 10, 50}};
+constexpr StreamInfo kStreams[kStreamCount] = {{STR_ATTITUDE, "attitude", 18, 50, 200}, {STR_RC, "rc", 42, 20, 100}, {STR_STATUS, "status", 49, 10, 50}, {STR_MOTORS, "motors", 70, 20, 100}, {STR_SENSORS, "sensors", 28, 50, 200}, {STR_GPS, "gps", 31, 5, 25}, {STR_ESTIMATE, "estimate", 15, 20, 100}, {STR_GYRO_FAST, "gyro_fast", 12, 0, 1000}, {STR_CALIBRATION, "calibration", 11, 10, 20}, {STR_BATTERY, "battery", 19, 2, 20}, {STR_BLACKBOX, "blackbox", 34, 2, 10}, {STR_TUNING, "tuning", 53, 0, 50}, {STR_NAV, "nav", 28, 10, 50}};
 inline const StreamInfo* find_stream(uint8_t id) { for (const auto& s : kStreams) if (s.id == id) return &s; return nullptr; }
 } // namespace wbp

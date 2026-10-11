@@ -193,7 +193,7 @@ inline bool decode_pvt(const Message& m, Solution& s) {
     const int32_t velN = i32(p + 48), velE = i32(p + 52), velD = i32(p + 56), gspeed = i32(p + 60), head = i32(p + 64);
     s.s_acc_mm = u32(p + 68); s.head_acc = u32(p + 72);
     s.pdop = u16(p + 76); s.hdop = s.pdop; s.vdop = s.pdop;          // NAV-PVT has pDOP only; BF uses it for all three (conservative)
-    s.vel_n_cms = sat_i16(velN / 10); s.vel_e_cms = sat_i16(velE / 10); s.vel_d_cms = sat_i16(velD / 10);
+    s.vel_n_cms = sat_i16(velN / 10); s.vel_e_cms = sat_i16(velE / 10); s.vel_d_cms = sat_i16(velD / 10); s.has_vel_d = true;
     s.ground_speed_cms = sat16(gspeed / 10);
     const double g = (double)gspeed, d = (double)velD;
     double sp = __builtin_sqrt(g * g + d * d) * 0.1; s.speed3d_cms = sat16((int64_t)sp);
@@ -221,7 +221,7 @@ inline void decode_dop(const Message& m, Solution& s) { if (m.len >= 18) { s.pdo
 inline void decode_velned(const Message& m, Solution& s) {
     if (m.len < 36) return;
     const uint8_t* p = m.payload;
-    s.vel_n_cms = sat_i16(i32(p + 4)); s.vel_e_cms = sat_i16(i32(p + 8)); s.vel_d_cms = sat_i16(i32(p + 12));
+    s.vel_n_cms = sat_i16(i32(p + 4)); s.vel_e_cms = sat_i16(i32(p + 8)); s.vel_d_cms = sat_i16(i32(p + 12)); s.has_vel_d = true;
     s.speed3d_cms = sat16(u32(p + 16)); s.ground_speed_cms = sat16(u32(p + 20));
     int32_t hd = i32(p + 24) / 10000; if (hd < 0) hd += 3600; s.course_ddeg = (uint16_t)(hd % 3600);
     s.s_acc_mm = u32(p + 28) * 10; s.head_acc = u32(p + 32);

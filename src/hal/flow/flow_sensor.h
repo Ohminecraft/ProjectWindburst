@@ -10,6 +10,7 @@
 #include "flow_driver.h"
 #include "pmw3901.h"
 #include "flow_msp.h"
+#include "../serial_block.h"
 #include "../bus/bus_spi.h"
 #include "../range/range_driver.h"
 
@@ -45,10 +46,10 @@ private:
 
 class ArduinoBytePort : public flow::BytePort {
 public:
-    void attach(HardwareSerial& s) { s_ = &s; }
-    int read() override { return s_ && s_->available() ? s_->read() : -1; }
+    void attach(HardwareSerial& s) { s_ = &s; in_.clear(); }
+    int read() override { return s_ ? in_.get(*s_) : -1; }                 // (in blocks: serial_block.h)
 private:
-    HardwareSerial* s_ = nullptr;
+    HardwareSerial* s_ = nullptr; SerialBlock<64> in_;
 };
 
 // The lidar inside an MSP flow sensor, as a range driver.

@@ -212,7 +212,7 @@ export default {
   streams: { motors: 20, status: 10 },
   mount(view) {
     const pulse = h('div', { id: 'pulse-fields' }, fields('motors', ['pulse_disarmed', 'pulse_armed', 'pulse_max', 'pulse_hz']));
-    const dshot = h('div', { id: 'dshot-fields' }, fields('motors', ['dshot_driver', 'bidirectional', 'pole_count', 'edt', 'dir_cmd_extended', 'dyn_idle_min_rpm', 'dyn_idle_p', 'dyn_idle_i', 'dyn_idle_d', 'dyn_idle_max_inc']));
+    const dshot = h('div', { id: 'dshot-fields' }, fields('motors', ['dshot_driver', 'bidirectional', 'ext_pullup', 'pole_count', 'edt', 'dir_cmd_extended', 'dyn_idle_min_rpm', 'dyn_idle_p', 'dyn_idle_i', 'dyn_idle_d', 'dyn_idle_max_inc']));
     const tooMany = h('p', { class: 'note bad', id: 'dshot-count' });
     const which = () => {
       const m = store.settings.motors, d = /^(DSHOT|PROSHOT)/.test(String(m.protocol));

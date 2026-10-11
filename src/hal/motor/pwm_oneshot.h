@@ -18,9 +18,14 @@ public:
 
     bool begin(const uint8_t* pins, int count, motor::Protocol proto, uint16_t pulse_hz, bool) override {
         if (motor::is_dshot(proto) || count < 1 || count > 8) return false;
+        ledcSetClockSource(LEDC_USE_APB_CLK);
         proto_ = proto; count_ = count; hz_ = pulse_hz ? pulse_hz : motor::default_pulse_hz(proto);
         if (1e6f / hz_ < motor::pulse_period_min_us(proto)) return false;      // period shorter than the longest pulse
+#ifdef CONFIG_IDF_TARGET_ESP32S3                                      // the IDF driver cannot do more than 4 kHz on the S3 (the RMT path is one-way DShot only)
         bits_ = 14;
+#else
+        bits_ = 16;
+#endif
         while (bits_ > 8 && (uint64_t)hz_ * (1u << bits_) > 80000000ull) bits_--;
         for (int i = 0; i < count; i++) {
             pins_[i] = pins[i];

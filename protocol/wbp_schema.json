@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0x44955247",
+ "hash": "0x1C71546D",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -369,6 +369,11 @@
   "port_assign": [
    "AUTO",
    "TABLE"
+  ],
+  "gps_alt": [
+   "OFF",
+   "FALLBACK",
+   "BLEND"
   ]
  },
  "bits": {
@@ -417,7 +422,9 @@
    "YAW_FROM_MAG",
    "VEL",
    "FLOW",
-   "TILT_AIDED"
+   "TILT_AIDED",
+   "GPS_ALT",
+   "GPS_VZ"
   ],
   "fs_cause": [
    "LINK",
@@ -1320,10 +1327,19 @@
      "d": 0,
      "enum": "dshot_driver",
      "desc": "how DShot frames reach the pins: DIRECT = written straight into the RMT peripheral (needed for bidirectional DShot, a few microseconds per cycle); IDF = through the ESP-IDF driver, one way only (fallback)"
+    },
+    {
+     "n": "ext_pullup",
+     "t": "bool",
+     "d": 0,
+     "desc": "bidirectional DShot: the motor signal lines have pull-up resistors of their own (e.g. 1-4.7 kOhm to 3.3 V): the internal ~45 kOhm pull-up of the pins is left off"
     }
    ],
    "live": false,
-   "compat": 34
+   "compat": [
+    35,
+    34
+   ]
   },
   {
    "id": 7,
@@ -2532,8 +2548,22 @@
      "t": "bool",
      "d": 0,
      "desc": "allow arming without a GPS fix although a rescue is set up (then there is no home point: the rescue cannot fly)"
+    },
+    {
+     "n": "gps_alt",
+     "t": "u8",
+     "d": 1,
+     "enum": "gps_alt",
+     "desc": "how the GPS height is used for the height estimate: OFF never; FALLBACK only without barometer and range finder (none fitted, or one went silent in flight) - then Altitude Hold works on the GPS height; BLEND as FALLBACK, and next to the barometer it slowly (about a minute) takes out the baro's weather drift"
+    },
+    {
+     "n": "gps_vel_z",
+     "t": "bool",
+     "d": 1,
+     "desc": "use the GPS vertical velocity in the height estimate (u-blox modules; NMEA has none): steadier climb rate in prop wash and fast climbs"
     }
-   ]
+   ],
+   "compat": 27
   },
   {
    "id": 18,
@@ -2648,6 +2678,21 @@
      "n": "rate",
      "t": "u16",
      "desc": "valid receiver frames per second"
+    },
+    {
+     "n": "bad_frames",
+     "t": "u16",
+     "desc": "receiver frames the decoder threw away in the last second (checksum, length, sync)"
+    },
+    {
+     "n": "uart_ovf",
+     "t": "u16",
+     "desc": "serial receivers: times in the last second the UART driver had no room for incoming bytes (the firmware read too late)"
+    },
+    {
+     "n": "uart_line",
+     "t": "u16",
+     "desc": "serial receivers: framing / parity errors in the last second (noise on the wire, wrong baud rate, wrong inversion)"
     }
    ]
   },

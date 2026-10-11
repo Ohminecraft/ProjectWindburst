@@ -925,7 +925,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.8.2" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.8.7" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -1981,6 +1981,52 @@ static void t_servo() {
       CHECK(has_line(*r, "servo: FAILED - no free PWM (LEDC) channel for a servo") && g_stub_pwm[1].attached && !g_stub_pwm[3].attached, "only one PWM channel left: the first servo gets it, the report says the others found none"); }
 }
 
+// 0.8.5: what the receiver's UART and decoder lose, per second (rc stream); the UART set up with room to spare; the external pull-up setting
+static void t_rx_diag() {
+    printf("[receiver diagnostics] bad frames, UART overflows and line errors per second; the motor pull-up setting\n");
+    { auto r = nav_rig([](wbp::Settings&, VirtualBoard&) {}); Rig& g = *r; VirtualBoard& b = g.board; g.run(3.0);
+      CHECK(Serial2.rx_buffer == 2048 && Serial2.rx_fifo_full == 64, "the receiver's UART: 2 kB receive buffer, its FIFO handed over every 64 bytes (%u, %u)", (unsigned)Serial2.rx_buffer, (unsigned)Serial2.rx_fifo_full);
+      { const uint32_t s0 = Serial2.single_reads, b0 = Serial2.block_reads, f0 = b.rc_frames, g0 = Serial1.single_reads, gb0 = Serial1.block_reads; g.run(2.0); const uint32_t frames = b.rc_frames - f0;
+        CHECK(Serial2.single_reads == s0 && Serial2.block_reads - b0 <= frames + 4 && frames > 250, "0.8.7: the receiver is read in blocks - %u calls for %u frames of 26 bytes, never one byte at a time (on the board that fell behind the receiver)",
+              (unsigned)(Serial2.block_reads - b0), (unsigned)frames);
+        CHECK(Serial1.single_reads == g0 && Serial1.block_reads > gb0, "... and so is the GPS"); }
+      const uint16_t rate0 = g.tel().rc_rate;
+      CHECK(rate0 >= 130 && g.tel().rc_bad == 0 && g.tel().rc_ovf == 0 && g.tel().rc_line == 0, "a clean link: %u frames/s, nothing lost", rate0);
+      b.rc_corrupt = 30; Serial2.stub_error(UART_FIFO_OVF_ERROR); Serial2.stub_error(UART_BUFFER_FULL_ERROR); Serial2.stub_error(UART_FRAME_ERROR);
+      int bad = 0, ovf = 0, line = 0; uint16_t low = 999;
+      for (int i = 0; i < 30; i++) { g.run(0.1); if (i % 10 == 9) { bad += g.tel().rc_bad; ovf += g.tel().rc_ovf; line += g.tel().rc_line; low = std::min(low, g.tel().rc_rate); } }
+      CHECK(bad == 30 && ovf == 2 && line == 1 && low <= rate0 - 25, "30 damaged frames, two overflows, a framing error: counted %d / %d / %d, the rate dips to %u", bad, ovf, line, low);
+      T_rc rc{}; r->clear_inbox(); r->stream(STR_RC, 20); r->run(0.2);
+      CHECK(r->latest(STR_RC, rc) && rc.bad_frames == g.tel().rc_bad && rc.uart_ovf == g.tel().rc_ovf, "the rc stream carries them"); }
+    for (int ext = 0; ext < 2; ext++) {
+      auto r = nav_rig([ext](wbp::Settings& s, VirtualBoard&) { s.motors.protocol = ESC_PROTOCOL_DSHOT600; s.motors.bidirectional = 1; s.motors.ext_pullup = (uint8_t)ext; });
+      HostMotorHw* hw = static_cast<HostMotorHw*>(r->app().motors.hw());
+      CHECK(hw && hw->internal_pullup == !ext, "motors.ext_pullup = %d: the internal pull-up of the motor pins is %s", ext, ext ? "left off" : "used"); }
+}
+
+static uint8_t est_bits(Rig& r) { T_estimate e{}; r.clear_inbox(); r.stream(STR_ESTIMATE, 50); r.run(0.1); const bool ok = r.latest(STR_ESTIMATE, e); r.stream(STR_ESTIMATE, 0); return ok ? e.valid : 0; }
+static void t_gps_alt() {
+    printf("[gps height] the GPS height and vertical velocity in the height estimate (nav.gps_alt, nav.gps_vel_z)\n");
+    { auto r = nav_rig([](wbp::Settings&, VirtualBoard& b) { b.has_baro = false; }, false); VirtualBoard& b = r->board; r->run(6.0);
+      b.rc[5] = 2000; b.rc[6] = 2000; r->run(0.3);
+      CHECK((r->tel().health & HEALTH_GPS) && !(r->tel().health & HEALTH_BARO) && r->tel().blockers == 0, "no barometer, a GPS fix, the Altitude Hold switch on: arming is allowed - the GPS height stands in (blockers 0x%x)", r->tel().blockers);
+      nav_takeoff(*r, 0.0); b.rc[2] = 1700; for (int i = 0; i < 80 && b.plant.z < 3.0f; i++) r->run(0.1); b.rc[2] = 1500; r->run(3.0);
+      const uint8_t v = est_bits(*r); const float z0 = b.plant.z; float dev = 0; bool on = true;
+      for (int i = 0; i < 100; i++) { r->run(0.1); dev = fmaxf(dev, fabsf(b.plant.z - z0)); on &= r->tel().alt_valid; }
+      CHECK(z0 > 2.0f && (v & EST_VALID_ALT) && (v & EST_VALID_GPS_ALT) && (v & EST_VALID_GPS_VZ) && on && dev < 1.5f && r->tel().ah_state == AH_STATE_FLYING,
+            "takes off and climbs to %.1f m in Altitude Hold, stick centred: holds within %.2f m for 10 s on the GPS height and vertical velocity (valid bits 0x%x)", z0, dev, v); }
+    { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { b.has_baro = false; s.nav.gps_alt = GPS_ALT_OFF; }, false); VirtualBoard& b = r->board; r->run(6.0);
+      b.rc[5] = 2000; b.rc[6] = 2000; r->run(0.3);
+      CHECK(r->tel().blockers & ARM_BLOCKER_ALTHOLD_NO_BARO, "the same with nav.gps_alt = OFF: ALTHOLD_NO_BARO, as before"); }
+    for (int mode = GPS_ALT_FALLBACK; mode <= GPS_ALT_BLEND; mode++) {
+      auto r = nav_rig([mode](wbp::Settings& s, VirtualBoard&) { s.nav.gps_alt = (uint8_t)mode; }, false); VirtualBoard& b = r->board; r->run(6.0);
+      nav_takeoff(*r, 2.0); r->run(5.0); const uint8_t v = est_bits(*r);
+      if (mode == GPS_ALT_FALLBACK) CHECK((v & EST_VALID_ALT) && (v & EST_VALID_GPS_VZ) && !(v & EST_VALID_GPS_ALT) && b.plant.z > 0.5f, "with a barometer (FALLBACK, the default): the GPS vertical velocity is used, its height is not (valid 0x%x, %.1f m up)", v, b.plant.z);
+      else CHECK((v & EST_VALID_ALT) && (v & EST_VALID_GPS_VZ) && (v & EST_VALID_GPS_ALT), "BLEND: the GPS height corrects the barometer as well (valid 0x%x)", v); }
+    { auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.nav.gps_vel_z = 0; }, false); r->run(6.0); nav_takeoff(*r, 2.0); r->run(3.0);
+      CHECK(!(est_bits(*r) & EST_VALID_GPS_VZ), "nav.gps_vel_z off: the GPS vertical velocity is left out"); }
+}
+
 int main() {
     if (const char* only = getenv("WB_ONLY")) {            // one group alone (while working on it): WB_ONLY=nav ./build/test_fw
         if (!strcmp(only, "nav")) { t_nav_flow(); t_nav_mounting(); t_nav_uarts(); }
@@ -1992,6 +2038,8 @@ int main() {
         if (!strcmp(only, "frames")) t_frames();
         if (!strcmp(only, "ports")) t_ports();
         if (!strcmp(only, "gpsbaud")) t_gps_baud();
+        if (!strcmp(only, "gpsalt")) t_gps_alt();
+        if (!strcmp(only, "rxdiag")) t_rx_diag();
         printf("%d checks, %d failed (only '%s')\n", g_pass + g_fail, g_fail, only); return 1;
     }
     t_boot();
@@ -2025,6 +2073,8 @@ int main() {
     t_frames();
     t_ports();
     t_gps_baud();
+    t_gps_alt();
+    t_rx_diag();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

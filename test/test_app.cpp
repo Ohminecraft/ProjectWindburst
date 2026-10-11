@@ -207,6 +207,24 @@ static void t_tx_queue() {
       CHECK(qn.write(b.data(), b.size()) == 0 && g_waits == 0 && qn.frames_lost() == 1, "without a way to wait: given up at once");
       g_wait_port = nullptr; }
     { FakePort p(100, 100); app::QueuedTransport q(p, 23040); CHECK(q.bytes_per_second() == 23040, "the link's capacity is passed on (for the live log's rate)"); }
+    { // USB Serial/JTAG after a hiccup: its ring is full and nothing drains it until somebody writes (the core re-arms its
+      // interrupt in write()). The queue only writes when there is room: without the kick it would wait for ever.
+      struct StuckUsb : app::RawPort {
+          size_t cap = 256, held = 256; bool armed = false; uint32_t now = 0; std::vector<uint8_t> wire; app::StallKick kick; int puts = 0;
+          size_t room() override { return kick.room((int)(cap - held), now); }
+          size_t put(const uint8_t* d, size_t n) override { puts++; armed = true; const size_t k = n < cap - held ? n : cap - held; wire.insert(wire.end(), d, d + k); held += k; return k; }
+          void ms() { now++; if (armed) held = held > 64 ? held - 64 : 0; }
+      };
+      for (int on = 0; on < 2; on++) {
+          StuckUsb u; u.kick.after_ms = on ? 50 : 0; app::QueuedTransport q(u, 0);
+          std::vector<uint8_t> f(300); for (size_t i = 0; i < f.size(); i++) f[i] = (uint8_t)(i * 7);
+          q.write(f.data(), f.size());
+          for (int t = 0; t < 1000 && q.queued(); t++) { u.ms(); q.pump(); }
+          if (!on) CHECK(q.queued() == f.size() && u.puts == 0, "a full USB ring that nothing drains, no kick: the link is dead for good (the app's 'firmware does not answer')");
+          else CHECK(q.queued() == 0 && u.wire == f && u.kick.kicks == 1 && u.now >= 50 && u.now < 60, "with the kick: after 50 ms one byte is offered, the port starts draining, every byte arrives once and in order (%u ms, %u kick)", u.now, u.kick.kicks);
+      }
+      app::StallKick k; k.after_ms = 50;
+      CHECK(k.room(10, 0) == 10 && k.room(0, 49) == 0 && k.room(0, 50) == 1 && k.room(0, 60) == 0 && k.room(0, 100) == 1 && k.kicks == 2, "a kick every 50 ms while the port takes nothing, never sooner"); }
 }
 
 static void t_gate() {

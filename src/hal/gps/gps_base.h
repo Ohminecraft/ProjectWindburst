@@ -7,6 +7,7 @@
 #include <Arduino.h>
 #include <HardwareSerial.h>
 #include "gps_engine.h"
+#include "../serial_block.h"
 #include "gps_nav.h"
 #include "../../config/hardware_config.h"
 
@@ -26,17 +27,18 @@
 class ArduinoGpsPort : public gps::Port {
 public:
     void attach(HardwareSerial& s, int rx, int tx) { s_ = &s; rx_ = rx; tx_ = tx; started_ = false; }
-    int read() override { return s_ && s_->available() ? s_->read() : -1; }
+    int read() override { return s_ ? in_.get(*s_) : -1; }                 // (in blocks: serial_block.h)
     void write(const uint8_t* d, size_t n) override { if (s_) s_->write(d, n); }
     void set_baud(uint32_t baud) override {
         if (!s_) return;
         if (!started_) { s_->setRxBufferSize(1024); s_->begin(baud, SERIAL_8N1, rx_, tx_); started_ = true; }
         else { s_->flush(); s_->updateBaudRate(baud); }
         while (s_->available()) s_->read();                      // bytes received at the old rate are garbage now
+        in_.clear();
     }
     bool tx_empty() override { return true; }                    // our frames are < 100 bytes and the TX ring is 256: write() never blocks
 private:
-    HardwareSerial* s_ = nullptr; int rx_ = -1, tx_ = -1; bool started_ = false;
+    HardwareSerial* s_ = nullptr; int rx_ = -1, tx_ = -1; bool started_ = false; SerialBlock<64> in_;
 };
 
 class GpsSensor {

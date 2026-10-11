@@ -164,8 +164,8 @@ class PtyPort:
                 if self.chatter and time.monotonic() - last > self.period:
                     last = time.monotonic()
                     os.write(self.master, self.chatter)
-            except OSError:
-                if not self.alive:
+            except (OSError, TypeError):                         # (TypeError: the port was closed under us - master is None now)
+                if not self.alive or self.master is None:
                     return
                 time.sleep(0.02)
 

@@ -11,7 +11,7 @@
 // Two functions on one GPIO is never right, and some combinations are dangerous: an ADC or a buzzer configured on a motor's pin
 // silently takes the pin away from the ESC signal - that motor then stays off when the craft arms. The firmware refuses to arm
 // with such a pin map (arming blocker PIN_CONFLICT) and names the two functions in the boot report.
-// Also: pins the ESP32-S3 module needs for itself (flash 26..32, octal PSRAM 35..37 on "R8" modules, and 19 / 20 when the app
+// Also: pins the ESP32-S3 module needs for itself (flash 26..32, octal PSRAM 35..37 on "R8" modules, and 19 / 20 when the app 
 // link is the chip's USB).
 // Portable.
 // ============================================================================

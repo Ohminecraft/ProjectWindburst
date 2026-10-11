@@ -241,10 +241,12 @@ private:
     struct RcUart : StubUartDevice {
         VirtualBoard* b = nullptr; std::deque<uint8_t> q; uint32_t baud = 0, format = 0; bool inverted = false; std::vector<uint8_t> sent;     // sent: what the firmware wrote (telemetry)
         int dev_read() override { if (q.empty()) return -1; const uint8_t c = q.front(); q.pop_front(); return c; }
+        int dev_pending() override { return (int)q.size(); }
         void dev_write(const uint8_t* d, size_t n) override { sent.insert(sent.end(), d, d + n); }
         void dev_config(uint32_t bd, uint32_t f, bool inv) override { baud = bd; format = f; inverted = inv; }
     } rc_uart;
 public:
+    int rc_corrupt = 0;                                   // this many of the next CRSF frames arrive with one byte damaged
     uint32_t rc_uart_baud() const { return rc_uart.baud; }
     std::vector<uint8_t>& rc_uart_sent() { return rc_uart.sent; }
 
@@ -299,6 +301,7 @@ private:
         std::vector<uint8_t> f; f.push_back(0xC8); f.push_back((uint8_t)(n + 2)); f.push_back(type);
         for (size_t i = 0; i < n; i++) f.push_back(payload[i]);
         f.push_back(crc8(f.data() + 2, n + 1));
+        if (rc_corrupt > 0 && f.size() > 4) { f[4] ^= 0x55; rc_corrupt--; }      // a byte hit by noise: the checksum no longer fits
         for (uint8_t c : f) rc_uart.q.push_back(c);
     }
     void send_crsf_channels() {

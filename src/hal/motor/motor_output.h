@@ -38,6 +38,7 @@ struct MotorConfig {
     uint16_t pulse_hz = 0;                          // 0 = protocol default
     bool bidirectional = false;                     // bidirectional DShot (eRPM telemetry)
     uint8_t dshot_driver = 0;                       // 0 = direct RMT (needed for bidirectional), 1 = ESP-IDF RMT driver (one-way)
+    bool ext_pullup = false;                        // bidirectional DShot: pull-up resistors on the board, the pins' own pull-up stays off
     uint8_t pole_count = 14;                        // motor poles (magnets), for eRPM -> rpm
     bool edt = false;                               // extended telemetry (voltage/current/temperature) decoding
     bool dir_cmd_extended = false;                  // false: 7/8 (BLHeli_S/32, Bluejay)  true: 20/21 (extended, AM32)

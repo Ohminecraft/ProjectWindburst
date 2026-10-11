@@ -5,6 +5,7 @@
 | `docs/HANDOFF.md` | tiến trình, quy ước bắt buộc, cách build/test, việc tiếp theo |
 | **`docs/HARDWARE_FEEDBACK_1.md`** | lần chạy đầu trên mạch thật (bản 0.5): từng hiện tượng → nguyên nhân → đã sửa gì → còn phải xem gì trên mạch; bảng đổi "Hướng chip IMU"; `IRAM_ATTR` |
 | **`docs/HARDWARE_FEEDBACK_2.md`** | log đầu tiên từ mạch thật (bản 0.6.1): vì sao motor lệch nhau khi thử không cánh, cột PID trong log bị kẹp, vòng lặp 83 % → quỹ thời gian của task bay, thời gian từng khâu trong log |
+| **`docs/HARDWARE_FEEDBACK_3.md`** | DShot hai chiều với 0.8.2 trên mạch thật: ESC không nhận khung nào, 0 trả lời; giả thuyết dây bị kéo xuống khi nhả chân → 0.8.4 giữ dây cao sau cửa sổ trả lời, đo mức dây, đọc lại khung khi đang chạy |
 | `docs/FIRMWARE.md` | `main.cpp`, `FlightApp`, ba luồng (task bay / cảm biến / link), mạch ảo + `wb_sim`, bảng kiểm chứng |
 | `docs/PROTOCOL.md` | giao thức app ↔ firmware (WBP): khung, settings, stream, lệnh, quy tắc an toàn |
 | `docs/APP.md` | configurator đồ họa (13 tab), thư viện client Python, dòng lệnh |

@@ -18,7 +18,7 @@
 #endif
 #define WB_FW_MAJOR 0
 #define WB_FW_MINOR 8
-#define WB_FW_PATCH 2
+#define WB_FW_PATCH 7
 
 #if defined(_WINDBURST_TX)
 
@@ -58,6 +58,9 @@ void setup() {
     Serial.setTxBufferSize(2048);                        // (the queue in front of it is SerialTransport's own, 8 kB)
 #endif
     Serial.begin(WB_LINK_BAUD);
+#if WB_LINK_KICK
+    Serial.setTxTimeoutMs(0);                            // a write to the USB port never waits (link_arduino.h: StreamPort)
+#endif
 
     // 1. settings: a missing / resized / corrupted section falls back to its defaults, the others are kept
     const bool nvs_ok = nvs.begin();
@@ -99,6 +102,13 @@ void setup() {
     else snprintf(line, sizeof(line), "loop: FAILED to start the flight task - the control cycle shares its thread with the sensors (slower)");
     flight.add_report(line);
 
+    {   // why the chip started: a reset in flight (watchdog, crash, brown-out) shows here the next time the app connects
+        const esp_reset_reason_t r = esp_reset_reason();
+        const char* why = r == ESP_RST_POWERON ? "power on" : r == ESP_RST_SW ? "software restart" : r == ESP_RST_PANIC ? "CRASH (panic)" : r == ESP_RST_INT_WDT ? "CRASH (interrupt watchdog)"
+                        : r == ESP_RST_TASK_WDT ? "CRASH (task watchdog)" : r == ESP_RST_WDT ? "CRASH (watchdog)" : r == ESP_RST_BROWNOUT ? "BROWN-OUT (supply voltage dropped)"
+                        : r == ESP_RST_EXT ? "reset pin" : r == ESP_RST_DEEPSLEEP ? "deep sleep" : r == ESP_RST_USB ? "USB (the port's reset line)" : r == ESP_RST_JTAG ? "JTAG" : "unknown";
+        snprintf(line, sizeof(line), "reset: %s", why); flight.add_report(line);
+    }
     if (WB_LINK_BYTES_PER_S) snprintf(line, sizeof(line), "link: %s, %lu bytes/s (the live log is slowed down to fit)", WB_LINK_KIND, (unsigned long)WB_LINK_BYTES_PER_S);
     else snprintf(line, sizeof(line), "link: %s", WB_LINK_KIND);
     flight.add_report(line);

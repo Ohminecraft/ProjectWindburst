@@ -59,9 +59,9 @@ public:
     static constexpr int kMaxCh = 4;
     typedef void (*AlarmFn)(void*);
 
-    bool begin(const uint8_t* pins, int count, bool bidir, motor::Protocol proto, AlarmFn fn, void* arg) {
+    bool begin(const uint8_t* pins, int count, bool bidir, motor::Protocol proto, AlarmFn fn, void* arg, bool pullup = true) {
         end();
-        count_ = count; bidir_ = bidir; fn_ = fn; arg_ = arg;
+        count_ = count; bidir_ = bidir; fn_ = fn; arg_ = arg; pullup_ = pullup;
         for (uint32_t hz : {80000000u, 40000000u}) {                     // finer ticks first (DShot1200 needs ~12 ns)
             if (create(pins, hz, proto)) return true;
             end();
@@ -191,7 +191,8 @@ private:
                 rmt_ll_rx_set_idle_thres(&RMT, r, idle_ticks);
                 rmt_ll_rx_set_mem_owner(&RMT, r, RMT_LL_MEM_OWNER_HW);
                 rmt_ll_rx_enable(&RMT, r, false);
-                gpio_pullup_en((gpio_num_t)pin_[c]);                        // the line idles high while the ESC has it
+                if (pullup_) gpio_pullup_en((gpio_num_t)pin_[c]);           // the line idles high while the ESC has it
+                else gpio_pullup_dis((gpio_num_t)pin_[c]);                  // (resistors on the board do that: motors.ext_pullup)
                 drive(c);
             }
         }
@@ -216,7 +217,7 @@ private:
     uint32_t iomux_[kMaxCh] = {}; uint16_t tx_sig_[kMaxCh] = {}, rx_sig_[kMaxCh] = {};
     gptimer_handle_t timer_ = nullptr;
     AlarmFn fn_ = nullptr; void* arg_ = nullptr;
-    int count_ = 0; bool bidir_ = false; uint32_t tick_hz_ = 80000000;
+    int count_ = 0; bool bidir_ = false, pullup_ = true; uint32_t tick_hz_ = 80000000;
     const char* fail_step_ = ""; esp_err_t fail_err_ = ESP_OK;
 };
 #endif // WB_DSHOT_DIRECT
@@ -227,6 +228,7 @@ public:
 
     ~DshotHw() override { end(); }
     void set_driver(uint8_t d) override { want_ = d == DRV_IDF ? DRV_IDF : DRV_DIRECT; }
+    void set_pullup(bool internal) override { pullup_ = internal; }
     const char* name() const override {
         const char* base = proto_ == motor::PROTO_PROSHOT1000 ? (drv_ == DRV_IDF ? "ProShot1000/RMT IDF" : "ProShot1000/RMT direct")
                          : drv_ == DRV_IDF ? (wanted_bidir_ ? "DShot/RMT IDF (one-way only)" : "DShot/RMT IDF")
@@ -268,7 +270,7 @@ public:
             if (bidir_) {
                 // bidirectional: set up, then prove on the board that every pin carries the frames and is heard by its receiver.
                 // Anything wrong: one-way DShot instead (the motors must still spin and beep), and the boot report says why.
-                if (port_.begin(pins, count, true, proto, on_alarm, this) && direct_.begin(port_, count, proto, true)) {
+                if (port_.begin(pins, count, true, proto, on_alarm, this, pullup_) && direct_.begin(port_, count, proto, true)) {
                     for (int c = 0; c < count; c++) {
                         int words = 0; const uint16_t want = motor::dshot_packet(0, false, true);
                         const uint32_t seen = direct_.loopback(c, 0, words);
@@ -278,7 +280,7 @@ public:
                         else snprintf(note_, sizeof(note_), "bidirectional OFF: start-up check, motor %d sent 0x%04x, heard 0x%04x", c + 1, (unsigned)want, (unsigned)seen);
                         break;
                     }
-                    if (!note_[0]) { snprintf(note_, sizeof(note_), "start-up check OK on %d pin%s", count, count == 1 ? "" : "s"); return true; }
+                    if (!note_[0]) { snprintf(note_, sizeof(note_), "start-up check OK on %d pin%s, %s pull-up", count, count == 1 ? "" : "s", pullup_ ? "internal" : "external"); return true; }
                 } else snprintf(note_, sizeof(note_), "bidirectional OFF: %s failed (%s)", port_.failStep(), esp_err_to_name(port_.failErr()));
                 port_.end(); bidir_ = false;
             }
@@ -379,6 +381,6 @@ private:
     motor::Protocol proto_ = motor::PROTO_DSHOT300;
     Driver want_ = DRV_DIRECT, drv_ = DRV_DIRECT;
     char note_[100] = {}; mutable char name_[140] = {};
-    int count_ = 0; bool bidir_ = false, wanted_bidir_ = false, started_ = false;
+    int count_ = 0; bool bidir_ = false, wanted_bidir_ = false, started_ = false, pullup_ = true;
     uint32_t tick_hz_ = 80000000, cycle_us_ = 100, t_tx_ = 0, frames_ = 0, skipped_ = 0;
 };

@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 #include "gps_types.h"
 
 // ============================================================================
@@ -92,6 +93,10 @@ private:
         if (f[2][0] == 'V') { return; }                          // void: no valid navigation data
         sol.ground_speed_cms = (uint16_t)((int64_t)fixed(f[7], 100) * 5144 / 10000);     // knots -> cm/s (1 kn = 51.444 cm/s)
         if (f[8][0]) { int32_t c = fixed(f[8], 10); if (c < 0) c += 3600; sol.course_ddeg = (uint16_t)(c % 3600); }
+        // north / east velocity from the speed and the course over the ground (UBX gives them directly; the horizontal estimator
+        // and Position Hold need them). Below 0.5 knot the course means nothing, but the velocity is about 0 then anyway.
+        { const float r = sol.course_ddeg * (3.14159265f / 1800.0f), v = (float)sol.ground_speed_cms;
+          sol.vel_n_cms = (int16_t)lroundf(v * cosf(r)); sol.vel_e_cms = (int16_t)lroundf(v * sinf(r)); sol.vel_d_cms = 0; sol.has_vel_d = false; }
         const char* tm = f[1]; const char* dt = f[9];
         if (strlen(tm) >= 6 && strlen(dt) >= 6) {
             sol.date.hour = (uint8_t)((tm[0] - '0') * 10 + tm[1] - '0'); sol.date.minute = (uint8_t)((tm[2] - '0') * 10 + tm[3] - '0'); sol.date.second = (uint8_t)((tm[4] - '0') * 10 + tm[5] - '0');

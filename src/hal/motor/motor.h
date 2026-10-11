@@ -44,7 +44,7 @@ public:
         mgr_.begin(dt_s);
         hw_ = motor::is_dshot(c.protocol) ? static_cast<MotorHw*>(&dshot_) : static_cast<MotorHw*>(&pulse_);
         // the hardware slot order is the pin order: slot k -> pins[k]
-        hw_->set_driver(c.dshot_driver);
+        hw_->set_driver(c.dshot_driver); hw_->set_pullup(!c.ext_pullup);
         if (motor::is_dshot(c.protocol) && c.count > kMaxDigitalMotors) { ok_ = false; return false; }      // (the same rule on a PC as on the chip)
         ok_ = hw_->begin(pins, c.count, c.protocol, mgr_.pulse_hz(), c.bidirectional && motor::is_dshot_wire(c.protocol));
         if (ok_) { motor::Frame f; float z[8] = {}; mgr_.update(0, z, false, f); hw_->write(f); }   // drive the disarmed level immediately

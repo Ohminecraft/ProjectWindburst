@@ -42,7 +42,7 @@ public:
     bool start(FlightApp& app, int priority = 20) {
         app_ = &app;
         app.set_sync(&sync_);
-        if (xTaskCreatePinnedToCore(&FlightTask::entry, "wb_flight", 12288, this, priority, &task_, xPortGetCoreID()) != pdPASS) return false;
+        if (xTaskCreatePinnedToCore(&FlightTask::entry, "wb_flight", 24000, this, priority, &task_, xPortGetCoreID()) != pdPASS) return false;
         gptimer_config_t gc = {};
         gc.clk_src = GPTIMER_CLK_SRC_DEFAULT;
         gc.direction = GPTIMER_COUNT_UP;

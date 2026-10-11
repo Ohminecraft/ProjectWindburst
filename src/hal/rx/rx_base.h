@@ -26,6 +26,12 @@
 // The pulse interrupt only stores the time of the edge (rx::EdgeRing); update() decodes. An interrupt that comes late (another
 // interrupt, a flash write with the cache off) only shifts a pulse by microseconds, or loses a frame that is then skipped.
 // Not implemented: NRF24 (begin() refuses it with a clear reason).
+//
+// Serial: a 2 kB receive buffer (48 ms of CRSF at full speed, so a sensor thread that is held up does not lose bytes), the
+// hardware FIFO handed to it every 64 bytes (the driver's default at these rates is 120 of 128: 190 us of slack for its
+// interrupt), and read in blocks of 128 bytes, up to 2 kB per update() (0.8.7: one read() per byte was what fell behind). What still goes wrong is counted: uartOverflows() (bytes the driver had no room
+// for - the firmware did not read in time) and uartLineErrors() (framing / parity errors - noise on the wire, wrong baud),
+// next to frameErrors() (frames the decoder threw away). The Receiver tab shows all three per second.
 // ============================================================================
 class RcReceiver {
 public:
@@ -44,8 +50,14 @@ public:
         }
         if (rx_pin == 255) { dec_ = nullptr; fail_ = "receiver RX pin not set (app: Pins tab, or hardware_config.h)"; return false; }
         uart_ = &uart;
-        uart.setRxBufferSize(512);                            // 1 ms of CRSF at 420 kbaud is 42 bytes; room for a stalled loop
+        uart.setRxBufferSize(kRxBuffer);                      // 1 ms of CRSF at 420 kbaud is 42 bytes; room for a stalled loop
         uart.begin(dec_->baud(), dec_->even_parity_2stop() ? SERIAL_8E2 : SERIAL_8N1, rx_pin, tx_pin == 255 ? -1 : tx_pin, dec_->inverted());
+        uart.setRxFIFOFull(64);
+        g_uart_ovf = 0; g_uart_line = 0;
+        uart.onReceiveError([](hardwareSerial_error_t e) {        // (Arduino's serial event task: core 0, low priority - platformio.ini)
+            if (e == UART_BUFFER_FULL_ERROR || e == UART_FIFO_OVF_ERROR) g_uart_ovf = g_uart_ovf + 1;
+            else if (e == UART_FRAME_ERROR || e == UART_PARITY_ERROR) g_uart_line = g_uart_line + 1;
+        });
         dec_->reset();
         kind_ = K_SERIAL; tx_ok_ = tx_pin != 255; proto_ = proto;
         return true;
@@ -80,9 +92,15 @@ public:
     bool update(uint32_t now_us, uint32_t now_ms) {
         bool got = false; rx::Frame f;
         if (kind_ == K_SERIAL) {
-            int budget = 256;
-            while (budget-- > 0 && uart_->available()) {
-                if (dec_->feed((uint8_t)uart_->read(), now_us, f)) { link_.on_frame(f, now_ms); got = true; }
+            // in blocks (serial_block.h): one read() per byte costs several microseconds on Arduino-ESP32 3.x - at 500 Hz CRSF that was
+            // enough to fall behind the receiver
+            uint8_t buf[128]; size_t total = 0;
+            while (total < 2048) {
+                int a = uart_->available(); if (a <= 0) break;
+                if (a > (int)sizeof(buf)) a = (int)sizeof(buf);
+                const size_t n = uart_->read(buf, (size_t)a); if (!n) break;
+                for (size_t i = 0; i < n; i++) if (dec_->feed(buf[i], now_us, f)) { link_.on_frame(f, now_ms); got = true; }
+                total += n;
             }
         } else if (kind_ == K_PPM || kind_ == K_PWM) {
             rx::Edge e; int budget = 256;                     // (PPM: 9 edges a frame; PWM: 16)
@@ -105,12 +123,16 @@ public:
     const uint16_t* channels() const { return link_.channels(); }
     uint16_t rateHz() const { return link_.rate_hz(); }
     uint8_t linkQuality() const { return kind_ == K_SERIAL ? dec_->link_quality() : 0; }
+    uint32_t uartOverflows() const { return kind_ == K_SERIAL ? g_uart_ovf : 0; }     // receive buffer / FIFO overflow events since begin()
+    uint32_t uartLineErrors() const { return kind_ == K_SERIAL ? g_uart_line : 0; }   // framing / parity errors since begin()
     uint32_t frameErrors() const { return kind_ == K_SERIAL ? dec_->errors() : kind_ == K_PPM ? ppm_.errors() + ring_.lost() : kind_ == K_PWM ? pwm_.errors() + ring_.lost() : 0; }
     const char* name() const { return kind_ == K_SERIAL ? dec_->name() : kind_ == K_PPM ? "PPM" : kind_ == K_PWM ? "PWM" : "none"; }
     int ppmChannels() const { return kind_ == K_PPM ? ppm_.channels() : 0; }      // learnt from the frames, 0 = not yet
     const char* failReason() const { return fail_; }
 
 private:
+    static constexpr size_t kRxBuffer = 2048;
+    static inline volatile uint32_t g_uart_ovf = 0, g_uart_line = 0;      // (one receiver per firmware)
     enum Kind : uint8_t { K_NONE, K_SERIAL, K_PPM, K_PWM };
     struct Ctx { RcReceiver* self; uint8_t input, pin; };
     static void WB_FAST on_edge(void* arg) {                  // the GPIO interrupt: the time and the level, nothing else

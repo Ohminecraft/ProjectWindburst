@@ -49,6 +49,7 @@ struct Solution {
     uint16_t ground_speed_cms = 0, speed3d_cms = 0;
     uint16_t course_ddeg = 0;                // 0..3599
     int16_t vel_n_cms = 0, vel_e_cms = 0, vel_d_cms = 0;   // NED
+    bool has_vel_d = false;                  // vel_d_cms is measured (u-blox NAV-PVT / VELNED); NMEA has no vertical velocity
     uint16_t pdop = 0, hdop = 0, vdop = 0;   // x100
     uint32_t h_acc_mm = 0, v_acc_mm = 0, s_acc_mm = 0, head_acc = 0;
     uint32_t time_ms = 0;                    // GPS time of week
