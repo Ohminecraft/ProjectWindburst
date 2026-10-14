@@ -381,8 +381,36 @@ class WbClient:
             self.subscribe("blackbox", 5)
         return self.wait_stream("blackbox", timeout)
 
-    def blackbox_sessions(self):
-        """[(start, size)] of the sessions stored in the flight controller's log memory, oldest first."""
+    def blackbox_claim(self):
+        """Before a download: a session that is being written on the ground (trigger ALWAYS, the BLACKBOX switch) is closed, so that
+        the list gives its final size. (Since 0.8.8 a mere look at the list leaves it running; a READ closes it - in the air it
+        stays BUSY and the download is refused.)"""
+        try:
+            if self.blackbox_status().get("state") != "LOGGING":
+                return
+        except WbError:
+            return
+        busy_until = time.monotonic() + 3.0
+        while True:
+            try:
+                self.command("BLACKBOX_READ", offset=0, length=1)
+                break
+            except WbError as e:
+                if e.name == "ARMED":                                # a flight is being logged: it is not cut short
+                    raise WbError("BUSY", "a flight is being logged") from e
+                if e.name != "BUSY" or time.monotonic() >= busy_until:
+                    raise
+                time.sleep(0.1)
+        try:
+            self.command("BLACKBOX_READ", offset=0, length=0)       # (the one byte is not wanted)
+        except WbError:
+            pass
+
+    def blackbox_sessions(self, final=False):
+        """[(start, size)] of the sessions stored in the flight controller's log memory, oldest first. final: close a session that is
+        being written first (blackbox_claim), so that its size does not change any more - for a download."""
+        if final:
+            self.blackbox_claim()
         out = []
         busy_until = None
         while True:
@@ -456,7 +484,7 @@ class WbClient:
 
     def blackbox_download(self, index=None, progress=None):
         """One stored session (by its position in blackbox_sessions()) as .wblog bytes, or all of them when index is None."""
-        sessions = self.blackbox_sessions()
+        sessions = self.blackbox_sessions(final=True)
         if not sessions:
             return b""
         if index is None:

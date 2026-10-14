@@ -27,6 +27,7 @@
 //   sdcard put <number> <bytes>  a file wb_<number>.wblog of that size that is already on the card (the card lives in RAM: empty at every start)
 //   carry <z> <vn> <ve>          somebody holds the craft level, z m above the floor, and walks at vn / ve m/s (north / east)     carry off   puts it down
 //   wind <n> <e>                 the air moves at this speed (m/s towards north / east)
+//   linkpause <s>                the link stops sending its streams for s (simulated) seconds but still answers requests
 //   flow quality <0..255>        what the MSP flow sensor reports about the surface      flow dark 0|1   the PMW3901 sees nothing
 //   flow plug 0|1                pull / push the plug of the MSP sensor                  flow mount <deg> <mirror 0|1> <scale>   how the sensor sits on the craft
 //   gps fix 0|1                  the receiver loses / has its fix                        gps dead 0|1    the module stops talking
@@ -187,6 +188,7 @@ static std::string control(Rig& r, const std::string& line, bool& quit) {
                  (double)r.board.plant.pn, (double)r.board.plant.pe, (double)r.board.plant.vn, (double)r.board.plant.ve);
         return out;
     }
+    if (!strcmp(cmd, "linkpause") && sscanf(line.c_str(), "%*s %lf", &a) == 1 && a >= 0 && a <= 30) { r.streams_off_until_ms = millis() + (uint32_t)(a * 1000.0); return "ok"; }   // streams stop, requests are still answered
     if (!strcmp(cmd, "quit")) { quit = true; return "ok"; }
     return "err unknown command";
 }

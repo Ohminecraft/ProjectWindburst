@@ -26,6 +26,8 @@
 // The flight loop is involved only through the Recorder (queue + two atomics).
 //
 // Rules for the two destinations (the spec: "connected to the app -> stop storing, stream instead"):
+//   * listing the sessions never stops a recording (the one being written is listed with its size so far); a DOWNLOAD closes it on
+//     the ground, and a session of the BLACKBOX switch then starts again only after the switch was flipped off and on (0.8.8).
 //   * the app asks for the stream (BLACKBOX_STREAM). On the ground a running storage session is closed and the stream starts.
 //     In the air the storage session is NOT cut: the request is refused with BUSY until the craft is disarmed.
 //   * while the app streams, no storage session starts. When the stream ends (the app says so, or it has been silent for 3 s -
@@ -94,7 +96,10 @@ public:
             if (!cur_->erase_step()) { rec_.set_busy(false); rec_.post_erase_done(); state_ = idle_state(); }
             return;
         }
-        const bool trigger = cfg_.device != DEV_NONE && dev_ == cfg_.device && (cfg_.trigger == TRIG_ALWAYS || (cfg_.trigger == TRIG_ARMED && in.armed) || (cfg_.trigger == TRIG_SWITCH && in.switch_on));
+        // a switch session the app closed (to download) starts again only when the pilot flips the switch off and on: before 0.8.8
+        // it started a new one by itself 3 s later, with the switch still on, and the next look at the list closed that one too
+        if (!in.switch_on) switch_held_ = false;
+        const bool trigger = cfg_.device != DEV_NONE && dev_ == cfg_.device && (cfg_.trigger == TRIG_ALWAYS || (cfg_.trigger == TRIG_ARMED && in.armed) || (cfg_.trigger == TRIG_SWITCH && in.switch_on && !switch_held_));
 
         switch (state_) {
         case ST_LOGGING:
@@ -142,13 +147,16 @@ public:
             const bool enable = a[0] != 0; const uint16_t rate = (uint16_t)(a[1] | (a[2] << 8));
             if (!enable) { stream_wanted_ = false; return wbp::ERR_OK; }
             if (state_ == ST_ERASING || (state_ == ST_LOGGING && armed_)) return wbp::ERR_BUSY;       // a flight log is not cut short
-            if (state_ == ST_LOGGING && !closing_) begin_close(END_APP_TOOK_OVER);
+            if (state_ == ST_LOGGING && !closing_) begin_close(END_APP_TOOK_OVER);      // (when the stream ends, the switch records again by itself)
             stream_wanted_ = true; stream_rate_ = rate;
             return wbp::ERR_OK; }
         case wbp::CMD_BLACKBOX_SESSION: {
             const int i = a[0] | (a[1] << 8);
             if (!cur_->ok()) return wbp::ERR_NO_SENSOR;
-            if (const wbp::Err e = free_for_reading()) return e;
+            // Listing does not stop a recording (0.8.8): the session being written is in the list with the size it has now.
+            // Only a download (BLACKBOX_READ) closes it - on the ground; in the air the flight log wins.
+            if (state_ == ST_ERASING) return wbp::ERR_BUSY;
+            if (state_ != ST_LOGGING) { read_hold_ms_ = now_ms_; reading_held_ = true; }
             if (i >= cur_->listed()) return wbp::ERR_BAD_ARG;
             const uint32_t st = cur_->session_start(i), sz = cur_->session_size(i);
             memcpy(result, &st, 4); memcpy(result + 4, &sz, 4); rlen = 8;
@@ -190,7 +198,7 @@ private:
         if (state_ == ST_ERASING) return wbp::ERR_BUSY;
         if (state_ == ST_LOGGING) {
             if (armed_) return wbp::ERR_BUSY;
-            if (!closing_) begin_close(END_APP_TOOK_OVER);
+            if (!closing_) { begin_close(END_APP_TOOK_OVER); if (cfg_.trigger == TRIG_SWITCH) switch_held_ = true; }
             read_hold_ms_ = now_ms_; reading_held_ = true;
             return wbp::ERR_BUSY;                                    // closed within a few milliseconds: the app asks again
         }
@@ -360,6 +368,7 @@ private:
     Config cfg_; State state_ = ST_OFF;
     ExtraFn extra_ = nullptr; void* extra_ctx_ = nullptr; float loop_hz_ = 4000.0f; uint8_t motors_ = 4;
     bool stream_wanted_ = false, closing_ = false, end_written_ = false, out_droppable_ = false, armed_ = false;
+    bool switch_held_ = false;                       // see poll(): the switch must go off before it starts a session again
     uint8_t close_reason_ = 0, hdr_seq_ = 0, data_seq_ = 0, blob_seq_ = 0; uint16_t close_polls_ = 0;
     uint16_t stream_rate_ = 0, pay_n_ = 0, out_n_ = 0, rate_hz_ = 0;
     uint32_t now_ms_ = 0, flush_ms_ = 0, frame_ms_ = 0, sec_ms_ = 0, sec_fast_ = 0, sec_bytes_ = 0, byte_rate_ = 0, dropped_seen_ = 0, stream_dropped_ = 0, session_no_ = 0;

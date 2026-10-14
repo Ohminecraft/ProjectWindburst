@@ -5,6 +5,7 @@ import { LAYOUTS, motorCount } from '../gfx/fwmath.js';
 import { ENUM_LABELS } from '../labels.js';
 import { scope } from '../gfx/scope.js';
 import { tr } from '../i18n.js';
+import { api } from '../api.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 function s(tag, attrs, ...kids) {
@@ -230,9 +231,25 @@ export default {
         block('ESC', fields('motors', ['protocol', 'idle_x10', 'output_limit']), tooMany, pulse, dshot,
           note(tr('Kiểu khung, giao thức ESC và thứ tự motor có hiệu lực sau khi lưu và khởi động lại. DShot qua RMT của ESP32-S3 chạy được tối đa 4 motor.'))),
         perMotor(),
+        escToolBlock(),
         servos())));
   },
 };
+
+// ESC passthrough: the ESC tools (BLHeliSuite32, ESC Configurator, AM32 Configurator) on this same port, after this app has let go of it.
+function escToolBlock() {
+  const btn = h('button', { type: 'button', class: 'btn', id: 'esc-tool-mode' }, tr('Nhả cổng cho BLHeliSuite32'));
+  const msg = h('div', { id: 'esc-tool-result' });
+  btn.addEventListener('click', async () => {
+    try {
+      await api.post('/api/disconnect');
+      msg.replaceChildren(h('p', { class: 'note ok' }, tr('Xong. App đã nhả cổng: mở BLHeliSuite32 / ESC Configurator trên cổng này rồi bấm Connect.')));
+    } catch (e) { showError(e); }
+  });
+  return block(tr('Cấu hình ESC (BLHeliSuite32, ESC Configurator)'),
+    h('p', { class: 'help', id: 'esc-passthrough-help' }, tr('Firmware có ESC passthrough như Betaflight. Cắm pin, tháo cánh, bấm nút dưới (app sẽ tự ngắt kết nối), rồi mở BLHeliSuite32 / ESC Configurator / AM32 Configurator trên cùng cổng và bấm Connect. Motor ngừng phát trong lúc đó; bấm Disconnect trong công cụ thì firmware tự khởi động lại. Không làm được khi đang ARM.')),
+    h('div', { class: 'btn-row' }, btn), msg);
+}
 
 // Servos: each follows one RC channel. Live settings; the pins are on the Pins tab.
 function servos() {

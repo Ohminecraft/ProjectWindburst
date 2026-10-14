@@ -45,9 +45,9 @@ struct Firmware {
     // logmem: the flash region of the blackbox (nullptr = a board whose partition table has none)
     // sdcard: the SD card socket (nullptr = a board without one)
     Firmware(VirtualBoard& b, wbp::Storage& st, wbp::Transport& tx, bb::BlockStore* logmem, bb::FileStore* sdcard = nullptr, uint32_t card_buffer_bytes = 512 * 1024)
-        : store(st), host(app.link, &Firmware::wait, this, &Firmware::now), server(settings, &store, host, tx, wbp::ROLE_RX, 0, 8, 7, "Windburst RX (sim)",
+        : store(st), host(app.link, &Firmware::wait, this, &Firmware::now), server(settings, &store, host, tx, wbp::ROLE_RX, 0, 9, 5, "Windburst RX (sim)",
                                                                                  wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER),
-          blackbox(app.blackbox, tx), bb_header{&settings, "Windburst RX (sim)", 0, 8, 7}, board(b) {
+          blackbox(app.blackbox, tx), bb_header{&settings, "Windburst RX (sim)", 0, 9, 5}, board(b) {
         load = store.load(settings);
         app.usb_link = g_rig_usb_link;
         app.uart0 = g_rig_usb_link ? &Serial0 : nullptr;       // as main.cpp: with the app on USB, UART0 is free for a sensor
@@ -114,20 +114,21 @@ struct Rig {
         { const bool was = g_rig_usb_link; g_rig_usb_link = was || usb_link;
           fw.reset(new Firmware(board, flash, tx, has_logmem ? &logmem : nullptr, has_sdcard ? &sdcard : nullptr, card_buffer_bytes));
           g_rig_usb_link = was; }
-        boots++; last_ms_ = millis();
+        boots++; last_ms_ = millis(); fw->host.set_boot_id(0x5EED0000u + (uint32_t)boots);
     }
     FlightApp& app() { return fw->app; }
     const app::Telemetry& tel() { return fw->app.telemetry(); }
 
     // Advance the whole system. The server ticks every millisecond like the link task; a firmware-requested restart reboots it.
     uint32_t step_us = 250;             // time between two calls of the firmware's loop (250 = the loop gets its 4 kHz; more = a board that is too slow)
+    uint32_t streams_off_until_ms = 0;  // a link that stops sending its streams for a while (but still answers): the app must not call it a restart
     void run(double seconds) {
         const uint64_t n = (uint64_t)(seconds * 1e6 / step_us + 0.5);
         for (uint64_t i = 0; i < n; i++) {
             board.step(fw->app, step_us);
             const uint32_t ms = millis();
             if (ms != last_ms_) {
-                last_ms_ = ms; fw->server.tick(ms);
+                last_ms_ = ms; if ((int32_t)(ms - streams_off_until_ms) >= 0) fw->server.tick(ms);
                 // the SD writer task: a lower-priority task that runs whenever the card is not keeping it waiting
                 if (card_busy && (int32_t)(micros() - card_busy_until_us) >= 0) card_busy = false;
                 if (fw->card && !card_busy) fw->card->work(ms);

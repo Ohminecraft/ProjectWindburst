@@ -1552,7 +1552,8 @@ def test_blackbox_live_recording_on_the_page(gui, log_dir):
     assert roll == pytest.approx(20, abs=2) and pitch == pytest.approx(-10, abs=2), "the live chart shows the attitude of this moment"
     pg.mouse.move(5, 5)
     # looking back stops the following; the switch brings it back
-    att.drag(later[1] - 1.0, later[1] - 0.5); att.loaded()
+    now = att.range()                                         # (not `later`: the chart has moved on while the legend was read)
+    att.drag(now[1] - 1.0, now[1] - 0.5); att.loaded()
     held = att.range()
     assert not pg.is_checked("#log-follow input") or gui.wait(lambda: not pg.is_checked("#log-follow input"), what="follow switch off")
     time.sleep(0.8)

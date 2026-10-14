@@ -148,6 +148,7 @@ function noteText(note) {
   if (note.code === 'PORT_LOST') return tr('Mất kết nối với cổng {port} (rút cáp?)', { port: note.port });
   if (note.code === 'NOT_RESPONDING') return tr('Firmware không trả lời (đang khởi động lại, treo, hoặc mất nguồn?)');
   if (note.code === 'REBOOTED') return tr('Flight controller vừa khởi động lại');
+  if (note.code === 'STALLED') return tr('Dữ liệu từ firmware ngừng {s} giây nhưng firmware KHÔNG khởi động lại (chi tiết: tab Hệ thống, Nhật ký firmware)', { s: note.seconds });
   return note.code || '';
 }
 
@@ -263,6 +264,7 @@ async function onConn({ before }) {
   const fresh = c.connected && (!before.connected || before.boots !== c.boots || before.port !== c.port);
   if (!c.connected) { settingsReady = false; paintBar(); show(current); refreshPorts(true); return; }
   paintBar();
+  if (before.connected && (c.stalls || 0) > (before.stalls || 0)) toast(noteText(c.note), 'warn');
   if (fresh) {
     lastFailure = null;
     refreshPorts(true);                   // a page opened on an existing connection shows the port that is in use

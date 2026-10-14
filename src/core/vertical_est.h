@@ -38,6 +38,14 @@
 //     take over without a step when the barometer goes silent in flight.
 //     The reference starts again on arming (restart_gps_ref), after `gps_gap_s` without GPS, and after `gps_reref_after`
 //     rejected readings in a row (the GPS jumped: a new reference, z is not dragged).
+// Barometer rejected for good. Every reading is gated against the estimate; if the estimate itself has run away (a hard
+// landing, an accelerometer that clipped, a disarm thump) the gate rejects every reading from then on and the estimate is never
+// pulled back - z grows like a free fall until its own uncertainty covers the error, which takes minutes (seen in a log: -290 m
+// with the baro at 0, Altitude Hold unavailable for the whole next flight). So, as ArduPilot does (EKF height innovation timeout:
+// ResetHeight), after `baro_reset_s` without one accepted baro reading while readings keep coming, z is set to the barometer
+// (minus its learned offset) and the velocity to 0 - the barometer is the one height source that does not jump.
+// Disarmed the craft stands (or is carried): update_still() pulls the velocity towards 0 (ArduPilot: zero velocity fusion on the
+// ground), so an accelerometer bias cannot integrate into a climb rate while nobody looks.
 // The GPS vertical velocity (update_gps_vel) is a different thing: it does not wander, and it is what a barometer is worst
 // at (prop wash, fast climbs). The caller brings it forward by the GPS latency with the measured acceleration.
 // ============================================================================
@@ -65,6 +73,8 @@ struct KfConfig {
     float gps_gap_s = 3.0f;              // no GPS height for this long: the next one starts a new reference
     float gps_ref_track_tau_s = 10.0f;   // not fused: the reference follows GPS - z with this time constant
     float gps_used_s = 2.0f;             // "GPS used" = fused within this long
+    float baro_reset_s = 1.5f;           // no baro reading accepted for this long (while they keep coming): z is reset to the baro
+    float still_sigma = 0.3f;            // disarmed: velocity pseudo-measurement 0 with this sigma (m/s)
 };
 
 struct VerticalState { float z = 0, v = 0; bool range_used = false, gps_used = false, gps_vel_used = false; };      // *_used: fused within the last range_gap_s / gps_used_s
@@ -75,7 +85,7 @@ public:
     void reset(float z0 = 0) {
         for (int i = 0; i < 4; i++) { x[i] = 0; for (int j = 0; j < 4; j++) P[i][j] = 0; }
         x[0] = z0; P[0][0] = 1.0f; P[1][1] = 1.0f; P[2][2] = 0.05f; P[3][3] = 0.25f;
-        anchor_ = 0.0f; anchored_ = false; range_rejects_ = 0; range_age_ = gps_age_ = gps_vel_age_ = gps_seen_age_ = 1e9f; reanchors_ = 0;
+        anchor_ = 0.0f; anchored_ = false; range_rejects_ = 0; range_age_ = gps_age_ = gps_vel_age_ = gps_seen_age_ = baro_age_ = 1e9f; reanchors_ = 0; baro_resets_ = 0;
         restart_gps_ref(); gps_resets_ = 0;
     }
     WB_FAST void predict(float a_up_mps2, float dt) {
@@ -84,6 +94,7 @@ public:
         if (gps_age_ < 1e8f) gps_age_ += dt;
         if (gps_vel_age_ < 1e8f) gps_vel_age_ += dt;
         if (gps_seen_age_ < 1e8f) gps_seen_age_ += dt;
+        if (baro_age_ < 1e8f) baro_age_ += dt;
         x[0] += x[1] * dt + 0.5f * (a_up_mps2 - x[2]) * dt * dt;
         x[1] += (a_up_mps2 - x[2]) * dt;
         // P = F P F^T + Q with F = [[1,dt,-dt^2/2,0],[0,1,-dt,0],[0,0,1,0],[0,0,0,1]]
@@ -106,7 +117,22 @@ public:
     bool update_baro(float baro_m, float sigma = 0.0f, bool ground_effect = false) {
         float s = sigma > 0 ? clampf(sigma, cfg.r_baro_min, cfg.r_baro_max) : cfg.r_baro;
         if (ground_effect) s *= cfg.ground_effect_scale;
-        return scalar(baro_m, 1, 1, s);
+        if (scalar(baro_m, 1, 1, s)) { baro_age_ = 0.0f; return true; }
+        if (baro_age_ > cfg.baro_reset_s) {                   // (also the very first reading: baro_age_ starts "never")
+            set_z(baro_m - x[3], s);
+            x[1] = 0.0f; for (int j = 0; j < 4; j++) { P[1][j] = P[j][1] = 0.0f; } P[1][1] = 1.0f;
+            baro_age_ = 0.0f; baro_resets_++; return true;
+        }
+        return false;
+    }
+    // disarmed / standing: the climb rate is 0 (sigma still_sigma). Call at the baro rate, not every loop.
+    // Not gated: it is not a sensor that may be wrong but what "disarmed" means - and the case it is there for is exactly the one a
+    // gate would refuse (an accelerometer spike at touch-down that left v at -4 m/s, 10 sigmas from 0).
+    // Far off (more than 3 sigmas): the filter's own certainty about v is what is wrong - it is widened to the error first, so the
+    // update takes most of it out at once instead of a few percent per call.
+    bool update_still() {
+        if (fabsf(x[1]) > 3.0f * cfg.still_sigma) { const float w = x[1] * x[1]; if (P[1][1] < w) P[1][1] = w; }
+        return scalar(0.0f, 0, 0, cfg.still_sigma, 1, false);
     }
     // relative: a barometer holds z (see the top of this file); false: the range finder is the only height there is.
     bool update_range(float height_m /*tilt-corrected*/, float sigma = 0.0f, bool relative = false) {
@@ -152,6 +178,7 @@ public:
     bool gps_ref_ok() const { return ref_ok_; }
     float gps_ref() const { return gps_ref_; }               // GPS height - z, as latched (relative use)
     uint32_t gps_resets() const { return gps_resets_; }      // new references / z set to the GPS after rejected readings
+    uint32_t baro_resets() const { return baro_resets_; }    // z set to the barometer after baro_reset_s of rejected readings
     VerticalState state() const {
         VerticalState s; s.z = x[0]; s.v = x[1]; s.range_used = range_age_ <= cfg.range_gap_s;
         s.gps_used = gps_age_ <= cfg.gps_used_s; s.gps_vel_used = gps_vel_age_ <= cfg.gps_used_s; return s;
@@ -163,12 +190,12 @@ public:
     uint32_t range_reanchors() const { return reanchors_; }
 private:
     // H = [hz, hv, 0, ho]
-    WB_FAST bool scalar(float meas, float hz, float ho, float sigma, float hv = 0.0f) {
+    WB_FAST bool scalar(float meas, float hz, float ho, float sigma, float hv = 0.0f, bool gate = true) {
         float Hx = hz * x[0] + hv * x[1] + ho * x[3], y = meas - Hx;
         float PH[4]; for (int i = 0; i < 4; i++) PH[i] = P[i][0] * hz + P[i][1] * hv + P[i][3] * ho;
         float S = hz * PH[0] + hv * PH[1] + ho * PH[3] + sigma * sigma;
         if (S <= 1e-9f) return false;
-        if (y * y > cfg.gate_sigma * cfg.gate_sigma * S) return false;
+        if (gate && y * y > cfg.gate_sigma * cfg.gate_sigma * S) return false;
         float K[4]; for (int i = 0; i < 4; i++) K[i] = PH[i] / S;
         for (int i = 0; i < 4; i++) x[i] += K[i] * y;
         // Joseph-free but symmetric update: P = P - K (H P)
@@ -188,5 +215,6 @@ private:
     float x[4] = {}, P[4][4] = {};
     float anchor_ = 0.0f, range_age_ = 1e9f, gps_age_ = 1e9f; bool anchored_ = false; uint8_t range_rejects_ = 0; uint32_t reanchors_ = 0;
     float gps_vel_age_ = 1e9f, gps_seen_age_ = 1e9f, gps_ref_ = 0.0f, ref_sum_ = 0.0f; bool ref_ok_ = false; uint8_t ref_n_ = 0, gps_rejects_ = 0; uint32_t gps_resets_ = 0;
+    float baro_age_ = 1e9f; uint32_t baro_resets_ = 0;
 };
 } // namespace fc

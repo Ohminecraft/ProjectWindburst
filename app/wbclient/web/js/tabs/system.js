@@ -49,6 +49,25 @@ export default {
     const raw = h('pre', { class: 'log', id: 'raw', tabindex: '0' });
     const paintRaw = () => { raw.textContent = store.raw || tr('Chưa có byte nào ngoài giao thức.'); raw.scrollTop = raw.scrollHeight; };
     listen('raw', paintRaw); paintRaw();
+    // ---- the link: always streamed at 1 Hz by the app (it tells a firmware that restarted from one that only paused)
+    const linkBox = h('div', { id: 'link-diag' });
+    const paintLink = () => {
+      const l = store.streams.link;
+      if (!l) { linkBox.replaceChildren(h('p', { class: 'help' }, tr('Chưa có số liệu.'))); return; }
+      const warn = (v, lim) => (v > lim ? ' ⚠' : '');
+      linkBox.replaceChildren(kv([
+        [tr('Firmware chạy được'), tr('{s} giây', { s: Math.floor(l.uptime) })],
+        [tr('Khung nhận từ app / hỏng'), `${l.rx_frames} / ${l.rx_bad}`],
+        [tr('Lệnh không được xử lý kịp (BUSY)'), String(l.busy)],
+        [tr('Lệnh chờ lâu nhất (1 s qua)'), `${l.cmd_max_ms} ms${warn(l.cmd_max_ms, 50)}`],
+        [tr('Luồng link nghỉ lâu nhất'), `${l.link_gap_ms} ms${warn(l.link_gap_ms, 20)}`],
+        [tr('Luồng cảm biến nghỉ lâu nhất'), `${l.slow_gap_ms} ms${warn(l.slow_gap_ms, 20)}`],
+        [tr('Khung telemetry bỏ qua / trả lời bị mất'), `${l.dropped} / ${l.tx_lost}`],
+        [tr('Cổng USB bị kẹt phải kích lại'), String(l.kicks)],
+        [tr('Byte đang chờ gửi'), String(l.queued)],
+      ]));
+    };
+    listen('stream:link', paintLink); paintLink();
 
     view.append(h('div', { class: 'cols' },
       h('div', {},
@@ -64,6 +83,8 @@ export default {
           h('p', { class: 'help' }, tr('Bản sao lưu chứa mọi mục cấu hình, kể cả bảng chân và kết quả hiệu chuẩn.'))),
         block(tr('Về mặc định'), h('div', { class: 'btn-row' }, sectionSel, defaults)),
         block(tr('Nhật ký firmware'), log),
+        block(tr('Đường truyền với app'), linkBox,
+          h('p', { class: 'help' }, tr('Khi app báo "firmware không trả lời": số giây chạy tăng đều nghĩa là firmware không khởi động lại, chỉ là dữ liệu bị nghẽn. Luồng cảm biến nghỉ lâu (hàng chục ms) nghĩa là vòng lặp chiếm hết CPU của core 1: hạ tần số loop. Gửi các số này kèm log khi báo lỗi.'))),
         block(tr('Dữ liệu thô từ cổng serial'), raw,
           h('p', { class: 'help' }, tr('Những byte không thuộc khung WBP: log khởi động của ESP32, thông báo lỗi khi firmware treo ("Guru Meditation", backtrace), hoặc dữ liệu của chương trình khác. Bình thường ô này trống.'))))));
   },

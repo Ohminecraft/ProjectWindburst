@@ -88,19 +88,23 @@ App đăng ký từng stream với tần số mong muốn; firmware kẹp theo `
 
 | id | stream | mặc định / tối đa (Hz) | nội dung |
 |---|---|---|---|
-| 1 | attitude | 50 / 200 | roll, pitch, yaw (quy ước phi công), gyro đã lọc, setpoint |
+| 1 | attitude | 50 / 200 | roll, pitch (quy ước phi công), **yaw là hướng 0 … 360° (0 = bắc, theo chiều kim đồng hồ; từ 0.8.8, u16; trước đó −180 … 180)**, gyro đã lọc, setpoint |
 | 2 | rc | 20 / 100 | 16 kênh µs, link, LQ, số khung/giây |
 | 3 | status | 10 / 50 | armed, **arm blockers** (bit có tên; mới: `LOOP_RATE`, `RUNAWAY_TAKEOFF`, `RESCUE_NO_FIX`, `RESCUE_NO_COMPASS`), failsafe, modes, health, AltHold state, thời gian vòng lặp, pin/cell, cờ settings, throttle, % CPU, % RAM, RAM / PSRAM còn trống (kB), **thời gian trung bình từng khâu của chu kỳ điều khiển trong giây vừa rồi `t_imu / t_core / t_motor / t_rest` (µs), lượt dài nhất của luồng cảm biến `t_slow_max`, số chu kỳ bỏ lỡ `overruns`, tần số đặt `loop_target`, nguyên nhân failsafe `fs_cause` (bit LINK / SWITCH / BATTERY)** |
 | 4 | motors | 20 / 100 | lệnh thực gửi ESC (kể cả khi motor test), rpm, lỗi telemetry, nhiệt, điện áp, dynamic idle, **`bidir` (OFF / ACTIVE / UNAVAILABLE), `answers` (bit i = ESC của motor i trả lời), `skipped`, `late` (khung bỏ qua / lượt trả lời lỡ trong giây vừa rồi)** |
 | 5 | sensors | 50 / 200 | gyro thô, accel, la bàn, baro, nhiệt độ, sonar |
-| 6 | gps | 5 / 25 | fix, vệ tinh, lat/lon/alt, tốc độ, hướng, HDOP, khoảng cách/hướng về home, trạng thái driver |
-| 7 | estimate | 20 / 100 | độ cao, vận tốc đứng, sigma, vị trí/vận tốc ngang, cờ hợp lệ (`ALT`, `POS`, `YAW_FROM_MAG`, **`VEL`, `FLOW`, `TILT_AIDED`**, 0.8.3: **`GPS_ALT`, `GPS_VZ`**) |
+| 6 | gps | 5 / 25 | fix, vệ tinh, lat/lon/alt, tốc độ, hướng, HDOP, khoảng cách/hướng về home, trạng thái driver, **`rate` số lời giải mỗi giây đo được (0.8.8)** |
+| 7 | estimate | 20 / 100 | độ cao, vận tốc đứng, sigma, vị trí/vận tốc ngang, cờ hợp lệ (`ALT`, `POS`, `YAW_FROM_MAG`, **`VEL`, `FLOW`, `TILT_AIDED`**, 0.8.3: **`GPS_ALT`, `GPS_VZ`**), 0.8.8: **`z_resets`** (số lần độ cao bị đặt lại theo baro) |
 | 8 | gyro_fast | 0 / 1000 | gyro thô + đã lọc cho đồ thị rung |
 | 9 | calibration | 10 / 20 | loại, tiến độ %, trạng thái, mặt nạ 6 mặt (accel), giá trị thô, **% của lần đo level trim khi bay** (100 = đã đo xong, chờ disarm) |
 | 10 | battery | 2 / 20 | điện áp, mỗi cell, số cell, trạng thái, nguồn đo, mV ở chân ADC, âm còi đang kêu, âm motor đang phát |
 | 11 | blackbox | 2 / 10 | trạng thái, dung lượng, đã dùng (byte, bão hòa ở 4 GB), số phiên, tốc độ thật, byte mỗi bản ghi, số bản ghi bị bỏ, % xoá, byte/giây, **thiết bị, dung lượng / đã dùng theo kB (thẻ lớn), mức đầy bộ đệm thẻ (%)** |
 | 12 | tuning | 0 / 50 | trạng thái đang chạy của bộ lọc và PID: tần số cắt gyro / D-term lowpass 1 lúc này, 9 dynamic notch (3 mỗi trục), RPM notch hài 1 của từng motor, TPA %, anti-gravity, tốc độ khung receiver đo được và tần số cắt RC smoothing, airmode, PID sum từng trục, **ga treo đo được** |
-| 13 | nav | 10 / 50 | cờ (`POSHOLD`, `POSHOLD_UNAVAILABLE`, `RESCUE`, `RESCUE_AVAILABLE`, `NAV_LEAN`), flow: chất lượng, lý do bỏ mẫu (`OK` … `NO_SAMPLE`), số mẫu/giây, vận tốc đo được (tiến / phải, trung bình 0,25 s); Position Hold: trạng thái từng trục, góc nghiêng yêu cầu, điểm đang giữ, bù gió; Rescue: giai đoạn, lý do bỏ cuộc, khoảng cách tới home, độ cao bay về |
+| 13 | nav | 10 / 50 | cờ (`POSHOLD`, `POSHOLD_UNAVAILABLE`, `RESCUE`, `RESCUE_AVAILABLE`, `NAV_LEAN`, 0.8.8: `POSHOLD_SLOW_GPS`), flow: chất lượng, lý do bỏ mẫu (`OK` … `NO_SAMPLE`), số mẫu/giây, vận tốc đo được (tiến / phải, trung bình 0,25 s); Position Hold: trạng thái từng trục, góc nghiêng yêu cầu, điểm đang giữ, bù gió; Rescue: giai đoạn, lý do bỏ cuộc, khoảng cách tới home, độ cao bay về |
+| 14 | link | 1 / 10 | (0.8.8) sức khoẻ đường truyền: `uptime` (s, tới ms), `boot_id`, khung nhận / hỏng, `busy`, `tx_lost`, `dropped`, `kicks`, `cmd_max_ms`, `link_gap_ms`, `slow_gap_ms`, `queued` - xem docs/FIRMWARE.md "Firmware không trả lời" |
+
+Section mới 0.8.8: **`althold`** (id 19, live): `mid_stick`, `deadband`, `low_stick`, `max_stick` (% hành trình cần ga, không qua đường cong ga), `climb_rate`, `descend_rate` (0,1 m/s). `nav` thêm `ph_min_gps_hz` (compat 29, 27).
+Cùng cổng với WBP firmware còn hiểu **MSP** đủ cho công cụ ESC (docs/ESC_PASSTHROUGH.md); hai parser cùng nhận mọi byte.
 
 Tên các bit (`bits` trong json) được firmware kiểm tra lúc biên dịch với enum thật của core (`static_assert` trong `settings_apply.h`): đổi enum trong core mà quên sửa json là lỗi biên dịch, không phải nhãn sai trên app.
 

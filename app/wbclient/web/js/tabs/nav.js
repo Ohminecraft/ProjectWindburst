@@ -66,7 +66,7 @@ export default {
   id: 'nav',
   title: tr('Vị trí'),
   lead: tr('Cảm biến optical flow, ước lượng vị trí, giữ vị trí (Position Hold) và tự bay về (GPS Rescue).'),
-  streams: { nav: 10, estimate: 10, sensors: 5, gps: 2, status: 10 },
+  streams: { nav: 10, estimate: 10, sensors: 5, gps: 2, status: 10, attitude: 5 },
   mount(view) {
     const pair = (a, b, d, unit) => `${f(a, d)} / ${f(b, d)} ${unit}`;
     view.append(
@@ -96,6 +96,15 @@ export default {
               [tr('Góc nghiêng ước lượng'), withId('est-tilt', readout('estimate', (e) => (has(e.valid, 'TILT_AIDED') ? tr('đang được chỉnh theo gia tốc đo từ GPS / optical flow') : tr('chỉ theo accelerometer'))))],
             ]),
             fields('nav', ['tilt_aid'])),
+          block(tr('EKF (thử nghiệm)'),
+            h('p', { class: 'help' }, tr('Bộ lọc gộp tư thế, vận tốc, vị trí và bias của IMU vào một: khi la bàn bị nhiễu, vận tốc GPS sửa được hướng mũi mỗi lần máy tăng tốc. Mặc định chỉ chạy song song và ghi vào blackbox (ekf_yaw, ekf_pn…) để so; chọn NAV thì Position Hold và GPS Rescue dùng nó. Chỉ chọn NAV sau khi log cho thấy nó tốt hơn.')),
+            kv([
+              [tr('Trạng thái'), withId('ekf-state', readout('estimate', (e) => (!has(e.ekf_flags, 'ALIGNED') ? tr('chưa chạy / chưa căn') : [has(e.ekf_flags, 'GPS_AIDING') ? tr('có GPS') : tr('không GPS'), has(e.ekf_flags, 'HEADING_OK') ? tr('biết hướng') : tr('chưa chắc hướng'), has(e.ekf_flags, 'USED_FOR_NAV') ? tr('đang dùng để giữ vị trí') : tr('chỉ ghi log')].join(', '))))],
+              [tr('Hướng mũi: EKF / AHRS'), withId('ekf-yaw', readout('estimate', (e) => (has(e.ekf_flags, 'ALIGNED') ? `${f(e.ekf_yaw, 1)}° ± ${f(e.ekf_yaw_sigma, 1)} / ${f(((store.streams.attitude || {}).yaw), 1)}°` : '–')))],
+              [tr('Vị trí EKF (bắc / đông)'), withId('ekf-pos', readout('estimate', (e) => (has(e.ekf_flags, 'GPS_AIDING') ? pair(e.ekf_pn, e.ekf_pe, 1, 'm') : '–')))],
+              [tr('Một bước EKF tốn'), withId('ekf-us', readout('estimate', (e) => (e.ekf_us ? `${e.ekf_us} µs` : '–')))],
+            ]),
+            fields('nav', ['ekf'])),
           block(tr('Độ cao từ GPS'),
             h('p', { class: 'help' }, tr('Độ cao GPS trôi một đến vài mét mỗi phút, barometer thì ổn định hơn trong vài giây nhưng trôi theo thời tiết. Vì vậy mặc định độ cao GPS chỉ dùng khi không có barometer / lidar; còn vận tốc lên / xuống của GPS (u-blox) thì luôn có ích, nhất là trong gió cánh quạt và khi leo nhanh.')),
             kv([
@@ -108,13 +117,13 @@ export default {
           block('Position Hold',
             h('p', { class: 'help' }, tr('Buông cần roll / pitch thì máy tự phanh rồi đứng tại chỗ, chống lại gió; đẩy cần thì bay như Angle. Cần một trong hai: optical flow + lidar (trong nhà, bay thấp), hoặc GPS đã fix + la bàn đã hiệu chuẩn. Gán công tắc ở tab Mode và nên bật cùng Altitude Hold.')),
             kv([
-              [tr('Trạng thái'), pill('ph-state', 'nav', (n) => (has(n.flags, 'POSHOLD') ? ['ok', tr('đang giữ vị trí')] : has(n.flags, 'POSHOLD_UNAVAILABLE') ? ['warn', tr('công tắc đang bật nhưng chưa có gì để giữ vị trí')] : ['off', tr('tắt')]))],
+              [tr('Trạng thái'), pill('ph-state', 'nav', (n) => (has(n.flags, 'POSHOLD') ? ['ok', tr('đang giữ vị trí')] : has(n.flags, 'POSHOLD_SLOW_GPS') ? ['warn', tr('GPS gửi quá ít lời giải mỗi giây để giữ vị trí (xem tần số GPS ở tab Cảm biến)')] : has(n.flags, 'POSHOLD_UNAVAILABLE') ? ['warn', tr('công tắc đang bật nhưng chưa có gì để giữ vị trí')] : ['off', tr('tắt')]))],
               ['Roll / Pitch', withId('ph-axes', readout('nav', (n) => (has(n.flags, 'POSHOLD') ? `${label('ph_axis', n.ph_roll)} / ${label('ph_axis', n.ph_pitch)}` : '–')))],
               [tr('Góc nghiêng autopilot yêu cầu (roll / pitch)'), withId('ph-lean', readout('nav', (n) => (has(n.flags, 'NAV_LEAN') ? pair(n.lean_roll, n.lean_pitch, 1, '°') : '–')))],
               [tr('Điểm đang giữ (bắc / đông)'), withId('ph-target', readout('nav', (n) => (has(n.flags, 'POSHOLD') ? pair(n.target_n, n.target_e, 1, 'm') : '–')))],
               [tr('Bù gió đã học (bắc / đông)'), withId('ph-wind', readout('nav', (n) => (has(n.flags, 'POSHOLD') ? pair(n.wind_n, n.wind_e, 2, 'm/s²') : '–')))],
             ]),
-            fields('nav', ['ph_angle_max', 'ph_brake_rate', 'ph_brake_angle', 'pos_p', 'vel_p', 'vel_i', 'vel_d'])),
+            fields('nav', ['ph_angle_max', 'ph_brake_rate', 'ph_brake_angle', 'pos_p', 'vel_p', 'vel_i', 'vel_d', 'ph_min_gps_hz'])),
           block(tr('GPS Rescue và failsafe'),
             h('p', { class: 'help' }, tr('Rescue: máy leo lên độ cao bay về, quay mũi về điểm cất cánh, bay về, hạ dần rồi hạ cánh và tắt motor. Chạy khi bật công tắc GPS Rescue (tab Mode), hoặc khi mất sóng nếu chọn ở ô dưới. Sóng trở lại giữa chừng: gạt cần roll hoặc pitch quá 30 % để lấy lại quyền điều khiển. Pin dưới mức tối thiểu thì luôn hạ cánh tại chỗ.')),
             kv([

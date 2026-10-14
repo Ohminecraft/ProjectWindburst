@@ -39,7 +39,7 @@ struct Rig {
     float ground_level = 0;                                               // the ground under the craft lies this far above the take-off point (a table): what the range finder sees
     float prop_wash_m = 0;                                                // the barometer reads this much too low while the motors run and the craft is within 0.3 m of the ground
     // navigation sensors. ngps: a fix every 100 ms that shows where the craft was 150 ms ago; the position wanders slowly (multipath), the velocity is good
-    uint8_t gps_sats = 14;
+    uint8_t gps_sats = 14; float gps_rate_said = 10.0f;      // what the GPS layer says its solution rate is (Position Hold wants >= nav.ph_min_gps_hz)
     bool ngps = false; float gps_delay = 0.15f, gps_sigma_p = 0.3f, gps_sigma_v = 0.08f, gps_wander = 0.6f, gps_bias[2] = {0, 0}, gps_sacc = 0.15f; bool gps_valid = true;     // gps_sacc: how sure the receiver says its velocity is
     // optical flow: 50 samples a second, each the mean over 20 ms that ended 10 ms ago, rad/s about the sensor's X / Y (ArduPilot's signs)
     bool flow = false; float flow_noise = 0.03f, flow_scale = 1.0f; uint8_t flow_quality = 90; int flow_window_ms = 20, flow_late_ms = 10;      // each sample: the mean over flow_window_ms that ended flow_late_ms ago
@@ -70,7 +70,7 @@ struct Rig {
             if (us / 20000 != prev / 20000) { drift += drift_rate * 0.02f; if (baro) core.on_baro(pl.z + drift + gauss(0.25f) - wash, 0.3f, in.now_ms); }
             if (us / 33000 != prev / 33000 && range && pl.z - ground_level < 3.5f && pl.z >= ground_level) core.on_range(pl.z - ground_level + gauss(0.03f), 0.03f, in.now_ms);
             if (us / 10000 != prev / 10000 && mag) { const double d = declination * M_PI / 180, Bef[3] = {0.30 * cos(d), 0.30 * sin(d), 0.38}; double bf[3]; pl.body_from_world(Bef, bf); core.on_mag({(float)bf[0], (float)bf[1], (float)bf[2]}, true, in.now_ms); }
-            if (us / 100000 != prev / 100000 && gps) { GpsMeas gm; gm.valid = true; gm.north_m = pl.pn; gm.east_m = pl.pe; gm.vn = pl.vn; gm.ve = pl.ve; gm.vd = -pl.vz; gm.vd_valid = gps_vd; gm.alt_m = pl.z + gps_alt_err; gm.sigma_alt = 2.0f; core.on_gps(gm, in.now_ms); }
+            if (us / 100000 != prev / 100000 && gps) { GpsMeas gm; gm.valid = true; gm.north_m = pl.pn; gm.east_m = pl.pe; gm.vn = pl.vn; gm.ve = pl.ve; gm.vd = -pl.vz; gm.vd_valid = gps_vd; gm.alt_m = pl.z + gps_alt_err; gm.sigma_alt = 2.0f; gm.rate_hz = gps_rate_said; core.on_gps(gm, in.now_ms); }
             if (us / 1000 != prev / 1000 && (ngps || flow)) {       // what the slow sensors will report later
                 if (past.empty()) past.resize(512);
                 past[past_i] = {pl.pn, pl.pe, pl.vn, pl.ve, pl.z, pl.vz, pl.w[0], pl.w[1], pl.v_forward(), pl.v_right(), (pl.z - ground_level) / fmaxf(pl.R22(), 0.3f)}; past_i = (past_i + 1) % past.size();
@@ -79,7 +79,7 @@ struct Rig {
                 const Past& a = ago(gps_delay); GpsMeas g; g.valid = gps_valid;
                 for (int k = 0; k < 2; k++) gps_bias[k] += -gps_bias[k] * (0.1f / 20.0f) + gauss(gps_wander * sqrtf(2.0f * 0.1f / 20.0f));     // wanders with a time constant of 20 s
                 g.north_m = a.pn + gps_bias[0] + gauss(gps_sigma_p); g.east_m = a.pe + gps_bias[1] + gauss(gps_sigma_p); g.alt_m = a.z + gauss(1.0f);
-                g.vn = a.vn + gauss(gps_sigma_v); g.ve = a.ve + gauss(gps_sigma_v); g.vd = -a.vz + gauss(0.1f); g.vd_valid = gps_vd; g.sigma_pos = 1.0f; g.sigma_vel = gps_sacc; g.sigma_alt = 2.0f; g.sats = gps_sats;
+                g.vn = a.vn + gauss(gps_sigma_v); g.ve = a.ve + gauss(gps_sigma_v); g.vd = -a.vz + gauss(0.1f); g.vd_valid = gps_vd; g.sigma_pos = 1.0f; g.sigma_vel = gps_sacc; g.sigma_alt = 2.0f; g.sats = gps_sats; g.rate_hz = gps_rate_said;
                 core.on_gps(g, in.now_ms);
             }
             if (flow && us / 20000 != prev / 20000 && us >= 600000) {
@@ -721,6 +721,12 @@ static void t_position_hold() {
         Rig r(0, true); if (five) r.pl.make_five_inch(); r.ngps = true; r.gps_wander = 0.3f; r.h.gps_ok = true; Pilot p; nav_takeoff(r, p, 3.0f);
         const char* who = five ? "5-inch" : "1 kg";
         CHECK(r.out.armed && r.pl.z > 2.0f && r.out.est.pos_valid && r.out.est.vel_valid && r.out.est.yaw_from_mag && !r.out.poshold_active, "[%s] flying at %.1f m with a GPS position and a compass heading", who, r.pl.z);
+        if (five) {                                          // 0.8.8: a GPS that sends one solution a second is not enough for a hold
+            r.gps_rate_said = 1.0f; p.poshold = true; r.run(0.5f, p);
+            CHECK(!r.out.poshold_active && r.out.poshold_unavailable && r.out.poshold_slow_gps && !r.out.nav_lean, "[%s] a 1 Hz GPS: Position Hold refuses (unavailable, 'GPS too slow'), the pilot keeps the sticks", who);
+            r.core.cfg.ph_min_gps_hz = 0.0f; r.run(0.1f, p);
+            CHECK(r.out.poshold_active && !r.out.poshold_slow_gps, "[%s] ... unless the check is switched off (nav.ph_min_gps_hz 0)", who);
+            r.core.cfg.ph_min_gps_hz = 5.0f; p.poshold = false; r.gps_rate_said = 10.0f; r.run(1.0f, p); }
         p.poshold = true; r.run(0.05f, p); const bool on = r.out.poshold_active; r.run(4.0f, p);
         CHECK(on && r.core.poshold().holding() && r.out.nav_lean && hypotf(r.pl.vn, r.pl.ve) < 0.4f, "[%s] Position Hold switched on in a hover: holding after 4 s (%.2f m/s)", who, hypotf(r.pl.vn, r.pl.ve));
         { const float n0 = r.pl.pn, e0 = r.pl.pe; float far = 0, tilt = 0; for (int i = 0; i < 200; i++) { r.run(0.1f, p); far = fmaxf(far, nav_dist(r, n0, e0)); tilt = fmaxf(tilt, fmaxf(fabsf(r.pl.right_down_deg()), fabsf(r.pl.nose_down_deg()))); }

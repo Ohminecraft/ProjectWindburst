@@ -3,7 +3,7 @@ import { api } from './api.js';
 
 export const store = {
   schema: null,
-  conn: { connected: false, responding: false, port: null, note: '', info: null, report: [], boots: 0 },
+  conn: { connected: false, responding: false, port: null, note: '', info: null, report: [], boots: 0, stalls: 0 },
   serverUp: true,
   settings: {},        // section -> values (engineering units, enum names)
   streams: {},         // stream -> latest values

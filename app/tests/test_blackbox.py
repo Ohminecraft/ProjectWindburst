@@ -104,6 +104,12 @@ def test_reader_csv(tmp_path):
     assert lines[1].split(",")[0] == "0.002000" and float(lines[1].split(",")[1]) == pytest.approx(-123.4)
 
 
+def test_csv_keeps_the_resolution():
+    """0.9.0: "%g" cut a latitude to 6 digits (20.8634 = 11 m steps) - every value now has the decimals of its field's scale."""
+    assert wblog._num(20.86341234 + 1e-9, 7) == "20.8634123" and wblog._num(105.8012345, 7) == "105.8012345"
+    assert wblog._num(-123.4, 1) == "-123.4" and wblog._num(1500.0, 0) == "1500" and wblog._num(-0.00001, 2) == "0" and wblog._num(0.5, 3) == "0.5"
+
+
 # ---------------------------------------------------------------------------------------------------------------- firmware
 def _fly(sim, fc, seconds=4.0):
     """Arm, take off in Altitude Hold, a roll input, land by disarming. Returns the largest roll angle seen (from telemetry)."""

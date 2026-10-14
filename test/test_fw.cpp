@@ -925,7 +925,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.8.7" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.9.5" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -2027,6 +2027,88 @@ static void t_gps_alt() {
       CHECK(!(est_bits(*r) & EST_VALID_GPS_VZ), "nav.gps_vel_z off: the GPS vertical velocity is left out"); }
 }
 
+// ESC passthrough over the app link: MSP next to WBP, the flight side lets go of the motors (app/link_host.h MspLink)
+static void t_esc_passthrough() {
+    printf("[esc passthrough] MSP on the app link, SET_PASSTHROUGH stops the motor output\n");
+    auto v1 = [](uint8_t cmd) { std::vector<uint8_t> f = {'$', 'M', '<', 0, cmd, cmd}; return f; };
+    auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.motors.protocol = ESC_PROTOCOL_DSHOT600; }); r->run(3.0);
+    MemTransport mt; app::MspLink ml(r->fw->host, mt);
+    for (uint8_t c : v1(msp::FC_VARIANT)) ml.on_byte(c);
+    CHECK(mt.out.size() == 10 && memcmp(mt.out.data() + 5, "BTFL", 4) == 0, "an ESC tool asks who we are: it gets an answer it knows (%zu bytes)", mt.out.size());
+    mt.out.clear(); for (uint8_t c : v1(msp::MOTOR_CONFIG)) ml.on_byte(c);
+    CHECK(mt.out.size() > 11 && mt.out[11] == 4, "four motors");
+    {   // BLHeliSuite32 32.10 (0.9.3 on a board): 1, 1, 2, 3, 4, 5, 90, 36, 119 - and gave up on the unanswered 90 / 119
+        const uint8_t seq[] = {msp::API_VERSION, msp::FC_VARIANT, msp::FC_VERSION, msp::BOARD_INFO, msp::BUILD_INFO, msp::ADVANCED_CONFIG, msp::FEATURE_CONFIG, msp::BOXIDS};
+        int bad = 0; uint8_t proto = 0;
+        for (uint8_t cmd : seq) { mt.out.clear(); for (uint8_t c : v1(cmd)) ml.on_byte(c); if (mt.out.size() < 6 || mt.out[2] != '>') bad++; if (cmd == msp::ADVANCED_CONFIG && mt.out.size() > 8) proto = mt.out[8]; }
+        CHECK(bad == 0 && proto == 7, "BLHeliSuite32's requests before the passthrough: all answered (%d refused), motor protocol from the settings: Betaflight DShot600 (%u)", bad, proto); }
+    {   // the answers come from the firmware itself (nav_rig: switches for ARM, ANGLE, ALTHOLD, POSHOLD; a baro, a GPS)
+        mt.out.clear(); for (uint8_t c : v1(msp::BOXIDS)) ml.on_byte(c);
+        const bool boxes = mt.out.size() == 10 && mt.out[3] == 4 && mt.out[5] == 0 && mt.out[6] == 1 && mt.out[7] == 3 && mt.out[8] == 11;
+        mt.out.clear(); for (uint8_t c : v1(msp::STATUS_EX)) ml.on_byte(c);
+        const uint16_t sens = mt.out.size() > 10 ? (uint16_t)(mt.out[9] | mt.out[10] << 8) : 0;
+        CHECK(boxes && (sens & 1) && (sens & 32) && (sens & 2), "BOXIDS: ARM, ANGLE, ALTHOLD, POS HOLD - the switches in the settings; STATUS_EX sensors 0x%x (accelerometer, gyro, baro)", sens); }
+    HostMotorHw* hw = static_cast<HostMotorHw*>(r->app().motors.hw());
+    // armed: refused
+    VirtualBoard& b = r->board; b.rc[4] = 2000; r->run(0.5);
+    const bool armed = r->tel().armed; uint8_t got = 0; mt.out.clear(); for (uint8_t c : v1(msp::SET_PASSTHROUGH)) got |= ml.on_byte(c);
+    CHECK(armed && got == 0 && mt.out.size() == 7 && mt.out[5] == 0 && !r->app().motors.released(), "ARMED: SET_PASSTHROUGH is answered with 0 ESCs, the motors keep running");
+    b.rc[4] = 1000; r->run(0.5);
+    const uint32_t f0 = hw->frames; mt.out.clear(); got = 0;
+    for (uint8_t c : v1(msp::SET_PASSTHROUGH)) got |= ml.on_byte(c);
+    const uint32_t f1 = hw->frames; r->run(0.5);
+    CHECK(got == 4 && mt.out.size() == 7 && mt.out[5] == 4 && r->app().motors.released() && hw->frames == f1 && f1 >= f0, "disarmed: 4 ESCs, and the motor output stops for good (%u frames before, none after)", (unsigned)(f1 - f0));
+    CHECK(r->app().escPin(0) != GPIO_UNUSED && r->app().escPin(3) != GPIO_UNUSED && r->app().escPin(4) == GPIO_UNUSED, "the pins of the four motors are known to the link side (GPIO%u .. GPIO%u)", r->app().escPin(0), r->app().escPin(3));
+    b.rc[4] = 2000; r->run(0.5); CHECK(hw->frames == f1, "arming now changes nothing: no output until the restart");
+    mt.out.clear(); got = 0; b.rc[4] = 1000; r->run(0.3); for (uint8_t c : v1(msp::SET_PASSTHROUGH)) got |= ml.on_byte(c);
+    CHECK(got == 0 && mt.out.size() == 7 && mt.out[5] == 0, "a second request (still in passthrough): 0");
+    // WBP keeps working next to MSP bytes
+    { r->clear_inbox(); for (uint8_t c : v1(msp::API_VERSION)) r->fw->server.on_byte(c); T_status st{}; r->stream(STR_STATUS, 10); r->run(0.3);
+      CHECK(r->latest(STR_STATUS, st), "the app's own protocol is not disturbed by MSP bytes on the same link"); }
+}
+
+// The EKF (core/ekf.h) in the real firmware on the virtual board: SHADOW (logged next to the usual estimate) and NAV (Position Hold uses it)
+static void t_ekf() {
+    printf("[ekf] SHADOW: next to the usual estimators on the virtual board; NAV: Position Hold on it\n");
+    { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); b.plant.set_tilt(0, 0, 60); }, false); VirtualBoard& b = r->board; T_estimate e{};
+      r->run(6.0);
+      const app::Telemetry& t = r->tel();
+      CHECK((t.ekf_flags & EKF_FLAGS_ALIGNED) && (t.ekf_flags & EKF_FLAGS_HEADING_OK) && fabsf(fc::wrap180(t.ekf_yaw - 60.0f)) < 4.0f && !(t.ekf_flags & EKF_FLAGS_USED_FOR_NAV),
+            "on the ground: aligned, heading %.1f deg (true 60, sigma %.1f), not used for navigation (SHADOW is the default)", t.ekf_yaw, t.ekf_yaw_sigma);
+      b.rc[7] = 2000; nav_takeoff(*r, 4.0);
+      float worst_yaw = 0, worst_pos = 0, worst_tilt = 0;
+      for (int leg = 0; leg < 4; leg++) {                     // forwards, stop, right, stop: accelerations to see the heading by
+          b.rc[leg % 2 ? 0 : 1] = 1750; r->run(2.5); b.rc[0] = b.rc[1] = 1500;
+          for (int i = 0; i < 40; i++) { r->run(0.1); const app::Telemetry& u = r->tel();
+              worst_yaw = fmaxf(worst_yaw, fabsf(fc::wrap180(u.ekf_yaw - b.plant.yaw_deg()))); worst_pos = fmaxf(worst_pos, hypotf(u.ekf_pn - b.plant.pn, u.ekf_pe - b.plant.pe));
+              worst_tilt = fmaxf(worst_tilt, fmaxf(fabsf(u.ekf_roll - b.plant.right_down_deg()), fabsf(u.ekf_pitch - b.plant.nose_down_deg()))); } }
+      CHECK(r->tel().armed && (r->tel().ekf_flags & EKF_FLAGS_GPS_AIDING) && worst_yaw < 4.0f && worst_pos < 1.5f && worst_tilt < 3.0f,
+            "flying legs with Position Hold: the EKF's heading within %.1f deg of the truth, position within %.2f m, tilt within %.1f deg", worst_yaw, worst_pos, worst_tilt);
+      r->clear_inbox(); r->stream(STR_ESTIMATE, 20); r->run(1.2);
+      CHECK(r->latest(STR_ESTIMATE, e) && (e.ekf_flags & EKF_FLAGS_GPS_AIDING) && fabsf(e.ekf_pn * 0.1f - b.plant.pn) < 1.5f, "estimate stream: EKF position %.1f / %.1f m, flags 0x%x (the step time, ekf_us, is only real on the board: the PC clock stands still inside a step)", e.ekf_pn * 0.1, e.ekf_pe * 0.1, e.ekf_flags); }
+    { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.nav.ekf = EKF_MODE_NAV; b.plant.set_tilt(0, 0, 60); }, false); VirtualBoard& b = r->board;
+      r->run(6.0); b.rc[7] = 2000; nav_takeoff(*r, 4.0);
+      const float n0 = b.plant.pn, e0 = b.plant.pe; float far = 0; for (int i = 0; i < 100; i++) { r->run(0.1); far = fmaxf(far, nav_far(*r, n0, e0)); }
+      CHECK((r->tel().ekf_flags & EKF_FLAGS_USED_FOR_NAV) && far < 0.8f, "nav.ekf = NAV: Position Hold flies on the EKF's position and heading - within %.2f m for 10 s", far);
+      b.rc[1] = 1750; r->run(2.5); const float vf = b.plant.v_forward(), vr = b.plant.v_right(); b.rc[1] = 1500; r->run(8.0);
+      CHECK(vf > 1.5f && fabsf(vr) < 0.5f && hypotf(b.plant.vn, b.plant.ve) < 0.3f, "stick forwards: %.1f m/s along the nose (%.1f sideways); let go: stops", vf, vr); }
+    { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { s.sensors.mag_enabled = 0; s.nav.ekf = EKF_MODE_NAV; b.plant.set_tilt(0, 0, 60); }, false); VirtualBoard& b = r->board;
+      r->run(6.0); nav_takeoff(*r, 4.0);                      // no compass: the usual estimators never know the heading, so Position Hold is refused
+      T_nav n{}; b.rc[7] = 2000; r->run(0.5);
+      const bool refused = nav_now(*r, n) && (n.flags & NAV_FLAGS_POSHOLD_UNAVAILABLE) && !(r->tel().ekf_flags & EKF_FLAGS_HEADING_OK);
+      b.rc[7] = 1000;
+      for (int leg = 0; leg < 4; leg++) { b.rc[leg % 2 ? 0 : 1] = 1750; r->run(2.5); b.rc[0] = b.rc[1] = 1500; r->run(3.0); }   // Altitude Hold, a few accelerations
+      const float yaw_err = fabsf(fc::wrap180(r->tel().ekf_yaw - b.plant.yaw_deg()));
+      CHECK(refused && (r->tel().ekf_flags & EKF_FLAGS_HEADING_OK) && yaw_err < 6.0f,
+            "no compass, nav.ekf = NAV: Position Hold refused before any acceleration; after a few, the EKF has the heading from the GPS velocity (%.1f deg off)", yaw_err);
+      b.rc[7] = 2000; r->run(1.0); const float n0 = b.plant.pn, e0 = b.plant.pe; float far = 0;
+      for (int i = 0; i < 80; i++) { r->run(0.1); far = fmaxf(far, nav_far(*r, n0, e0)); }
+      CHECK(nav_now(*r, n) && (n.flags & NAV_FLAGS_POSHOLD) && !(n.flags & NAV_FLAGS_POSHOLD_UNAVAILABLE) && (r->tel().ekf_flags & EKF_FLAGS_USED_FOR_NAV) && far < 1.5f,
+            "... and Position Hold then flies on it: within %.2f m for 8 s (without the EKF it stays refused)", far); }
+    { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.nav.ekf = EKF_MODE_OFF; }, false); r->run(6.0);
+      CHECK(r->tel().ekf_flags == 0 && r->tel().ekf_us == 0, "nav.ekf = OFF: not run at all"); }
+}
+
 int main() {
     if (const char* only = getenv("WB_ONLY")) {            // one group alone (while working on it): WB_ONLY=nav ./build/test_fw
         if (!strcmp(only, "nav")) { t_nav_flow(); t_nav_mounting(); t_nav_uarts(); }
@@ -2040,6 +2122,8 @@ int main() {
         if (!strcmp(only, "gpsbaud")) t_gps_baud();
         if (!strcmp(only, "gpsalt")) t_gps_alt();
         if (!strcmp(only, "rxdiag")) t_rx_diag();
+        if (!strcmp(only, "esc")) t_esc_passthrough();
+        if (!strcmp(only, "ekf")) t_ekf();
         printf("%d checks, %d failed (only '%s')\n", g_pass + g_fail, g_fail, only); return 1;
     }
     t_boot();
@@ -2073,6 +2157,8 @@ int main() {
     t_frames();
     t_ports();
     t_gps_baud();
+    t_esc_passthrough();
+    t_ekf();
     t_gps_alt();
     t_rx_diag();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);

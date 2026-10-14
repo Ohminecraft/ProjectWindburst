@@ -28,8 +28,8 @@ static void t_format() {
     p.build(1u << G_GYRO, 4); CHECK(p.fast_size == 4 + 6 && p.slow_size == 4 + 23, "gyro only: 10-byte fast record; slow = time + always-on state (%u, %u)", p.fast_size, p.slow_size);
     const uint32_t dflt = (1u << G_GYRO) | (1u << G_SETPOINT) | (1u << G_PID) | (1u << G_RC) | (1u << G_MOTORS) | (1u << G_ATTITUDE) | (1u << G_TIMING) | (1u << G_ALT) | (1u << G_BATTERY) | (1u << G_GPS) | (1u << G_NAV);
     { wbp::S_blackbox d; wbp::defaults(d); CHECK(d.fields == dflt, "the settings' default groups: gyro, setpoint, PID, RC, motors, attitude, timing, altitude, battery, GPS, navigation (0x%x)", (unsigned)d.fields); }
-    p.build(dflt, 4); CHECK(p.fast_size == 4 + 6 + 6 + 24 + 10 + 8 + 6 + 9 && p.slow_size == 4 + 23 + 12 + 8 + 22 + 33, "default groups, quad: %u-byte fast record, %u-byte slow record (battery: voltage, cell, current, mAh)", p.fast_size, p.slow_size);
-    p.build(0xFFFFFFFFu, 8); CHECK(p.fast_size == 4 + 18 + 24 + 10 + 16 + 6 + 6 + 16 + 9 && p.slow_size == 4 + 23 + 12 + 8 + 22 + 6 + 33, "everything, 8 motors: %u / %u bytes", p.fast_size, p.slow_size);
+    p.build(dflt, 4); CHECK(p.fast_size == 4 + 6 + 6 + 24 + 10 + 8 + 6 + 9 && p.slow_size == 4 + 23 + 12 + 8 + 22 + 33 + 27, "default groups, quad: %u-byte fast record, %u-byte slow record (battery: voltage, cell, current, mAh)", p.fast_size, p.slow_size);
+    p.build(0xFFFFFFFFu, 8); CHECK(p.fast_size == 4 + 18 + 24 + 10 + 16 + 6 + 6 + 16 + 9 && p.slow_size == 4 + 23 + 12 + 8 + 22 + 6 + 33 + 27, "everything, 8 motors: %u / %u bytes", p.fast_size, p.slow_size);
     p.build(0xFFFFFFFFu, 20); CHECK(p.motors == 8, "motor count capped at 8");
     CHECK(p.fast_size + 1 <= 128 && p.slow_size + 1 <= 160, "the largest records fit the recorder's buffers");
 
@@ -105,7 +105,7 @@ static void t_format() {
     // ---- header text
     { p.build((1u << G_GYRO) | (1u << G_MOTORS) | (1u << G_ATTITUDE), 6);
       char txt[2048]; TextOut to(txt, sizeof(txt)); describe_fields(to, "fast", p, kFast, kFastDefs);
-      CHECK(std::string(txt) == "fast t:u32:1e-06:s gyro[0]:i16:0.1:deg/s gyro[1]:i16:0.1:deg/s gyro[2]:i16:0.1:deg/s motor[0]:u16:0.0001: motor[1]:u16:0.0001: motor[2]:u16:0.0001: motor[3]:u16:0.0001: motor[4]:u16:0.0001: motor[5]:u16:0.0001: roll:i16:0.01:deg pitch:i16:0.01:deg yaw:i16:0.01:deg\n",
+      CHECK(std::string(txt) == "fast t:u32:1e-06:s gyro[0]:i16:0.1:deg/s gyro[1]:i16:0.1:deg/s gyro[2]:i16:0.1:deg/s motor[0]:u16:0.0001: motor[1]:u16:0.0001: motor[2]:u16:0.0001: motor[3]:u16:0.0001: motor[4]:u16:0.0001: motor[5]:u16:0.0001: roll:i16:0.01:deg pitch:i16:0.01:deg yaw:u16:0.01:deg\n",
             "field list: name:type:scale:unit, six motors for a hexa: %s", txt);
       char tiny[40]; TextOut small(tiny, sizeof(tiny)); describe_fields(small, "fast", p, kFast, kFastDefs);
       CHECK(small.overflow && strlen(tiny) < sizeof(tiny), "a text buffer that is too small is reported, never overrun"); }
@@ -395,11 +395,15 @@ static void t_link_budget() {
     // ---- download while a session is being written
     { Bench b; b.cfg(DEV_FLASH, TRIG_ALWAYS); b.ms(1500);
       CHECK(b.svc.state() == ST_LOGGING && b.svc.log().writing(), "trigger ALWAYS: a session is being written from the start");
-      std::vector<uint8_t> res;
-      CHECK(b.cmd(wbp::CMD_BLACKBOX_SESSION, {0, 0}) == wbp::ERR_BUSY, "the app asks for the list: BUSY for the moment ...");
+      std::vector<uint8_t> res; uint32_t st, sz, sz2;
+      CHECK(b.cmd(wbp::CMD_BLACKBOX_SESSION, {0, 0}, &res) == wbp::ERR_OK && res.size() == 8 && b.svc.state() == ST_LOGGING,
+            "0.8.8: the app asks for the list - it gets it, and the recording goes on (it used to be closed for a mere look at the list)");
+      memcpy(&sz, res.data() + 4, 4); b.ms(500); b.cmd(wbp::CMD_BLACKBOX_SESSION, {0, 0}, &res); memcpy(&sz2, res.data() + 4, 4);
+      CHECK(sz2 > sz && b.svc.state() == ST_LOGGING && b.stored().size() == 1, "the session being written is in the list, growing (%u -> %u bytes)", sz, sz2);
+      CHECK(b.cmd(wbp::CMD_BLACKBOX_READ, {0, 0, 0, 0, 16, 0, 0, 0}) == wbp::ERR_BUSY, "a DOWNLOAD needs it closed: BUSY for the moment ...");
       b.ms(50);
-      CHECK(b.svc.state() == ST_IDLE && b.cmd(wbp::CMD_BLACKBOX_SESSION, {0, 0}, &res) == wbp::ERR_OK && res.size() == 8, "... the session was closed for it, 50 ms later the list is there");
-      uint32_t st, sz; memcpy(&st, res.data(), 4); memcpy(&sz, res.data() + 4, 4);
+      CHECK(b.svc.state() == ST_IDLE && b.cmd(wbp::CMD_BLACKBOX_SESSION, {0, 0}, &res) == wbp::ERR_OK && res.size() == 8, "... closed for it, 50 ms later the list is final");
+      memcpy(&st, res.data(), 4); memcpy(&sz, res.data() + 4, 4);
       const std::vector<RSession> ss = b.stored();
       const bool ended = ss.size() == 1 && ss[0].count_events(EV_END) == 1 && ss[0].events.back().code == EV_END && ss[0].events.back().data.size() == 1 && ss[0].events.back().data[0] == END_APP_TOOK_OVER;
       CHECK(ended && sz > 20000, "closed properly, with its reason (%u bytes)", sz);
@@ -410,11 +414,22 @@ static void t_link_budget() {
       for (int polls = 0; polls < 3000 && received < sz; polls++) { b.tx.out.clear(); b.ms(1); wbp::Parser p; wbp::Frame f; for (uint8_t c : b.tx.out) if (p.feed(c, f) && f.type == kMsgBlob) { uint32_t off; memcpy(&off, f.payload, 4); memcpy(got.data() + (off - st), f.payload + 4, f.len - 4u); received += f.len - 4u; } }
       CHECK(received == sz && memcmp(got.data(), b.mem.mem.data() + st, sz) == 0 && b.svc.log().sessions() == 1, "downloaded, still no new session in the way");
       b.ms(2000); CHECK(b.svc.state() == ST_IDLE, "2 s after the download: still held back");
-      b.ms(1500); CHECK(b.svc.state() == ST_LOGGING, "3 s after the app's last request the logging goes on by itself");
+      b.ms(1500); CHECK(b.svc.state() == ST_LOGGING, "3 s after the app's last request the logging goes on by itself (trigger ALWAYS)");
       // in the air the flight log wins
       b.in.armed = true; b.ms(300);
-      CHECK(b.cmd(wbp::CMD_BLACKBOX_SESSION, {0, 0}) == wbp::ERR_BUSY && b.cmd(wbp::CMD_BLACKBOX_READ, {0, 0, 0, 0, 16, 0, 0, 0}) == wbp::ERR_BUSY, "armed: BUSY");
+      CHECK(b.cmd(wbp::CMD_BLACKBOX_SESSION, {0, 0}) == wbp::ERR_OK && b.cmd(wbp::CMD_BLACKBOX_READ, {0, 0, 0, 0, 16, 0, 0, 0}) == wbp::ERR_BUSY, "armed: the list yes, a download BUSY");
       b.ms(300); CHECK(b.svc.state() == ST_LOGGING && b.stored().size() == 2 && b.stored()[1].count_events(EV_END) == 0, "and the session is NOT cut"); }
+    // ---- the BLACKBOX switch is on and the app opens its blackbox tab (the bug of 0.8.7: closed, a new one 3 s later, closed again ...)
+    { Bench b; b.cfg(DEV_FLASH, TRIG_SWITCH); b.in.switch_on = true; b.ms(1000);
+      CHECK(b.svc.state() == ST_LOGGING, "the switch records on the ground");
+      std::vector<uint8_t> res;
+      for (int i = 0; i < 5; i++) { b.cmd(wbp::CMD_BLACKBOX_SESSION, {0, 0}, &res); b.ms(800); }
+      CHECK(b.svc.state() == ST_LOGGING && b.stored().size() == 1 && b.stored()[0].count_events(EV_END) == 0, "the tab looks at the list every 0.8 s for 4 s: one session, still recording");
+      CHECK(b.cmd(wbp::CMD_BLACKBOX_READ, {0, 0, 0, 0, 16, 0, 0, 0}) == wbp::ERR_BUSY, "a download is asked for"); b.ms(50);
+      CHECK(b.svc.state() == ST_IDLE && b.stored().size() == 1, "closed for it");
+      b.ms(5000); CHECK(b.svc.state() == ST_IDLE && b.svc.log().sessions() == 1, "the switch is still on, 5 s later: no new session by itself (it would be closed by the next look again)");
+      b.in.switch_on = false; b.ms(100); b.in.switch_on = true; b.ms(300);
+      CHECK(b.svc.state() == ST_LOGGING && b.svc.log().sessions() == 2, "switch off and on again: a new session"); }
     { Bench b; b.ms(100);                                    // trigger ARMED, on the ground, the app reads; then the pilot arms
       b.in.armed = true; b.ms(500); b.in.armed = false; b.ms(300);
       std::vector<uint8_t> res; CHECK(b.cmd(wbp::CMD_BLACKBOX_SESSION, {0, 0}, &res) == wbp::ERR_OK, "list");

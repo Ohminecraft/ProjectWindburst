@@ -62,7 +62,7 @@ static void t_schema() {
     CHECK(s.filters.gyro_lpf1_dyn_min_hz == 250 && s.filters.gyro_lpf1_dyn_max_hz == 500 && s.filters.gyro_lpf2_hz == 500 && s.filters.dterm_lpf1_dyn_min_hz == 75 && s.filters.dterm_lpf2_hz == 150 && s.filters.dyn_notch_count == 3 &&
           s.filters.rpm_harmonics == 3 && s.filters.yaw_lowpass_hz == 100 && s.filters.slider_gyro == 1 && s.filters.slider_dterm_mult == 100, "filter defaults = Betaflight's");
     CHECK(s.beeper.conditions == 0x1FFFFu && s.general.fs_guard_ms == 500 && s.general.airmode_start_throttle == 25 && s.receiver.rc_smoothing == 1 && s.receiver.rc_smoothing_factor == 30, "u32 default, general, receiver");
-    size_t total = 0; for (const SectionInfo& si : kSections) total += si.size; CHECK(kSectionCount == 18 && total == sizeof(Settings), "section table covers the Settings struct exactly (%zu vs %zu)", total, sizeof(Settings));
+    size_t total = 0; for (const SectionInfo& si : kSections) total += si.size; CHECK(kSectionCount == 19 && total == sizeof(Settings), "section table covers the Settings struct exactly (%zu vs %zu)", total, sizeof(Settings));
     CHECK(find_section(SEC_PID)->size == sizeof(S_pid) && find_section(99) == nullptr, "lookup");
     S_general g; defaults(g); g.loop_hz = 60000; g.max_arm_angle = 0; g.board_align = 99; g.airmode = 7; g.board_trim_yaw = -9999;
     Settings t; defaults(t); t.general = g; const int fixed = validate_section(t, SEC_GENERAL);
@@ -73,13 +73,13 @@ static void t_schema() {
           t.pid.stab_p[2] == 4.5f && t.pid.iterm_windup == 30, "motors / pid clamps (a NaN gain becomes the default)");
     t.filters.gyro_lpf1_type = 9; t.filters.gyro_lpf2_hz = 4000; t.filters.dyn_notch_count = 20; t.filters.rpm_harmonics = 5; t.filters.rpm_q = 10; t.filters.slider_gyro_mult = 3; t.filters.rpm_weights[2] = 180; validate_section(t, SEC_FILTERS);
     CHECK(t.filters.gyro_lpf1_type == LPF_TYPE_PT3 && t.filters.gyro_lpf2_hz == 1000 && t.filters.dyn_notch_count == 7 && t.filters.rpm_harmonics == 3 && t.filters.rpm_q == 250 && t.filters.slider_gyro_mult == 10 && t.filters.rpm_weights[2] == 100, "filter clamps");
-    CHECK(kProtocolVersion == 1 && kStreamCount == 13 && find_stream(STR_TUNING)->size == sizeof(T_tuning) && find_stream(STR_ATTITUDE)->size == sizeof(T_attitude), "streams");
+    CHECK(kProtocolVersion == 1 && kStreamCount == 14 && find_stream(STR_LINK)->size == sizeof(T_link) && find_stream(STR_TUNING)->size == sizeof(T_tuning) && find_stream(STR_ATTITUDE)->size == sizeof(T_attitude), "streams");
 }
 
 static void t_store() {
     printf("[settings store]\n");
     MemStorage m; SettingsStore st(m); Settings a; defaults(a); a.general.max_arm_angle = 33; a.pid.anti_gravity_gain = 123; a.motors.reversed_mask = 0x05; a.modes.mode[0] = 0; a.modes.aux[0] = 4; a.modes.lo[0] = 1700; a.modes.hi[0] = 2100;
-    CHECK(st.save(a) && m.kv.size() == 18, "18 records written");
+    CHECK(st.save(a) && m.kv.size() == 19, "19 records written");
     Settings b; auto r = st.load(b);
     CHECK(r.defaulted_mask == 0 && r.loaded_mask != 0 && b.general.max_arm_angle == 33 && b.pid.anti_gravity_gain == 123 && b.motors.reversed_mask == 5 && b.modes.hi[0] == 2100, "round trip");
     m.kv["wbs05"][6] ^= 0xFF; Settings c; r = st.load(c);
@@ -96,7 +96,7 @@ static void t_store() {
         std::vector<uint8_t> rec(size + 5u); rec[0] = 1; rec[1] = (uint8_t)size; rec[2] = (uint8_t)(size >> 8); memcpy(rec.data() + 3, data, size);
         const uint16_t c = crc16(rec.data(), size + 3u); rec[size + 3u] = (uint8_t)c; rec[size + 4u] = (uint8_t)(c >> 8); ms.kv[key] = rec;
     };
-    CHECK(find_section(SEC_PINS)->compat == 37 && find_section(SEC_PINS)->compat2 == 33 && find_section(SEC_PINS)->compat3 == 27 && offsetof(S_pins, flow_cs) == 27 && offsetof(S_pins, curr_adc) == 37 && offsetof(S_pins, servo) == 33 && find_section(SEC_BATTERY)->compat == 13 && offsetof(S_battery, current_source) == 13 && find_section(SEC_BLACKBOX)->compat == 8 && find_section(SEC_MOTORS)->compat == 35 && find_section(SEC_MOTORS)->compat2 == 34 && offsetof(S_motors, dshot_driver) == 34 && offsetof(S_motors, ext_pullup) == 35 && find_section(SEC_NAV)->compat == 27 && offsetof(S_nav, gps_alt) == 27 && find_section(SEC_GENERAL)->compat == 0 && offsetof(S_blackbox, sd_mode) == 8,
+    CHECK(find_section(SEC_PINS)->compat == 37 && find_section(SEC_PINS)->compat2 == 33 && find_section(SEC_PINS)->compat3 == 27 && offsetof(S_pins, flow_cs) == 27 && offsetof(S_pins, curr_adc) == 37 && offsetof(S_pins, servo) == 33 && find_section(SEC_BATTERY)->compat == 13 && offsetof(S_battery, current_source) == 13 && find_section(SEC_BLACKBOX)->compat == 8 && find_section(SEC_MOTORS)->compat == 35 && find_section(SEC_MOTORS)->compat2 == 34 && offsetof(S_motors, dshot_driver) == 34 && offsetof(S_motors, ext_pullup) == 35 && find_section(SEC_NAV)->compat == 30 && find_section(SEC_NAV)->compat2 == 29 && find_section(SEC_NAV)->compat3 == 27 && offsetof(S_nav, gps_alt) == 27 && offsetof(S_nav, ph_min_gps_hz) == 29 && offsetof(S_nav, ekf) == 30 && find_section(SEC_GENERAL)->compat == 23 && find_section(SEC_GPS)->compat == 0 && offsetof(S_blackbox, sd_mode) == 8,
           "pins (three times: the flow sensor's, the servos', the current sensor's and PWM receiver's), battery and blackbox grew at their end: their old sizes are known, and the old layout really is the start of the new one");
     { MemStorage ms; SettingsStore so(ms); Settings w; defaults(w); so.save(w);
       S_pins op; defaults(op); op.imu_cs = 10; op.motor[3] = 7; op.batt_adc = 2; op.sd_cs = 42; op.flow_cs = 38; op.servo[0] = 99; op.servo[3] = 98;   // (the servo bytes lie beyond the 33 bytes that are stored)
@@ -127,8 +127,11 @@ static void t_store() {
         CHECK(g6.pins.imu_cs == 9 && g6.pins.sd_cs == 40 && g6.pins.flow_cs == 255 && g6.pins.servo[0] == 255 && (rr6.migrated_mask & (1u << SEC_PINS)), "a pin map of firmware 0.6 (27 bytes): kept too (third older size)"); }
       old_record(ms, "wbs11", &op, 23); Settings bad2; const auto r4 = so.load(bad2);
       CHECK((r4.defaulted_mask & (1u << SEC_PINS)) && bad2.pins.imu_cs == 255, "a size that is neither today's nor a known old one (23 bytes: firmware 0.5, four layouts ago): defaults");
-      S_general og; defaults(og); og.loop_hz = 2000; old_record(ms, "wbs01", &og, (uint16_t)(sizeof(S_general) - 1)); Settings bad3; const auto r5 = so.load(bad3);
-      CHECK((r5.defaulted_mask & (1u << SEC_GENERAL)) && bad3.general.loop_hz == 4000, "a section without a known old size never takes a shorter record");
+      S_gps og; defaults(og); og.rate_hz = 5; old_record(ms, "wbs08", &og, (uint16_t)(sizeof(S_gps) - 1)); Settings bad3; const auto r5 = so.load(bad3);
+      CHECK((r5.defaulted_mask & (1u << SEC_GPS)) && bad3.gps.rate_hz == 10, "a section without a known old size (gps) never takes a shorter record");
+      { S_general og2; defaults(og2); og2.loop_hz = 2000; uint8_t rec[23]; memcpy(rec, &og2, sizeof(og2)); rec[22] = 0;
+        old_record(ms, "wbs01", rec, 23); Settings g8; const auto r8 = so.load(g8);
+        CHECK(sizeof(S_general) == 22 && g8.general.loop_hz == 2000 && (r8.migrated_mask & (1u << SEC_GENERAL)), "the general section of 0.9.0 - 0.9.4 (23 bytes, with the USB RTS setting that is gone again): kept, the extra byte ignored"); }
       // the motors section of firmware 0.5 (34 bytes, before the DShot driver choice was added)
       S_motors om; defaults(om); om.pole_count = 12; om.protocol = ESC_PROTOCOL_DSHOT600; om.bidirectional = 1; om.dshot_driver = DSHOT_DRIVER_IDF;
       old_record(ms, "wbs06", &om, 34); Settings got2; const auto r6 = so.load(got2);
@@ -160,7 +163,7 @@ static void t_server() {
       r.host.is_armed = true; nr.max_rate[0] = 100; memcpy(p.data() + 1, &nr, sizeof(nr)); r.send(frame(MSG_SECTION_SET, 5, p)); fr = r.tx.frames();
       CHECK(fr[0].first.type == MSG_ACK && fr[0].second[2] == ERR_ARMED && r.s.rates.max_rate[0] == 800, "while ARMED nothing is changed");
       r.host.is_armed = false; p.pop_back(); r.send(frame(MSG_SECTION_SET, 6, p)); fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_SIZE_MISMATCH, "wrong size refused"); }
-    { Rig r; r.s.general.max_arm_angle = 30; r.send(frame(MSG_SETTINGS_SAVE, 1)); auto fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_OK && r.mem.kv.size() == 18 && !(r.srv.flags() & SF_DIRTY), "save writes flash and clears the unsaved flag");
+    { Rig r; r.s.general.max_arm_angle = 30; r.send(frame(MSG_SETTINGS_SAVE, 1)); auto fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_OK && r.mem.kv.size() == 19 && !(r.srv.flags() & SF_DIRTY), "save writes flash and clears the unsaved flag");
       r.mem.fail_write = true; r.send(frame(MSG_SETTINGS_SAVE, 2)); fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_STORAGE, "flash failure reported");
       r.host.is_armed = true; r.send(frame(MSG_SETTINGS_SAVE, 3)); fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_ARMED, "no flash writes while armed (they stall the loop)"); }
     { Rig r; r.s.pid.tpa_rate = 10; r.s.general.loop_hz = 2000; r.send(frame(MSG_SETTINGS_DEFAULTS, 1, {SEC_PID})); CHECK(r.s.pid.tpa_rate == 65 && r.s.general.loop_hz == 2000, "defaults for one section");
@@ -210,6 +213,10 @@ static void t_streams() {
 static void t_apply() {
     printf("[apply] settings -> typed configs\n");
     Settings s; defaults(s); fc::CoreConfig def; fc::CoreConfig c; fc::RcInterpreter rc; apply_core(s, c, rc);
+    { const fc::AltHoldConfig ad; CHECK(fabsf(c.alt.mid_stick - ad.mid_stick) < 1e-6f && fabsf(c.alt.deadband - ad.deadband) < 1e-6f && fabsf(c.alt.low_stick - ad.low_stick) < 1e-6f && fabsf(c.alt.max_stick - ad.max_stick) < 1e-6f
+            && fabsf(c.alt.max_climb_mps - ad.max_climb_mps) < 1e-5f && fabsf(c.alt.max_descend_mps - ad.max_descend_mps) < 1e-5f, "althold defaults = the controller's own defaults (nothing changes for a craft that never touches the section)");
+      Settings t; defaults(t); t.althold.mid_stick = 45; t.althold.climb_rate = 35; t.althold.low_stick = 25; t.althold.deadband = 10; fc::AltHoldConfig a; apply_althold(t, a);
+      CHECK(fabsf(a.mid_stick - 0.45f) < 1e-6f && fabsf(a.max_climb_mps - 3.5f) < 1e-5f && a.low_stick <= 0.30f + 1e-6f, "althold: 45 %% holds, 3.5 m/s; a 'low' that would leave no descent travel is pulled down (%.2f)", a.low_stick); }
     CHECK(c.loop_hz == def.loop_hz && c.est_hz == def.est_hz && c.max_arm_angle_deg == def.max_arm_angle_deg && c.airmode == def.airmode && c.airmode == fc::AM_AUTO && fabsf(c.airmode_threshold - def.airmode_threshold) < 1e-6f, "default settings reproduce the core's defaults (loop, arming, airmode)");
     { const fc::PidConfig &a = c.pid, &d = def.pid; bool same = true;
       for (int x = 0; x < 3; x++) same &= a.p[x] == d.p[x] && a.i[x] == d.i[x] && a.d[x] == d.d[x] && a.d_max[x] == d.d_max[x] && a.f[x] == d.f[x] && c.rates.max_rate_dps[x] == def.rates.max_rate_dps[x] && c.rates.center_sens_dps[x] == def.rates.center_sens_dps[x];

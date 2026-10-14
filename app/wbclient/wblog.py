@@ -11,6 +11,7 @@ A log is a sequence of WBP frames (see framing.py): BB_HEADER frames carry a tex
 unit, BB_DATA frames carry the records. The reader takes the layout from that text only, so logs of other firmware versions
 stay readable. Damaged or missing frames cost the records inside them and are counted (session.gaps); nothing after them is lost.
 """
+import math
 import struct
 from array import array
 
@@ -269,8 +270,17 @@ class Session:
         cols = self.slow if slow else self.fast
         fp.write(",".join(f.name + (" (%s)" % f.unit if f.unit else "") for f in fields) + "\n")
         data = [cols[f.name] for f in fields]
+        # every value with the decimals its resolution has (0.9.0: "%g" kept 6 significant digits - a latitude of 20.8634 is 11 m)
+        nd = [6] + [max(0, min(9, -int(math.floor(math.log10(f.scale) + 1e-9)))) if f.scale > 0 else 6 for f in fields[1:]]
         for row in zip(*data):
-            fp.write(",".join("%.6f" % row[0] if k == 0 else ("%g" % v) for k, v in enumerate(row)) + "\n")
+            fp.write(",".join("%.6f" % v if k == 0 else _num(v, nd[k]) for k, v in enumerate(row)) + "\n")
+
+
+def _num(v, decimals):
+    t = "%.*f" % (decimals, v)
+    if "." in t:
+        t = t.rstrip("0").rstrip(".")
+    return "0" if t in ("-0", "") else t
 
 
 class Reader:

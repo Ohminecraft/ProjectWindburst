@@ -37,15 +37,21 @@ struct Telemetry {
     float batt_amps = 0, batt_mah = 0; uint8_t batt_remaining = 0, curr_source = 0; uint16_t curr_pin_mv = 0;      // current sensor, consumption, what is left (%)
     // ---- motors (logical order)
     float motor_cmd[8] = {}, rpm[8] = {}; uint8_t esc_err_pct[8] = {}, esc_temp[8] = {}; float esc_volt = 0, dyn_idle = 0;
-    uint8_t bidir_state = 0, esc_answers = 0; uint16_t hw_skipped = 0, hw_late = 0, hw_replies = 0, hw_garbled = 0;                 // output driver: bidirectional DShot state, which ESCs answer, frames skipped / replies lost in the last second
+    uint8_t bidir_state = 0, esc_answers = 0, motor_count = 0; uint16_t hw_skipped = 0, hw_late = 0, hw_replies = 0, hw_garbled = 0;                 // output driver: bidirectional DShot state, which ESCs answer, frames skipped / replies lost in the last second
     // ---- sensors
     float mag[3] = {}; float baro_alt = 0, baro_pa = 0, temp_c = 0, range_m = 0;
     // ---- gps (Betaflight units)
     uint8_t gps_fix = 0, gps_sats = 0; int32_t lat = 0, lon = 0, alt_cm = 0; uint16_t gs_cms = 0, course_ddeg = 0, hdop = 0;
-    uint32_t hacc_mm = 0, home_dist_m = 0; uint16_t home_dir_ddeg = 0; uint8_t gps_state = 0; uint32_t gps_baud = 0;
+    uint32_t hacc_mm = 0, home_dist_m = 0; uint16_t home_dir_ddeg = 0; uint8_t gps_state = 0; uint32_t gps_baud = 0; float gps_rate_hz = 0;
     // ---- estimator
     float z = 0, vz = 0, z_sigma = 0, pos_n = 0, pos_e = 0, vel_n = 0, vel_e = 0; bool alt_valid = false, pos_valid = false, yaw_from_mag = false;
-    bool vel_valid = false, flow_valid = false, tilt_aided = false, gps_alt_used = false, gps_vz_used = false;
+    bool vel_valid = false, flow_valid = false, tilt_aided = false, gps_alt_used = false, gps_vz_used = false; uint16_t z_resets = 0;
+    // ---- the EKF (core/ekf.h; nav.ekf): heading / position / velocity next to the usual estimate, for comparing
+    float ekf_roll = 0, ekf_pitch = 0, ekf_yaw = 0, ekf_pn = 0, ekf_pe = 0, ekf_vn = 0, ekf_ve = 0, ekf_vd = 0, ekf_z = 0, ekf_yaw_sigma = 0, ekf_test_vel = 0, ekf_test_mag = 0;
+    uint8_t ekf_flags = 0; uint16_t ekf_us = 0;
+    // ---- the app link (link stream): slow_gap_ms from the sensor thread, the rest filled in by the link task itself (LinkHost)
+    uint16_t slow_gap_ms = 0;
+    uint32_t up_ms = 0, boot_id = 0, link_rx = 0, link_dropped = 0; uint16_t link_bad = 0, link_busy = 0, link_tx_lost = 0, link_kicks = 0, link_cmd_max_ms = 0, link_gap_ms = 0, link_queued = 0;
     // ---- navigation: optical flow, Position Hold, GPS Rescue
     uint8_t nav_flags = 0, flow_quality = 0, flow_reject = wbp::FLOW_REJECT_NO_SAMPLE, flow_rate = 0, ph_state[2] = {}, rescue_phase = 0, rescue_fail = 0;
     float flow_fwd = 0, flow_right = 0, nav_roll = 0, nav_pitch = 0, nav_target_n = 0, nav_target_e = 0, nav_wind_n = 0, nav_wind_e = 0, nav_home_dist = 0, rescue_return_alt = 0;
@@ -68,6 +74,13 @@ inline int32_t scaled(float v, float scale, int32_t lo, int32_t hi) {
 inline int16_t s16(float v, float scale) { return (int16_t)scaled(v, scale, -32768, 32767); }
 inline uint16_t u16(float v, float scale) { return (uint16_t)scaled(v, scale, 0, 65535); }
 inline uint16_t sat_u16(uint32_t v) { return v > 65535u ? (uint16_t)65535u : (uint16_t)v; }
+// yaw as a heading: 0 .. 360 deg (0 = north, clockwise), what a compass and Betaflight's MSP_ATTITUDE show. The flight core keeps
+// -180 .. 180 inside (its arithmetic does not care); only what leaves the firmware (app, flight log) is converted.
+inline float heading360(float yaw_deg) {
+    if (!(yaw_deg == yaw_deg)) return 0.0f;
+    float h = fmodf(yaw_deg, 360.0f); if (h < 0.0f) h += 360.0f;
+    return h >= 359.995f ? 0.0f : h;                       // (rounds to 36000 at a scale of 0.01: that is 0)
+}
 
 // Writes the T_<stream> wire struct for `id`. settings_flags = wbp::Server::flags(). Returns the struct size, 0 for an unknown id / too small buffer.
 // what the estimators have at the moment, as the schema's est_valid bits (estimate stream, flight log)
@@ -89,7 +102,7 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
     if (!si || cap < si->size) return 0;
     switch (id) {
     case STR_ATTITUDE: {
-        T_attitude o; o.roll = s16(t.roll, scale::attitude_roll); o.pitch = s16(t.pitch, scale::attitude_pitch); o.yaw = s16(t.yaw, scale::attitude_yaw);
+        T_attitude o; o.roll = s16(t.roll, scale::attitude_roll); o.pitch = s16(t.pitch, scale::attitude_pitch); o.yaw = u16(heading360(t.yaw), scale::attitude_yaw);
         for (int i = 0; i < 3; i++) { o.gyro[i] = s16(t.gyro_f[i], scale::attitude_gyro); o.sp[i] = s16(t.sp[i], scale::attitude_sp); }
         memcpy(out, &o, sizeof(o)); break; }
     case STR_RC: {
@@ -116,12 +129,20 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
         memcpy(out, &o, sizeof(o)); break; }
     case STR_GPS: {
         T_gps o; o.fix = t.gps_fix; o.sats = t.gps_sats; o.lat = t.lat; o.lon = t.lon; o.alt = t.alt_cm; o.gs = t.gs_cms; o.course = t.course_ddeg; o.hdop = t.hdop;
-        o.hacc = sat_u16(t.hacc_mm); o.home_dist = sat_u16(t.home_dist_m); o.home_dir = t.home_dir_ddeg; o.state = t.gps_state; o.baud = t.gps_baud;
+        o.hacc = sat_u16(t.hacc_mm); o.home_dist = sat_u16(t.home_dist_m); o.home_dir = t.home_dir_ddeg; o.state = t.gps_state; o.baud = t.gps_baud; o.rate = (uint8_t)scaled(t.gps_rate_hz, scale::gps_rate, 0, 255);
         memcpy(out, &o, sizeof(o)); break; }
     case STR_ESTIMATE: {
         T_estimate o; o.z = s16(t.z, scale::estimate_z); o.vz = s16(t.vz, scale::estimate_vz); o.z_sigma = u16(t.z_sigma, scale::estimate_z_sigma);
         o.valid = est_valid_bits(t);
         o.pos_n = s16(t.pos_n, scale::estimate_pos_n); o.pos_e = s16(t.pos_e, scale::estimate_pos_e); o.vel_n = s16(t.vel_n, scale::estimate_vel_n); o.vel_e = s16(t.vel_e, scale::estimate_vel_e);
+        o.z_resets = t.z_resets;
+        o.ekf_yaw = u16(heading360(t.ekf_yaw), scale::estimate_ekf_yaw); o.ekf_yaw_sigma = u16(t.ekf_yaw_sigma, scale::estimate_ekf_yaw_sigma);
+        o.ekf_pn = s16(t.ekf_pn, scale::estimate_ekf_pn); o.ekf_pe = s16(t.ekf_pe, scale::estimate_ekf_pe); o.ekf_vn = s16(t.ekf_vn, scale::estimate_ekf_vn); o.ekf_ve = s16(t.ekf_ve, scale::estimate_ekf_ve);
+        o.ekf_flags = t.ekf_flags; o.ekf_us = t.ekf_us;
+        memcpy(out, &o, sizeof(o)); break; }
+    case STR_LINK: {
+        T_link o; o.uptime = t.up_ms; o.boot_id = t.boot_id; o.rx_frames = t.link_rx; o.rx_bad = t.link_bad; o.busy = t.link_busy; o.tx_lost = t.link_tx_lost; o.dropped = t.link_dropped;
+        o.kicks = t.link_kicks; o.cmd_max_ms = t.link_cmd_max_ms; o.link_gap_ms = t.link_gap_ms; o.slow_gap_ms = t.slow_gap_ms; o.queued = t.link_queued;
         memcpy(out, &o, sizeof(o)); break; }
     case STR_GYRO_FAST: {
         T_gyro_fast o; for (int i = 0; i < 3; i++) { o.raw[i] = s16(t.gyro_raw[i], scale::gyro_fast_raw); o.filt[i] = s16(t.gyro_f[i], scale::gyro_fast_filt); }

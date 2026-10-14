@@ -72,6 +72,18 @@ inline double slow_value(const app::Telemetry& t, uint8_t id, int i) {
     case S_NAV_TARGET_N: return (double)t.nav_target_n;
     case S_NAV_TARGET_E: return (double)t.nav_target_e;
     case S_RESCUE_PHASE: return t.rescue_phase;
+    case S_EKF_ROLL: return t.ekf_roll;
+    case S_EKF_PITCH: return t.ekf_pitch;
+    case S_EKF_YAW: return app::heading360(t.ekf_yaw);
+    case S_EKF_PN: return t.ekf_pn;
+    case S_EKF_PE: return t.ekf_pe;
+    case S_EKF_VN: return t.ekf_vn;
+    case S_EKF_VE: return t.ekf_ve;
+    case S_EKF_Z: return t.ekf_z;
+    case S_EKF_YAW_SIGMA: return t.ekf_yaw_sigma;
+    case S_EKF_TEST_VEL: return t.ekf_test_vel;
+    case S_EKF_TEST_MAG: return t.ekf_test_mag;
+    case S_EKF_FLAGS: return t.ekf_flags;
     default: return 0.0;
     }
 }

@@ -532,8 +532,8 @@ export const EN = {
     "Max rate (°/s)",
   "Ga":
     "Throttle",
-  "Đường cong ga chỉ dùng khi bay ga tay. Altitude Hold dùng thẳng vị trí cần ga quanh điểm giữa.":
-    "The throttle curve is used only with manual throttle. Altitude Hold uses the stick position around the middle directly.",
+  "Đường cong ga chỉ dùng khi bay ga tay. Altitude Hold dùng thẳng vị trí cần ga, theo mục bên dưới.":
+    "The throttle curve is only for manual throttle. Altitude Hold uses the stick position itself, as set below.",
   "Angle và Stabilize":
     "Angle and Stabilize",
   "Không mở được cổng {port}: {detail}":
@@ -1966,8 +1966,8 @@ export const EN = {
     "Then there is no home point: the rescue cannot fly home, the failsafe lands on the spot.",
   "Position Hold đang bật nhưng chưa có gì để giữ vị trí (optical flow + lidar, hoặc GPS đã fix + la bàn đã hiệu chuẩn)":
     "Position Hold is on but there is nothing to hold a position with (optical flow + lidar, or a GPS fix + a calibrated compass)",
-  "đã cài GPS Rescue nhưng GPS chưa fix (chưa có điểm home)":
-    "GPS Rescue is set up but the GPS has no fix (no home point yet)",
+  "đã cài GPS Rescue (có công tắc, dù đang tắt, hoặc là thủ tục failsafe) nhưng GPS chưa fix: chưa có điểm home. Không muốn chờ: bật \"Cho arm khi GPS chưa fix\" ở tab Vị trí (như Betaflight)":
+    "GPS Rescue is set up (it has a switch, even one that is off, or it is the failsafe procedure) but the GPS has no fix: no home point yet. Not wanting to wait: turn on \"Allow arming without a GPS fix\" in the Position tab (as in Betaflight)",
   "đã cài GPS Rescue nhưng la bàn đang tắt hoặc không có":
     "GPS Rescue is set up but the compass is switched off or missing",
   "Giữ vị trí bằng optical flow hoặc GPS + la bàn; tự bật Angle, nên bật cùng Altitude Hold. Cài đặt ở tab Vị trí.":
@@ -2208,6 +2208,104 @@ export const EN = {
     "UART line errors: ",
   "Tốc độ khung thấp hơn tốc độ gói của receiver (ELRS: 150, 250, 500 Hz…): \"Khung hỏng\" tăng = byte bị mất hoặc sai. \"Tràn bộ đệm\" tăng = firmware đọc UART không kịp. \"Lỗi đường truyền\" tăng = nhiễu trên dây, sai baud hoặc sai đảo mức. Cả ba bằng 0 mà tốc độ vẫn thấp = receiver gửi ít khung hơn (xem tốc độ gói ở tay phát).":
     "Frame rate below the receiver's packet rate (ELRS: 150, 250, 500 Hz…): \"Bad frames\" rising = bytes lost or corrupted. \"Buffer overflows\" rising = the firmware read the UART too late. \"Line errors\" rising = noise on the wire, wrong baud rate or wrong inversion. All three at 0 and the rate still low = the receiver sends fewer frames (check the packet rate on the transmitter).",
+  "Dữ liệu từ firmware ngừng {s} giây nhưng firmware KHÔNG khởi động lại (chi tiết: tab Hệ thống, Nhật ký firmware)":
+    "No data from the firmware for {s} s, but the firmware did NOT restart (details: System tab, firmware log)",
+  "Chưa có số liệu.":
+    "No data yet.",
+  "Firmware chạy được":
+    "Firmware up for",
+  "Khung nhận từ app / hỏng":
+    "Frames received from the app / broken",
+  "Lệnh không được xử lý kịp (BUSY)":
+    "Requests not handled in time (BUSY)",
+  "Lệnh chờ lâu nhất (1 s qua)":
+    "Longest request wait (last second)",
+  "Luồng link nghỉ lâu nhất":
+    "Longest pause of the link task",
+  "Luồng cảm biến nghỉ lâu nhất":
+    "Longest pause of the sensor thread",
+  "Khung telemetry bỏ qua / trả lời bị mất":
+    "Telemetry frames skipped / replies lost",
+  "Cổng USB bị kẹt phải kích lại":
+    "Stuck USB port restarted",
+  "Byte đang chờ gửi":
+    "Bytes waiting to be sent",
+  "Đường truyền với app":
+    "Link to the app",
+  "Khi app báo \"firmware không trả lời\": số giây chạy tăng đều nghĩa là firmware không khởi động lại, chỉ là dữ liệu bị nghẽn. Luồng cảm biến nghỉ lâu (hàng chục ms) nghĩa là vòng lặp chiếm hết CPU của core 1: hạ tần số loop. Gửi các số này kèm log khi báo lỗi.":
+    "When the app says \"the firmware does not answer\": an uptime that keeps counting means the firmware did not restart, only the data was held up. Long pauses of the sensor thread (tens of ms) mean the loop takes all of core 1: lower the loop rate. Send these numbers with the log when reporting it.",
+  "GPS gửi quá ít lời giải mỗi giây để giữ vị trí (xem tần số GPS ở tab Cảm biến)":
+    "the GPS sends too few solutions a second to hold a position (see the GPS rate in the Sensors tab)",
+  "Tần số lời giải":
+    "Solution rate",
+  " (chậm: Position Hold bằng GPS cần từ 5 Hz; module NMEA thì tăng baud lên 57600)":
+    " (slow: Position Hold on GPS needs 5 Hz or more; for an NMEA module raise the baud rate to 57600)",
+  "Tần số GPS tối thiểu để giữ vị trí":
+    "Lowest GPS rate for Position Hold",
+  "Position Hold chỉ dùng GPS khi module gửi ít nhất từng này lời giải mỗi giây (0 = không kiểm tra). GPS 1 Hz làm vị trí và vận tốc nhảy mỗi giây một lần nên máy lắc liên tục. Không ảnh hưởng tới optical flow.":
+    "Position Hold uses the GPS only when the module sends at least this many solutions a second (0 = no check). A 1 Hz GPS makes position and velocity jump once a second and the craft keeps rocking. Optical flow is not affected.",
+  "Cần ga trong Altitude Hold":
+    "Throttle stick in Altitude Hold",
+  "Cần ở \"điểm giữ\" ± vùng chết: giữ độ cao. Đẩy lên tới \"cần tối đa\": leo nhanh nhất; kéo xuống tới \"cần thấp\": hạ nhanh nhất, và trên mặt đất thì đứng yên. Ga treo (mức ga máy treo được) firmware tự đo, không cần nhập. Đường cong ga ở trên không áp dụng cho mode này.":
+    "Stick at the \"hold point\" ± the deadband: the height is held. Up to \"full stick\": the fastest climb; down to \"low stick\": the fastest descent, and on the ground it stays there. The hover throttle is measured by the firmware, nothing to enter. The throttle curve above does not apply in this mode.",
+  "Điểm giữ độ cao":
+    "Hold point",
+  "Vị trí cần ga (theo receiver, không qua đường cong ga) giữ nguyên độ cao. Mặc định 50 % = giữa cần.":
+    "Throttle stick position (as the receiver sends it, not through the throttle curve) that holds the height. Default 50 % = mid stick.",
+  "Vùng chết":
+    "Deadband",
+  "Nửa bề rộng quanh điểm giữ vẫn còn giữ độ cao, tính theo % hành trình cần.":
+    "Half-width around the hold point that still holds the height, in % of the stick travel.",
+  "Cần thấp":
+    "Low stick",
+  "Dưới mức này là \"ga thấp\": hạ với tốc độ tối đa; đang đứng trên đất thì không cất cánh.":
+    "Below this is \"throttle low\": the fastest descent; standing on the ground it does not take off.",
+  "Cần tối đa":
+    "Full stick",
+  "Từ vị trí này trở lên: leo với tốc độ tối đa.":
+    "From here up: the fastest climb.",
+  "Tốc độ leo tối đa":
+    "Fastest climb",
+  "Tốc độ hạ tối đa":
+    "Fastest descent",
+  "Cấu hình ESC (BLHeliSuite32, ESC Configurator)":
+    "ESC configuration (BLHeliSuite32, ESC Configurator)",
+  "EKF (thử nghiệm)":
+    "EKF (experimental)",
+  "Bộ lọc gộp tư thế, vận tốc, vị trí và bias của IMU vào một: khi la bàn bị nhiễu, vận tốc GPS sửa được hướng mũi mỗi lần máy tăng tốc. Mặc định chỉ chạy song song và ghi vào blackbox (ekf_yaw, ekf_pn…) để so; chọn NAV thì Position Hold và GPS Rescue dùng nó. Chỉ chọn NAV sau khi log cho thấy nó tốt hơn.":
+    "One filter for attitude, velocity, position and the IMU's biases: when the compass is disturbed, the GPS velocity corrects the heading every time the craft accelerates. By default it only runs alongside and is written to the blackbox (ekf_yaw, ekf_pn…) for comparison; with NAV, Position Hold and GPS Rescue use it. Choose NAV only after the logs have shown it is better.",
+  "chưa chạy / chưa căn":
+    "not running / not aligned",
+  "có GPS":
+    "GPS aiding",
+  "không GPS":
+    "no GPS",
+  "biết hướng":
+    "heading known",
+  "chưa chắc hướng":
+    "heading uncertain",
+  "đang dùng để giữ vị trí":
+    "used for Position Hold",
+  "chỉ ghi log":
+    "logged only",
+  "Hướng mũi: EKF / AHRS":
+    "Heading: EKF / AHRS",
+  "Vị trí EKF (bắc / đông)":
+    "EKF position (north / east)",
+  "Một bước EKF tốn":
+    "One EKF step takes",
+  "OFF: không chạy. SHADOW: chạy song song, chỉ ghi log (mặc định). NAV: Position Hold và GPS Rescue lấy vị trí, vận tốc, hướng mũi từ EKF khi nó có GPS.":
+    "OFF: not run. SHADOW: runs alongside, logged only (default). NAV: Position Hold and GPS Rescue take position, velocity and heading from the EKF while it has GPS.",
+  "Chạy song song, chỉ ghi log":
+    "Alongside, logged only",
+  "Dùng cho Position Hold / Rescue":
+    "Used by Position Hold / Rescue",
+  "Firmware có ESC passthrough như Betaflight. Cắm pin, tháo cánh, bấm nút dưới (app sẽ tự ngắt kết nối), rồi mở BLHeliSuite32 / ESC Configurator / AM32 Configurator trên cùng cổng và bấm Connect. Motor ngừng phát trong lúc đó; bấm Disconnect trong công cụ thì firmware tự khởi động lại. Không làm được khi đang ARM.":
+    "The firmware has ESC passthrough like Betaflight. Plug in the battery, remove the props, press the button below (the app disconnects by itself), then open BLHeliSuite32 / ESC Configurator / AM32 Configurator on the same port and press Connect. The motor output stops meanwhile; pressing Disconnect in the tool restarts the firmware. Not while ARMED.",
+  "Nhả cổng cho BLHeliSuite32":
+    "Let go of the port for BLHeliSuite32",
+  "Xong. App đã nhả cổng: mở BLHeliSuite32 / ESC Configurator trên cổng này rồi bấm Connect.":
+    "Done. The app has let go of the port: open BLHeliSuite32 / ESC Configurator on this port and press Connect.",
 };
 
 // Strings that read the same in both languages (units, protocol names, terms pilots use in English).
@@ -2230,4 +2328,5 @@ export const SAME = [
   "mA", "mAh",
   "ProShot1000",
   "Hexa H", "Y4", "V-tail quad", "A-tail quad",
+  "EKF",
 ];

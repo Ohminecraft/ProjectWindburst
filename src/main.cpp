@@ -4,7 +4,8 @@
  * Firmware entry point.
  *   RX build (-D_WINDBURST_RX, ESP32-S3): the flight controller.
  *       core 1  "wb_flight" : the control cycle (IMU -> FlightCore -> motors), woken by a hardware timer    [FlightTask + FlightApp::flight_cycle]
- *       core 1  loop()      : sensors, receiver, app requests, about once per millisecond                   [FlightApp::slow_update]
+ *       core 1  "wb_sensor" : sensors, receiver, app requests, about once per millisecond                   [FlightApp::slow_update]
+ *                             (its own task since 0.8.8: Arduino's loop task is deleted at the end of setup(), loop() never runs)
  *       core 0  "wb_link"   : app link (WBP protocol over USB / UART0) + blackbox (log memory, stream)     [LinkTask + wbp::Server + bb::Service]
  *       core 0  "wb_sd"     : writes the flight log to the SD card, when the settings select the card      [SdCardTask + bb::CardLog]
  *   TX build (-D_WINDBURST_TX, ESP32-C5): not written yet - placeholder that only identifies itself.
@@ -17,8 +18,8 @@
 #define WB_LINK_BAUD 230400          // UART0 / USB-serial bridge. Ignored on USB (see WB_LINK_KIND in app/link_arduino.h).
 #endif
 #define WB_FW_MAJOR 0
-#define WB_FW_MINOR 8
-#define WB_FW_PATCH 7
+#define WB_FW_MINOR 9
+#define WB_FW_PATCH 5
 
 #if defined(_WINDBURST_TX)
 
@@ -33,6 +34,7 @@ void loop() { Serial.println("Windburst TX: firmware not implemented yet"); dela
 #include "blackbox/bb_store_esp.h"
 #include "blackbox/bb_card_esp.h"
 #include "blackbox/bb_header.h"
+#include <esp_mac.h>
 
 static wbp::Settings settings;
 static FlightApp flight;
@@ -44,6 +46,7 @@ static app::LinkHost host(flight.link, &LinkTask::wait_1ms, nullptr, &LinkTask::
 static wbp::Server server(settings, &store, host, transport, wbp::ROLE_RX, WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH, "Windburst RX",
                           wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER);
 static LinkTask link_task(server, Serial, transport);
+static app::MspLink msp_link(host, transport);           // ESC tools on the same port (ESC passthrough)
 static EspPartitionStore log_store;                      // flash region of the flight log (partition "wblog", or the stock "spiffs" one)
 static bb::Service blackbox(flight.blackbox, transport);
 static bb::FirmwareHeader log_header{&settings, "Windburst RX", WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH};
@@ -52,10 +55,23 @@ static RtosLock sd_lock;
 static bb::CardLog card_log(sd_store, sd_lock);
 static SdCardTask sd_task(card_log);
 
+// The sensor thread. Before 0.8.8 it was Arduino's loop(); now a task of its own, so that its stack and priority are ours
+// (the loop task's 8 kB were set by the core, and the core may add work of its own to that task). Priority 1, as the loop task
+// had: below the flight task on the same core, which preempts it for every control cycle.
+static constexpr uint32_t kSensorStack = 16384;
+RTC_NOINIT_ATTR static uint32_t g_boot_count;               // (link stream boot_id)
+
+static void WB_FAST sensor_entry(void*) {
+    for (;;) {
+        if (flight_task.running()) { flight.slow_update(); vTaskDelay(1); }  // one pass per millisecond tick
+        else flight.run();                                                    // no flight task: one thread does both, as on a PC
+    }
+}
+
 void setup() {
-    Serial.setRxBufferSize(1024);
+    Serial.setRxBufferSize(2048);
 #if !defined(WB_LINK_NO_TX_BUFFER)
-    Serial.setTxBufferSize(2048);                        // (the queue in front of it is SerialTransport's own, 8 kB)
+    Serial.setTxBufferSize(4096);                        // (the queue in front of it is SerialTransport's own, 8 kB)
 #endif
     Serial.begin(WB_LINK_BAUD);
 #if WB_LINK_KICK
@@ -96,11 +112,23 @@ void setup() {
     blackbox.set_header_source(&bb::FirmwareHeader::write, &log_header);
     blackbox.set_loop(flight.core.cfg.loop_hz, flight.motors.cfg().count);
     host.set_blackbox(&blackbox, &settings);
+    host.set_port(&transport, &g_link_kicks);                // (the link stream: transmit queue, USB kicks)
+    // A number that differs every start: esp_random() alone is only pseudo-random with the radio off, so a counter in RTC memory
+    // that survives a restart (garbage after power-on - just as good) and the microsecond clock are mixed in.
+    g_boot_count++; host.set_boot_id(esp_random() ^ (g_boot_count * 2654435761u) ^ (uint32_t)micros());
+    {   // ESC passthrough: the MSP side gets the chip's id and the build; the link task gets the motor pins when a tool asks
+        uint8_t uid[12] = {}; esp_efuse_mac_get_default(uid); host.set_uid(uid);
+        msp_link.set_firmware(WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH, __DATE__, __TIME__);
+        link_task.set_msp(&msp_link, [](EscPins& p) { p.n = 0; for (int m = 0; m < 8 && flight.escPin(m) != GPIO_UNUSED; m++) p.pin[p.n++] = flight.escPin(m); p.pullup = flight.escPullup(); });
+    }
 
     // 4. the control cycle gets its own task and timer. From here on FlightApp is used by two threads (app/sync.h).
     if (flight_task.start(flight)) snprintf(line, sizeof(line), "loop: flight task on core %d, timer every %lu us", (int)xPortGetCoreID(), (unsigned long)flight.period_us());
     else snprintf(line, sizeof(line), "loop: FAILED to start the flight task - the control cycle shares its thread with the sensors (slower)");
     flight.add_report(line);
+    //    the sensor thread (starts now: from here the flight task and it share FlightApp; the link side does not exist yet)
+    const bool sensor_task = xTaskCreatePinnedToCore(&sensor_entry, "wb_sensor", kSensorStack, nullptr, 1, nullptr, xPortGetCoreID()) == pdPASS;
+    if (!sensor_task) flight.add_report("loop: FAILED to start the sensor task - it runs in Arduino's loop task instead");
 
     {   // why the chip started: a reset in flight (watchdog, crash, brown-out) shows here the next time the app connects
         const esp_reset_reason_t r = esp_reset_reason();
@@ -123,14 +151,12 @@ void setup() {
     host.set_report(flight.report(), flight.report_lines());
     for (int i = 0; i < flight.report_lines(); i++) server.log(1, flight.report()[i]);
 
-    // 6. app link, SD writer
+    // 6. app link, SD writer - then Arduino's loop task (this one) deletes itself
     link_task.start();
     sd_task.start();
+    if (sensor_task) vTaskDelete(nullptr);                   // (otherwise loop() below takes over)
 }
 
-void loop() {
-    if (flight_task.running()) { flight.slow_update(); vTaskDelay(1); }      // the sensor thread: one pass per millisecond tick
-    else flight.run();                                                        // no flight task: one thread does both, as on a PC
-}
+void loop() { sensor_entry(nullptr); }                       // only if the sensor task could not be created
 
 #endif

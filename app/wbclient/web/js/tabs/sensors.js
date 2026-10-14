@@ -126,6 +126,7 @@ export default {
         block('GPS',
           kv([
             [tr('Trạng thái'), readout('gps', (g) => `${g.state}, ${g.baud} baud`)],
+            [tr('Tần số lời giải'), readout('gps', (g) => (g.rate > 0 ? `${f(g.rate, 1)} Hz` + (g.rate < 4.5 ? tr(' (chậm: Position Hold bằng GPS cần từ 5 Hz; module NMEA thì tăng baud lên 57600)') : '') : '–'))],
             ['Fix', readout('gps', (g) => (g.fix >= 2 ? tr('{fix}D, {sats} vệ tinh, HDOP {hdop}', { fix: g.fix, sats: g.sats, hdop: f(g.hdop, 2) }) : tr('chưa fix, {sats} vệ tinh', { sats: g.sats })))],
             [tr('Vị trí'), readout('gps', (g) => (g.fix >= 2 ? tr('{lat}, {lon}, cao {alt} m', { lat: f(g.lat, 7), lon: f(g.lon, 7), alt: f(g.alt, 1) }) : '–'))],
             ['Home', readout('gps', (g) => (g.home_dist || g.home_dir ? tr('cách {d} m, hướng {dir}°', { d: g.home_dist, dir: f(g.home_dir, 0) }) : tr('cách 0 m')))],

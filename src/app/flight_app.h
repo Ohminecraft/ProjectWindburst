@@ -21,6 +21,7 @@
 #include "../hal/beeper/beeper_base.h"
 #include "../core/flight_core.h"
 #include "../core/inflight_trim.h"
+#include "../core/ekf.h"
 #include "../proto/settings_apply.h"
 #include "telemetry.h"
 #include "exchange.h"
@@ -78,6 +79,7 @@ public:
     void configure(wbp::Settings& s) {
         s_ = &s;
         wbp::apply_core(s, core.cfg, core.rc);
+        ekf_mode_ = s.nav.ekf; ekf_.cfg.gps_delay_s = core.cfg.horizontal.gps_delay_s;
         wbp::apply_motors(s, motors.cfg());
         wbp::apply_gps(s, gnss.config());
         apply_battery(); apply_beeper(); apply_servo();
@@ -230,7 +232,7 @@ public:
           add_report(line); }
 
         next_us_ = micros() + period_us_; last_us_ = micros(); start_us_ = last_us_; slow_us_ = last_us_; stat_ms_ = millis();
-        health_ = health(millis()); busy_other_ = busy_other(millis()); batt_state_ = (uint8_t)battery.monitor.state(); tel_.loop_target_hz = (uint16_t)(core.cfg.loop_hz + 0.5f);
+        health_ = health(millis()); busy_other_ = busy_other(millis()); batt_state_ = (uint8_t)battery.monitor.state(); tel_.loop_target_hz = (uint16_t)(core.cfg.loop_hz + 0.5f); tel_.motor_count = status.motors ? motors.cfg().count : 0;
         fill_slow(millis()); link.publish(tel_);
         return status.imu && status.motors;
     }
@@ -274,8 +276,11 @@ public:
     WB_FAST bool flight_cycle(uint32_t now_us) { sync_->lock(); const bool ok = fast_cycle(now_us, micros()); sync_->unlock(); return ok; }
 
     // ~1 kHz, the sensor thread.
-    void slow_update() {
+    WB_FAST void slow_update() {
         const uint32_t now_us = micros(), now_ms = millis();
+        // how regularly this thread gets the CPU: it runs the app's requests, so a long pause here is a firmware that "does not answer"
+        if (slow_seen_) { const uint32_t gap = now_ms - slow_last_ms_; if (gap > slow_gap_cur_) slow_gap_cur_ = gap; }
+        slow_seen_ = true; slow_last_ms_ = now_ms;
         // ---- A. device I/O, no lock: nothing here is shared with the flight task except the three values copied first
         bool armed, esc_a_ok; float up_cos, esc_v, esc_a;
         { app::Guard g(*sync_); armed = last_out_.armed; up_cos = core.ahrs().up_cos(); esc_v = motors.manager().esc_voltage(now_ms); esc_a_ok = motors.manager().esc_current(now_ms, esc_a); }
@@ -294,14 +299,24 @@ public:
         default: mag_new = mag.update(now_us, now_ms); break;
         }
         const uint32_t io_us = micros() - now_us;
+        // (the EKF's measurements wait here for its next step: this thread only)
+        if (ekf_mode_) {
+            if (gps_new) { ekf_gm_ = gm; ekf_gps_pend_ = true; }
+            if (baro_new) { ekf_baro_ = baro.altitudeM(); ekf_baro_pend_ = true; }
+            if (mag_new && mag.readyForFusion(now_ms)) { const float* b = mag.board(); ekf_mag_ = {b[0], b[1], b[2]}; ekf_mag_pend_ = true; }
+        }
 
         // ---- B. with the lock: results into the core, one app request, slow telemetry. Nothing below waits for a device.
         bool restart = false;
         {
             app::Guard g(*sync_);
             const bool now_armed = last_out_.armed;
-            if (now_armed && !was_armed_) core.reset_position();                 // (the GPS home point is set by gnss.update() when it sees the same edge)
+            if (now_armed && !was_armed_) { core.reset_position(); ekf_rehome_ = true; }   // (the GPS home point is set by gnss.update() when it sees the same edge)
             was_armed_ = now_armed;
+            if (ekf_mode_) {
+                if (ekf_acc_.dt >= 0.004f) { ekf_in_ = ekf_acc_; ekf_acc_ = EkfDelta(); ekf_due_ = true; ekf_ahrs_yaw_ = core.ahrs().euler_aero().yaw; ekf_armed_ = now_armed; ekf_gyro_ok_ = imu.gyroCalibrated(); }
+                core.on_ekf(ekf_nav_, now_ms);                                  // (the result of the last step)
+            }
 
             if (!use_external_rc) { if (rc_new) rc_seq_++; rc_link_ = rc.linkOk(now_ms); const uint16_t* c = rc.channels(); for (int i = 0; i < 16; i++) rc_[i] = c[i]; }
             for (int i = 0; i < 16; i++) servo_rc_[i] = rc_[i];                      // (the servos keep the last channels when the link drops)
@@ -327,15 +342,24 @@ public:
 
             link.service([this](const app::Request& r) { return execute(r); });
             if (reboot_pending_ && (int32_t)(now_ms - reboot_at_ms_) >= 0) { float z[8] = {}; motors.update(micros(), z, false); restart = true; }
-
+        }
+        // ---- C. the slow telemetry, in short pieces with the lock let go in between: a control cycle that comes due meanwhile waits
+        // for one piece, not for all of them (0.8.7 logs: the flight task waited ~240 us for the whole of B and C in one go, the
+        // larger part of a 4 kHz period). Each piece is consistent on its own; the telemetry never needed more.
+        {
+            app::Guard g(*sync_);
             const uint32_t slow_us = micros() - now_us;
             t_slow_.add(slow_us > io_us ? slow_us : io_us);
-            if ((uint32_t)(now_ms - stat_ms_) >= 1000u) every_second(now_us, now_ms);
+            if ((uint32_t)(now_ms - stat_ms_) >= 1000u) { every_second(now_us, now_ms); tel_.slow_gap_ms = app::sat_u16(slow_gap_cur_); slow_gap_cur_ = 0; tel_.ekf_us = app::sat_u16(ekf_us_cur_); ekf_us_cur_ = 0; }
             health_ = health(now_ms); busy_other_ = busy_other(now_ms); if (busy_other_) busy_seen_ = true; batt_state_ = (uint8_t)battery.monitor.state();
-            fill_slow(now_ms);
+        }
+        { app::Guard g(*sync_); fill_slow(now_ms); }
+        {
+            app::Guard g(*sync_);
             if (rc.telemetryPossible() && rc_link_) tlm_n_ = crsf_tlm_.next(now_us, crsf_in(), tlm_buf_);     // (only while the receiver is there to take it)
             if ((uint32_t)(now_ms - bb_slow_ms_) >= 1000u / bb::kSlowHz) { bb_slow_ms_ = now_ms; blackbox.log_slow(now_us, tel_); }
         }
+        if (ekf_due_) { ekf_due_ = false; ekf_step(now_ms); }  // (outside the lock: the EKF is this thread's alone, ~30 - 60 us)
         servos.update(servo_rc_, servo_have_rc_);              // (outside the lock: it writes the PWM peripheral; the channels were copied under it)
         if (tlm_n_) { rc.sendTelemetry(tlm_buf_, tlm_n_); tlm_n_ = 0; }                  // (outside the lock: a UART write)
         if (restart) { delay(20); ESP.restart(); }
@@ -346,6 +370,8 @@ public:
     uint32_t imuErrors() const { return imu_errors_; }
     uint32_t loops() const { return loops_; }                 // control cycles executed since boot
     uint32_t beaconsSent() const { return beacons_; }         // DShot beacon rounds requested by the beeper
+    uint8_t escPin(int m) const { return motors.pinOf(m); }   // ESC passthrough: the pin of logical motor m (fixed after begin())
+    bool escPullup() { return !motors.cfg().ext_pullup; }   // ... internal pull-up wanted (no 2k resistor on the board)
 
     // ---------------------------------------------------------------- app requests (flight loop context, called by link.service)
     app::Reply execute(const app::Request& r) {
@@ -358,6 +384,12 @@ public:
         switch (r.cmd) {
         case app::REQ_APPLY_SECTION: return apply_live(r.args[0]) ? wbp::ERR_OK : wbp::ERR_NOT_SUPPORTED;
         case app::REQ_REBOOT: mm.test_stop(); reboot_pending_ = true; reboot_at_ms_ = now_ms + 300; return wbp::ERR_OK;   // 300 ms: time for the ACK to leave
+        case app::REQ_ESC_PASSTHROUGH: {                     // (disarmed: check_request) the link task talks to the ESC bootloaders on the motor pins
+            if (!status.motors || motors.released()) return wbp::ERR_NOT_SUPPORTED;
+            mm.test_stop(); { float z[8] = {}; motors.update(now_us, z, false); }           // the disarmed level, once more
+            motors.release(); motor_beeper.silence();
+            int n = 0; while (n < motors.cfg().count && motors.pinOf(n) != GPIO_UNUSED) n++;
+            return app::Reply(wbp::ERR_OK, (uint8_t)n); }
         case wbp::CMD_APPLY_SETTINGS: for (const wbp::SectionInfo& si : wbp::kSections) if (si.live) apply_live(si.id); return wbp::ERR_OK;
 
         case wbp::CMD_GYRO_CAL:
@@ -458,6 +490,12 @@ private:
         const float nominal = period_us_ * 1e-6f;
         if (dt < 0.25f * nominal) dt = 0.25f * nominal; else if (dt > 8.0f * nominal) dt = 8.0f * nominal;
         if (acc_cal_.running()) acc_cal_.feed(imu.rawAcc());
+        // the EKF's input: every sample integrated (delta angle, delta velocity, FRD) - the sensor thread takes the sums at 250 Hz
+        if (ekf_mode_) {
+            if (ekf_acc_.dt > 0.1f) ekf_acc_ = EkfDelta();             // (nobody took them: the EKF starts over from the next ones)
+            for (int k = 0; k < 3; k++) { ekf_acc_.dang[k] += s.gyro_dps[k] * fc::kDeg2Rad * dt; ekf_acc_.dvel[k] += s.acc_g[k] * fc::kG0 * dt; }
+            ekf_acc_.dt += dt;
+        }
 
         fc::FastInput in;
         in.gyro_dps = {s.gyro_dps[0], s.gyro_dps[1], s.gyro_dps[2]}; in.acc_g = {s.acc_g[0], s.acc_g[1], s.acc_g[2]};
@@ -489,7 +527,7 @@ private:
             fs.t_us = now_us; fs.gyro = last_out_.gyro_f_dps; fs.gyro_raw = tel_.gyro_raw; fs.setpoint = last_out_.sp_dps;
             fs.pid_p = last_out_.pid_p; fs.pid_i = last_out_.pid_i; fs.pid_d = last_out_.pid_d; fs.pid_f = last_out_.pid_f;
             fs.stick = last_out_.stick; fs.throttle = last_out_.throttle; fs.motor = mo; fs.rpm = in.motors.rpm; fs.acc = tel_.acc;
-            fs.roll = last_out_.est.att.roll; fs.pitch = last_out_.est.att.pitch; fs.yaw = last_out_.est.att.yaw;
+            fs.roll = last_out_.est.att.roll; fs.pitch = last_out_.est.att.pitch; fs.yaw = app::heading360(last_out_.est.att.yaw);
             fs.loop_us = micros() - now_us;
             fs.t_lock_us = peak_.lock; fs.t_imu_us = peak_.imu; fs.t_core_us = peak_.core; fs.t_est_us = peak_.est; fs.t_motor_us = peak_.motor; peak_ = StagePeaks();
             blackbox.log_fast(fs);
@@ -604,6 +642,7 @@ private:
         case wbp::SEC_BEEPER: apply_beeper(); return true;
         case wbp::SEC_BATTERY: apply_battery(); return true;
         case wbp::SEC_SERVO: apply_servo(); return true;
+        case wbp::SEC_ALTHOLD: wbp::apply_althold(s, core.cfg.alt); core.apply_althold(); return true;
         case wbp::SEC_BLACKBOX: return true;                                      // used by bb::Service (link task), nothing to do in the flight loop
         default: return false;
         }
@@ -701,8 +740,50 @@ private:
         g.vn = s.vel_n_cms * 0.01f; g.ve = s.vel_e_cms * 0.01f; g.vd = s.vel_d_cms * 0.01f;
         g.sigma_pos = s.h_acc_mm ? s.h_acc_mm * 0.001f : 2.0f; g.sigma_vel = s.s_acc_mm ? s.s_acc_mm * 0.001f : 0.3f; g.sigma_alt = s.v_acc_mm ? s.v_acc_mm * 0.001f : 3.0f;
         g.vd_valid = s.has_vel_d;
-        g.sats = s.num_sat;
+        g.sats = s.num_sat; g.rate_hz = gnss.rateHz();
         return g;
+    }
+
+    // ---- the EKF (core/ekf.h), sensor thread. Aligned on the ground (accelerometer tilt, compass heading), then predicted from the
+    // IMU sums and corrected with whatever arrived since the last step.
+    void ekf_step(uint32_t now_ms) {
+        const uint32_t t0 = micros();
+        const EkfDelta d = ekf_in_; if (!(d.dt > 0.0f)) return;
+        const float fx = d.dvel[0] / d.dt, fy = d.dvel[1] / d.dt, fz = d.dvel[2] / d.dt, an = sqrtf(fx * fx + fy * fy + fz * fz) / fc::kG0;
+        const float decl = core.cfg.declination_deg; const bool use_mag = core.cfg.use_mag && status.mag;
+        if (!ekf_.aligned()) {
+            ekf_gps_pend_ = ekf_baro_pend_ = false;
+            if (ekf_armed_ || !ekf_gyro_ok_ || an < 0.9f || an > 1.1f) { ekf_mag_pend_ = false; return; }
+            if (use_mag && !ekf_mag_pend_ && (uint32_t)(now_ms - ekf_wait_ms_) < 3000u) return;    // a compass reading first (3 s at most)
+            const fc::Vec3 a{fx / fc::kG0, fy / fc::kG0, fz / fc::kG0};
+            float yaw0 = ekf_ahrs_yaw_ * fc::kDeg2Rad; bool known = false;
+            if (ekf_mag_pend_) {                         // the field, levelled with the tilt and a heading of 0: its angle is (declination - heading)
+                const float roll = atan2f(-a.y, -a.z), pitch = atan2f(a.x, sqrtf(a.y * a.y + a.z * a.z)), cr = cosf(roll), sr = sinf(roll), cp = cosf(pitch), sp = sinf(pitch);
+                const fc::Vec3 m = ekf_mag_; const float mn = cp * m.x + sr * sp * m.y + cr * sp * m.z, me = cr * m.y - sr * m.z;
+                if (mn * mn + me * me > 1e-8f) { yaw0 = decl * fc::kDeg2Rad - atan2f(me, mn); known = true; }
+            }
+            ekf_.init(a, yaw0, known); ekf_mag_pend_ = false; ekf_rehome_ = true;
+            return;
+        }
+        ekf_wait_ms_ = now_ms;
+        ekf_.predict({d.dang[0], d.dang[1], d.dang[2]}, {d.dvel[0], d.dvel[1], d.dvel[2]}, d.dt);
+        const float turn = sqrtf(d.dang[0] * d.dang[0] + d.dang[1] * d.dang[1] + d.dang[2] * d.dang[2]) / d.dt;
+        if (!ekf_armed_ && turn < 0.1f && an > 0.95f && an < 1.05f) ekf_.fuse_still();
+        if (ekf_gps_pend_) {
+            ekf_gps_pend_ = false; const fc::GpsMeas& g = ekf_gm_;
+            if (ekf_rehome_) { ekf_.set_position(g.north_m, g.east_m); ekf_rehome_ = false; }   // (a new home point: the GPS position jumped)
+            ekf_.fuse_gps(g.north_m, g.east_m, g.vn, g.ve, g.vd, g.vd_valid, g.sigma_pos, g.sigma_vel);
+        }
+        if (ekf_baro_pend_) { ekf_baro_pend_ = false; ekf_.fuse_baro(ekf_baro_); }
+        if (ekf_mag_pend_) { ekf_mag_pend_ = false; if (use_mag) ekf_.fuse_mag(ekf_mag_, decl); }
+        bool finite = true; for (int i = 0; i < 3; i++) finite &= ekf_.vel()[i] == ekf_.vel()[i] && ekf_.pos()[i] == ekf_.pos()[i];
+        if (!finite || !(ekf_.q()[0] == ekf_.q()[0])) { const fc::EkfConfig c = ekf_.cfg; ekf_ = fc::Ekf(); ekf_.cfg = c; ekf_nav_ = fc::EkfNav(); return; }   // (never seen: start over)
+        const fc::EkfStatus& st = ekf_.status(); float r, p, y; ekf_.euler_rad(r, p, y);
+        ekf_nav_.valid = true; ekf_nav_.gps_aiding = st.gps_aiding; ekf_nav_.heading_ok = st.heading_ok;
+        ekf_nav_.pn = ekf_.pos()[0]; ekf_nav_.pe = ekf_.pos()[1]; ekf_nav_.vn = ekf_.vel()[0]; ekf_nav_.ve = ekf_.vel()[1]; ekf_nav_.yaw_deg = y * fc::kRad2Deg;
+        ekf_out_.roll = r * fc::kRad2Deg; ekf_out_.pitch = -p * fc::kRad2Deg; ekf_out_.yaw = y * fc::kRad2Deg; ekf_out_.z = -ekf_.pos()[2]; ekf_out_.vd = ekf_.vel()[2];
+        ekf_out_.yaw_sigma = ekf_.yaw_sigma() * fc::kRad2Deg; ekf_out_.test_vel = st.test_vel; ekf_out_.test_mag = st.test_mag;
+        const uint32_t us = micros() - t0; if (us > ekf_us_cur_) ekf_us_cur_ = us;
     }
 
     // ---- telemetry
@@ -719,6 +800,15 @@ private:
         tel_.gps_alt_used = e.gps_alt_used; tel_.gps_vz_used = e.gps_vz_used;
     }
     void fill_slow(uint32_t now_ms) {
+        tel_.z_resets = app::sat_u16(core.vertical().baro_resets());
+        {   const EkfOut& e = ekf_out_; uint8_t f = 0;
+            if (ekf_.aligned()) f |= wbp::EKF_FLAGS_ALIGNED;
+            if (ekf_nav_.gps_aiding) f |= wbp::EKF_FLAGS_GPS_AIDING;
+            if (ekf_nav_.heading_ok) f |= wbp::EKF_FLAGS_HEADING_OK;
+            if (core.ekf_used()) f |= wbp::EKF_FLAGS_USED_FOR_NAV;
+            tel_.ekf_flags = ekf_mode_ ? f : 0; tel_.ekf_roll = e.roll; tel_.ekf_pitch = e.pitch; tel_.ekf_yaw = e.yaw; tel_.ekf_z = e.z; tel_.ekf_vd = e.vd;
+            tel_.ekf_pn = ekf_nav_.pn; tel_.ekf_pe = ekf_nav_.pe; tel_.ekf_vn = ekf_nav_.vn; tel_.ekf_ve = ekf_nav_.ve;
+            tel_.ekf_yaw_sigma = e.yaw_sigma; tel_.ekf_test_vel = e.test_vel; tel_.ekf_test_mag = e.test_mag; }
         // navigation (changes at the estimators' rate at most)
         { const fc::CoreOutput& o = last_out_; const fc::Estimate& e = o.est; uint8_t f = 0;
           if (o.poshold_active) f |= wbp::NAV_FLAGS_POSHOLD;
@@ -726,6 +816,7 @@ private:
           if (o.rescue_active) f |= wbp::NAV_FLAGS_RESCUE;
           if (o.rescue_available) f |= wbp::NAV_FLAGS_RESCUE_AVAILABLE;
           if (o.nav_lean) f |= wbp::NAV_FLAGS_NAV_LEAN;
+          if (o.poshold_slow_gps) f |= wbp::NAV_FLAGS_POSHOLD_SLOW_GPS;
           tel_.nav_flags = f; tel_.flow_quality = flow_quality_; tel_.flow_reject = e.flow_reject; tel_.flow_rate = flow.rateHz();
           // the speed the flow sensor measures, for the eye: single samples of these sensors are coarse (an MSP sensor counts in steps of 0.5 rad/s), so a quarter second of them is averaged
           { const uint32_t d = now_ms - flow_tel_ms_; flow_tel_ms_ = now_ms; const float k = d >= 250u ? 1.0f : (float)d / 250.0f;
@@ -777,7 +868,7 @@ private:
         const gps::Solution& g = gnss.solution();
         tel_.gps_fix = g.fix_type; tel_.gps_sats = g.num_sat; tel_.lat = g.lat; tel_.lon = g.lon; tel_.alt_cm = g.alt_cm; tel_.gs_cms = g.ground_speed_cms;
         tel_.course_ddeg = g.course_ddeg; tel_.hdop = g.hdop; tel_.hacc_mm = g.h_acc_mm; tel_.home_dist_m = gnss.home().distance_to_home_m();
-        tel_.home_dir_ddeg = gnss.home().direction_to_home_ddeg(); tel_.gps_state = (uint8_t)gnss.state(); tel_.gps_baud = gnss.baud();
+        tel_.home_dir_ddeg = gnss.home().direction_to_home_ddeg(); tel_.gps_state = (uint8_t)gnss.state(); tel_.gps_baud = gnss.baud(); tel_.gps_rate_hz = gnss.rateHz();
         // calibration progress
         tel_.cal_kind = cal_kind_; tel_.cal_mask = acc_cal_.mask();
         const float* raw = imu.rawAcc();
@@ -816,6 +907,13 @@ private:
     sys::Load load_;
     app::Sync no_sync_; app::Sync* sync_ = &no_sync_;
     app::StageTime t_imu_, t_core_, t_motor_, t_rest_, t_slow_;
+    bool slow_seen_ = false; uint32_t slow_last_ms_ = 0, slow_gap_cur_ = 0;
+    // the EKF: sums of the IMU (flight task adds, sensor thread takes - under the lock), the filter and its inputs (sensor thread only)
+    struct EkfDelta { float dang[3] = {0, 0, 0}, dvel[3] = {0, 0, 0}, dt = 0; };
+    struct EkfOut { float roll = 0, pitch = 0, yaw = 0, z = 0, vd = 0, yaw_sigma = 0, test_vel = 0, test_mag = 0; };
+    EkfDelta ekf_acc_, ekf_in_; uint8_t ekf_mode_ = 1; bool ekf_due_ = false, ekf_armed_ = false, ekf_gyro_ok_ = false; float ekf_ahrs_yaw_ = 0;
+    fc::Ekf ekf_; fc::EkfNav ekf_nav_; EkfOut ekf_out_; fc::GpsMeas ekf_gm_; float ekf_baro_ = 0; fc::Vec3 ekf_mag_;
+    bool ekf_gps_pend_ = false, ekf_baro_pend_ = false, ekf_mag_pend_ = false, ekf_rehome_ = true; uint32_t ekf_wait_ms_ = 0, ekf_us_cur_ = 0;       // sensor thread: longest pause between two passes, this second
     struct StagePeaks { uint16_t lock = 0, imu = 0, core = 0, est = 0, motor = 0; } peak_;
     WB_FAST static uint16_t peak16(uint16_t was, uint32_t us) { return us > 65535u ? (uint16_t)65535 : us > was ? (uint16_t)us : was; }
     bool loop_slow_ = false, busy_other_ = false, busy_seen_ = false; uint8_t slow_seconds_ = 0, batt_state_ = 0, flow_quality_ = 0; uint32_t flow_tel_ms_ = 0;

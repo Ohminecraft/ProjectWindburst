@@ -8,6 +8,8 @@
 #include <string.h>
 #include "../proto/wbp_server.h"
 #include "exchange.h"
+#include "tx_queue.h"
+#include "msp_bridge.h"
 #include "../blackbox/bb_service.h"
 #include "../proto/settings_apply.h"
 
@@ -25,7 +27,7 @@ namespace app {
 // Flight-loop side. Returns ERR_OK if the request may be executed now.
 inline wbp::Err check_request(const Request& r, bool armed) {
     if (r.cmd == REQ_APPLY_SECTION) return armed ? wbp::ERR_ARMED : (r.n == 1 && wbp::find_section(r.args[0]) ? wbp::ERR_OK : wbp::ERR_BAD_SECTION);
-    if (r.cmd == REQ_REBOOT) return armed ? wbp::ERR_ARMED : wbp::ERR_OK;
+    if (r.cmd == REQ_REBOOT || r.cmd == REQ_ESC_PASSTHROUGH) return armed ? wbp::ERR_ARMED : wbp::ERR_OK;
     const wbp::CommandInfo* ci = wbp::find_command(r.cmd);
     if (!ci) return wbp::ERR_UNKNOWN;
     if (r.n != ci->arg_bytes) return wbp::ERR_BAD_ARG;
@@ -37,7 +39,7 @@ class LinkHost : public wbp::Host {
 public:
     using NowFn = uint32_t (*)();
     // wait/ctx: how the link task sleeps ~1 ms while the flight loop executes a request (vTaskDelay(1)); now: millis()
-    LinkHost(Exchange& x, Exchange::WaitFn wait, void* ctx, NowFn now) : x_(x), wait_(wait), ctx_(ctx), now_(now) {}
+    LinkHost(Exchange& x, Exchange::WaitFn wait, void* ctx, NowFn now) : x_(x), wait_(wait), ctx_(ctx), now_(now) { boot_ms_ = now_(); }
 
     void attach(wbp::Server* s) { srv_ = s; }
     // Boot report: text lines that never change after setup() (detected sensors, failure reasons). Sent as LOG frames on CMD_REPORT.
@@ -48,7 +50,15 @@ public:
 
     bool armed() override { x_.snapshot(tel_); return tel_.armed; }
     void on_frame() override { x_.link_touch(now_()); }
+    // the transmit queue and the USB kick counter (link_arduino.h), for the link stream; either may be null
+    void set_port(const QueuedTransport* tx, const volatile uint32_t* kicks) { tx_ = tx; kicks_ = kicks; }
+    // a number that differs from one start to the next (esp_random() on the board): the app tells a restart by it
+    void set_boot_id(uint32_t id) { boot_id_ = id; }
     void tick(uint32_t now_ms) override {
+        // how regularly the link task runs: the longest pause between two passes, per second (a pass that waits for a request counts)
+        if (tick_seen_) { const uint32_t gap = now_ms - last_tick_ms_; if (gap > gap_cur_) gap_cur_ = gap; }
+        tick_seen_ = true; last_tick_ms_ = now_ms;
+        if ((uint32_t)(now_ms - win_ms_) >= 1000u) { win_ms_ = now_ms; gap_last_ = gap_cur_; gap_cur_ = 0; cmd_last_ = cmd_cur_; cmd_cur_ = 0; }
         x_.snapshot(tel_);
         if (tel_.fw_saved_seq != saved_seq_) { saved_seq_ = tel_.fw_saved_seq; autosave_ = tel_.fw_saved_section; }       // the flight loop changed a section and wants it kept
         if (!bb_) return;
@@ -60,6 +70,7 @@ public:
     uint16_t fill_stream(uint8_t id, uint8_t* out, uint16_t cap) override {
         if (id == wbp::STR_BLACKBOX) return bb_ ? bb_->pack_status(out, cap) : 0;          // the one stream that does not come from the flight loop
         x_.snapshot(tel_);
+        if (id == wbp::STR_LINK) fill_link(tel_);
         return pack_stream(id, tel_, srv_ ? srv_->flags() : 0, out, cap);
     }
 
@@ -79,7 +90,7 @@ public:
         }
         if (n > sizeof(Request::args)) return wbp::ERR_BAD_ARG;
         Request r; r.cmd = cmd; r.n = (uint8_t)n; if (n) memcpy(r.args, args, n);
-        const Reply rep = x_.call(r, wait_, ctx_);
+        const Reply rep = timed_call(r);
         if (rep.n) { memcpy(result, rep.data, rep.n); rlen = rep.n; }
         if (rep.err == wbp::ERR_OK && ci->writes_section) changed_ = true;
         return rep.err;
@@ -93,18 +104,89 @@ public:
             return true;
         }
         Request r; r.cmd = REQ_APPLY_SECTION; r.n = 1; r.args[0] = section;
-        return x_.call(r, wait_, ctx_).err == wbp::ERR_OK;
+        return timed_call(r).err == wbp::ERR_OK;
     }
     bool take_settings_changed() override { const bool c = changed_; changed_ = false; return c; }
     // flash writes stall the flight loop for milliseconds: the section waits here until the craft is disarmed
     uint8_t take_autosave() override { if (!autosave_ || tel_.armed) return 0; const uint8_t s = autosave_; autosave_ = 0; return s; }
-    void reboot() override { Request r; r.cmd = REQ_REBOOT; x_.call(r, wait_, ctx_); }
+    void reboot() override { Request r; r.cmd = REQ_REBOOT; timed_call(r); }
+    // ESC passthrough: the flight side stops the motor output for good. Returns the number of ESCs, 0 = refused (armed, no motors).
+    uint8_t esc_passthrough() { Request r; r.cmd = REQ_ESC_PASSTHROUGH; const Reply rep = timed_call(r); return rep.err == wbp::ERR_OK && rep.n ? rep.data[0] : 0; }
+
+    // the link task's own counters, into a telemetry copy (link stream)
+    void fill_link(Telemetry& t) const {
+        const uint32_t now = now_();
+        t.up_ms = now - boot_ms_;                              // (since this object was made: the firmware's start on the board, a restart in the simulator)
+        t.boot_id = boot_id_; t.link_busy = sat_u16(x_.timeouts());
+        if (srv_) { t.link_rx = srv_->frames(); t.link_bad = sat_u16(srv_->bad_frames()); t.link_dropped = srv_->dropped_streams(); }
+        if (tx_) { t.link_tx_lost = sat_u16(tx_->frames_lost()); t.link_queued = sat_u16((uint32_t)tx_->queued()); }
+        if (kicks_) t.link_kicks = sat_u16(*kicks_);
+        t.link_cmd_max_ms = sat_u16(cmd_last_ > cmd_cur_ ? cmd_last_ : cmd_cur_); t.link_gap_ms = sat_u16(gap_last_ > gap_cur_ ? gap_last_ : gap_cur_);
+    }
+
+    // what the MSP side (ESC tools) is told: from the telemetry snapshot
+    void msp_info(msp::Info& in) {
+        x_.snapshot(tel_);
+        in.armed = tel_.armed; in.motors = tel_.motor_count; in.cycle_us = tel_.loop_target_hz ? (uint16_t)(1000000u / tel_.loop_target_hz) : 250;
+        in.batt_v = tel_.batt_v; in.amps = tel_.batt_amps; in.cells = tel_.batt_cells; in.mah = (uint16_t)(tel_.batt_mah > 65535.0f ? 65535.0f : tel_.batt_mah > 0 ? tel_.batt_mah : 0.0f);
+        memcpy(in.uid, uid_, 12);
+        if (settings_) {                                     // (the link task owns the settings: read here, never written)
+            static const uint8_t bf[] = {0, 1, 2, 3, 5, 6, 7, 7, 8, 4};   // esc_protocol -> Betaflight (DShot1200: none there, said 600)
+            const uint8_t pr = settings_->motors.protocol;
+            in.bf_motor_protocol = pr < sizeof(bf) ? bf[pr] : 6;
+            in.pwm_rate = settings_->motors.pulse_hz; in.idle_x100 = (uint16_t)(settings_->motors.idle_x10 * 10u);
+            in.pulse_disarmed = settings_->motors.pulse_disarmed; in.pulse_armed = settings_->motors.pulse_armed; in.pulse_max = settings_->motors.pulse_max;
+            in.pole_count = settings_->motors.pole_count; in.bidir = settings_->motors.bidirectional != 0;
+            in.airmode = settings_->general.airmode != 0;
+            const uint8_t rp = settings_->receiver.protocol;
+            in.rx_kind = rp == wbp::RX_PROTOCOL_PPM ? 1 : rp == wbp::RX_PROTOCOL_PWM ? 2 : 0;
+            in.gps = settings_->sensors.gps_enabled != 0; in.range = settings_->sensors.range_enabled != 0;
+            in.modes_set = 0;
+            for (int i = 0; i < 16; i++) if (settings_->modes.hi[i] > settings_->modes.lo[i] && settings_->modes.mode[i] < 32) in.modes_set |= 1u << settings_->modes.mode[i];
+        }
+        in.health = tel_.health; in.modes_on = tel_.modes; in.blockers = tel_.blockers; in.cpu_pct = tel_.cpu_pct;
+        for (int i = 0; i < 8; i++) in.motor_out[i] = tel_.motor_cmd[i];
+    }
+    void set_uid(const uint8_t uid[12]) { memcpy(uid_, uid, 12); }
 
 private:
+    uint8_t uid_[12] = {};
+    Reply timed_call(const Request& r) {
+        const uint32_t t0 = now_(); const Reply rep = x_.call(r, wait_, ctx_);
+        const uint32_t d = now_() - t0; if (d > cmd_cur_) cmd_cur_ = d;
+        return rep;
+    }
+    const QueuedTransport* tx_ = nullptr; const volatile uint32_t* kicks_ = nullptr; uint32_t boot_ms_ = 0, boot_id_ = 0;
+    bool tick_seen_ = false; uint32_t last_tick_ms_ = 0, win_ms_ = 0, gap_cur_ = 0, gap_last_ = 0, cmd_cur_ = 0, cmd_last_ = 0;
     Exchange& x_; Exchange::WaitFn wait_; void* ctx_; NowFn now_;
     wbp::Server* srv_ = nullptr; Telemetry tel_; bool changed_ = false; uint8_t saved_seq_ = 0, autosave_ = 0;
     const char* const* report_ = nullptr; int report_n_ = 0;
     bb::Service* bb_ = nullptr; const wbp::Settings* settings_ = nullptr;
+};
+
+// MSP next to WBP on the app link (msp_bridge.h): the link task gives every byte it received to both. on_byte() answers the ESC
+// tools' questions itself and returns the number of ESCs once a passthrough was granted (the flight side has let go of the motor
+// pins): the caller then runs the 4-way interface (hal/motor/esc4way.h) on this port and restarts the firmware when it ends.
+class MspLink {
+public:
+    MspLink(LinkHost& h, wbp::Transport& tx) : h_(h), tx_(tx) {}
+    void set_firmware(uint8_t maj, uint8_t min, uint8_t patch, const char* date, const char* time) { info_.fw_major = maj; info_.fw_minor = min; info_.fw_patch = patch; info_.build_date = date; info_.build_time = time; }
+    uint8_t on_byte(uint8_t c) {
+        if (c == '$' && !info_fresh_) { h_.msp_info(info_); info_fresh_ = true; }      // (a fresh snapshot per frame, not per byte)
+        uint8_t out[160]; size_t n = 0;
+        const msp::Bridge::Result r = br_.feed(c, info_, out, sizeof(out), n);
+        if (r == msp::Bridge::NONE) return 0;
+        info_fresh_ = false;
+        if (r == msp::Bridge::REPLY) { tx_.write(out, n); return 0; }
+        const uint8_t escs = h_.esc_passthrough();          // PASSTHROUGH: ask the flight side (refused armed, without motors)
+        n = br_.passthrough_reply(escs, out, sizeof(out)); tx_.write(out, n);
+        passthroughs_ += escs ? 1 : 0;
+        return escs;
+    }
+    const msp::Bridge& bridge() const { return br_; }
+    uint32_t passthroughs() const { return passthroughs_; }
+private:
+    LinkHost& h_; wbp::Transport& tx_; msp::Bridge br_; msp::Info info_; bool info_fresh_ = false; uint32_t passthroughs_ = 0;
 };
 
 } // namespace app

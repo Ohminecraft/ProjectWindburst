@@ -8,12 +8,12 @@
 // so a struct is its own wire image). The Python client builds the same layouts from the same json.
 namespace wbp {
 constexpr uint8_t kProtocolVersion = 1;
-constexpr uint32_t kSchemaHash = 0x1C71546Du;
+constexpr uint32_t kSchemaHash = 0xB0570D17u;
 
 enum Err : uint8_t { ERR_OK, ERR_UNKNOWN, ERR_BAD_ARG, ERR_ARMED, ERR_BUSY, ERR_NOT_SUPPORTED, ERR_BAD_SECTION, ERR_SIZE_MISMATCH, ERR_STORAGE, ERR_NO_SENSOR, ERR_BAD_STATE, ERR_FAILED };
 enum Cmd : uint8_t { CMD_GYRO_CAL = 1, CMD_ACC_CAL_POINT = 2, CMD_ACC_CAL_FINISH = 3, CMD_LEVEL_TRIM = 4, CMD_MAG_CAL_START = 5, CMD_MAG_CAL_FINISH = 6, CMD_MAG_CAL_CANCEL = 7, CMD_MOTOR_TEST = 8, CMD_MOTOR_STOP = 9, CMD_MOTOR_DIRECTION = 10, CMD_MOTOR_BEACON = 11, CMD_SET_HOME = 12, CMD_ESC_TELEMETRY = 13, CMD_APPLY_SETTINGS = 14, CMD_REPORT = 15, CMD_ACC_CAL_CANCEL = 16, CMD_BEEP = 17, CMD_BLACKBOX_ERASE = 18, CMD_BLACKBOX_STREAM = 19, CMD_BLACKBOX_SESSION = 20, CMD_BLACKBOX_READ = 21 };
-enum SectionId : uint8_t { SEC_GENERAL = 1, SEC_RECEIVER = 2, SEC_MODES = 3, SEC_RATES = 4, SEC_PID = 5, SEC_MOTORS = 6, SEC_SENSORS = 7, SEC_GPS = 8, SEC_BEEPER = 9, SEC_PORTS = 10, SEC_PINS = 11, SEC_CALIBRATION = 12, SEC_BATTERY = 13, SEC_BLACKBOX = 14, SEC_FILTERS = 15, SEC_FLOW = 16, SEC_NAV = 17, SEC_SERVO = 18 };
-enum StreamId : uint8_t { STR_ATTITUDE = 1, STR_RC = 2, STR_STATUS = 3, STR_MOTORS = 4, STR_SENSORS = 5, STR_GPS = 6, STR_ESTIMATE = 7, STR_GYRO_FAST = 8, STR_CALIBRATION = 9, STR_BATTERY = 10, STR_BLACKBOX = 11, STR_TUNING = 12, STR_NAV = 13 };
+enum SectionId : uint8_t { SEC_GENERAL = 1, SEC_RECEIVER = 2, SEC_MODES = 3, SEC_RATES = 4, SEC_PID = 5, SEC_MOTORS = 6, SEC_SENSORS = 7, SEC_GPS = 8, SEC_BEEPER = 9, SEC_PORTS = 10, SEC_PINS = 11, SEC_CALIBRATION = 12, SEC_BATTERY = 13, SEC_BLACKBOX = 14, SEC_FILTERS = 15, SEC_FLOW = 16, SEC_NAV = 17, SEC_SERVO = 18, SEC_ALTHOLD = 19 };
+enum StreamId : uint8_t { STR_ATTITUDE = 1, STR_RC = 2, STR_STATUS = 3, STR_MOTORS = 4, STR_SENSORS = 5, STR_GPS = 6, STR_ESTIMATE = 7, STR_GYRO_FAST = 8, STR_CALIBRATION = 9, STR_BATTERY = 10, STR_BLACKBOX = 11, STR_TUNING = 12, STR_NAV = 13, STR_LINK = 14 };
 enum LAYOUT_E : uint8_t { LAYOUT_QUAD_X, LAYOUT_QUAD_PLUS, LAYOUT_HEX_X, LAYOUT_HEX_PLUS, LAYOUT_HEX_X_BF, LAYOUT_HEX_H, LAYOUT_Y6, LAYOUT_Y4, LAYOUT_OCTO_X8, LAYOUT_OCTO_FLAT_PLUS, LAYOUT_OCTO_FLAT_X, LAYOUT_VTAIL4, LAYOUT_ATAIL4, LAYOUT_QUAD_X_1234 };
 enum ESC_PROTOCOL_E : uint8_t { ESC_PROTOCOL_PWM, ESC_PROTOCOL_ONESHOT125, ESC_PROTOCOL_ONESHOT42, ESC_PROTOCOL_MULTISHOT, ESC_PROTOCOL_DSHOT150, ESC_PROTOCOL_DSHOT300, ESC_PROTOCOL_DSHOT600, ESC_PROTOCOL_DSHOT1200, ESC_PROTOCOL_PROSHOT1000, ESC_PROTOCOL_BRUSHED };
 enum RX_PROTOCOL_E : uint8_t { RX_PROTOCOL_CRSF, RX_PROTOCOL_SBUS, RX_PROTOCOL_IBUS, RX_PROTOCOL_SPEKTRUM, RX_PROTOCOL_NRF24, RX_PROTOCOL_PPM, RX_PROTOCOL_PWM, RX_PROTOCOL_SPEKTRUM1024 };
@@ -63,12 +63,14 @@ enum SERVO_SOURCE_E : uint8_t { SERVO_SOURCE_OFF, SERVO_SOURCE_CH1, SERVO_SOURCE
 enum CURR_SOURCE_E : uint8_t { CURR_SOURCE_AUTO, CURR_SOURCE_ADC, CURR_SOURCE_ESC, CURR_SOURCE_NONE };
 enum PORT_ASSIGN_E : uint8_t { PORT_ASSIGN_AUTO, PORT_ASSIGN_TABLE };
 enum GPS_ALT_E : uint8_t { GPS_ALT_OFF, GPS_ALT_FALLBACK, GPS_ALT_BLEND };
+enum EKF_MODE_E : uint8_t { EKF_MODE_OFF, EKF_MODE_SHADOW, EKF_MODE_NAV };
 enum ARM_BLOCKER_B : uint32_t { ARM_BLOCKER_NO_IMU = 1u << 0, ARM_BLOCKER_GYRO_NOT_CAL = 1u << 1, ARM_BLOCKER_RX_LOST = 1u << 2, ARM_BLOCKER_THROTTLE_HIGH = 1u << 3, ARM_BLOCKER_ANGLE_TOO_HIGH = 1u << 4, ARM_BLOCKER_FAILSAFE = 1u << 5, ARM_BLOCKER_ALTHOLD_NO_BARO = 1u << 6, ARM_BLOCKER_BATT_LOW = 1u << 7, ARM_BLOCKER_ARM_SWITCH_ON = 1u << 8, ARM_BLOCKER_CONFIG_UNSAVED = 1u << 9, ARM_BLOCKER_CALIBRATING = 1u << 10, ARM_BLOCKER_POSHOLD_NO_GPS = 1u << 11, ARM_BLOCKER_MAG_NOT_CALIBRATED = 1u << 12, ARM_BLOCKER_PIN_CONFLICT = 1u << 13, ARM_BLOCKER_LOOP_RATE = 1u << 14, ARM_BLOCKER_RUNAWAY_TAKEOFF = 1u << 15, ARM_BLOCKER_RESCUE_NO_FIX = 1u << 16, ARM_BLOCKER_RESCUE_NO_COMPASS = 1u << 17 };
 enum HEALTH_B : uint32_t { HEALTH_IMU = 1u << 0, HEALTH_GYRO_CAL = 1u << 1, HEALTH_BARO = 1u << 2, HEALTH_RANGE = 1u << 3, HEALTH_GPS = 1u << 4, HEALTH_MAG_READY = 1u << 5, HEALTH_MAG_CAL = 1u << 6, HEALTH_RX = 1u << 7, HEALTH_MOTORS = 1u << 8, HEALTH_ESC_TELEMETRY = 1u << 9, HEALTH_ACC_CAL = 1u << 10, HEALTH_BATTERY = 1u << 11, HEALTH_FLOW = 1u << 12 };
 enum SETTINGS_FLAGS_B : uint32_t { SETTINGS_FLAGS_DIRTY = 1u << 0, SETTINGS_FLAGS_REBOOT_REQUIRED = 1u << 1 };
 enum EST_VALID_B : uint32_t { EST_VALID_ALT = 1u << 0, EST_VALID_POS = 1u << 1, EST_VALID_YAW_FROM_MAG = 1u << 2, EST_VALID_VEL = 1u << 3, EST_VALID_FLOW = 1u << 4, EST_VALID_TILT_AIDED = 1u << 5, EST_VALID_GPS_ALT = 1u << 6, EST_VALID_GPS_VZ = 1u << 7 };
 enum FS_CAUSE_B : uint32_t { FS_CAUSE_LINK = 1u << 0, FS_CAUSE_SWITCH = 1u << 1, FS_CAUSE_BATTERY = 1u << 2 };
-enum NAV_FLAGS_B : uint32_t { NAV_FLAGS_POSHOLD = 1u << 0, NAV_FLAGS_POSHOLD_UNAVAILABLE = 1u << 1, NAV_FLAGS_RESCUE = 1u << 2, NAV_FLAGS_RESCUE_AVAILABLE = 1u << 3, NAV_FLAGS_NAV_LEAN = 1u << 4 };
+enum NAV_FLAGS_B : uint32_t { NAV_FLAGS_POSHOLD = 1u << 0, NAV_FLAGS_POSHOLD_UNAVAILABLE = 1u << 1, NAV_FLAGS_RESCUE = 1u << 2, NAV_FLAGS_RESCUE_AVAILABLE = 1u << 3, NAV_FLAGS_NAV_LEAN = 1u << 4, NAV_FLAGS_POSHOLD_SLOW_GPS = 1u << 5 };
+enum EKF_FLAGS_B : uint32_t { EKF_FLAGS_ALIGNED = 1u << 0, EKF_FLAGS_GPS_AIDING = 1u << 1, EKF_FLAGS_HEADING_OK = 1u << 2, EKF_FLAGS_USED_FOR_NAV = 1u << 3 };
 
 struct __attribute__((packed)) S_general {
     uint16_t loop_hz;
@@ -1064,8 +1066,10 @@ struct __attribute__((packed)) S_nav {
     uint8_t rescue_allow_no_fix;
     uint8_t gps_alt;
     uint8_t gps_vel_z;
+    uint8_t ph_min_gps_hz;
+    uint8_t ekf;
 };
-static_assert(sizeof(S_nav) == 29, "S_nav layout");
+static_assert(sizeof(S_nav) == 31, "S_nav layout");
 inline void defaults(S_nav& s) {
     s.flow_align = 0;
     s.flow_flip = 0;
@@ -1094,6 +1098,8 @@ inline void defaults(S_nav& s) {
     s.rescue_allow_no_fix = 0;
     s.gps_alt = 1;
     s.gps_vel_z = 1;
+    s.ph_min_gps_hz = 5;
+    s.ekf = 1;
 }
 inline int validate(S_nav& s) {
     int fixed = 0; (void)s;
@@ -1124,6 +1130,8 @@ inline int validate(S_nav& s) {
     { if (s.rescue_allow_no_fix > 1) { s.rescue_allow_no_fix = 1; fixed++; } }
     { if (s.gps_alt > 2) { s.gps_alt = 2; fixed++; } }
     { if (s.gps_vel_z > 1) { s.gps_vel_z = 1; fixed++; } }
+    { if (s.ph_min_gps_hz > 20) { s.ph_min_gps_hz = 20; fixed++; } }
+    { if (s.ekf > 2) { s.ekf = 2; fixed++; } }
     return fixed;
 }
 
@@ -1164,6 +1172,34 @@ inline int validate(S_servo& s) {
     return fixed;
 }
 
+struct __attribute__((packed)) S_althold {
+    uint8_t mid_stick;
+    uint8_t deadband;
+    uint8_t low_stick;
+    uint8_t max_stick;
+    uint8_t climb_rate;
+    uint8_t descend_rate;
+};
+static_assert(sizeof(S_althold) == 6, "S_althold layout");
+inline void defaults(S_althold& s) {
+    s.mid_stick = 50;
+    s.deadband = 5;
+    s.low_stick = 6;
+    s.max_stick = 100;
+    s.climb_rate = 20;
+    s.descend_rate = 12;
+}
+inline int validate(S_althold& s) {
+    int fixed = 0; (void)s;
+    { if (s.mid_stick < 30) { s.mid_stick = 30; fixed++; } else if (s.mid_stick > 70) { s.mid_stick = 70; fixed++; } }
+    { if (s.deadband > 20) { s.deadband = 20; fixed++; } }
+    { if (s.low_stick < 2) { s.low_stick = 2; fixed++; } else if (s.low_stick > 25) { s.low_stick = 25; fixed++; } }
+    { if (s.max_stick < 70) { s.max_stick = 70; fixed++; } else if (s.max_stick > 100) { s.max_stick = 100; fixed++; } }
+    { if (s.climb_rate < 2) { s.climb_rate = 2; fixed++; } else if (s.climb_rate > 80) { s.climb_rate = 80; fixed++; } }
+    { if (s.descend_rate < 2) { s.descend_rate = 2; fixed++; } else if (s.descend_rate > 50) { s.descend_rate = 50; fixed++; } }
+    return fixed;
+}
+
 struct Settings {
     S_general general;
     S_receiver receiver;
@@ -1183,14 +1219,15 @@ struct Settings {
     S_flow flow;
     S_nav nav;
     S_servo servo;
+    S_althold althold;
 };
-inline void defaults(Settings& s) { defaults(s.general); defaults(s.receiver); defaults(s.modes); defaults(s.rates); defaults(s.pid); defaults(s.motors); defaults(s.sensors); defaults(s.gps); defaults(s.beeper); defaults(s.ports); defaults(s.pins); defaults(s.calibration); defaults(s.battery); defaults(s.blackbox); defaults(s.filters); defaults(s.flow); defaults(s.nav); defaults(s.servo); }
+inline void defaults(Settings& s) { defaults(s.general); defaults(s.receiver); defaults(s.modes); defaults(s.rates); defaults(s.pid); defaults(s.motors); defaults(s.sensors); defaults(s.gps); defaults(s.beeper); defaults(s.ports); defaults(s.pins); defaults(s.calibration); defaults(s.battery); defaults(s.blackbox); defaults(s.filters); defaults(s.flow); defaults(s.nav); defaults(s.servo); defaults(s.althold); }
 
 // live: applied to the running firmware without a reboot. compat / compat2 / compat3: sizes of this section in older firmwares whose layout was the same
 // up to that size (fields were only appended or cut at the end since): such a stored record is still loaded. 0 = none.
 struct SectionInfo { uint8_t id; const char* name; uint16_t size; bool live; uint16_t compat, compat2, compat3; };
-constexpr int kSectionCount = 18;
-constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 22, false, 0, 0, 0}, {SEC_RECEIVER, "receiver", 12, false, 9, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0}, {SEC_PID, "pid", 75, true, 0, 0, 0}, {SEC_MOTORS, "motors", 36, false, 35, 34, 0}, {SEC_SENSORS, "sensors", 16, false, 0, 0, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0}, {SEC_PINS, "pins", 46, false, 37, 33, 27}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0}, {SEC_NAV, "nav", 29, true, 27, 0, 0}, {SEC_SERVO, "servo", 26, true, 0, 0, 0}};
+constexpr int kSectionCount = 19;
+constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 22, false, 23, 0, 0}, {SEC_RECEIVER, "receiver", 12, false, 9, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0}, {SEC_PID, "pid", 75, true, 0, 0, 0}, {SEC_MOTORS, "motors", 36, false, 35, 34, 0}, {SEC_SENSORS, "sensors", 16, false, 0, 0, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0}, {SEC_PINS, "pins", 46, false, 37, 33, 27}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0}, {SEC_NAV, "nav", 31, true, 30, 29, 27}, {SEC_SERVO, "servo", 26, true, 0, 0, 0}, {SEC_ALTHOLD, "althold", 6, true, 0, 0, 0}};
 inline const SectionInfo* find_section(uint8_t id) { for (const auto& s : kSections) if (s.id == id) return &s; return nullptr; }
 // pointer to / size of a section inside a Settings object (nullptr if unknown)
 inline uint8_t* section_ptr(Settings& st, uint8_t id) { switch (id) {
@@ -1212,6 +1249,7 @@ inline uint8_t* section_ptr(Settings& st, uint8_t id) { switch (id) {
     case SEC_FLOW: return (uint8_t*)&st.flow;
     case SEC_NAV: return (uint8_t*)&st.nav;
     case SEC_SERVO: return (uint8_t*)&st.servo;
+    case SEC_ALTHOLD: return (uint8_t*)&st.althold;
     default: return nullptr; } }
 inline int validate_section(Settings& st, uint8_t id) { switch (id) {
     case SEC_GENERAL: return validate(st.general);
@@ -1232,6 +1270,7 @@ inline int validate_section(Settings& st, uint8_t id) { switch (id) {
     case SEC_FLOW: return validate(st.flow);
     case SEC_NAV: return validate(st.nav);
     case SEC_SERVO: return validate(st.servo);
+    case SEC_ALTHOLD: return validate(st.althold);
     default: return -1; } }
 inline bool defaults_section(Settings& st, uint8_t id) { switch (id) {
     case SEC_GENERAL: defaults(st.general); return true;
@@ -1252,13 +1291,14 @@ inline bool defaults_section(Settings& st, uint8_t id) { switch (id) {
     case SEC_FLOW: defaults(st.flow); return true;
     case SEC_NAV: defaults(st.nav); return true;
     case SEC_SERVO: defaults(st.servo); return true;
+    case SEC_ALTHOLD: defaults(st.althold); return true;
     default: return false; } }
 
 // ---- telemetry streams ----
 struct __attribute__((packed)) T_attitude {
     int16_t roll;
     int16_t pitch;
-    int16_t yaw;
+    uint16_t yaw;
     int16_t gyro[3];
     int16_t sp[3];
 };
@@ -1342,8 +1382,9 @@ struct __attribute__((packed)) T_gps {
     uint16_t home_dir;
     uint8_t state;
     uint32_t baud;
+    uint8_t rate;
 };
-static_assert(sizeof(T_gps) == 31, "T_gps layout");
+static_assert(sizeof(T_gps) == 32, "T_gps layout");
 struct __attribute__((packed)) T_estimate {
     int16_t z;
     int16_t vz;
@@ -1353,8 +1394,17 @@ struct __attribute__((packed)) T_estimate {
     int16_t pos_e;
     int16_t vel_n;
     int16_t vel_e;
+    uint16_t z_resets;
+    uint16_t ekf_yaw;
+    uint16_t ekf_yaw_sigma;
+    int16_t ekf_pn;
+    int16_t ekf_pe;
+    int16_t ekf_vn;
+    int16_t ekf_ve;
+    uint8_t ekf_flags;
+    uint16_t ekf_us;
 };
-static_assert(sizeof(T_estimate) == 15, "T_estimate layout");
+static_assert(sizeof(T_estimate) == 32, "T_estimate layout");
 struct __attribute__((packed)) T_gyro_fast {
     int16_t raw[3];
     int16_t filt[3];
@@ -1436,6 +1486,21 @@ struct __attribute__((packed)) T_nav {
     uint16_t return_alt;
 };
 static_assert(sizeof(T_nav) == 28, "T_nav layout");
+struct __attribute__((packed)) T_link {
+    uint32_t uptime;
+    uint32_t boot_id;
+    uint32_t rx_frames;
+    uint16_t rx_bad;
+    uint16_t busy;
+    uint16_t tx_lost;
+    uint32_t dropped;
+    uint16_t kicks;
+    uint16_t cmd_max_ms;
+    uint16_t link_gap_ms;
+    uint16_t slow_gap_ms;
+    uint16_t queued;
+};
+static_assert(sizeof(T_link) == 32, "T_link layout");
 // ---- commands ----
 struct CommandInfo { uint8_t id; const char* name; uint8_t arg_bytes; bool armed_ok; uint8_t writes_section; };   // writes_section: section the command changes in RAM (0 = none)
 constexpr int kCommandCount = 21;
@@ -1467,6 +1532,7 @@ constexpr float gps_course = 0.1f;
 constexpr float gps_hdop = 0.01f;
 constexpr float gps_hacc = 0.001f;
 constexpr float gps_home_dir = 0.1f;
+constexpr float gps_rate = 0.1f;
 constexpr float estimate_z = 0.01f;
 constexpr float estimate_vz = 0.01f;
 constexpr float estimate_z_sigma = 0.001f;
@@ -1474,6 +1540,12 @@ constexpr float estimate_pos_n = 0.1f;
 constexpr float estimate_pos_e = 0.1f;
 constexpr float estimate_vel_n = 0.01f;
 constexpr float estimate_vel_e = 0.01f;
+constexpr float estimate_ekf_yaw = 0.01f;
+constexpr float estimate_ekf_yaw_sigma = 0.01f;
+constexpr float estimate_ekf_pn = 0.1f;
+constexpr float estimate_ekf_pe = 0.1f;
+constexpr float estimate_ekf_vn = 0.01f;
+constexpr float estimate_ekf_ve = 0.01f;
 constexpr float gyro_fast_raw = 0.1f;
 constexpr float gyro_fast_filt = 0.1f;
 constexpr float calibration_raw = 0.001f;
@@ -1492,9 +1564,10 @@ constexpr float nav_wind_n = 0.01f;
 constexpr float nav_wind_e = 0.01f;
 constexpr float nav_home_dist = 0.1f;
 constexpr float nav_return_alt = 0.1f;
+constexpr float link_uptime = 0.001f;
 } // namespace scale
 struct StreamInfo { uint8_t id; const char* name; uint16_t size; uint16_t default_rate; uint16_t max_rate; };
-constexpr int kStreamCount = 13;
-constexpr StreamInfo kStreams[kStreamCount] = {{STR_ATTITUDE, "attitude", 18, 50, 200}, {STR_RC, "rc", 42, 20, 100}, {STR_STATUS, "status", 49, 10, 50}, {STR_MOTORS, "motors", 70, 20, 100}, {STR_SENSORS, "sensors", 28, 50, 200}, {STR_GPS, "gps", 31, 5, 25}, {STR_ESTIMATE, "estimate", 15, 20, 100}, {STR_GYRO_FAST, "gyro_fast", 12, 0, 1000}, {STR_CALIBRATION, "calibration", 11, 10, 20}, {STR_BATTERY, "battery", 19, 2, 20}, {STR_BLACKBOX, "blackbox", 34, 2, 10}, {STR_TUNING, "tuning", 53, 0, 50}, {STR_NAV, "nav", 28, 10, 50}};
+constexpr int kStreamCount = 14;
+constexpr StreamInfo kStreams[kStreamCount] = {{STR_ATTITUDE, "attitude", 18, 50, 200}, {STR_RC, "rc", 42, 20, 100}, {STR_STATUS, "status", 49, 10, 50}, {STR_MOTORS, "motors", 70, 20, 100}, {STR_SENSORS, "sensors", 28, 50, 200}, {STR_GPS, "gps", 32, 5, 25}, {STR_ESTIMATE, "estimate", 32, 20, 100}, {STR_GYRO_FAST, "gyro_fast", 12, 0, 1000}, {STR_CALIBRATION, "calibration", 11, 10, 20}, {STR_BATTERY, "battery", 19, 2, 20}, {STR_BLACKBOX, "blackbox", 34, 2, 10}, {STR_TUNING, "tuning", 53, 0, 50}, {STR_NAV, "nav", 28, 10, 50}, {STR_LINK, "link", 32, 1, 10}};
 inline const StreamInfo* find_stream(uint8_t id) { for (const auto& s : kStreams) if (s.id == id) return &s; return nullptr; }
 } // namespace wbp

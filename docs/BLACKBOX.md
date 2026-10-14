@@ -87,6 +87,13 @@ task "wb_sd" (nhân 0, ưu tiên thấp):  CardLog::work()  <---- khối 4 kB, s
   - `blackbox.sd_mhz` (mặc định 20): dây dài mà thẻ không nhận thì hạ xuống 4 đến 10.
 - Thẻ phải định dạng **FAT32** (FAT16 cũng được). Bản FatFs trong Arduino-ESP32 **không có exFAT**: thẻ 64 GB trở lên xuất xưởng là exFAT, phải định dạng lại thành FAT32 trên máy tính. Firmware không tự định dạng thẻ.
 
+### Xem danh sách không cắt bản ghi (0.8.8)
+Lỗi người dùng gặp: ghi blackbox bằng công tắc AUX, mở tab Blackbox của app thì phiên đang ghi bị đóng, 3 s sau một phiên mới tự bắt đầu, lần xem danh sách kế tiếp lại đóng nó... Từ 0.8.8:
+- `BLACKBOX_SESSION` (xem danh sách) **không đóng** phiên đang ghi nữa; phiên đó có trong danh sách với kích thước tới lúc đó.
+- Chỉ khi **tải** (`BLACKBOX_READ`) phiên mới bị đóng (trên mặt đất; đang bay thì BUSY như cũ). App gọi `blackbox_claim()` trước khi tải để danh sách có kích thước cuối cùng.
+- Phiên của **công tắc** mà app đã đóng để tải: không tự bắt đầu lại khi công tắc vẫn bật; gạt công tắc tắt rồi bật để ghi phiên mới. (Trigger ALWAYS vẫn tự ghi tiếp 3 s sau lần đọc cuối; luồng trực tiếp về app kết thúc thì công tắc vẫn ghi tiếp như cũ.)
+Kiểm chứng: `test_blackbox` (TRIG_SWITCH: xem danh sách 5 lần trong 4 s → một phiên, vẫn ghi; tải → đóng, 5 s sau vẫn không có phiên mới; tắt / bật → phiên mới), pytest `test_download_with_trigger_always`.
+
 ## 4. Điều phải đo trên mạch thật: flash làm đứng vòng bay
 
 Trên ESP32, **mọi thao tác flash tắt cache và làm đứng cả hai nhân**, kể cả nhân đang chạy vòng bay. Thiết kế trên giới hạn mỗi lần đứng ở một trang (theo datasheet khoảng 0,7 ms), không bao giờ xoá lúc bay. Trong mô phỏng: ghi trang 700 µs, xoá sector 45 ms, xoá khối 64 kB 150 ms — **đây là số giả định, chưa đo**.

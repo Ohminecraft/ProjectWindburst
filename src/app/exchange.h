@@ -27,7 +27,7 @@
 // ============================================================================
 namespace app {
 
-enum : uint8_t { REQ_APPLY_SECTION = 0xF0, REQ_REBOOT = 0xF1 };   // internal requests; everything below 0x80 is a wbp::Cmd
+enum : uint8_t { REQ_APPLY_SECTION = 0xF0, REQ_REBOOT = 0xF1, REQ_ESC_PASSTHROUGH = 0xF2 };   // internal requests; everything below 0x80 is a wbp::Cmd
 
 struct Request { uint8_t cmd = 0; uint8_t n = 0; uint8_t args[8] = {}; };
 struct Reply { wbp::Err err = wbp::ERR_OK; uint8_t n = 0; uint8_t data[8] = {}; Reply() {} Reply(wbp::Err e) : err(e) {} Reply(wbp::Err e, uint8_t b0) : err(e), n(1) { data[0] = b0; } };

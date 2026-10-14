@@ -175,7 +175,7 @@ static void t_baud_and_failures() {
 static void t_nmea_engine() {
     printf("[engine NMEA] provider with custom commands\n");
     SimGps sim; sim.version = UBX_M8; sim.module_baud = 38400; sim.engine_baud = 38400; sim.truth.fix_after_ms = 100;
-    Engine e; e.cfg.provider = PROV_NMEA; e.cfg.baud = 38400; strcpy(e.cfg.nmea_custom_commands, "$PMTK220,100*2F $PMTK300,100,0,0,0,0*2C");
+    Engine e; e.cfg.provider = PROV_NMEA; e.cfg.baud = 38400; e.cfg.auto_config = false; strcpy(e.cfg.nmea_custom_commands, "$PMTK220,100*2F $PMTK300,100,0,0,0,0*2C");
     sim.truth.vn = 3.0; sim.truth.ve = -4.0; sim.truth.vd = -1.0;
     uint32_t t = 0; e.begin(sim, t); run(e, sim, t, 10000, [&] { return e.healthy() && e.solution().fix; });
     run(e, sim, t, 1200, [&] { return false; });
@@ -183,7 +183,21 @@ static void t_nmea_engine() {
     CHECK(abs(e.solution().vel_n_cms - 300) <= 3 && abs(e.solution().vel_e_cms + 400) <= 3 && !e.solution().has_vel_d, "NMEA: north / east velocity from RMC (%d / %d cm/s), no vertical one", e.solution().vel_n_cms, e.solution().vel_e_cms);
     CHECK(abs(e.solution().lat - (int32_t)llround(sim.truth.lat * 1e7)) <= 5 && abs(e.solution().lon - (int32_t)llround(sim.truth.lon * 1e7)) <= 5, "NMEA position within 0.5 m: %d %d", e.solution().lat, e.solution().lon);
     CHECK(sim.nmea_in.size() == 2 && sim.nmea_in[0] == "PMTK220,100*2F" && sim.nmea_in[1] == "PMTK300,100,0,0,0,0*2C", "custom commands sent one per line (%zu)", sim.nmea_in.size());
-    bool ubx_sent = false; for (auto& r : sim.log) (void)r, ubx_sent = true; CHECK(!ubx_sent, "NMEA provider never sends UBX");
+    bool ubx_sent = false; for (auto& r : sim.log) (void)r, ubx_sent = true; CHECK(!ubx_sent, "NMEA provider with auto-config off never sends UBX");
+
+    // 0.8.8: auto-config on - the solution rate is asked for in the three dialects (a 1 Hz NMEA module made Position Hold rock)
+    auto rate_run = [&](uint32_t baud, uint8_t want, SimGps& sm, Engine& en) {
+        sm.version = UBX_M8; sm.module_baud = baud; sm.engine_baud = baud; sm.truth.fix_after_ms = 100;
+        en.cfg.provider = PROV_NMEA; en.cfg.baud = baud; en.cfg.update_rate_hz = want;
+        uint32_t tt = 0; en.begin(sm, tt); run(en, sm, tt, 10000, [&] { return en.healthy() && en.solution().fix; }); run(en, sm, tt, 15000, [&] { return false; }); };
+    { SimGps sm; Engine en; rate_run(57600, 10, sm, en);
+      const bool mtk = sm.nmea_in.size() >= 2 && sm.nmea_in[0] == "PMTK220,100*2F" && sm.nmea_in[1] == "PCAS02,100*1E";
+      CHECK(mtk && en.nmea_rate_requested() == 10, "57600 baud, 10 Hz wanted: $PMTK220,100 and $PCAS02,100 sent (%zu lines, first '%s')", sm.nmea_in.size(), sm.nmea_in.empty() ? "" : sm.nmea_in[0].c_str());
+      CHECK(sm.rate_ms == 100 && en.rate_hz() > 8.0f, "... and UBX CFG-RATE: a u-blox in NMEA mode now sends %u ms apart, measured %.1f Hz", (unsigned)sm.rate_ms, en.rate_hz()); }
+    { SimGps sm; Engine en; rate_run(19200, 10, sm, en);
+      CHECK(en.nmea_rate_requested() == 2 && sm.nmea_in.size() >= 1 && sm.nmea_in[0] == "PMTK220,500*2B" && sm.rate_ms == 500, "19200 baud carries no 10 Hz of NMEA: 2 Hz asked for ('%s')", sm.nmea_in.empty() ? "" : sm.nmea_in[0].c_str()); }
+    { SimGps sm; Engine en; rate_run(9600, 10, sm, en);
+      CHECK(en.nmea_rate_requested() == 1 && sm.nmea_in.empty() && sm.rate_ms == 1000 && en.rate_hz() > 0.8f && en.rate_hz() < 1.2f, "9600 baud: left at 1 Hz, nothing sent; the rate is measured (%.2f Hz) - Position Hold will refuse it", en.rate_hz()); }
 }
 
 static void t_providers() {

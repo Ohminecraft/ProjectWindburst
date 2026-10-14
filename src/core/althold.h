@@ -49,7 +49,10 @@ enum class AhState : uint8_t { STOPPED, LANDED_IDLE, LANDED_PRE_TAKEOFF, TAKEOFF
 
 struct AltHoldConfig {
     float max_climb_mps = 2.0f, max_descend_mps = 1.2f;
-    float deadband = 0.10f;             // fraction of half-stick around 0.5
+    // the throttle stick (0..1, as it comes from the receiver: the throttle curve is not used here) - the althold section
+    float mid_stick = 0.5f;             // holds the height
+    float deadband = 0.05f;             // +- this around mid_stick still holds (0.8.7 and before: 0.10 of the half stick, the same 5 %)
+    float max_stick = 1.0f;             // full climb rate here; full descent rate at low_stick
     float kp_z = 1.2f;                  // 1/s   position error -> velocity
     float kp_v = 5.0f, ki_v = 3.0f;     // velocity error -> accel (m/s^2), integral of it
     float i_limit_mps2 = 4.0f;
@@ -120,7 +123,7 @@ public:
             if (!in.armed) { state = AhState::STOPPED; return 0.0f; }
             if (in.pilot_absent || in.failsafe_descent) { state = AhState::LANDED_IDLE; need_low = true; return 0.0f; }
             if (in.stick01 <= cfg.low_stick) { state = AhState::LANDED_IDLE; return 0.0f; }
-            if (in.stick01 > 0.5f + cfg.deadband) { takeoff_t = 0; z0 = in.z; ramp_ = 0.0f; lifted_ = false; state = AhState::TAKEOFF; }
+            if (in.stick01 > cfg.mid_stick + cfg.deadband) { takeoff_t = 0; z0 = in.z; ramp_ = 0.0f; lifted_ = false; state = AhState::TAKEOFF; }
             return 0.0f;                                 // idle spin only; motors turn, no lift
         case AhState::TAKEOFF: {
             if (!in.armed) { state = AhState::STOPPED; return 0.0f; }
@@ -158,11 +161,7 @@ public:
             else if (in.failsafe_descent) vt = -failsafe_rate(in.z);
             else if (low) vt = -cfg.max_descend_mps;
             else if (!in.pilot_absent) {                 // (nobody at the stick, no descent ordered yet: hold the height)
-                float s = (in.stick01 - 0.5f) * 2.0f, a = fabsf(s);
-                if (a > cfg.deadband) {
-                    float f = (a - cfg.deadband) / (1.0f - cfg.deadband);
-                    vt = s > 0 ? f * cfg.max_climb_mps : -f * cfg.max_descend_mps;
-                }
+                vt = stick_rate(in.stick01);
             }
             if (vt == 0.0f) {                            // holding: target stays put (like D_set_pos_target_from_climb_rate with 0)
                 // nothing to integrate
@@ -180,6 +179,14 @@ public:
         }
     }
 
+    // The climb rate the stick asks for (m/s, up +): 0 inside mid_stick +- deadband; from its edge up to max_stick linearly to the
+    // full climb rate, down to low_stick to the full descent rate (an off-centre mid_stick gives each side its own travel).
+    WB_FAST float stick_rate(float st) const {
+        const float up0 = cfg.mid_stick + cfg.deadband, dn0 = cfg.mid_stick - cfg.deadband;
+        if (st > up0) { const float span = fmaxf(cfg.max_stick - up0, 0.02f); return clampf((st - up0) / span, 0.0f, 1.0f) * cfg.max_climb_mps; }
+        if (st < dn0) { const float span = fmaxf(dn0 - cfg.low_stick, 0.02f); return -clampf((dn0 - st) / span, 0.0f, 1.0f) * cfg.max_descend_mps; }
+        return 0.0f;
+    }
     // Call when Altitude Hold is (re)engaged in flight from another mode; seeds integrator so throttle does not jump.
     void begin_flight(float z, float current_throttle01, float up_cos) {
         state = AhState::FLYING;

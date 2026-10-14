@@ -113,7 +113,8 @@ private:
     }
     void set_state(State s) { state_ = s; state_ts_ = now_; cfg_pos_ = 0; if (s == ST_DETECT_BAUD) { test_count_ = 0; test_sent_ = false; } if (s == ST_CONFIGURE) { ack_ = ACK_IDLE; retries_ = 0; step_ts_ = now_; gnss_set_sent_ = false; } }
     void note_solution() {
-        if (last_nav_ms_ && sol_.time_ms != prev_itow_ ) { const uint32_t dt = now_ - last_nav_ms_; if (dt > 0 && dt < 2000) nav_dt_ms_ = nav_dt_ms_ ? (nav_dt_ms_ * 7 + dt) / 8 : dt; }
+        if (last_nav_ms_ && (cfg.provider == PROV_NMEA || sol_.time_ms != prev_itow_)) {      // (NMEA: every completed GGA is a solution - it carries no iTOW)
+            const uint32_t dt = now_ - last_nav_ms_; if (dt > 0 && dt < 2000) nav_dt_ms_ = nav_dt_ms_ ? (nav_dt_ms_ * 7 + dt) / 8 : dt; }
         prev_itow_ = sol_.time_ms; last_nav_ms_ = now_;
     }
 
@@ -313,9 +314,39 @@ private:
         if (state_ == ST_DETECT_BAUD) { set_state(ST_CHANGE_BAUD); return; }                  // BF does not try to detect the NMEA module's baud
         if (state_ == ST_CHANGE_BAUD) {
             if (cfg_pos_ == 0) { port_->set_baud(kBauds[user_baud_idx_]); temp_baud_idx_ = user_baud_idx_; cfg_pos_ = 1; state_ts_ = now_; return; }
+            if (cfg.auto_config) send_nmea_rate(cfg.update_rate_hz);
             send_custom_commands(); set_state(ST_RECEIVING_DATA); last_nav_ms_ = now_;
         }
     }
+    // The solution rate of an NMEA module (0.8.8). NMEA itself has no command for it: each chip family has its own. These three cover
+    // nearly every module sold for drones; a module that does not know a sentence ignores it (no harm in sending all three):
+    //   MediaTek / Quectel / most "GPS+GLONASS" boards   $PMTK220,<ms>
+    //   AT6558 / CASIC (many cheap "BDS" modules)        $PCAS02,<ms>
+    //   u-blox left in NMEA mode (BN-880, M8N clones)    UBX CFG-RATE (binary)
+    // One solution of GGA + RMC + GSA + GSV is about 400 bytes: the rate is capped by what the baud rate carries (9600: left at 1 Hz,
+    // 19200: 2, 38400: 5, 57600 and up: 10). Raise the module's baud rate (or use the UBX provider on a u-blox) for more.
+    static uint8_t nmea_rate_for_baud(uint8_t want, uint32_t baud) {
+        const uint8_t cap = baud >= 57600 ? 10 : baud >= 38400 ? 5 : baud >= 19200 ? 2 : 1;
+        return want == 0 ? 0 : want < cap ? want : cap;
+    }
+    void send_nmea_line(const char* body) {                    // "$" body "*" checksum CR LF
+        uint8_t ck = 0; for (const char* c = body; *c; c++) ck ^= (uint8_t)*c;
+        char line[48]; const int n = snprintf(line, sizeof(line), "$%s*%02X\r\n", body, ck);
+        if (n > 0 && n < (int)sizeof(line)) port_->write((const uint8_t*)line, (size_t)n);
+    }
+    void send_nmea_rate(uint8_t want_hz) {
+        const uint8_t hz = nmea_rate_for_baud(want_hz, kBauds[temp_baud_idx_]);
+        nmea_rate_sent_ = hz;
+        if (hz <= 1) return;                                    // 1 Hz is every module's default: nothing to ask for
+        const unsigned ms = 1000u / hz; char body[24];
+        snprintf(body, sizeof(body), "PMTK220,%u", ms); send_nmea_line(body);
+        snprintf(body, sizeof(body), "PCAS02,%u", ms); send_nmea_line(body);
+        uint8_t p[6]; ubx::cfg_rate_legacy(p, hz); uint8_t buf[ubx::kMaxFrame];
+        const size_t n = ubx::build(buf, sizeof(buf), ubx::CLS_CFG, ubx::CFG_RATE, p, 6); if (n) port_->write(buf, n);
+    }
+public:
+    uint8_t nmea_rate_requested() const { return nmea_rate_sent_; }   // what send_nmea_rate() asked for (0 = nothing sent yet)
+private:
     void send_custom_commands() {
         const char* p = cfg.nmea_custom_commands;
         while (*p) {
@@ -330,7 +361,7 @@ private:
     Solution sol_; State state_ = ST_UNKNOWN;
     uint32_t now_ = 0, state_ts_ = 0, step_ts_ = 0, sent_ts_ = 0, last_nav_ms_ = 0, last_sweep_ms_ = 0, prev_itow_ = 0, nav_dt_ms_ = 0, timeouts_ = 0, config_nacks_ = 0, config_timeouts_ = 0;
     int user_baud_idx_ = 2, temp_baud_idx_ = 2; uint8_t test_count_ = 0, retries_ = 0, ack_cls_ = 0, ack_id_ = 0; uint16_t sweep_steps_ = 0;
-    Ack ack_ = ACK_IDLE; uint8_t cfg_pos_ = 0;
+    Ack ack_ = ACK_IDLE; uint8_t cfg_pos_ = 0, nmea_rate_sent_ = 0;
     UbxVersion version_ = UBX_UNDEF; bool version_assumed_ = false, flight_model_ = false, armed_ = false, sat_dirty_ = false;
     bool test_sent_ = false, have_pos_ = false, have_vel_ = false, gnss_set_sent_ = false;
     SatInfo sats_[kMaxSats]; int sat_n_ = 0;

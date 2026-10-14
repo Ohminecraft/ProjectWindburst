@@ -111,7 +111,7 @@ struct Bmp388Sim : BaroSim {
     uint16_t T1 = 27000, T2 = 19000; int8_t T3 = -10;
     int16_t P1 = 32270, P2 = 25500; int8_t P3 = 4, P4 = -1; uint16_t P5 = 2400, P6 = 1500; int8_t P7 = 3, P8 = -5;
     int16_t P9 = 500; int8_t P10 = 3, P11 = -3;
-    uint8_t id = 0x50, osr = 0, pwr = 0, cfgreg = 0, err = 0, err_force = 0;
+    uint8_t id = 0x50, osr = 0, pwr = 0, cfgreg = 0, odr = 0, err = 0, err_force = 0; bool normal = false;      // normal: free-running conversions
     uint32_t up_next = 0, ut_next = 0, up_out = 0, ut_out = 0;
     bool drdy = false, awake = true, fresh_frames = false;
     Bmp388Sim() {}
@@ -155,6 +155,7 @@ struct Bmp388Sim : BaroSim {
         if (r >= 0x07 && r <= 0x09) return (uint8_t)(ut_out >> (8 * (r - 7)));
         if (r == 0x1B) return pwr;
         if (r == 0x1C) return osr;
+        if (r == 0x1D) return odr;
         if (r == 0x1F) return cfgreg;
         if (r >= 0x31 && r < 0x31 + 21) return cal_byte(r - 0x31);
         return 0;
@@ -169,22 +170,26 @@ struct Bmp388Sim : BaroSim {
         for (int i = 0; i < first; i++) {
             const uint8_t r = (uint8_t)(reg + i);
             if (r == 0x03 && busy > 0) busy--;
-            if (r >= 0x04 && r <= 0x09) drdy = false;           // reading data clears data-ready
+            if (r == 0x03 && normal && !drdy && busy == 0 && !stuck_busy) { up_out = up_next; ut_out = ut_next; drdy = true; triggers++; }    // normal mode: the next conversion is done
+            if (r >= 0x04 && r <= 0x09) { drdy = false; if (normal) busy = busy_reads; }           // reading data clears data-ready
         }
     }
     void wr(uint8_t r, uint8_t v) override {
         if (spi && !awake) return;
-        if (r == 0x7E && v == 0xB6) { pwr = 0; osr = 0; cfgreg = 0; drdy = false; busy = 0; err = 0; resets++; return; }
+        if (r == 0x7E && v == 0xB6) { pwr = 0; osr = 0; cfgreg = 0; odr = 0; drdy = false; busy = 0; err = 0; normal = false; resets++; return; }
         if (r == 0x1C) { osr = v; return; }
+        if (r == 0x1D) { odr = v; return; }
         if (r == 0x1F) { cfgreg = v; return; }
         if (r == 0x1B) {
             pwr = v;
             const int mode = (v >> 4) & 3;
-            if (mode == 1 || mode == 3) {
+            if (mode == 1) {                                     // forced: one conversion, back to sleep
                 if ((v & 3) == 3) { up_out = up_next; ut_out = ut_next; drdy = true; busy = busy_reads; triggers++; }
                 else bad_triggers++;
                 pwr = (uint8_t)(v & ~0x30);
-            }
+            } else if (mode == 3) {                              // normal: conversions one after another at the ODR
+                if ((v & 3) == 3) { normal = true; drdy = false; busy = busy_reads; } else bad_triggers++;
+            } else normal = false;
         }
     }
 };

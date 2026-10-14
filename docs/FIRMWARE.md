@@ -3,7 +3,7 @@
 ## 1. Cấu trúc
 
 ```
-src/main.cpp                 setup(): NVS → settings → FlightApp.configure/begin → task link → task bay.   loop(): flight.slow_update()
+src/main.cpp                 setup(): NVS → settings → FlightApp.configure/begin → task bay → task cảm biến → task link → xoá task loop của Arduino
 src/app/flight_app.h         thân firmware: driver + FlightCore + telemetry + xử lý lệnh của app
 src/app/flight_task.h        task `wb_flight` + timer phần cứng đánh thức mỗi chu kỳ điều khiển; khoá dùng chung (FreeRTOS mutex)
 src/app/sync.h               khoá (giao diện), thời gian từng khâu, "vòng lặp có giữ được tần số không"                 [portable]
@@ -12,7 +12,9 @@ src/config/fast_code.h       WB_FAST = IRAM_ATTR cho mã của chu kỳ điều 
 src/app/telemetry.h          app::Telemetry (đơn vị kỹ thuật) → struct trên dây (scale, bão hòa, NaN→0)      [portable]
 src/app/exchange.h           cầu nối duy nhất giữa vòng bay và task link (seqlock + hộp thư 1 yêu cầu)      [portable]
 src/app/link_host.h          wbp::Host cho task link + check_request() cho vòng bay                          [portable]
-src/app/link_arduino.h       SerialTransport, NvsStorage (Preferences), LinkTask (FreeRTOS, core 0)
+src/app/link_arduino.h       SerialTransport, NvsStorage (Preferences), LinkTask (FreeRTOS, core 0), EspEscPort (ESC passthrough)
+src/app/msp_bridge.h         MSP vừa đủ cho công cụ ESC (BLHeliSuite32 ...) trên cùng cổng với WBP          [portable]
+src/hal/motor/esc4way.h      giao diện 4-way + bootloader BLHeli trên dây motor (docs/ESC_PASSTHROUGH.md)     [portable]
 src/proto/*                  khung WBP, server, lưu settings, settings → cấu hình (xem docs/PROTOCOL.md)       [portable]
 src/hal/rx/*                 receiver nối tiếp CRSF / SBUS / IBUS (xem docs/RX.md)
 src/hal/battery/*, beeper/*  đo pin (ADC / ESC), tiếng báo bằng còi và bằng motor (xem docs/POWER.md)
@@ -25,11 +27,11 @@ Mạch mặc định là ESP32-S3 **N16R8**: env, bảng phân vùng, chân khô
 | Core | Chạy gì | Ghi chú |
 |---|---|---|
 | core 1, task `wb_flight` (ưu tiên 20) | `FlightApp::flight_cycle()`: IMU → FlightCore → motor → trả lời DShot → bản ghi blackbox. Được **timer phần cứng** đánh thức đúng mỗi `1 / loop_hz`; mã nằm trong RAM (`WB_FAST`) | chen ngang mọi việc khác trên core 1; tick đến lúc chu kỳ trước chưa xong thì bị bỏ (đếm ở `status.overruns`), không chạy bù. Task giữ một **quỹ thời gian** (`app::TickBudget` / `app::TickLoop` trong `sync.h`): luồng cảm biến luôn có ≥ 20 % nhân, kể cả khi chu kỳ dài hơn chu kỳ đặt; một chu kỳ chạy quá tick được nối tiếp ngay bằng chu kỳ sau (bù tối đa một tick) chừng nào quỹ còn; luồng cảm biến không chờ quá hai chu kỳ đặt + hai chu kỳ điều khiển |
-| core 1, `loop()` (ưu tiên 1) | `FlightApp::slow_update()` mỗi ~1 ms. Pha A, **không giữ khoá**: receiver, GPS, đo pin, **một** cảm biến I2C (baro / lidar / la bàn luân phiên). Pha B, giữ khoá: đưa kết quả vào core, còi, level trim, yêu cầu của app, thống kê mỗi giây | một giao dịch I2C 0,3 ms không còn dời chu kỳ điều khiển |
+| core 1, task `wb_sensor` (ưu tiên 1, stack 16 kB; từ 0.8.8, trước đó là `loop()` của Arduino) | `FlightApp::slow_update()` mỗi ~1 ms. Pha A, **không giữ khoá**: receiver, GPS, đo pin, **một** cảm biến I2C (baro / lidar / la bàn luân phiên). Pha B, giữ khoá: đưa kết quả vào core, còi, level trim, yêu cầu của app. Pha C (0.8.8), **ba lần giữ khoá ngắn** có nhả ở giữa: thống kê mỗi giây + health, telemetry chậm, telemetry CRSF + bản ghi chậm của blackbox | một giao dịch I2C 0,3 ms không còn dời chu kỳ điều khiển; chu kỳ đến hạn giữa chừng chỉ chờ một mẩu, không chờ cả B + C |
 | core 0, task `wb_link` | `wbp::Server`: đọc byte, trả lời, phát stream; `bb::Service`: lấy bản ghi blackbox từ hàng đợi, ghi flash, đưa vào bộ đệm thẻ SD, hoặc gửi về app | có thể bị USB chặn mà không ảnh hưởng vòng bay; **ghi flash thì làm đứng cả hai nhân** (docs/BLACKBOX.md mục 4) |
 | core 0, task `wb_sd` | `bb::CardLog::work()`: ghi bộ đệm ra thẻ SD từng khối 4 kB, sync mỗi 250 ms; tìm thẻ mỗi 3 s khi chưa có | chỉ làm việc khi `blackbox.device = SDCARD`; thẻ chậm chỉ làm chậm task này |
 
-Thứ tự khởi động (`setup()`): `Serial` → NVS → `SettingsStore::load()` (section hỏng/thiếu về mặc định riêng nó) → `FlightApp::configure(settings)` → `FlightApp::begin()` → task link → gửi báo cáo khởi động dạng LOG (app lấy lại bằng lệnh `REPORT`).
+Thứ tự khởi động (`setup()`): `Serial` → NVS → `SettingsStore::load()` (section hỏng/thiếu về mặc định riêng nó) → `FlightApp::configure(settings)` → `FlightApp::begin()` → task bay → task cảm biến → gửi báo cáo khởi động dạng LOG (app lấy lại bằng lệnh `REPORT`) → task link, task thẻ SD → `vTaskDelete(NULL)`: task loop của Arduino tự xoá, `loop()` không bao giờ chạy (chỉ khi tạo task cảm biến thất bại thì `loop()` gánh việc đó, báo cáo có dòng `loop: FAILED to start the sensor task`).
 
 ## 2. `FlightApp`
 
@@ -88,7 +90,7 @@ Dùng `wb_sim` để viết giao diện app mà không cần mạch: arm bằng 
 
 Tổng cộng 20 chương trình C++, 3424 kiểm tra.
 
-Mutation test (`make mutate`, cố ý làm hỏng mã, test phải báo lỗi): **1710** lỗi cố ý trong `tools/mutate.py`, 253 trong `tools/mutate_gui.py`. Kết quả lượt chạy gần nhất: `docs/HANDOFF.md`.
+Mutation test (`make mutate`, cố ý làm hỏng mã, test phải báo lỗi): **1721** lỗi cố ý trong `tools/mutate.py` (0.8.8: 17 lỗi mới hoặc viết lại theo mã mới, chạy riêng: cả 17 bị bắt; 27 lỗi cũ không còn khớp mã vì các đợt trước đổi mã, chưa viết lại), 253 trong `tools/mutate_gui.py`. Kết quả lượt chạy gần nhất: `docs/HANDOFF.md`.
 
 **Đã chạy trên mạch thật**: bản 0.5 (khởi động, IMU ICM20602 qua SPI, arm, motor quay bằng DShot một chiều, app qua UART và qua USB của S3, blackbox ghi được); bản 0.6.1, không cánh, theo log người dùng gửi (`docs/HARDWARE_FEEDBACK_2.md`): task bay + timer, mã trong RAM, driver DShot mới (DShot600 một chiều), receiver CRSF, hàng đợi phát USB với log trực tiếp 250 bản ghi/giây liền mạch trong 87 giây; vòng lặp đo được ≈ 3300 Hz trên 4000. **Chưa chạy trên mạch**: toàn bộ 0.8.0 (đo dòng, receiver Spektrum / PPM / PWM, telemetry CRSF, bảng cổng), servo (0.7.1), toàn bộ 0.7.0 (optical flow, Position Hold, GPS Rescue: `docs/NAV.md` mục 8), mọi thay đổi của 0.6.2 (quỹ thời gian của task bay, các cột mới trong log), DShot hai chiều, bay thật. Ngoài ra vẫn chưa kiểm: NVS, thời gian thực của một chu kỳ (`status.loop_us` và bốn số theo khâu), UART đảo mức cho SBUS, nhiễu I2C lên vòng 4 kHz, thời gian đọc ADC, **thời gian đứng khi ghi flash của blackbox**, thẻ SD thật, ESC có kêu theo lệnh beacon không, PSRAM. Danh sách thử theo thứ tự: `docs/BOARD_N16R8.md` mục 7.
 
@@ -98,6 +100,14 @@ Người dùng báo: nối app qua USB Serial/JTAG, thỉnh thoảng app báo m�
 - Mỗi lần phải "đá" cổng, app nhận một dòng log: "link: the USB port took nothing for 50 ms and was restarted (N times since boot)".
 - Báo cáo khởi động thêm dòng **`reset:`**: lý do chip khởi động (bật nguồn, khởi động lại bằng phần mềm, CRASH panic / watchdog, BROWN-OUT, chân reset, USB). App tự nhận ra firmware khởi động lại và đăng ký stream lại; dòng này cho biết tại sao.
 Kiểm chứng: `test_app` (vòng đệm USB đầy không ai rút: không có "đá" thì link chết hẳn, có thì sau 50 ms mọi byte tới đủ, đúng thứ tự; không đá sớm hơn 50 ms). **Chưa thử trên mạch**, và đó mới là một nguyên nhân có thể: nếu app vẫn báo không trả lời, gửi mình dòng `reset:` và các dòng log cuối cùng.
+
+### "Firmware không trả lời" và "software restart" (0.8.8)
+Người dùng thấy app báo không nhận được gì từ firmware, và trong log có dòng "software restart". Đọc lại mã thì:
+- **"software restart" không phải do lỗi đó**: chỉ có một chỗ trong firmware gọi `ESP.restart()` theo yêu cầu: lệnh REBOOT của app (Lưu + khởi động lại, Huỷ thay đổi). Dòng `reset:` là lý do của lần khởi động **gần nhất thật sự**. Trước 0.8.8, cứ hễ stream im 1,5 s mà firmware vẫn trả lời HELLO là app coi như firmware vừa khởi động lại, đọc lại báo cáo khởi động, nên lại thấy dòng `reset: software restart` cũ.
+- Từ 0.8.8 app phân biệt được: stream mới **`link`** (1 Hz, app luôn đăng ký) mang `boot_id` (số ngẫu nhiên rút mỗi lần khởi động, `esp_random()` trộn với bộ đếm trong RTC và đồng hồ µs) và thời gian chạy. `boot_id` không đổi = firmware **không** khởi động lại: app báo "Dữ liệu ngừng N giây nhưng firmware KHÔNG khởi động lại" và ghi vào nhật ký các con số của link; đổi = khởi động lại thật.
+- Các con số đó (tab Hệ thống, khối "Đường truyền với app"): yêu cầu không được xử lý kịp (BUSY), lệnh chờ lâu nhất, **luồng link nghỉ lâu nhất**, **luồng cảm biến nghỉ lâu nhất** (nó chạy yêu cầu của app), khung telemetry bỏ, trả lời bị mất, số lần "đá" cổng USB, byte đang chờ gửi. Lần sau gặp lỗi, mấy con số này chỉ ra nằm ở đâu: luồng cảm biến nghỉ hàng chục ms = core 1 bị vòng lặp chiếm hết (hạ `loop_hz`); luồng link nghỉ lâu = core 0 (ghi flash, thẻ SD); "đá" cổng tăng = USB.
+- Đồng thời giảm một nguyên nhân có thật: log 0.8.7 cho thấy task bay chờ khoá trung vị **236 µs** (`t_lock`): pha B của luồng cảm biến giữ khoá liền một mạch cả phần telemetry chậm. 0.8.8 cắt phần đó thành ba mẩu, nhả khoá giữa các mẩu.
+Kiểm chứng: `test_app` (stream `link`: uptime, kick, khoảng nghỉ của task link, byte trong hàng đợi), pytest `test_a_pause_of_the_streams_is_not_called_a_restart` (wb_sim lệnh `linkpause`: stream ngừng 3 s nhưng vẫn trả lời → STALLED, không phải REBOOTED) và `test_a_restart_behind_our_back_is_noticed`. **Chưa thử trên mạch.**
 
 ## 5. Lỗi tìm ra trong lúc ghép (đã sửa)
 

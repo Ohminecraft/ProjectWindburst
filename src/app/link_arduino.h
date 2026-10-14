@@ -9,6 +9,11 @@
 #include "../proto/wbp_server.h"
 #include "link_host.h"
 #include "tx_queue.h"
+#include "../hal/motor/esc4way.h"
+#include <driver/gpio.h>
+#include <esp_rom_gpio.h>
+#include <soc/gpio_sig_map.h>
+#include <esp_timer.h>
 
 // ============================================================================
 // Arduino / ESP32 ends of the app link:
@@ -18,6 +23,8 @@
 //   NvsStorage       - settings records in NVS flash (Preferences), one key per settings section.
 //   LinkTask         - a FreeRTOS task (core 0, low priority) that owns the wbp::Server: reads bytes, answers requests, emits streams.
 //                      The flight loop (core 1) is never touched from here; requests cross through app::Exchange.
+//                      The same bytes go to app::MspLink (ESC tools: BLHeliSuite32, ESC Configurator); when one of them asks for
+//                      ESC passthrough, this task runs the 4-way interface (EspEscPort below) and restarts the firmware after it.
 // NOTE: an NVS write stalls flash access on both cores for a few ms. The server only saves while disarmed.
 // ============================================================================
 // Which port `Serial` is in this build (the board's USB settings decide), and what it carries.
@@ -83,9 +90,48 @@ private:
     Preferences prefs_; bool ok_ = false;
 };
 
+// The 4-way interface on the board: the PC on `Serial` (through the link's transmit queue), the ESC wires bit-banged with the GPIO
+// driver. Between their bytes the wires are inputs, pulled up (inside, or by the 2k resistors of a board with motors.ext_pullup).
+// lock(): a critical section - one byte on the wire takes 572 us and its bits must come 52 us apart (esc4way.h never holds it longer).
+struct EscPins { uint8_t pin[8] = {}; int n = 0; bool pullup = true; };
+class EspEscPort {
+public:
+    static constexpr uint32_t kIdleMs = 300000;             // no byte from the PC for 5 minutes: the tool is gone, the firmware restarts
+    EspEscPort(Stream& s, app::QueuedTransport& tx, const EscPins& p) : s_(s), tx_(tx), p_(p) { last_ms_ = millis(); }
+    void begin() {
+        for (int i = 0; i < p_.n; i++) {
+            const gpio_num_t g = (gpio_num_t)p_.pin[i];
+            gpio_reset_pin(g);                                // (takes the pin from the RMT / LEDC output: plain GPIO from here on)
+            esp_rom_gpio_connect_out_signal(g, SIG_GPIO_OUT_IDX, false, false);
+            gpio_set_level(g, 1);
+            gpio_set_direction(g, GPIO_MODE_INPUT);
+            if (p_.pullup) gpio_pullup_en(g); else gpio_pullup_dis(g);
+            gpio_pulldown_dis(g);
+        }
+    }
+    int host_read() { if (s_.available() > 0) { last_ms_ = millis(); return s_.read(); } return -1; }
+    void host_write(const uint8_t* d, size_t n) { tx_.write(d, n); }
+    void host_flush() { for (int i = 0; i < 500 && tx_.queued(); i++) { tx_.pump(); if (tx_.queued()) vTaskDelay(1); } }
+    void host_wait() { tx_.pump(); vTaskDelay(1); }
+    bool host_alive() { return (uint32_t)(millis() - last_ms_) < kIdleMs; }
+    void esc_input(int c) { gpio_set_direction((gpio_num_t)p_.pin[c], GPIO_MODE_INPUT); }
+    void esc_output(int c) { gpio_set_direction((gpio_num_t)p_.pin[c], GPIO_MODE_INPUT_OUTPUT); }
+    void esc_hi(int c) { gpio_set_level((gpio_num_t)p_.pin[c], 1); }
+    void esc_lo(int c) { gpio_set_level((gpio_num_t)p_.pin[c], 0); }
+    bool esc_is_hi(int c) { return gpio_get_level((gpio_num_t)p_.pin[c]) != 0; }
+    uint32_t micros() { return (uint32_t)esp_timer_get_time(); }
+    void lock() { portENTER_CRITICAL(&mux_); }
+    void unlock() { portEXIT_CRITICAL(&mux_); }
+private:
+    Stream& s_; app::QueuedTransport& tx_; EscPins p_; uint32_t last_ms_ = 0; portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
+};
+
 class LinkTask {
 public:
     LinkTask(wbp::Server& server, Stream& port, app::QueuedTransport& tx) : server_(server), port_(port), tx_(tx) {}
+    // ESC passthrough: the MSP side, and who knows the motor pins (called once the flight side has let go of them)
+    using EscPinsFn = void (*)(EscPins&);
+    void set_msp(app::MspLink* m, EscPinsFn pins) { msp_ = m; pins_ = pins; }
 
     // stack: the server keeps two ~520 byte frame buffers on the stack while answering, a log download another ~1 kB, and the
     // SD card's file system (FatFs with long file names on the stack) about 2 kB below that when a file is opened / listed / read
@@ -106,12 +152,28 @@ private:
             uint8_t buf[128]; int n = 0;
             while (n < (int)sizeof(buf) && port_.available() > 0) buf[n++] = (uint8_t)port_.read();
             const uint32_t now = millis();
-            if (n > 0) { server_.on_bytes(buf, (size_t)n); last_rx = now; }
+            if (n > 0) {
+                server_.on_bytes(buf, (size_t)n); last_rx = now;
+                if (msp_) for (int i = 0; i < n; i++) if (const uint8_t escs = msp_->on_byte(buf[i])) passthrough(escs);     // (does not return)
+            }
             else if ((uint32_t)(now - last_rx) > 20u) { server_.on_idle(); last_rx = now; }   // a half-received frame is given up after 20 ms of silence
             server_.tick(now);
             tx_.pump();
             vTaskDelay(1);
         }
     }
+    // The 4-way interface until the PC tool says goodbye (or is silent for 5 minutes), then a restart: the motor output, its RMT
+    // channels and timers start afresh - simpler and safer than handing the pins back to a running driver.
+    void passthrough(uint8_t escs) {
+        tx_.pump(); for (int i = 0; i < 200 && tx_.queued(); i++) { vTaskDelay(1); tx_.pump(); }     // the MSP answer goes out first
+        EscPins p; if (pins_) pins_(p);
+        if (p.n > (int)escs) p.n = escs;
+        EspEscPort port(port_, tx_, p); port.begin();
+        esc4way::Interface<EspEscPort> itf(port, p.n); itf.begin();
+        itf.run();
+        port.host_flush(); vTaskDelay(50);
+        ESP.restart();
+    }
     wbp::Server& server_; Stream& port_; app::QueuedTransport& tx_; TaskHandle_t handle_ = nullptr;
+    app::MspLink* msp_ = nullptr; EscPinsFn pins_ = nullptr;
 };

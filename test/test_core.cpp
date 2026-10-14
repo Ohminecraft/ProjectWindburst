@@ -163,6 +163,30 @@ static void t_vertical() {
       VerticalEstimator kg; kg.reset(0); for (int i = 0; i < 4000; i++) { kg.predict(0, dt); if (i % 20 == 0) kg.update_baro(gauss(0.05f), 5.0f); }
       CHECK(kf.z_sigma() < kg.z_sigma(), "a smaller sigma from the sensor layer gives a tighter estimate (%.3f vs %.3f)", kf.z_sigma(), kg.z_sigma()); }
 
+    // ---- the estimate runs away (an accelerometer that clipped on a hard landing), the barometer stays at 0
+    // (the generator is put back afterwards: the tests below were tuned on its sequence)
+    const std::mt19937 rng_saved = rng;
+    { VerticalEstimator kf; kf.reset(0); const float dt2 = 0.0005f; int n_ok = 0; float worst_after = 0;
+      for (int i = 0; i < 4000; i++) { kf.predict(gauss(0.1f), dt2); if (i % 40 == 0) kf.update_baro(gauss(0.2f), 0.3f); }
+      for (int i = 0; i < 200; i++) kf.predict(-40.0f, dt2);                          // 0.1 s of -4 g: v -4 m/s
+      for (int i = 0; i < 6000; i++) kf.predict(gauss(0.1f), dt2);                   // ... and 3 s without a baro reading: z -12 m
+      const float v_kick = kf.state().v; const uint32_t r0 = kf.baro_resets();
+      for (int i = 0; i < 8000; i++) { kf.predict(gauss(0.1f), dt2); if (i % 40 == 0 && kf.update_baro(gauss(0.2f), 0.3f)) n_ok++;
+          if (i * dt2 > 2.0f) worst_after = fmaxf(worst_after, fabsf(kf.state().z)); }
+      CHECK(v_kick < -3.0f && kf.baro_resets() >= r0 + 1 && kf.baro_resets() <= r0 + 2 && worst_after < 0.6f && fabsf(kf.state().v) < 0.3f,
+            "kicked to %.1f m/s: after %.1f s of rejected baro readings z is reset to the baro (resets %u, |z| after 2 s <= %.2f m, v %.2f) - the old filter ran to -290 m",
+            v_kick, kf.cfg.baro_reset_s, (unsigned)(kf.baro_resets() - r0), worst_after, kf.state().v); }
+    { VerticalEstimator kf; kf.reset(0); const float dt2 = 0.0005f; float maxv = 0;
+      for (int i = 0; i < 40000; i++) { kf.predict(0.3f, dt2); if (i % 40 == 0) { kf.update_baro(gauss(0.5f), 1.0f); kf.update_still(); } if (i > 20000) maxv = fmaxf(maxv, fabsf(kf.state().v)); }
+      CHECK(maxv < 0.15f && kf.baro_resets() <= 1, "disarmed with a 0.3 m/s^2 accel error and a noisy baro: the zero-velocity update keeps |v| <= %.2f", maxv); }
+    for (int still = 0; still < 2; still++) {                // the touch-down spike, disarmed: the zero-velocity update takes it out at once
+      VerticalEstimator kf; kf.reset(0); const float dt2 = 0.0005f;
+      for (int i = 0; i < 4000; i++) { kf.predict(0, dt2); if (i % 40 == 0) { kf.update_baro(gauss(0.1f), 0.3f); if (still) kf.update_still(); } }
+      for (int i = 0; i < 200; i++) kf.predict(-40.0f, dt2);
+      for (int i = 0; i < 400; i++) { kf.predict(0, dt2); if (i % 40 == 0) { kf.update_baro(gauss(0.1f), 0.3f); if (still) kf.update_still(); } }
+      if (still) CHECK(fabsf(kf.state().v) < 0.5f && fabsf(kf.state().z) < 0.5f, "a -4 m/s spike at disarm: 0.2 s later v %.2f m/s, z %.2f m (the zero-velocity update is not gated)", kf.state().v, kf.state().z);
+      else CHECK(kf.state().v < -2.0f, "(without it the same spike is still at %.1f m/s 0.2 s later)", kf.state().v); }
+    rng = rng_saved;
     // ---- with a barometer, the range finder measures from the ground under the craft - and that ground changes
     // the craft moves from z0 to z1 (above the take-off point) in `seconds`, over ground lying `ground` above the take-off point
     auto fly = [&](VerticalEstimator& kf, float z0, float z1, float ground, float seconds, bool baro = true, bool range = true, bool relative = true) {
@@ -594,6 +618,18 @@ static void t_althold_unit() {
     in.stick01 = 0.0f; for (int i = 0; i < 100; i++) ah.update(in, dt); in.stick01 = 0.3f; for (int i = 0; i < 100; i++) ah.update(in, dt); CHECK(ah.get_state() == AhState::LANDED_PRE_TAKEOFF, "pre-takeoff");
     in.stick01 = 0.8f; for (int i = 0; i < 100; i++) ah.update(in, dt); CHECK(ah.get_state() == AhState::TAKEOFF, "takeoff");
     AltHold a2; a2.init(); a2.begin_flight(5.0f, 0.55f, 1.0f); AhInput i2; i2.armed = true; i2.stick01 = 0.5f; i2.z = 5.0f; const float first = a2.update(i2, dt); CHECK(fabsf(first - 0.55f) < 0.02f, "engaging in flight keeps the throttle (%.3f)", first);
+
+    // ---- the stick (althold section, 0.8.8): hold point, deadband, the ends of the travel
+    { AltHold m; m.init();
+      CHECK(m.stick_rate(0.5f) == 0 && m.stick_rate(0.549f) == 0 && m.stick_rate(0.451f) == 0 && fabsf(m.stick_rate(1.0f) - 2.0f) < 1e-5f && fabsf(m.stick_rate(0.06f) + 1.2f) < 1e-5f && fabsf(m.stick_rate(0.0f) + 1.2f) < 1e-5f,
+            "defaults: centre +-5 %% holds, full stick 2 m/s up, the bottom 1.2 m/s down - the same as before 0.8.8");
+      CHECK(fabsf(m.stick_rate(0.775f) - 1.0f) < 1e-4f, "half way between the deadband and the top: half the climb rate (%.3f)", m.stick_rate(0.775f));
+      m.cfg.mid_stick = 0.40f; m.cfg.deadband = 0.03f; m.cfg.max_stick = 0.90f; m.cfg.max_climb_mps = 3.0f; m.cfg.max_descend_mps = 1.0f;
+      CHECK(m.stick_rate(0.40f) == 0 && m.stick_rate(0.42f) == 0 && fabsf(m.stick_rate(0.90f) - 3.0f) < 1e-5f && fabsf(m.stick_rate(0.95f) - 3.0f) < 1e-5f && fabsf(m.stick_rate(0.06f) + 1.0f) < 1e-5f && m.stick_rate(0.30f) < -0.2f,
+            "hover at 40 %% of the stick, +-3 %%, full climb at 90 %%: 3 m/s from 90 %% up, 1 m/s down at the bottom");
+      AhInput t; t.armed = true; AltHold k; k.init(); k.cfg = m.cfg; t.stick01 = 0.0f; k.update(t, dt); for (int i = 0; i < 50; i++) k.update(t, dt);
+      t.stick01 = 0.2f; for (int i = 0; i < 50; i++) k.update(t, dt); t.stick01 = 0.45f; for (int i = 0; i < 20; i++) k.update(t, dt);
+      CHECK(k.get_state() == AhState::TAKEOFF, "take-off starts above the hold point + deadband (45 %% with the hold at 40 %%)"); }
 
     // ---- throttle <-> motor output (the mixer's own mapping: idle at zero throttle)
     { AltHold m; m.init(); m.set_limits(0.055f, 1.0f); CHECK(fabsf(m.to_motor(0) - 0.055f) < 1e-6f && fabsf(m.to_motor(1) - 1.0f) < 1e-6f && fabsf(m.to_motor(0.5f) - 0.5275f) < 1e-6f && fabsf(m.to_throttle(0.5275f) - 0.5f) < 1e-6f && m.to_throttle(0.01f) == 0 && m.to_throttle(2) == 1,

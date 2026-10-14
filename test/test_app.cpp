@@ -28,7 +28,9 @@ static void t_pack() {
     app::Telemetry t; uint8_t b[96];
     t.roll = 12.345f; t.pitch = -7.891f; t.yaw = -179.99f; t.gyro_f[0] = 123.44f; t.gyro_f[2] = -2000.06f; t.sp[1] = 360.0f;
     CHECK(app::pack_stream(STR_ATTITUDE, t, 0, b, sizeof(b)) == sizeof(T_attitude), "attitude size");
-    { T_attitude a; memcpy(&a, b, sizeof(a)); CHECK(a.roll == 1235 && a.pitch == -789 && a.yaw == -17999 && a.gyro[0] == 1234 && a.gyro[2] == -20001 && a.sp[1] == 3600, "0.01 deg / 0.1 deg/s, rounded to nearest: %d %d %d %d %d %d", a.roll, a.pitch, a.yaw, a.gyro[0], a.gyro[2], a.sp[1]); }
+    { T_attitude a; memcpy(&a, b, sizeof(a)); CHECK(a.roll == 1235 && a.pitch == -789 && a.yaw == 18001 && a.gyro[0] == 1234 && a.gyro[2] == -20001 && a.sp[1] == 3600, "0.01 deg / 0.1 deg/s, rounded to nearest; yaw -179.99 goes out as the heading 180.01: %d %d %d %d %d %d", a.roll, a.pitch, a.yaw, a.gyro[0], a.gyro[2], a.sp[1]); }
+    CHECK(app::heading360(0.0f) == 0.0f && app::heading360(-90.0f) == 270.0f && app::heading360(180.0f) == 180.0f && app::heading360(-180.0f) == 180.0f && app::heading360(-0.001f) == 0.0f
+          && fabsf(app::heading360(725.0f) - 5.0f) < 1e-4f && app::heading360(NAN) == 0.0f, "heading 0 .. 360: -90 is 270 (west), a hair below 0 is 0 (not 360), NaN is 0");
     t.gyro_f[0] = 5000.0f; t.gyro_f[1] = -5000.0f; t.roll = NAN; t.pitch = INFINITY;
     app::pack_stream(STR_ATTITUDE, t, 0, b, sizeof(b));
     { T_attitude a; memcpy(&a, b, sizeof(a)); CHECK(a.gyro[0] == 32767 && a.gyro[1] == -32768, "out of range saturates instead of wrapping: %d %d", a.gyro[0], a.gyro[1]); CHECK(a.roll == 0 && a.pitch == 0, "NaN / infinity become 0: %d %d", a.roll, a.pitch); }
@@ -269,6 +271,16 @@ static void t_host() {
     t.fw_saved_seq = 2; fl.x.publish(t); h.tick(6); CHECK(h.take_autosave() == SEC_CALIBRATION, "the next change is");
     t.armed = true; fl.x.publish(t);
     uint8_t b[64]; CHECK(h.fill_stream(STR_ATTITUDE, b, sizeof(b)) == sizeof(T_attitude), "streams are packed from the snapshot"); { T_attitude at; memcpy(&at, b, sizeof(at)); CHECK(at.roll == 1200, "snapshot value on the wire"); }
+    // the link stream: the link task's own numbers, for telling a stalled firmware from a restarted one
+    { static uint32_t clk = 0; YesFlight f2; app::LinkHost h2(f2.x, &YesFlight::wait, &f2, []() -> uint32_t { return clk; });
+      struct NullPort : app::RawPort { size_t room() override { return 0; } size_t put(const uint8_t*, size_t) override { return 0; } } np;
+      app::QueuedTransport q(np, 0); const uint8_t junk[10] = {}; q.write(junk, sizeof(junk));
+      volatile uint32_t kicks = 3; h2.set_port(&q, &kicks);
+      app::Telemetry tl; tl.slow_gap_ms = 7; f2.x.publish(tl);
+      clk = 1000; h2.tick(clk); clk = 1001; h2.tick(clk); clk = 1041; h2.tick(clk); clk = 1042; h2.tick(clk);          // one pause of 40 ms
+      clk = 61500; const uint16_t n = h2.fill_stream(STR_LINK, b, sizeof(b)); T_link L; memcpy(&L, b, sizeof(L));
+      CHECK(n == sizeof(T_link) && L.uptime == 61500 && L.kicks == 3 && L.queued == 10 && L.slow_gap_ms == 7 && L.link_gap_ms == 40 && L.busy == 0,
+            "link stream: uptime %u ms, kicks %u, %u bytes queued, sensor-thread pause %u ms, link-task pause %u ms", (unsigned)L.uptime, L.kicks, L.queued, L.slow_gap_ms, L.link_gap_ms); }
 }
 
 static void t_exchange() {
@@ -424,7 +436,7 @@ static void t_settings() {
       CHECK(b.valid && b.offset[0] == 0.02f && b.offset[2] == -0.03f && b.scale[1] == 1.01f && c.mag_valid == 0, "accelerometer calibration <-> settings round trip, compass part untouched"); }
     { Settings q; defaults(q); q.general.board_trim_roll = 15; q.general.board_trim_yaw = -900; q.calibration.acc_trim_roll = -7; q.calibration.acc_trim_pitch = 22; float r, p, y; board_fine_alignment(q, r, p, y);
       CHECK(fabsf(r - 0.8f) < 1e-5f && fabsf(p - 2.2f) < 1e-5f && fabsf(y + 90.0f) < 1e-5f, "fine alignment = board trim + level trim: %.2f %.2f %.2f", r, p, y); }
-    for (const SectionInfo& si : kSections) CHECK(si.live == (si.id == SEC_MODES || si.id == SEC_RATES || si.id == SEC_PID || si.id == SEC_CALIBRATION || si.id == SEC_BEEPER || si.id == SEC_BATTERY || si.id == SEC_BLACKBOX || si.id == SEC_FILTERS || si.id == SEC_NAV || si.id == SEC_SERVO), "section %s live flag", si.name);
+    for (const SectionInfo& si : kSections) CHECK(si.live == (si.id == SEC_MODES || si.id == SEC_RATES || si.id == SEC_PID || si.id == SEC_CALIBRATION || si.id == SEC_BEEPER || si.id == SEC_BATTERY || si.id == SEC_BLACKBOX || si.id == SEC_FILTERS || si.id == SEC_NAV || si.id == SEC_SERVO || si.id == SEC_ALTHOLD), "section %s live flag", si.name);
 }
 
 static void t_hwconfig() {

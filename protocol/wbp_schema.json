@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0x1C71546D",
+ "hash": "0xB0570D17",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -374,6 +374,11 @@
    "OFF",
    "FALLBACK",
    "BLEND"
+  ],
+  "ekf_mode": [
+   "OFF",
+   "SHADOW",
+   "NAV"
   ]
  },
  "bits": {
@@ -436,7 +441,14 @@
    "POSHOLD_UNAVAILABLE",
    "RESCUE",
    "RESCUE_AVAILABLE",
-   "NAV_LEAN"
+   "NAV_LEAN",
+   "POSHOLD_SLOW_GPS"
+  ],
+  "ekf_flags": [
+   "ALIGNED",
+   "GPS_AIDING",
+   "HEADING_OK",
+   "USED_FOR_NAV"
   ]
  },
  "sections": [
@@ -552,7 +564,8 @@
      "desc": "runaway take-off prevention (Betaflight): until a normal flight has been seen, a PID sum at its limit while the craft turns disarms it after 75 ms - what a wrong motor order, a wrong prop direction or a reversed gyro axis do on the first take-off"
     }
    ],
-   "live": false
+   "live": false,
+   "compat": 23
   },
   {
    "id": 2,
@@ -2561,9 +2574,28 @@
      "t": "bool",
      "d": 1,
      "desc": "use the GPS vertical velocity in the height estimate (u-blox modules; NMEA has none): steadier climb rate in prop wash and fast climbs"
+    },
+    {
+     "n": "ph_min_gps_hz",
+     "t": "u8",
+     "d": 5,
+     "min": 0,
+     "max": 20,
+     "desc": "Position Hold on GPS only: the GPS must send at least this many solutions a second (0 = no check). At 1 Hz the position and velocity jump once a second and the hold rocks (0.8.7 log); optical flow is not affected"
+    },
+    {
+     "n": "ekf",
+     "t": "u8",
+     "d": 1,
+     "enum": "ekf_mode",
+     "desc": "the EKF (attitude + velocity + position + IMU biases in one filter, core/ekf.h): OFF not run; SHADOW (default) runs next to the usual estimators and is only logged, to compare; NAV Position Hold and GPS Rescue use its position, velocity and heading (experimental: only after logs have shown it is better)"
     }
    ],
-   "compat": 27
+   "compat": [
+    30,
+    29,
+    27
+   ]
   },
   {
    "id": 18,
@@ -2613,6 +2645,64 @@
      "desc": "pulses per second: 50 for analog servos, up to 330 for digital ones (read at power-up)"
     }
    ]
+  },
+  {
+   "id": 19,
+   "name": "althold",
+   "live": true,
+   "desc": "Altitude Hold: what the throttle stick does (the throttle curve of the rates tab is not used in this mode)",
+   "fields": [
+    {
+     "n": "mid_stick",
+     "t": "u8",
+     "d": 50,
+     "min": 30,
+     "max": 70,
+     "desc": "stick position (%) that holds the height"
+    },
+    {
+     "n": "deadband",
+     "t": "u8",
+     "d": 5,
+     "min": 0,
+     "max": 20,
+     "desc": "half-width (% of the stick travel) around mid_stick that still holds the height"
+    },
+    {
+     "n": "low_stick",
+     "t": "u8",
+     "d": 6,
+     "min": 2,
+     "max": 25,
+     "desc": "stick below this (%) = throttle low: full descent, and on the ground it stays there"
+    },
+    {
+     "n": "max_stick",
+     "t": "u8",
+     "d": 100,
+     "min": 70,
+     "max": 100,
+     "desc": "stick position (%) that asks for the full climb rate"
+    },
+    {
+     "n": "climb_rate",
+     "t": "u8",
+     "d": 20,
+     "min": 2,
+     "max": 80,
+     "scale": 0.1,
+     "desc": "fastest climb the stick asks for (m/s)"
+    },
+    {
+     "n": "descend_rate",
+     "t": "u8",
+     "d": 12,
+     "min": 2,
+     "max": 50,
+     "scale": 0.1,
+     "desc": "fastest descent the stick asks for (m/s)"
+    }
+   ]
   }
  ],
  "streams": [
@@ -2635,8 +2725,9 @@
     },
     {
      "n": "yaw",
-     "t": "i16",
-     "scale": 0.01
+     "t": "u16",
+     "scale": 0.01,
+     "desc": "heading, 0 .. 360 deg clockwise from north (0 = north, 90 = east), like Betaflight's MSP_ATTITUDE"
     },
     {
      "n": "gyro",
@@ -3030,6 +3121,12 @@
     {
      "n": "baud",
      "t": "u32"
+    },
+    {
+     "n": "rate",
+     "t": "u8",
+     "scale": 0.1,
+     "desc": "solutions per second the module sends (measured)"
     }
    ]
   },
@@ -3079,6 +3176,53 @@
      "n": "vel_e",
      "t": "i16",
      "scale": 0.01
+    },
+    {
+     "n": "z_resets",
+     "t": "u16",
+     "desc": "times since boot the height estimate was set back to the barometer after rejecting it for 1.5 s (vertical_est.h)"
+    },
+    {
+     "n": "ekf_yaw",
+     "t": "u16",
+     "scale": 0.01,
+     "desc": "EKF heading 0 .. 360 deg"
+    },
+    {
+     "n": "ekf_yaw_sigma",
+     "t": "u16",
+     "scale": 0.01,
+     "desc": "its uncertainty (deg, 1 sigma)"
+    },
+    {
+     "n": "ekf_pn",
+     "t": "i16",
+     "scale": 0.1
+    },
+    {
+     "n": "ekf_pe",
+     "t": "i16",
+     "scale": 0.1
+    },
+    {
+     "n": "ekf_vn",
+     "t": "i16",
+     "scale": 0.01
+    },
+    {
+     "n": "ekf_ve",
+     "t": "i16",
+     "scale": 0.01
+    },
+    {
+     "n": "ekf_flags",
+     "t": "u8",
+     "bits": "ekf_flags"
+    },
+    {
+     "n": "ekf_us",
+     "t": "u16",
+     "desc": "longest EKF step of the last second (us) - the sensor thread's cost of it"
     }
    ]
   },
@@ -3470,6 +3614,76 @@
      "t": "u16",
      "scale": 0.1,
      "desc": "the height the rescue flies home at (m)"
+    }
+   ]
+  },
+  {
+   "id": 14,
+   "name": "link",
+   "rate": 1,
+   "max": 10,
+   "desc": "health of the app link and of the thread that runs the app's requests (diagnosing a firmware that stops answering)",
+   "fields": [
+    {
+     "n": "uptime",
+     "t": "u32",
+     "desc": "seconds since the firmware started, to the millisecond (the app tells a real restart from a pause of the link by it)",
+     "scale": 0.001
+    },
+    {
+     "n": "boot_id",
+     "t": "u32",
+     "desc": "a random number drawn at every start: a different one = the firmware restarted (the uptime alone cannot tell a young firmware that restarted from one that paused)"
+    },
+    {
+     "n": "rx_frames",
+     "t": "u32",
+     "desc": "valid frames received from the app since boot"
+    },
+    {
+     "n": "rx_bad",
+     "t": "u16",
+     "desc": "broken frames received since boot (checksum, length)"
+    },
+    {
+     "n": "busy",
+     "t": "u16",
+     "desc": "requests the flight side did not pick up within 200 ms since boot (answered BUSY)"
+    },
+    {
+     "n": "tx_lost",
+     "t": "u16",
+     "desc": "replies given up since boot because the port took nothing for 200 ms"
+    },
+    {
+     "n": "dropped",
+     "t": "u32",
+     "desc": "telemetry frames skipped since boot (no room in the transmit queue)"
+    },
+    {
+     "n": "kicks",
+     "t": "u16",
+     "desc": "USB Serial/JTAG: times the stuck port had to be restarted since boot"
+    },
+    {
+     "n": "cmd_max_ms",
+     "t": "u16",
+     "desc": "longest wait for a request in the last second (ms)"
+    },
+    {
+     "n": "link_gap_ms",
+     "t": "u16",
+     "desc": "longest pause of the link task in the last second (ms; normally 1-2)"
+    },
+    {
+     "n": "slow_gap_ms",
+     "t": "u16",
+     "desc": "longest pause of the sensor thread in the last second (ms; it runs the app's requests; normally 1-3)"
+    },
+    {
+     "n": "queued",
+     "t": "u16",
+     "desc": "bytes waiting in the transmit queue right now"
     }
    ]
   }

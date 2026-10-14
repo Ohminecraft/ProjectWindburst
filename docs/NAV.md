@@ -155,3 +155,24 @@ Sau mỗi bước bay: gửi log (ghi vào flash hoặc thẻ SD, đủ nhóm m�
 - Phát hiện chạm đất khi Rescue dùng chung bộ phát hiện của Altitude Hold; trên mặt đất dốc hoặc cỏ cao chưa biết.
 - Thời gian chạy của phần điều hướng trong chu kỳ điều khiển trên ESP32-S3 chưa đo (nó chạy ở tần số bộ ước lượng, 500 Hz, và nằm trong RAM như phần còn lại của chu kỳ, trừ `atanf` của thư viện). Nhìn cột `t_est` của log trước và sau khi bật Position Hold.
 - Lỗi cố ý (mutation): hơn 440 lỗi cố ý cho riêng phần này (firmware) và 41 cho tab Vị trí; mọi lỗi còn lại đều bị test bắt (chi tiết: `docs/HANDOFF.md` mục 5, đợt C).
+
+## 11. Log bay 2026-10-11 (firmware 0.8.7) và những gì 0.8.8 sửa
+
+Log `flight_20261011_211839_s2_s0` (loop đặt 6000 Hz, GPS NMEA, `gps_alt` BLEND). Position Hold lắc liên tục, trôi ≈ 15 m.
+
+| Thấy trong log | Nguyên nhân | 0.8.8 |
+|---|---|---|
+| Lời giải GPS đổi mỗi **1,02 s**; mỗi lần vị trí nhảy tới 1,8 m, vận tốc 2,5 m/s; vận tốc ước lượng lệch GPS thô ~1,5 m/s; góc nghiêng Position Hold chạm ±15° | Module NMEA để mặc định **1 Hz**. Bộ điều khiển trả lời mỗi bước nhảy bằng một cú nghiêng. Không phải do tune | Firmware **xin tốc độ lời giải** khi `gps.auto_config` bật: `$PMTK220`, `$PCAS02`, UBX CFG-RATE (u-blox ở chế độ NMEA), có giới hạn theo baud (9600: để 1 Hz; 19200: 2; 38400: 5; ≥ 57600: 10). Stream `gps.rate` hiển thị tần số đo được (tab Cảm biến). **Position Hold chỉ bằng GPS cần ≥ `nav.ph_min_gps_hz` (5 Hz)**, không thì từ chối, cờ `POSHOLD_SLOW_GPS`, tab Vị trí nói rõ lý do. Optical flow không bị ảnh hưởng |
+| \|B\| la bàn đổi 0,50 → 0,40 … 0,58 theo ga; `YAW_FROM_MAG` mất từ 6,5 s tới 15 s (Position Hold không có hướng) | Nhiễu từ dòng motor / dây pin ngay cạnh la bàn | Phần cứng: đưa la bàn ra xa dây nguồn (cột GPS), xoắn dây pin. Bù theo dòng (compassmot của ArduPilot) để sau, cần log có dòng điện |
+| Lúc disarm (40,6 s) `est_vz` nhảy ≈ −4 m/s rồi `est_z` trôi tới **−290 m**, baro vẫn ≈ 0; cả chuyến bay thứ hai (51 … 115 s) không có cờ `ALT`, Altitude Hold không chạy | Ước lượng chạy lệch xa, mọi số đo baro bị cổng 5σ loại, không gì kéo về được; độ bất định tự lớn dần mất hàng phút | **Đặt lại theo baro** sau 1,5 s liền không nhận số đo baro nào (như ResetHeight của ArduPilot EKF): z = baro − offset, v = 0; đếm ở `estimate.z_resets`. **Disarm thì vận tốc đứng được kéo về 0** (zero-velocity update, như ArduPilot trên mặt đất). `test_core`: bị đá −4 m/s rồi 3 s không có baro → đặt lại, sai < 0,6 m sau 2 s |
+| Vòng lặp: đặt 6000, đạt trung bình 4273 Hz; `t_lock` trung vị 236 µs | Task bay chờ luồng cảm biến nhả khoá (phần telemetry chậm giữ khoá liền một mạch) | Cắt thành các mẩu ngắn (docs/FIRMWARE.md). Còn lại: đọc SPI của IMU |
+
+### Betaflight, ArduPilot làm Position Hold thế nào (để so)
+- **Betaflight** (master 10/2026: `flight/position_estimator.c`, `pos_hold_multirotor.c`, `autopilot_multirotor.c`): Kalman 3 trạng thái (vị trí, vận tốc, gia tốc) mỗi trục, nhận GPS vị trí + vận tốc (R theo hAcc / sAcc), optical flow, gia tốc IMU; **mặc định xin GPS 10 Hz** (`gps_update_rate_hz = 10`, u-blox). Một lời giải được dùng lại ở mọi bước ước lượng trong khoảng của nó.
+- **ArduPilot** (EKF3 + `AC_PosControl`, mode Loiter / PosHold): EKF 24 trạng thái, bù trễ GPS bằng bộ đệm thời gian, cổng innovation, đặt lại vị trí / độ cao khi bị loại quá lâu; GPS nên ≥ 5 Hz (mặc định u-blox 5 Hz, `GPS_RATE_MS = 200`).
+- **Windburst**: Kalman tuyến tính mỗi trục cho vị trí / vận tốc ngang với bù trễ GPS (`horizontal_est.h`), tilt aid, Kalman 4 trạng thái cho độ cao (z, v, bias gia tốc, offset baro). Điểm chung của cả ba: **không bộ lọc nào làm GPS 1 Hz bay êm được** - lời giải đến quá thưa so với tốc độ máy trôi. Vì thế 0.8.8 sửa ở nguồn (tần số GPS) và chặn khi nguồn quá chậm, không đổi bộ lọc.
+
+### Có cần "EKF" cho Position Hold không (todo ★★★★)
+Bộ ước lượng ngang **đã là** bộ lọc Kalman (hợp nhất GPS + gia tốc kế, có trễ). Một EKF phi tuyến đầy đủ kiểu EKF3 (tư thế + vị trí + vận tốc + bias + từ trường trong cùng một bộ lọc) là việc rất lớn (ArduPilot: hàng chục nghìn dòng, nhiều năm bay thử), CPU của ESP32-S3 chạy được ở 100 - 200 Hz trên core 1 nhưng **không kiểm chứng được nếu không bay thật nhiều**. Log này không cho thấy lỗi nào mà EKF sửa được hơn: lỗi là GPS 1 Hz, nhiễu la bàn, và ước lượng độ cao không tự hồi phục - cả ba đã xử lý trực tiếp ở trên. Đề nghị: bay lại với GPS ≥ 5 Hz, gửi log; chỉ khi khi đó vẫn lắc mới đáng bàn bộ lọc.
+
+**0.9.0**: EKF đã có, chạy song song (SHADOW), xem `docs/EKF.md`. Chạy lại log 2026-10-11 qua nó: tư thế khớp AHRS trong 1–2°, sai số vận tốc với GPS 1 Hz gần như bằng bộ cũ (GPS là giới hạn), độ cao không trôi.

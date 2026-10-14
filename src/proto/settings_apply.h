@@ -140,6 +140,16 @@ inline void apply_nav(const Settings& s, fc::CoreConfig& c) {
     for (int i = 0; i < 16; i++) if (s.modes.mode[i] == MODE_RESCUE && s.modes.aux[i] < fc::kAuxCount && s.modes.hi[i] > s.modes.lo[i]) on_switch = true;
     c.rescue_configured = on_switch || n.fs_procedure == FS_PROCEDURE_RESCUE; c.rescue_allow_no_fix = n.rescue_allow_no_fix != 0;
     c.gps_alt = n.gps_alt; c.gps_vel_z = n.gps_vel_z != 0;          // (read by the estimator every step: live)
+    c.ph_min_gps_hz = (float)n.ph_min_gps_hz;
+    c.ekf_nav = n.ekf == EKF_MODE_NAV;
+}
+
+// The althold section: what the throttle stick means in Altitude Hold (live).
+inline void apply_althold(const Settings& s, fc::AltHoldConfig& a) {
+    const S_althold& h = s.althold;
+    a.mid_stick = h.mid_stick * 0.01f; a.deadband = h.deadband * 0.01f; a.low_stick = h.low_stick * 0.01f; a.max_stick = h.max_stick * 0.01f;
+    a.max_climb_mps = h.climb_rate * 0.1f; a.max_descend_mps = h.descend_rate * 0.1f;
+    if (a.low_stick > a.mid_stick - a.deadband - 0.05f) a.low_stick = fmaxf(0.02f, a.mid_stick - a.deadband - 0.05f);      // (a usable descent travel)
 }
 
 inline void apply_core(const Settings& s, fc::CoreConfig& c, fc::RcInterpreter& rc) {
@@ -149,7 +159,7 @@ inline void apply_core(const Settings& s, fc::CoreConfig& c, fc::RcInterpreter& 
     c.airmode = s.general.airmode; c.airmode_threshold = s.general.airmode_start_throttle * 0.01f;
     c.mixer.layout = (fc::Layout)s.motors.layout; c.mixer.props_out = s.motors.props_out != 0;
     c.use_mag = s.sensors.mag_enabled != 0; c.declination_deg = s.sensors.mag_declination * 0.1f;
-    apply_pid(s, c); apply_filters(s, c); apply_rates_and_rc(s, c, rc); apply_modes(s, rc); apply_nav(s, c);
+    apply_pid(s, c); apply_filters(s, c); apply_rates_and_rc(s, c, rc); apply_modes(s, rc); apply_nav(s, c); apply_althold(s, c.alt);
 }
 
 inline void apply_motors(const Settings& s, motor::MotorConfig& m) {

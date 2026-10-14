@@ -92,15 +92,15 @@ static void t_bmp280_faults() {
 }
 
 static void t_bmp388() {
-    printf("[bmp388] integer compensation vs Bosch float model\n");
+    printf("[bmp388] normal mode at 50 Hz, Bosch float compensation (0.8.8: the user's driver) vs the float model\n");
     Bmp388Sim sim; sim.set_env(100653.27, 25.08);
     Bmp388Baro d(sim); BaroInitConfig cfg;
     CHECK(d.init(cfg), "init");
     BaroSample s; uint32_t us = 0;
     CHECK(pump(d, s, us), "sample");
-    CHECK(near_(s.temp_c, 25.08, 0.05) && near_(s.pressure_pa, 100653.27, 1.0), "%.3f C %.2f Pa (units: driver divides Bosch's Pa*100 by 100)", s.temp_c, s.pressure_pa);
+    CHECK(near_(s.temp_c, 25.08, 0.05) && near_(s.pressure_pa, 100653.27, 1.0), "%.3f C %.2f Pa", s.temp_c, s.pressure_pa);
     CHECK(strcmp(d.name(), "BMP388") == 0, "name");
-    CHECK(sim.osr == 0x03 && (sim.cfgreg & 0x0E) == 0, "x8 pressure, x1 temperature, IIR off (osr 0x%02x)", sim.osr);
+    CHECK(sim.osr == 0x03 && ((sim.cfgreg >> 1) & 7) == 2 && sim.odr == 0x02 && sim.normal && ((sim.pwr >> 4) & 3) == 3, "x8 pressure, x1 temperature, IIR coefficient 3, ODR 50 Hz, normal mode (osr 0x%02x, config 0x%02x, odr 0x%02x)", sim.osr, sim.cfgreg, sim.odr);
     double maxe = 0, maxt = 0; int missed = 0;
     for (int k = 0; k < 60; k++) {
         const double p = 40000 + k * 1250.0 + 7.3, tc = -20 + k * 1.05;
@@ -110,7 +110,7 @@ static void t_bmp388() {
     }
     CHECK(missed == 0, "all conversions delivered");
     CHECK(maxe < 2.0 && maxt < 0.1, "max |dP| %.3f Pa, max |dT| %.3f C over 40..115 kPa, -20..43 C", maxe, maxt);
-    CHECK(sim.bad_triggers == 0, "valid forced triggers only");
+    CHECK(sim.bad_triggers == 0, "pressure and temperature both enabled");
     { Bmp388Sim b; b.T1 = 40000; b.T2 = 40000; b.P6 = 40000; b.set_env(97000, 30);       // coefficients above 32767 must stay unsigned
       Bmp388Baro x(b); BaroSample q; uint32_t u = 0;
       CHECK(x.init(cfg) && pump(x, q, u) && near_(q.pressure_pa, 97000, 2.0) && near_(q.temp_c, 30, 0.1), "unsigned T1/T2/P6 above 32767: %.2f Pa %.2f C", q.pressure_pa, q.temp_c); }

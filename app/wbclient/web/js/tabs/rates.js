@@ -117,7 +117,9 @@ export default {
           rateChart())),
       h('div', {},
         block(tr('Ga'), fields('rates', ['throttle_mid', 'throttle_expo', 'throttle_limit']), throttleChart(),
-          h('p', { class: 'help' }, tr('Đường cong ga chỉ dùng khi bay ga tay. Altitude Hold dùng thẳng vị trí cần ga quanh điểm giữa.'))),
+          h('p', { class: 'help' }, tr('Đường cong ga chỉ dùng khi bay ga tay. Altitude Hold dùng thẳng vị trí cần ga, theo mục bên dưới.'))),
+        block(tr('Cần ga trong Altitude Hold'), fields('althold', ['mid_stick', 'deadband', 'low_stick', 'max_stick', 'climb_rate', 'descend_rate']),
+          h('p', { class: 'help' }, tr('Cần ở "điểm giữ" ± vùng chết: giữ độ cao. Đẩy lên tới "cần tối đa": leo nhanh nhất; kéo xuống tới "cần thấp": hạ nhanh nhất, và trên mặt đất thì đứng yên. Ga treo (mức ga máy treo được) firmware tự đo, không cần nhập. Đường cong ga ở trên không áp dụng cho mode này.'))),
         block(tr('Angle và Stabilize'), form(row('rates', 'angle_limit')),
           h('p', { class: 'help' }, tr('Angle (Betaflight): góc nghiêng theo cần đi theo đường cong rate ở trên, nên nửa cần cho ít hơn nửa góc tối đa. Stabilize (ArduPilot): tỉ lệ thẳng với cần. Các hệ số của hai mode ở tab PID.'))))));
   },

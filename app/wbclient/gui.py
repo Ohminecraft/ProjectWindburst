@@ -71,7 +71,7 @@ class Hub:
         self.port = None
         self.baud = 230400
         self.report = []
-        self.note = None                    # why the link is down / what just happened: {"code": "PORT_LOST" | "NOT_RESPONDING" | "REBOOTED", ...}
+        self.note = None                    # why the link is down / what just happened: {"code": "PORT_LOST" | "NOT_RESPONDING" | "REBOOTED" | "STALLED", ...}
         self.responding = True
         self.boots = 0                      # counts firmware restarts seen on this connection: the UI reloads its settings when it changes
         self.rates = {}                     # stream -> Hz wanted by the UI
@@ -86,6 +86,12 @@ class Hub:
         self._last_frame = time.monotonic()
         self._busy = False
         self._stop = False
+        # the link stream (1 Hz, always on while connected): the firmware's uptime tells a restart from a link that only paused
+        self.link = None                    # its latest values
+        self._boot_id = None
+        self._link_ev = threading.Event()
+        self._link_restarted = False
+        self.stalls = 0                     # pauses of the streams seen on this connection that were NOT a restart
         threading.Thread(target=self._watchdog, name="wbgui-watchdog", daemon=True).start()
 
     # ------------------------------------------------------------------ state
@@ -99,6 +105,8 @@ class Hub:
             "baud": self.baud,
             "note": self.note,
             "boots": self.boots,
+            "stalls": self.stalls,
+            "link": self.link,
             "info": None if not info else {"name": info.name, "version": info.version, "role": info.role, "protocol": info.protocol,
                                           "schema_hash": "0x%08X" % info.schema_hash, "features": info.features},
             "report": list(self.report),
@@ -123,6 +131,21 @@ class Hub:
             if name == self.FAST:
                 self.fast.append((self.seq, [values["t_ms"]] + list(values["raw"]) + list(values["filt"])))
         self._last_frame = time.monotonic()
+
+    def _on_link(self, values):
+        self._on_stream("link", values)      # (the page reads it like any other stream: store.streams.link)
+        with self._data:
+            self.link = dict(values)
+            before, now = self._boot_id, values.get("boot_id")
+            self._boot_id = now
+        if before is not None and now is not None and before != now:     # a new start since the last frame
+            self._link_restarted = True
+        self._link_ev.set()
+
+    def _log_gui(self, text, level=2):
+        with self._data:
+            self.seq += 1
+            self.logs.append((self.seq, level, "app: " + text))
 
     def _on_log(self, level, text):
         with self._data:
@@ -246,6 +269,11 @@ class Hub:
         if not fc:
             return
         self._end_recording()               # a firmware that restarted has forgotten the stream it was sending
+        self._link_restarted = False
+        with self._data:
+            self.link = None
+            self._boot_id = None
+        self._subscribe_link(fc)
         for name, hz in list(self.rates.items()):
             if hz > 0:
                 try:
@@ -256,6 +284,22 @@ class Hub:
             self.report = fc.report()
         except WbError:
             self.report = []
+
+    def _subscribe_link(self, fc):
+        try:
+            fc.subscribe("link", 1, callback=self._on_link)
+            return True
+        except (WbError, KeyError):         # (KeyError: a schema without the link stream)
+            return False
+
+    def _resubscribe(self, fc):
+        """Streams again after a pause that was not a restart: the firmware still has them, asking again costs nothing."""
+        for name, hz in list(self.rates.items()):
+            if hz > 0:
+                try:
+                    fc.subscribe(name, hz, callback=(lambda v, n=name: self._on_stream(n, v)))
+                except WbError:
+                    pass
 
     # ------------------------------------------------------------------ streams
     def set_rates(self, rates):
@@ -299,18 +343,42 @@ class Hub:
             try:
                 if self.fc is not fc or self._busy:
                     continue
+                silent = time.monotonic() - self._last_frame
                 try:
                     fc.hello()
                 except (WbError, SchemaMismatch):
                     if self.responding:
                         self.responding = False
                         self.note = {"code": "NOT_RESPONDING"}
+                        self._log_gui("the firmware does not answer (no frame for %.1f s, no answer to HELLO)" % silent)
                         self._changed()
                     continue
-                self.boots += 1
-                self.note = {"code": "REBOOTED"}
-                self.responding = True
-                self._after_boot()
+                # It answers. Restarted, or did only the streams stop? (Before 0.8.8 every such pause was called a restart, and the
+                # boot report read again showed the reset reason of the LAST real start - often "software restart", from a Save.)
+                # The link stream carries a number drawn at every start (boot_id): the same one = no restart. (The uptime alone would
+                # not do: a firmware that restarted 6 s after it started has been up for longer than it was before.)
+                before = self.link or {}
+                self._link_ev.clear()
+                self._link_restarted = False
+                now = None
+                if self._subscribe_link(fc) and self._link_ev.wait(2.5):
+                    now = self.link or {}
+                if now and before.get("boot_id") is not None and now.get("boot_id") == before["boot_id"] and not self._link_restarted:
+                    up = now["uptime"]
+                    self.stalls += 1
+                    lk = self.link or {}
+                    self.note = {"code": "STALLED", "seconds": round(silent, 1), "uptime": up}
+                    self._log_gui("the streams stopped for %.1f s but the firmware did NOT restart (up %.0f s). link: busy %s, lost %s, dropped %s, "
+                                  "kicks %s, longest request %s ms, link pause %s ms, sensor pause %s ms" % (
+                                      silent, up, lk.get("busy"), lk.get("tx_lost"), lk.get("dropped"), lk.get("kicks"),
+                                      lk.get("cmd_max_ms"), lk.get("link_gap_ms"), lk.get("slow_gap_ms")))
+                    self.responding = True
+                    self._resubscribe(fc)
+                else:
+                    self.boots += 1
+                    self.note = {"code": "REBOOTED"}
+                    self.responding = True
+                    self._after_boot()
                 self._last_frame = time.monotonic()
                 self._changed()
             finally:
@@ -419,7 +487,7 @@ class Hub:
             # download starts. Refusing here with "busy" left people guessing why the log could not be fetched.
             if self.rec and self.rec.stopped is None:
                 self._stop_recording(fc)
-            sessions = fc.blackbox_sessions()
+            sessions = fc.blackbox_sessions(final=True)
             if not sessions:
                 raise ApiError(409, "NO_LOG", "the log memory holds no session")
             if index is None:

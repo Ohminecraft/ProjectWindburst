@@ -195,10 +195,35 @@ def test_a_restart_behind_our_back_is_noticed(linked, sim):
     end = time.monotonic() + 8
     while hub.boots == 0 and time.monotonic() < end:
         time.sleep(0.1)
-    assert hub.boots == 1, "the silence was noticed and the firmware asked again"
+    assert hub.boots == 1, "the silence was noticed and the firmware asked again (stalls %d, note %s, link %s)" % (hub.stalls, hub.note, hub.link)
     ev = gui.events(1.0)
     assert ev[0]["conn"]["boots"] == 1 and ev[0]["conn"]["note"] == {"code": "REBOOTED"}
     assert any("status" in e.get("s", {}) for e in ev), "streams run again without the page doing anything"
+
+
+def test_a_pause_of_the_streams_is_not_called_a_restart(linked, sim):
+    """0.8.8: streams that stop for a while from a firmware that still answers were reported as a restart, and the boot report read
+    again then showed the reset reason of the last REAL start ("software restart" after a Save). The link stream's uptime decides."""
+    gui = linked
+    hub = gui.srv.hub
+    gui.post("/api/streams", {"rates": {"status": 10}})
+    end = time.monotonic() + 4
+    while hub.link is None and time.monotonic() < end:
+        time.sleep(0.1)
+    assert hub.link is not None, "the link stream runs on its own (1 Hz)"
+    time.sleep(1.2)
+    gui.events(0.2)
+    sim.do("linkpause %g" % (3.0 * sim.speed))      # (simulated seconds: 3 s on the wall clock)
+    end = time.monotonic() + 10
+    while hub.stalls == 0 and hub.boots == 0 and time.monotonic() < end:
+        time.sleep(0.1)
+    assert hub.stalls == 1 and hub.boots == 0, "a pause, not a restart (stalls %d, boots %d)" % (hub.stalls, hub.boots)
+    assert hub.note["code"] == "STALLED" and hub.note["seconds"] >= 1.5
+    assert any("did NOT restart" in t for _, _, t in hub.logs), "the app's log says so, with the link numbers"
+    end = time.monotonic() + 5
+    while time.monotonic() < end and not any("status" in e.get("s", {}) for e in gui.events(0.5)):
+        pass
+    assert any("status" in e.get("s", {}) for e in gui.events(1.0)), "streams run again"
 
 
 def test_losing_the_port(linked, sim):
@@ -574,7 +599,8 @@ def test_download_with_trigger_always(linked, sim, log_dir):
     sim.sleep(1.5)
     assert gui.srv.hub.fc.blackbox_status()["state"] == "LOGGING"
     stored = gui.get("/api/blackbox/sessions")["sessions"]
-    assert len(stored) == 1 and stored[0]["size"] > 20_000, "the running session was closed and is listed"
+    assert len(stored) == 1 and stored[0]["size"] > 20_000, "the running session is listed (0.8.8: and keeps running)"
+    assert gui.srv.hub.fc.blackbox_status()["state"] == "LOGGING", "a look at the list does not stop it"
     _, last, _ = _download(gui, 0)
     assert last["state"] == "done" and last["sessions"] == 1 and last["error"] is None
     meta = gui.get("/api/log/meta?file=" + last["file"])["sessions"][0]

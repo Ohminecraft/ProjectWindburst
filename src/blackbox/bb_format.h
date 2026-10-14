@@ -65,7 +65,7 @@ constexpr FieldDef kFast[] = {
     BB_FIELD(F_MOTOR, "motor", kMaxMotors, T_U16, 0.0001, "", G_MOTORS, true),       // what goes to each ESC, 0..1 (logical motor order)
     BB_FIELD(F_ROLL, "roll", 1, T_I16, 0.01, "deg", G_ATTITUDE, false),
     BB_FIELD(F_PITCH, "pitch", 1, T_I16, 0.01, "deg", G_ATTITUDE, false),
-    BB_FIELD(F_YAW, "yaw", 1, T_I16, 0.01, "deg", G_ATTITUDE, false),
+    BB_FIELD(F_YAW, "yaw", 1, T_U16, 0.01, "deg", G_ATTITUDE, false),                // heading 0 .. 360 (0.8.8; before: -180 .. 180)
     BB_FIELD(F_ACC, "acc", 3, T_I16, 0.001, "g", G_ACC, false),
     BB_FIELD(F_RPM, "rpm", kMaxMotors, T_U16, 10.0, "rpm", G_RPM, true),
     BB_FIELD(F_LOOP_US, "loop_us", 1, T_U16, 1.0, "us", G_TIMING, false),            // execution time of this control cycle
@@ -122,7 +122,8 @@ enum SlowId : uint8_t {
     S_ARMED, S_FAILSAFE, S_AH_STATE, S_BATT_STATE, S_MODES, S_BLOCKERS, S_HEALTH, S_LOOP_MAX_US, S_GAP_MAX_US, S_LOOP_HZ, S_RSSI, S_RC_RATE,
     S_BARO_ALT, S_EST_Z, S_EST_VZ, S_RANGE, S_VBAT, S_CELL, S_CURRENT, S_MAH, S_GPS_FIX, S_GPS_SATS, S_LAT, S_LON, S_GPS_ALT, S_GPS_SPEED, S_GPS_COURSE, S_HDOP,
     S_POS_N, S_POS_E, S_VEL_N, S_VEL_E, S_HOME_DIST, S_MAG,
-    S_EST_VALID, S_NAV_FLAGS, S_FLOW_QUALITY, S_FLOW_REJECT, S_FLOW_FWD, S_FLOW_RIGHT, S_NAV_ROLL, S_NAV_PITCH, S_NAV_TARGET_N, S_NAV_TARGET_E, S_RESCUE_PHASE, S_COUNT
+    S_EST_VALID, S_NAV_FLAGS, S_FLOW_QUALITY, S_FLOW_REJECT, S_FLOW_FWD, S_FLOW_RIGHT, S_NAV_ROLL, S_NAV_PITCH, S_NAV_TARGET_N, S_NAV_TARGET_E, S_RESCUE_PHASE,
+    S_EKF_ROLL, S_EKF_PITCH, S_EKF_YAW, S_EKF_PN, S_EKF_PE, S_EKF_VN, S_EKF_VE, S_EKF_Z, S_EKF_YAW_SIGMA, S_EKF_TEST_VEL, S_EKF_TEST_MAG, S_EKF_FLAGS, S_COUNT
 };
 constexpr FieldDef kSlow[] = {
     BB_FIELD(S_ARMED, "armed", 1, T_U8, 1.0, "", G_ALWAYS, false),
@@ -171,6 +172,19 @@ constexpr FieldDef kSlow[] = {
     BB_FIELD(S_NAV_TARGET_N, "nav_target_n", 1, T_I32, 0.01, "m", G_NAV, false),
     BB_FIELD(S_NAV_TARGET_E, "nav_target_e", 1, T_I32, 0.01, "m", G_NAV, false),
     BB_FIELD(S_RESCUE_PHASE, "rescue_phase", 1, T_U8, 1.0, "", G_NAV, false),         // schema enum rescue_phase
+    // the EKF (0.9.0, nav.ekf SHADOW / NAV): its own attitude (pilot convention, like roll / pitch / yaw), position, velocity, height
+    BB_FIELD(S_EKF_ROLL, "ekf_roll", 1, T_I16, 0.01, "deg", G_NAV, false),
+    BB_FIELD(S_EKF_PITCH, "ekf_pitch", 1, T_I16, 0.01, "deg", G_NAV, false),
+    BB_FIELD(S_EKF_YAW, "ekf_yaw", 1, T_U16, 0.01, "deg", G_NAV, false),               // heading 0 .. 360
+    BB_FIELD(S_EKF_PN, "ekf_pn", 1, T_I32, 0.01, "m", G_NAV, false),
+    BB_FIELD(S_EKF_PE, "ekf_pe", 1, T_I32, 0.01, "m", G_NAV, false),
+    BB_FIELD(S_EKF_VN, "ekf_vn", 1, T_I16, 0.01, "m/s", G_NAV, false),
+    BB_FIELD(S_EKF_VE, "ekf_ve", 1, T_I16, 0.01, "m/s", G_NAV, false),
+    BB_FIELD(S_EKF_Z, "ekf_z", 1, T_I32, 0.01, "m", G_NAV, false),
+    BB_FIELD(S_EKF_YAW_SIGMA, "ekf_yaw_sigma", 1, T_U16, 0.01, "deg", G_NAV, false),
+    BB_FIELD(S_EKF_TEST_VEL, "ekf_test_vel", 1, T_U8, 0.1, "", G_NAV, false),       // largest GPS velocity innovation / sigma of the last fix
+    BB_FIELD(S_EKF_TEST_MAG, "ekf_test_mag", 1, T_U8, 0.1, "", G_NAV, false),
+    BB_FIELD(S_EKF_FLAGS, "ekf_flags", 1, T_U8, 1.0, "", G_NAV, false),             // schema bits ekf_flags
 };
 constexpr int kSlowDefs = sizeof(kSlow) / sizeof(kSlow[0]);
 

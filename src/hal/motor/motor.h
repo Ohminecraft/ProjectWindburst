@@ -40,6 +40,7 @@ public:
         uint8_t pins[8];
         hw_cfg_.getMotorPins(pins);
         for (int i = 0; i < 8; i++) if (pins_[i] != GPIO_UNUSED) pins[i] = pins_[i];
+        for (int i = 0; i < 8; i++) used_[i] = pins[i];
         const motor::MotorConfig& c = mgr_.cfg;
         mgr_.begin(dt_s);
         hw_ = motor::is_dshot(c.protocol) ? static_cast<MotorHw*>(&dshot_) : static_cast<MotorHw*>(&pulse_);
@@ -51,6 +52,12 @@ public:
         return ok_;
     }
     bool ok() const { return ok_; }
+    // ESC passthrough (hal/motor/esc4way.h): the output stops for good (update() does nothing from here on) and the pins are the
+    // caller's. Only a restart brings the motors back.
+    void release() { ok_ = false; released_ = true; }
+    bool released() const { return released_; }
+    // the pin of LOGICAL motor m (the motor numbers of the app and of BLHeliSuite), GPIO_UNUSED if there is none
+    uint8_t pinOf(int m) const { if (m < 0 || m >= mgr_.cfg.count) return GPIO_UNUSED; const int slot = mgr_.cfg.order[m]; return slot >= 0 && slot < 8 ? used_[slot] : GPIO_UNUSED; }
     MotorHw* hw() { return hw_; }
     const char* backend() const { return hw_ ? hw_->name() : "none"; }
 
@@ -77,5 +84,6 @@ private:
     PulseHw pulse_;
     MotorHw* hw_ = nullptr;
     uint8_t pins_[8] = {GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED};
-    bool ok_ = false;
+    bool ok_ = false, released_ = false;
+    uint8_t used_[8] = {GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED};
 };
