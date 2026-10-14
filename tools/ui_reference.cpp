@@ -4,6 +4,7 @@
 //   g++ -std=c++17 tools/ui_reference.cpp -o build/ui_reference && build/ui_reference
 #include <stdio.h>
 #include "../src/proto/settings_apply.h"
+#include "../src/port/pin_names.h"
 
 int main() {
     using namespace fc;
@@ -97,6 +98,13 @@ int main() {
         for (; ms < 20000 && (ms == 0 || b.current() != beep::NO_MODE); ms++) { b.update(ms); if (b.take_start()) { if (!tones) first_ms = ms; last_ms = ms; tones++; } }
         printf("%s\n  \"%s\": [%d, %u]", first ? "" : ",", beep::kTable[m].name, tones, (unsigned)(last_ms - first_ms)); first = false;
     }
-    printf("\n },\n \"beacon_slot_ms\": %u\n}\n", (unsigned)beep::kBeaconIntervalMs);
+    printf("\n },\n \"beacon_slot_ms\": %u,\n", (unsigned)beep::kBeaconIntervalMs);
+    // the pin names (src/port/pin_names.h): the GUI's js/pinname.js must name and read pins the same way
+    printf(" \"pin_names\": ["); first = true;
+    for (int c = 0; c < 256; c++) { char a[12], b[12]; port::pin_name((uint8_t)c, true, a, sizeof(a)); port::pin_name((uint8_t)c, false, b, sizeof(b)); printf("%s[%d, \"%s\", \"%s\"]", first ? "" : ", ", c, a, b); first = false; }
+    static const char* const texts[] = {"PB3", "pb03", "B3", " PC13 ", "PK15", "PB16", "PL0", "P", "PB3x", "12", "GPIO12", "gpio48", "255", "254", "", "PA", "A0", "p0"};
+    printf("],\n \"pin_parse\": ["); first = true;
+    for (const char* t : texts) { printf("%s[\"%s\", %d, %d]", first ? "" : ", ", t, port::pin_parse(t, true), port::pin_parse(t, false)); first = false; }
+    printf("]\n}\n");
     return 0;
 }

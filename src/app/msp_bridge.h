@@ -167,7 +167,7 @@ private:
             p[n++] = 0xFF; p[n++] = 0;                                                     // MCU type (by name), configuration state
             return true;
         case BUILD_INFO: memcpy(p, in.build_date, 11); memcpy(p + 11, in.build_time, 8); n = 19;
-            { char rev[8]; rev[0] = 'w'; rev[1] = 'b'; rev[2] = (char)('0' + in.fw_major % 10); rev[3] = (char)('0' + in.fw_minor % 10); rev[4] = (char)('0' + in.fw_patch / 10 % 10); rev[5] = (char)('0' + in.fw_patch % 10); rev[6] = 'x';
+            { char rev[8]; rev[0] = 'w'; rev[1] = (char)('0' + in.fw_major % 10); rev[2] = (char)('0' + in.fw_minor / 10 % 10); rev[3] = (char)('0' + in.fw_minor % 10); rev[4] = (char)('0' + in.fw_patch / 10 % 10); rev[5] = (char)('0' + in.fw_patch % 10); rev[6] = 'x';   // 0.10.0: w01000x
               memcpy(p + n, rev, 7); n += 7; }
             return true;
         case FEATURE_CONFIG: {                        // Betaflight's feature bits for what this firmware has / is set to (never 3D: the tools ask)

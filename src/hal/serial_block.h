@@ -5,7 +5,7 @@
 #pragma once
 
 #include <Arduino.h>
-#include <HardwareSerial.h>
+#include "../port/uart.h"
 
 // ============================================================================
 // Bytes from a HardwareSerial in blocks. On Arduino-ESP32 3.x every read() of ONE byte takes the port's mutex, then the
@@ -17,11 +17,11 @@
 // ============================================================================
 template <size_t N> class SerialBlock {
 public:
-    int get(HardwareSerial& s) {
+    int get(port::SerialPort& s) {
         if (i_ >= n_) {
             int a = s.available(); if (a <= 0) return -1;
             if (a > (int)N) a = (int)N;
-            n_ = s.read(buf_, (size_t)a); i_ = 0;
+            n_ = port::uart_read(s, buf_, (size_t)a); i_ = 0;
             if (n_ == 0) return -1;
         }
         return buf_[i_++];

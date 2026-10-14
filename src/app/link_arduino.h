@@ -5,15 +5,20 @@
 #pragma once
 
 #include <Arduino.h>
-#include <Preferences.h>
+#include "../port/platform.h"
+#include "../port/rtos.h"
+#include "../port/gpio.h"
 #include "../proto/wbp_server.h"
 #include "link_host.h"
 #include "tx_queue.h"
 #include "../hal/motor/esc4way.h"
+#if WB_PLATFORM_ESP32
+#include <Preferences.h>
 #include <driver/gpio.h>
 #include <esp_rom_gpio.h>
 #include <soc/gpio_sig_map.h>
 #include <esp_timer.h>
+#endif
 
 // ============================================================================
 // Arduino / ESP32 ends of the app link:
@@ -28,7 +33,15 @@
 // NOTE: an NVS write stalls flash access on both cores for a few ms. The server only saves while disarmed.
 // ============================================================================
 // Which port `Serial` is in this build (the board's USB settings decide), and what it carries.
-#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+#if WB_PLATFORM_STM32
+#if defined(USBCON) && defined(USBD_USE_CDC)
+#define WB_LINK_KIND "USB CDC"                   // the chip's own USB (STM32duino: Serial is SerialUSB)
+#define WB_LINK_BYTES_PER_S 0u
+#else
+#define WB_LINK_KIND "UART"
+#define WB_LINK_BYTES_PER_S (WB_LINK_BAUD / 10u)
+#endif
+#elif defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
 #if defined(ARDUINO_USB_MODE) && ARDUINO_USB_MODE
 #define WB_LINK_KIND "USB Serial/JTAG"
 #define WB_LINK_BYTES_PER_S 0u
@@ -76,6 +89,7 @@ private:
     StreamPort port_;
 };
 
+#if WB_PLATFORM_ESP32
 class NvsStorage : public wbp::Storage {
 public:
     bool begin(const char* ns = "windburst") { ok_ = prefs_.begin(ns, false); return ok_; }
@@ -90,10 +104,13 @@ private:
     Preferences prefs_; bool ok_ = false;
 };
 
+#endif  // WB_PLATFORM_ESP32 (NvsStorage)
+
 // The 4-way interface on the board: the PC on `Serial` (through the link's transmit queue), the ESC wires bit-banged with the GPIO
 // driver. Between their bytes the wires are inputs, pulled up (inside, or by the 2k resistors of a board with motors.ext_pullup).
 // lock(): a critical section - one byte on the wire takes 572 us and its bits must come 52 us apart (esc4way.h never holds it longer).
 struct EscPins { uint8_t pin[8] = {}; int n = 0; bool pullup = true; };
+#if WB_PLATFORM_ESP32
 class EspEscPort {
 public:
     static constexpr uint32_t kIdleMs = 300000;             // no byte from the PC for 5 minutes: the tool is gone, the firmware restarts
@@ -125,6 +142,31 @@ public:
 private:
     Stream& s_; app::QueuedTransport& tx_; EscPins p_; uint32_t last_ms_ = 0; portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
 };
+#else
+class EspEscPort {                                          // (the name stays: one class per chip, picked at compile time)
+public:
+    static constexpr uint32_t kIdleMs = 300000;
+    EspEscPort(Stream& s, app::QueuedTransport& tx, const EscPins& p) : s_(s), tx_(tx), p_(p) { last_ms_ = millis(); }
+    void begin() {                                            // STM32: the motor timers let go of the pins, plain GPIO from here on
+        for (int i = 0; i < p_.n; i++) { pin_[i] = (PinName)p_.pin[i]; pinMode(port::apin(p_.pin[i]), p_.pullup ? INPUT_PULLUP : INPUT); }
+    }
+    int host_read() { if (s_.available() > 0) { last_ms_ = millis(); return s_.read(); } return -1; }
+    void host_write(const uint8_t* d, size_t n) { tx_.write(d, n); }
+    void host_flush() { for (int i = 0; i < 500 && tx_.queued(); i++) { tx_.pump(); if (tx_.queued()) vTaskDelay(1); } }
+    void host_wait() { tx_.pump(); vTaskDelay(1); }
+    bool host_alive() { return (uint32_t)(millis() - last_ms_) < kIdleMs; }
+    void esc_input(int c) { pinMode(port::apin(p_.pin[c]), p_.pullup ? INPUT_PULLUP : INPUT); }
+    void esc_output(int c) { pinMode(port::apin(p_.pin[c]), OUTPUT); }
+    void esc_hi(int c) { digitalWriteFast(pin_[c], HIGH); }
+    void esc_lo(int c) { digitalWriteFast(pin_[c], LOW); }
+    bool esc_is_hi(int c) { return digitalReadFast(pin_[c]) != 0; }
+    uint32_t micros() { return ::micros(); }
+    void lock() { crit_.hard_lock(); }                       // (bit timing: not even the USB interrupt in between)
+    void unlock() { crit_.hard_unlock(); }
+private:
+    Stream& s_; app::QueuedTransport& tx_; EscPins p_; uint32_t last_ms_ = 0; PinName pin_[8] = {}; port::Critical crit_;
+};
+#endif
 
 class LinkTask {
 public:
@@ -135,7 +177,7 @@ public:
 
     // stack: the server keeps two ~520 byte frame buffers on the stack while answering, a log download another ~1 kB, and the
     // SD card's file system (FatFs with long file names on the stack) about 2 kB below that when a file is opened / listed / read
-    bool start(int core = 0, int priority = 2) { return xTaskCreatePinnedToCore(&LinkTask::entry, "wb_link", 14000, this, priority, &handle_, core) == pdPASS; }
+    bool start(int core = 0, int priority = (int)port::kPrioLink) { return port::task_create(&LinkTask::entry, "wb_link", 14000, this, (UBaseType_t)priority, &handle_, core); }
 
     static void wait_1ms(void*) { vTaskDelay(1); }           // app::Exchange::WaitFn
     static uint32_t now_ms() { return millis(); }
@@ -172,7 +214,7 @@ private:
         esc4way::Interface<EspEscPort> itf(port, p.n); itf.begin();
         itf.run();
         port.host_flush(); vTaskDelay(50);
-        ESP.restart();
+        port::restart();
     }
     wbp::Server& server_; Stream& port_; app::QueuedTransport& tx_; TaskHandle_t handle_ = nullptr;
     app::MspLink* msp_ = nullptr; EscPinsFn pins_ = nullptr;

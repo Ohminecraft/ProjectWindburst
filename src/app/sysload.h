@@ -44,7 +44,21 @@ struct Memory {
 };
 inline uint16_t kb16(uint32_t bytes) { const uint32_t k = bytes / 1024u; return k > 65535u ? (uint16_t)65535u : (uint16_t)k; }
 
-#if defined(ARDUINO)
+#if defined(ARDUINO) && defined(ARDUINO_ARCH_STM32)
+}  // namespace sys
+#include <malloc.h>
+extern "C" char _end, _estack;                            // (the linker script: end of the static data, top of the RAM)
+namespace sys {
+// STM32: no PSRAM; "heap" = the RAM between the static data and the top of the main stack, used = what malloc holds (FreeRTOS
+// takes its task stacks from malloc in STM32duino's configuration).
+inline Memory memory() {
+    Memory m;
+    m.heap_total = (uint32_t)(&_estack - &_end);
+    const uint32_t used = (uint32_t)mallinfo().uordblks;
+    m.heap_free = used < m.heap_total ? m.heap_total - used : 0;
+    return m;
+}
+#elif defined(ARDUINO)
 inline Memory memory() {
     Memory m;
     m.heap_total = ESP.getHeapSize(); m.heap_free = ESP.getFreeHeap(); m.psram_total = ESP.getPsramSize(); m.psram_free = ESP.getFreePsram();

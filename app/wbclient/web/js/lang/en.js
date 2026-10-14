@@ -188,8 +188,8 @@ export const EN = {
     "Hardware slot",
   "Đảo chiều":
     "Reversed",
-  "Slot phần cứng: motor này nối vào chân \"Slot\" nào ở tab Chân và cổng. RPM và lỗi telemetry chỉ có khi bật DShot hai chiều.":
-    "Hardware slot: which \"Slot\" pin of the Pins and ports tab this motor is wired to. RPM and telemetry errors need bidirectional DShot.",
+  "Slot phần cứng: motor này nối vào chân \"Slot\" nào ở tab Chân và cổng. RPM có khi bật DShot hai chiều hoặc dây telemetry ESC; lỗi telemetry chỉ với DShot hai chiều. Dòng: extended DShot telemetry hoặc dây telemetry ESC.":
+    "Hardware slot: which \"Slot\" pin of the Pins and ports tab this motor is wired to. RPM comes with bidirectional DShot or the ESC telemetry wire; telemetry errors only with bidirectional DShot. Current: extended DShot telemetry or the ESC telemetry wire.",
   "Điện áp ESC báo: ":
     "Voltage reported by the ESC: ",
   "không có":
@@ -2306,6 +2306,34 @@ export const EN = {
     "Let go of the port for BLHeliSuite32",
   "Xong. App đã nhả cổng: mở BLHeliSuite32 / ESC Configurator trên cổng này rồi bấm Connect.":
     "Done. The app has let go of the port: open BLHeliSuite32 / ESC Configurator on this port and press Connect.",
+  "cổng debug (SWDIO)":
+    "the debug port (SWDIO)",
+  "cổng debug (SWCLK)":
+    "the debug port (SWCLK)",
+  "{label}: \"{text}\" không phải tên chân STM32 (PA0 đến PK15).":
+    "{label}: \"{text}\" is not an STM32 pin name (PA0 to PK15).",
+  "{label}: {pin} thường là {what}.":
+    "{label}: {pin} is usually {what}.",
+  "{pin} đang gán cho cả \"{a}\" và \"{b}\".":
+    "{pin} is set for both \"{a}\" and \"{b}\".",
+  "Mạch STM32":
+    "STM32 board",
+  "Chân ghi theo tên: PA0, PB3, PC13 ... Trên STM32 mỗi UART, SPI, I2C và timer chỉ ra được một số chân nhất định; firmware kiểm tra lúc khởi động và ghi lỗi vào báo cáo ở tab Tổng quan nếu chân không đúng chức năng.":
+    "Pins are written by name: PA0, PB3, PC13 ... On an STM32 each UART, SPI, I2C and timer reaches only certain pins; the firmware checks this at boot and writes an error into the report on the Overview tab if a pin cannot do its job.",
+  "Chân telemetry (T) của các ESC nối chung vào RX của một UART (chân ở tab Chân: Telemetry ESC). Firmware hỏi lần lượt từng ESC bằng bit telemetry của khung DShot; ESC trả lời nhiệt độ, điện áp, dòng, mAh và RPM. Dùng với BLHeli_32, AM32, KISS. Chỉ với DShot. Đủ cho đo pin và nhiệt độ, không đủ nhanh cho bộ lọc RPM (cần DShot hai chiều). Có hiệu lực sau khi lưu và khởi động lại.":
+    "The ESCs' telemetry pads (T) joined to the RX of one UART (pin on the Pins tab: ESC telemetry). The firmware asks one ESC at a time with the telemetry bit of the DShot frame; the ESC answers with temperature, voltage, current, mAh and RPM. For BLHeli_32, AM32, KISS. DShot only. Good for the battery and the temperatures, not fast enough for the RPM filter (that needs bidirectional DShot). Takes effect after saving and restarting.",
+  "Dây telemetry ESC (KISS)":
+    "ESC telemetry wire (KISS)",
+  "Dây telemetry ESC, mỗi giây: ":
+    "ESC telemetry wire, per second: ",
+  "Dây telemetry chung của các ESC (tab Motor: Dây telemetry ESC). Nối vào RX của một UART; firmware lấy UART còn trống (hoặc UART có chức năng Telemetry ESC trong bảng cổng).":
+    "The shared telemetry wire of the ESCs (Motors tab: ESC telemetry wire). Goes to the RX of a UART; the firmware takes the UART that is free (or the one with the function ESC telemetry in the port table).",
+  "Telemetry ESC":
+    "ESC telemetry",
+  "Telemetry ESC (dây riêng)":
+    "ESC telemetry (own wire)",
+  "{ok} trả lời, {crc} hỏng CRC, {lost} ESC không trả lời":
+    "{ok} answers, {crc} bad CRC, {lost} ESCs not answering",
 };
 
 // Strings that read the same in both languages (units, protocol names, terms pilots use in English).

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "../../port/gpio.h"
 #include "battery_monitor.h"
 #include "../../config/hardware_config.h"
 
@@ -41,13 +42,13 @@ public:
         pin_ = pin[0]; adc_ok_ = false; fail_ = ""; pin_mv_ = 0; last_ms_ = 0; started_ = false;
         monitor.reset();
         if (pin_ != GPIO_UNUSED) {
-            if (digitalPinToAnalogChannel(pin_) < 0) fail_ = "battery pin is not an ADC pin (ESP32-S3: GPIO1..GPIO20)";
-            else { pinMode(pin_, INPUT); adc_ok_ = true; }
+            if (!port::adc_pin_ok(pin_)) fail_ = WB_PLATFORM_STM32 ? "battery pin is not an ADC pin" : "battery pin is not an ADC pin (ESP32-S3: GPIO1..GPIO20)";
+            else { pinMode(port::apin(pin_), INPUT); adc_ok_ = true; }
         } else if (wanted_ == batt::SRC_ADC) fail_ = "battery ADC pin not set (app: Pins tab, or hardware_config.h)";
         cur_pin_ = GPIO_UNUSED; cur_adc_ok_ = false; cur_fail_ = ""; cur_mv_ = 0; current.reset();
         if (cur_pin_wanted_ != GPIO_UNUSED) {
-            if (digitalPinToAnalogChannel(cur_pin_wanted_) < 0) cur_fail_ = "current sensor pin is not an ADC pin (ESP32-S3: GPIO1..GPIO20)";
-            else { cur_pin_ = cur_pin_wanted_; pinMode(cur_pin_, INPUT); cur_adc_ok_ = true; }
+            if (!port::adc_pin_ok(cur_pin_wanted_)) cur_fail_ = WB_PLATFORM_STM32 ? "current sensor pin is not an ADC pin" : "current sensor pin is not an ADC pin (ESP32-S3: GPIO1..GPIO20)";
+            else { cur_pin_ = cur_pin_wanted_; pinMode(port::apin(cur_pin_), INPUT); cur_adc_ok_ = true; }
         } else if (cur_wanted_ == batt::CUR_ADC) cur_fail_ = "current sensor ADC pin not set (app: Pins tab, curr_adc)";
         if (wanted_ == batt::SRC_NONE) { fail_ = "battery monitoring switched off"; return false; }
         if (wanted_ == batt::SRC_ADC) return adc_ok_;
@@ -60,7 +61,7 @@ public:
         last_ms_ = started_ ? last_ms_ + kPeriodMs : now_ms; started_ = true;
         if ((uint32_t)(now_ms - last_ms_) > 5 * kPeriodMs) last_ms_ = now_ms;      // fell behind: do not burst
         // ---- current: an ADC sensor, the ESCs, or nothing
-        if (cur_adc_ok_) cur_mv_ = (uint16_t)analogReadMilliVolts(cur_pin_);       // (read even when not the source: the app shows it for calibrating)
+        if (cur_adc_ok_) cur_mv_ = (uint16_t)port::adc_read_mv(cur_pin_);       // (read even when not the source: the app shows it for calibrating)
         const float dt = first ? 0.0f : (float)(uint32_t)(last_ms_ - prev) * 0.001f;
         switch (currentSource()) {
         case batt::CUR_ADC: current.update(batt::adc_to_amps(cur_mv_, cur_scale_, cur_offset_), cur_adc_ok_, dt); break;
@@ -68,7 +69,7 @@ public:
         default: current.update(0.0f, false, dt); break;
         }
         const batt::Source src = source();
-        if (adc_ok_) pin_mv_ = (uint16_t)analogReadMilliVolts(pin_);               // read even when not the source: the app shows it for the divider calibration
+        if (adc_ok_) pin_mv_ = (uint16_t)port::adc_read_mv(pin_);               // read even when not the source: the app shows it for the divider calibration
         switch (src) {
         case batt::SRC_ADC: monitor.update(now_ms, batt::adc_to_volts(pin_mv_, divider_), adc_ok_); break;
         case batt::SRC_ESC: monitor.update(now_ms, esc_volts, esc_volts > 0.5f); break;

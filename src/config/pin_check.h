@@ -37,13 +37,17 @@ inline bool s3_reserved(uint8_t pin, bool octal_psram) { return (pin >= 26 && pi
 // The chip's own USB socket is GPIO19 (D-) and GPIO20 (D+). When the app link runs over it, a function on one of them takes the
 // link away the moment it starts.
 inline bool s3_usb_pin(uint8_t pin) { return pin == 19 || pin == 20; }
-inline const Use* find_on_usb(const Use* use, int n) {
-    for (int i = 0; i < n; i++) if (use[i].pin != kUnused && s3_usb_pin(use[i].pin)) return &use[i];
+// STM32 (pin numbers: port/pin_names.h): the USB socket is PA11 (D-) / PA12 (D+); PA13 / PA14 are the debug port (SWDIO / SWCLK) -
+// usable, but then a debug probe can no longer connect while the firmware runs.
+inline bool stm32_usb_pin(uint8_t pin) { return pin == 11 || pin == 12; }
+inline bool stm32_reserved(uint8_t pin) { return pin == 13 || pin == 14; }
+inline const Use* find_on_usb(const Use* use, int n, bool stm32 = false) {
+    for (int i = 0; i < n; i++) if (use[i].pin != kUnused && (stm32 ? stm32_usb_pin(use[i].pin) : s3_usb_pin(use[i].pin))) return &use[i];
     return nullptr;
 }
 // First entry of `use` that sits on such a pin, or nullptr.
-inline const Use* find_reserved(const Use* use, int n, bool octal_psram) {
-    for (int i = 0; i < n; i++) if (use[i].pin != kUnused && s3_reserved(use[i].pin, octal_psram)) return &use[i];
+inline const Use* find_reserved(const Use* use, int n, bool octal_psram, bool stm32 = false) {
+    for (int i = 0; i < n; i++) if (use[i].pin != kUnused && (stm32 ? stm32_reserved(use[i].pin) : s3_reserved(use[i].pin, octal_psram))) return &use[i];
     return nullptr;
 }
 

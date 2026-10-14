@@ -28,7 +28,7 @@
 | 2 | Hiệu chuẩn la bàn tự động | chưa | khả thi (kiểu học offset khi bay của ArduPilot) |
 | 1 | MAVLink, OSD, công tắc telemetry RX, mode mới (acro trainer, xoá blackbox, airmode bằng công tắc, antigravity) | chưa | đều khả thi; OSD analog cần chip MAX7456 trên mạch, OSD HD qua MSP DisplayPort |
 | 1 | ESP32 thường | có thể | 2 nhân 240 MHz, 8 kênh RMT; không có USB gốc (chỉ UART qua chip cầu), thiếu chân. Cần một đợt riêng |
-| 1 | STM32 (F405, H523/H750/H743, G431/G474) | **đổi ý: làm, bắt đầu với H5** (người dùng muốn bản riêng, viết trên Arduino) | Toàn bộ `hal/` viết trên Arduino-ESP32 (RMT, LEDC, gptimer, NVS, FreeRTOS). Port sang STM32 = viết lại một HAL ngang Betaflight, mà trên STM32 thì Betaflight / ArduPilot đã có sẵn, đã bay hàng triệu giờ. Phần `core/` portable có thể mang theo, nhưng phần cứng mới là chỗ tốn công |
+| 1 | STM32 (F405, H523/H750/H743, G431/G474) | **đang làm: bản đầu ở 0.10.0** (STM32H563, `docs/STM32.md`; chưa DShot / SD) | Toàn bộ `hal/` viết trên Arduino-ESP32 (RMT, LEDC, gptimer, NVS, FreeRTOS). Port sang STM32 = viết lại một HAL ngang Betaflight, mà trên STM32 thì Betaflight / ArduPilot đã có sẵn, đã bay hàng triệu giờ. Phần `core/` portable có thể mang theo, nhưng phần cứng mới là chỗ tốn công |
 
 ## Vì sao Betaflight trên STM32 chạy được 8 kHz
 - **DMA làm hết việc vào / ra**: gyro đọc bằng SPI + DMA khi chip báo có mẫu (ngắt EXTI), DShot phát bằng timer + DMA, không tốn CPU. Trên ESP32-S3 bản này: SPI qua driver (vài chục µs mỗi lần đọc), DShot qua RMT có tốn ít CPU để nạp.

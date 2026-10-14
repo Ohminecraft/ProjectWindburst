@@ -99,6 +99,20 @@ def _gui(browser, sim, locale):
 
 
 @pytest.fixture
+def sim_stm32(tmp_path):
+    """The simulator saying it is an STM32 board (device feature STM32): the page writes pins as PA0 .. PK15."""
+    from conftest import Sim
+    s = Sim(tmp_path, "--stm32", speed=1.0)
+    yield s
+    s.stop()
+
+
+@pytest.fixture
+def gui_stm32(browser, sim_stm32):
+    yield from _gui(browser, sim_stm32, "vi-VN")
+
+
+@pytest.fixture
 def gui(browser, sim):
     """Vietnamese page (the tests below read the Vietnamese texts)."""
     yield from _gui(browser, sim, "vi-VN")
@@ -1616,3 +1630,26 @@ def test_logs_are_viewable_without_a_flight_controller_and_in_english(gui_en, lo
     pg.wait_for_selector('#viewer[data-file="old flight.wblog"]')
     assert pg.input_value("#log-session") == "1" and "no end marker" in pg.inner_text("#log-warn"), "the log that was on screen is still on screen after connecting"
     no_vietnamese(gui, "blackbox tab, connected")
+
+
+def test_pins_tab_stm32(gui_stm32):
+    gui = gui_stm32
+    pg = gui.connect().page
+    gui.tab("pins")
+    assert gui.field("pins.imu_cs").input_value() == "PA10" and gui.field("pins.batt_adc").input_value() == "PA2", "pin numbers shown as STM32 names"
+    assert gui.field("pins.ppm").input_value() == "" and pg.locator("#pins-stm32").is_visible() and pg.locator("#pins-preset").count() == 0
+    gui.type_into("pins.buzzer", "pc13")
+    gui.wait(lambda: gui.setting("pins", "buzzer") == 45, what="PC13 = port C (2) * 16 + 13")
+    assert gui.field("pins.buzzer").input_value() == "PC13"
+    gui.type_into("pins.motor[4]", "PB3")
+    gui.wait(lambda: gui.setting("pins", "motor")[4] == 19, what="a motor slot by name")
+    gui.type_into("pins.led", "PZ1")                                   # not a pin: refused, the box shows the old value again
+    pg.wait_for_selector(".toast:has-text('không phải tên chân STM32')")
+    assert gui.setting("pins", "led") == 255 and gui.field("pins.led").input_value() == ""
+    gui.type_into("pins.led", "PA11")
+    pg.wait_for_function("/PA11 thường là USB D-/.test(document.getElementById('pin-warnings').textContent)")
+    gui.type_into("pins.buzzer", "PA2")                                # the battery's ADC pin
+    pg.wait_for_function("/PA2 đang gán cho cả/.test(document.getElementById('pin-warnings').textContent)")
+    assert "không đo được điện áp" not in pg.inner_text("#pin-warnings"), "the ESP32-S3 ADC rule does not apply"
+    gui.type_into("pins.buzzer", "")
+    gui.wait(lambda: gui.setting("pins", "buzzer") == 255, what="pin cleared")

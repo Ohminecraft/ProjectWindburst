@@ -41,7 +41,7 @@ class SchemaMismatch(Exception):
 
 class DeviceInfo:
     ROLES = {0: "RX", 1: "TX"}
-    FEATURES = ["STREAMS", "CALIBRATION", "MOTOR_TEST", "GPS", "BLACKBOX", "BATTERY", "BEEPER"]
+    FEATURES = ["STREAMS", "CALIBRATION", "MOTOR_TEST", "GPS", "BLACKBOX", "BATTERY", "BEEPER", "STM32"]   # STM32: pins are PA0 .. PK15 (port * 16 + pin)
 
     def __init__(self, payload):
         self.protocol, role, maj, mnr, pat, self.schema_hash, feat = struct.unpack_from("<BBBBBII", payload)

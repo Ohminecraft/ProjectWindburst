@@ -10,6 +10,7 @@
 #include <SPI.h>
 #include "../hal/acc_gyro/acc_gyro_base.h"
 #include "../hal/motor/motor.h"
+#include "../hal/motor/esc_sensor.h"
 #include "../hal/baro/baro_base.h"
 #include "../hal/range/range_base.h"
 #include "../hal/gps/gps_base.h"
@@ -29,6 +30,8 @@
 #include "link_host.h"
 #include "../blackbox/bb_recorder.h"
 #include "../config/pin_check.h"
+#include "../port/platform.h"
+#include "../port/pin_names.h"
 #include "sysload.h"
 
 // ============================================================================
@@ -49,6 +52,9 @@
 // The link task only talks to `link` (app::Exchange). The Settings object belongs to the link task; this class reads / writes
 // it only inside execute(), i.e. while the link task is blocked waiting for that very request.
 // ============================================================================
+// A pin number of the settings as the boot report names it: GPIO12 on an ESP32, PB3 on an STM32 (port/pin_names.h).
+inline const char* pin_str(uint8_t p, char (&b)[8]) { port::pin_name(p, WB_PLATFORM_STM32, b, sizeof(b)); return b; }
+
 class FlightApp {
 public:
     struct Status { bool imu = false, motors = false, baro = false, range = false, gps = false, mag = false, rx = false, battery = false, buzzer = false, motor_beep = false, pin_conflict = false, flow = false, servo = false; } status;
@@ -61,7 +67,12 @@ public:
     GpsSensor gnss;
     FlowSensor flow;
     ServoOutputs servos;
-    HardwareSerial* uart0 = nullptr;                      // UART0, when the app's link does not use it (native USB): a third UART for the flow sensor
+    port::SerialPort* uart0 = nullptr;                    // UART0, when the app's link does not use it (native USB): a third UART for the flow sensor
+#if WB_PLATFORM_STM32
+    port::SerialPort* uart1 = nullptr; port::SerialPort* uart2 = nullptr;      // (main_stm32.cpp: the UART instance follows the pins)
+#else
+    port::SerialPort* uart1 = &Serial1; port::SerialPort* uart2 = &Serial2;
+#endif
     MagSensor mag;
     RcReceiver rc;
     BatterySensor battery;
@@ -93,10 +104,18 @@ public:
         apply_calibration();
     }
 
+#if WB_PLATFORM_STM32
+    static const wbp::Settings*& self_pins() { static const wbp::Settings* p = nullptr; return p; }     // (for port::g_pin_taken)
+#endif
     // ---------------------------------------------------------------- hardware bring-up
     bool begin() {
         wbp::Settings& s = *s_; HardwareConfig hw;
         n_report_ = 0;
+#if WB_PLATFORM_STM32
+        port::g_pin_taken = [](uint8_t p) {                    // any pin of the "pins" section (all of it is pin bytes)
+            const uint8_t* b = reinterpret_cast<const uint8_t*>(&self_pins()->pins); for (size_t i = 0; i < sizeof(wbp::S_pins); i++) if (b[i] == p) return true; return false; };
+        self_pins() = s_;
+#endif
 
         // ---- pins: the app's "pins" section (kept in NVS by the settings store) goes into HardwareConfig, where every driver asks for its pins.
         //      A pin the app left at 255 keeps the board default typed in hardware_config.h.
@@ -149,7 +168,7 @@ public:
 
         // ---- UARTs: which one serves the GPS, the serial receiver and an MSP flow sensor (section ports: AUTO = GPS on UART1,
         //      receiver on UART2, the flow sensor on what is left; TABLE = the function table)
-        HardwareSerial* const uarts[3] = {uart0, &Serial1, &Serial2};
+        port::SerialPort* const uarts[3] = {uart0, uart1, uart2};
         static const char* const uname[3] = {"UART0", "UART1", "UART2"};
         const rx::Protocol rxp_ = (rx::Protocol)s.receiver.protocol;
         const bool serial_rx = !use_external_rc && rxp_ != rx::PROTO_PPM && rxp_ != rx::PROTO_PWM;
@@ -167,8 +186,8 @@ public:
                 uint8_t pp[RcReceiver::kMaxPulsePins]; int wired = 0;    // (copied: the settings struct is packed)
                 for (int i = 0; i < RcReceiver::kMaxPulsePins; i++) { pp[i] = rp == rx::PROTO_PPM ? (i == 0 ? s.pins.ppm : 255) : s.pins.rx_pwm[i]; if (pp[i] != 255) wired++; }
                 status.rx = rc.beginPulse(rp, pp, RcReceiver::kMaxPulsePins);
-                if (rp == rx::PROTO_PPM) say(status.rx, "rx", rc.name(), rc.failReason(), "PPM on GPIO%u", (unsigned)pp[0]);
-                else say(status.rx, "rx", rc.name(), rc.failReason(), "PWM, %d channel%s from GPIO%u", wired, wired == 1 ? "" : "s", (unsigned)pp[0]);
+                if (rp == rx::PROTO_PPM) { char pb[8]; say(status.rx, "rx", rc.name(), rc.failReason(), "PPM on %s", pin_str(pp[0], pb)); }
+                else { char pb[8]; say(status.rx, "rx", rc.name(), rc.failReason(), "PWM, %d channel%s from %s", wired, wired == 1 ? "" : "s", pin_str(pp[0], pb)); }
             } else if (plan.rx >= 0) {
                 uint8_t rxp[3]; hw.getSerialRxPins(rxp);
                 status.rx = rc.begin(rp, *uarts[plan.rx], rxp[0], rxp[1]);
@@ -178,8 +197,10 @@ public:
         }
         // ---- optical flow: PMW3901 on the second SPI bus, or an MSP sensor on whichever UART is left (UART1 without a GPS,
         //      UART2 without a serial receiver, UART0 when the app is on USB)
+        int flow_u = -1;
         if (s.flow.type != FlowSensor::NONE) {
             const int u = port_table ? plan.flow : app::flow_uart(status.gps, status.rx && !use_external_rc && rc.onUart(), uart0 != nullptr);
+            if (s.flow.type == FlowSensor::MSP) flow_u = u;
             flow.setUart(u >= 0 ? uarts[u] : nullptr, u >= 0 ? uname[u] : "", s.pins.flow_rx, s.pins.flow_tx, s.flow.baud);
             flow.setSpiPins(s.pins.flow_cs, s.pins.flow_sck, s.pins.flow_miso, s.pins.flow_mosi);
             flow.setSpiBusTaken(s.blackbox.device == bb::DEV_SDCARD && s.blackbox.sd_mode == wbp::SD_MODE_SPI);
@@ -192,9 +213,23 @@ public:
         }
         if (status.flow && !status.range) add_report("flow: WARNING - no range sensor: optical flow needs the distance to the ground (a lidar) to turn the picture's motion into a speed");
 
+        // ---- ESC telemetry on its own wire (hal/motor/esc_sensor.h): a UART RX at 115200, on the UART that is left (AUTO) or the
+        //      one with the function ESC_SENSOR (TABLE)
+        esc_uart_ = nullptr;
+        if (s.motors.esc_sensor) {
+            const int u = port_table ? plan.esc : app::esc_uart(status.gps, status.rx && !use_external_rc && rc.onUart(), uart0 != nullptr, flow_u);
+            char pb[8];
+            if (!motor::is_dshot((motor::Protocol)s.motors.protocol)) say(false, "esc tlm", "", "the ESC telemetry wire needs a DShot protocol (the request is a bit of the DShot frame)", "");
+            else if (s.pins.esc_tlm == 255) say(false, "esc tlm", "", "no pin for the ESC telemetry wire (Pins tab: ESC telemetry)", "");
+            else if (u < 0) say(false, "esc tlm", "", port_table ? "no UART has the function ESC_SENSOR in the serial ports table" : "no UART left for the ESC telemetry wire (GPS, receiver and flow sensor have them)", "");
+            else if (!port::uart_begin(*uarts[u], escs::kBaud, SERIAL_8N1, s.pins.esc_tlm, 255, false, 256)) say(false, "esc tlm", "", "the UART did not start on that pin", "");
+            else { esc_uart_ = uarts[u]; say(true, "esc tlm", "", "", "KISS telemetry on %s RX %s, 115200 baud (the first request after 5 s)", uname[u], pin_str(s.pins.esc_tlm, pb)); }
+        }
+
         // ---- core + motors
         core.configure();
         status.motors = motors.begin(1.0f / core.cfg.loop_hz);
+        esc_poll_.begin(esc_uart_ ? motors.cfg().count : 0, millis());
         {   // why the outputs did not start, as precisely as it can be said
             static char why[150]; why[0] = 0;
             const motor::MotorConfig& mc = motors.cfg();
@@ -212,11 +247,12 @@ public:
         say(status.battery, "battery", battery.name(), battery.failReason(), "%s%s", battery.name(), battery.source() == batt::SRC_ADC ? "" : " (no ADC pin)");
         // current: the ADC sensor, or the ESCs (only with extended DShot telemetry); AUTO with neither is no fault, just no current
         if (*battery.currentFailReason()) say(false, "current", "", battery.currentFailReason(), "");
-        else if (battery.currentSource() == batt::CUR_ADC) say(true, "current", "", "", "ADC sensor on GPIO%u, %d x 0.1 mV/A", (unsigned)s.pins.curr_adc, (int)s.battery.current_scale);
+        else if (battery.currentSource() == batt::CUR_ADC) { char pb[8]; say(true, "current", "", "", "ADC sensor on %s, %d x 0.1 mV/A", pin_str(s.pins.curr_adc, pb), (int)s.battery.current_scale); }
         else if (battery.currentSource() == batt::CUR_ESC) {
-            if (edt_wanted_) say(true, "current", "", "", "from the ESCs (extended DShot telemetry)");
-            else if (s.battery.current_source == batt::CUR_ESC) say(false, "current", "", "the ESCs report it only with bidirectional DShot and extended telemetry on (Motor tab)", "");
-            else say(true, "current", "", "", "none (no sensor pin, no extended DShot telemetry)");
+            if (esc_uart_) say(true, "current", "", "", "from the ESCs (telemetry wire)");
+            else if (edt_wanted_) say(true, "current", "", "", "from the ESCs (extended DShot telemetry)");
+            else if (s.battery.current_source == batt::CUR_ESC) say(false, "current", "", "the ESCs report it only over their telemetry wire, or with bidirectional DShot and extended telemetry on (Motor tab)", "");
+            else say(true, "current", "", "", "none (no sensor pin, no ESC telemetry)");
         }
         status.buzzer = buzzer.begin();
         status.motor_beep = status.motors && motor::is_dshot(motors.cfg().protocol);       // the ESCs can beep the motors
@@ -292,6 +328,13 @@ public:
         const fc::GpsMeas gm = gps_new ? gps_meas() : fc::GpsMeas();
         battery.update(now_ms, esc_v, esc_a, esc_a_ok);
         const bool flow_new = status.flow && flow.update(now_us, now_ms);        // (PMW3901: one poll in ten passes, 0.3 ms on its own bus; MSP: the bytes that came in)
+        int esc_ask = -1; bool esc_new = false; int esc_m = 0; escs::Reading esc_r;
+        if (esc_uart_) {                                     // ESC telemetry wire: the bytes that came in, then whom to ask next
+            uint8_t b[32]; size_t n;
+            while ((n = port::uart_read(*esc_uart_, b, sizeof(b))) > 0) esc_poll_.feed(b, n, now_ms);
+            esc_new = esc_poll_.take(esc_m, esc_r);
+            esc_ask = esc_poll_.ask_now(now_ms);
+        }
         bool baro_new = false, range_new = false, mag_new = false;
         switch (slot_++ % 3) {                               // one I2C device per pass
         case 0: baro_new = baro.update(now_us, now_ms, armed); break;
@@ -326,6 +369,8 @@ public:
             if (range_new) core.on_range(sonar.heightM(), sonar.sigmaM(), now_ms);
             if (flow_new) { const flow::Reading& r = flow.reading(); fc::FlowSample f; f.x = r.x; f.y = r.y; f.dt = r.dt; f.age_s = r.age_s; f.quality = r.quality; core.on_flow(f, now_ms); flow_quality_ = r.quality; }
             if (mag_new) { const float* b = mag.board(); core.on_mag({b[0], b[1], b[2]}, mag.readyForFusion(now_ms), now_ms); }
+            if (esc_new) motors.manager().feed_serial(esc_m, esc_r.temp_c, esc_r.volt, esc_r.amps, esc_r.erpm, now_ms);
+            if (esc_ask >= 0) motors.manager().request_telemetry(esc_ask);       // (the bit goes out with the next control cycle's frame)
             if (blackbox.take_erase_done()) beep_event(beep::BLACKBOX_ERASE);
             update_inflight_trim(now_ms);
             update_beeper(now_ms, now_armed);
@@ -362,7 +407,14 @@ public:
         if (ekf_due_) { ekf_due_ = false; ekf_step(now_ms); }  // (outside the lock: the EKF is this thread's alone, ~30 - 60 us)
         servos.update(servo_rc_, servo_have_rc_);              // (outside the lock: it writes the PWM peripheral; the channels were copied under it)
         if (tlm_n_) { rc.sendTelemetry(tlm_buf_, tlm_n_); tlm_n_ = 0; }                  // (outside the lock: a UART write)
-        if (restart) { delay(20); ESP.restart(); }
+        if (restart) {
+            delay(20);
+#if WB_PLATFORM_STM32
+            NVIC_SystemReset();
+#else
+            ESP.restart();
+#endif
+        }
     }
 
     const fc::CoreOutput& output() const { return last_out_; }
@@ -559,6 +611,8 @@ private:
         busy_seen_ = busy_other_;
         slow_seconds_ = slow ? (uint8_t)(slow_seconds_ < 0xFF ? slow_seconds_ + 1 : 0xFF) : (uint8_t)0;
         loop_slow_ = slow_seconds_ >= 2;
+        { auto d = [](uint32_t now, uint32_t& was) { const uint32_t x = now - was; was = now; return (uint16_t)(x > 65535u ? 65535u : x); };
+          tel_.esc_tlm_frames = d(esc_poll_.frames(), esc_mark_[0]); tel_.esc_tlm_crc = d(esc_poll_.crc_errors(), esc_mark_[1]); tel_.esc_tlm_timeouts = d(esc_poll_.timeouts(), esc_mark_[2]); }
         const motor::HwStats hs = motors.hwStats();
         tel_.hw_skipped = (uint16_t)(hs.skipped - hw_mark_.skipped > 65535u ? 65535u : hs.skipped - hw_mark_.skipped);
         tel_.hw_late = (uint16_t)(hs.late_switch - hw_mark_.late_switch > 65535u ? 65535u : hs.late_switch - hw_mark_.late_switch);
@@ -708,15 +762,17 @@ private:
         for (int i = 0; i < servo::kServos; i++) add(s.pins.servo[i], sname[i]);
         if (s.flow.type == FlowSensor::PMW3901) { add(s.pins.flow_cs, "flow_cs"); add(s.pins.flow_sck, "flow_sck"); add(s.pins.flow_miso, "flow_miso"); add(s.pins.flow_mosi, "flow_mosi"); }
         if (s.flow.type == FlowSensor::MSP) { add(s.pins.flow_rx, "flow_rx"); add(s.pins.flow_tx, "flow_tx"); }
+        if (s.motors.esc_sensor) add(s.pins.esc_tlm, "esc_tlm");
         if (s.blackbox.device == bb::DEV_SDCARD) { hw.getSdCardPins(p); if (s.blackbox.sd_mode == wbp::SD_MODE_SPI) add(p[0], "sd_cs"); add(p[1], "sd_clk"); add(p[2], "sd_cmd"); add(p[3], "sd_d0"); }
         const pins::Conflict c = pins::find_conflict(use, n);
         status.pin_conflict = c.found;
         char line[kReportLen];
-        if (c.found) { snprintf(line, sizeof(line), "pins: FAILED - GPIO%u is set for both %s and %s (arming is blocked until the Pins tab is fixed)", (unsigned)c.pin, c.a, c.b); add_report(line); }
-        const pins::Use* r = pins::find_reserved(use, n, sys::memory().psram_octal);
-        if (r) { snprintf(line, sizeof(line), "pins: WARNING - GPIO%u (%s) belongs to the module's own flash / PSRAM on an ESP32-S3: pick another pin", (unsigned)r->pin, r->what); add_report(line); }
-        const pins::Use* u = usb_link ? pins::find_on_usb(use, n) : nullptr;
-        if (u) { snprintf(line, sizeof(line), "pins: WARNING - GPIO%u (%s) is the USB socket this firmware talks to the app through: pick another pin", (unsigned)u->pin, u->what); add_report(line); }
+        char pb[8];
+        if (c.found) { snprintf(line, sizeof(line), "pins: FAILED - %s is set for both %s and %s (arming is blocked until the Pins tab is fixed)", pin_str(c.pin, pb), c.a, c.b); add_report(line); }
+        const pins::Use* r = pins::find_reserved(use, n, sys::memory().psram_octal, WB_PLATFORM_STM32);
+        if (r) { snprintf(line, sizeof(line), WB_PLATFORM_STM32 ? "pins: WARNING - %s (%s) is the debug port (SWD): a debug probe cannot connect while the firmware runs" : "pins: WARNING - %s (%s) belongs to the module's own flash / PSRAM on an ESP32-S3: pick another pin", pin_str(r->pin, pb), r->what); add_report(line); }
+        const pins::Use* u = usb_link ? pins::find_on_usb(use, n, WB_PLATFORM_STM32) : nullptr;
+        if (u) { snprintf(line, sizeof(line), "pins: WARNING - %s (%s) is the USB socket this firmware talks to the app through: pick another pin", pin_str(u->pin, pb), u->what); add_report(line); }
     }
 
     // what the CRSF telemetry frames carry, from the telemetry the app gets as well (called with the lock held)
@@ -846,7 +902,7 @@ private:
         if (rc_link_) h |= wbp::HEALTH_RX;
         if (status.motors) h |= wbp::HEALTH_MOTORS;
         motor::MotorOutputManager& mm = motors.manager();
-        if (mm.rpm_all_valid(now_ms)) h |= wbp::HEALTH_ESC_TELEMETRY;
+        if (mm.rpm_all_valid(now_ms) || (esc_uart_ && esc_poll_.alive(now_ms))) h |= wbp::HEALTH_ESC_TELEMETRY;
         if (imu.accCalibration().valid) h |= wbp::HEALTH_ACC_CAL;
         if (battery.monitor.present()) h |= wbp::HEALTH_BATTERY;
         tel_.health = h;
@@ -861,7 +917,7 @@ private:
         tel_.motor_beeping = motor_beeper.current() == beep::NO_MODE ? 0 : (uint8_t)(motor_beeper.current() + 1);
         for (int i = 0; i < 8; i++) {
             const motor::MotorTelemetry t = mm.telemetry(i, now_ms);
-            tel_.rpm[i] = t.rpm; tel_.esc_err_pct[i] = t.error_pct; tel_.esc_temp[i] = t.temp_c;
+            tel_.rpm[i] = t.rpm; tel_.esc_err_pct[i] = t.error_pct; tel_.esc_temp[i] = t.temp_c; tel_.esc_amps[i] = t.amps;
         }
         const float* b = mag.board(); for (int i = 0; i < 3; i++) tel_.mag[i] = b[i];
         tel_.baro_alt = baro.altitudeM(); tel_.baro_pa = baro.pressurePa(); tel_.temp_c = baro.tempC(); tel_.range_m = sonar.valid(now_ms) ? sonar.heightM() : 0.0f;
@@ -919,6 +975,7 @@ private:
     bool loop_slow_ = false, busy_other_ = false, busy_seen_ = false; uint8_t slow_seconds_ = 0, batt_state_ = 0, flow_quality_ = 0; uint32_t flow_tel_ms_ = 0;
     uint16_t servo_rc_[16] = {}; bool servo_have_rc_ = false;
     fc::Health health_; motor::HwStats hw_mark_; uint32_t rc_mark_[3] = {};
+    escs::Poller esc_poll_; port::SerialPort* esc_uart_ = nullptr; uint32_t esc_mark_[3] = {};      // ESC telemetry wire
     fc::CoreOutput last_out_;
     uint32_t trim_ms_ = 0;
 };

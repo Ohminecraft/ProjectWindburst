@@ -5,6 +5,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "../../port/pwm.h"
 
 // ============================================================================
 // Servo outputs: up to four servos, each follows one RC channel (a gimbal tilt on a slider, a gripper on a switch...).
@@ -48,13 +49,13 @@ public:
         for (int i = 0; i < servo::kServos; i++) {
             pin_[i] = 255; out_[i] = 0;
             if (pins[i] == 255) continue;                               // no pin: nothing (a servo switched OFF keeps its pin, without pulses)
-            if (!ledcAttach(pins[i], rate_, kBits)) { fail_ = "no free PWM (LEDC) channel for a servo (motors in PWM mode and a passive buzzer use them too)"; continue; }
+            if (!port::pwm_attach(pins[i], rate_, kBits)) { fail_ = WB_PLATFORM_STM32 ? "servo: the pin has no timer channel, or its timer runs at another rate (motors / buzzer)" : "no free PWM (LEDC) channel for a servo (motors in PWM mode and a passive buzzer use them too)"; continue; }
             pin_[i] = pins[i]; count_++;
         }
         have_rc_ = false;
         return *fail_ == 0;
     }
-    void stop() { for (int i = 0; i < servo::kServos; i++) if (pin_[i] != 255) { ledcDetach(pin_[i]); pin_[i] = 255; out_[i] = 0; } count_ = 0; }
+    void stop() { for (int i = 0; i < servo::kServos; i++) if (pin_[i] != 255) { port::pwm_detach(pin_[i]); pin_[i] = 255; out_[i] = 0; } count_ = 0; }
 
     // src: 0 = off, n = RC channel n (1-based); live
     void configure(const uint8_t src[servo::kServos], const uint16_t min_us[servo::kServos], const uint16_t max_us[servo::kServos], const uint8_t reverse[servo::kServos]) {
@@ -69,7 +70,7 @@ public:
             if (pin_[i] == 255) continue;
             uint16_t us = 0;
             if (src_[i] >= 1 && src_[i] <= 16) us = have_rc_ ? servo::map_us(rc[src_[i] - 1], min_[i], max_[i], rev_[i]) : (uint16_t)((min_[i] + max_[i]) / 2);
-            if (us != out_[i] || dirty_) { out_[i] = us; ledcWrite(pin_[i], us ? servo::duty_for(us, rate_) : 0); }
+            if (us != out_[i] || dirty_) { out_[i] = us; port::pwm_write(pin_[i], us ? servo::duty_for(us, rate_) : 0); }
         }
         dirty_ = false;
     }

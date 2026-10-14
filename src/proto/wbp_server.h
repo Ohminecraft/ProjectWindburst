@@ -27,7 +27,8 @@
 namespace wbp {
 
 enum Role : uint8_t { ROLE_RX = 0, ROLE_TX = 1 };
-enum Feature : uint32_t { FEAT_STREAMS = 1u << 0, FEAT_CALIBRATION = 1u << 1, FEAT_MOTOR_TEST = 1u << 2, FEAT_GPS = 1u << 3, FEAT_BLACKBOX = 1u << 4, FEAT_BATTERY = 1u << 5, FEAT_BEEPER = 1u << 6 };
+enum Feature : uint32_t { FEAT_STREAMS = 1u << 0, FEAT_CALIBRATION = 1u << 1, FEAT_MOTOR_TEST = 1u << 2, FEAT_GPS = 1u << 3, FEAT_BLACKBOX = 1u << 4, FEAT_BATTERY = 1u << 5, FEAT_BEEPER = 1u << 6,
+                         FEAT_STM32 = 1u << 7 };   // STM32: pin numbers are port * 16 + pin (PA0 = 0, PB3 = 19: src/port/pin_names.h), not GPIO numbers
 enum SettingsFlags : uint8_t { SF_DIRTY = SETTINGS_FLAGS_DIRTY, SF_REBOOT_REQUIRED = SETTINGS_FLAGS_REBOOT_REQUIRED };
 
 class Transport {
@@ -63,6 +64,7 @@ class Server {
 public:
     Server(Settings& live, SettingsStore* store, Host& host, Transport& tx, Role role, uint8_t maj, uint8_t min, uint8_t patch, const char* name, uint32_t features)
         : s_(live), store_(store), host_(host), tx_(tx), role_(role), maj_(maj), min_(min), patch_(patch), name_(name), features_(features) {}
+    void set_features(uint32_t f) { features_ = f; }                 // (the simulator plays an STM32 board with wb_sim --stm32)
 
     void on_byte(uint8_t c) { Frame f; if (parser_.feed(c, f)) { handle(f); while (parser_.pump(f)) handle(f); } }
     void on_bytes(const uint8_t* d, size_t n) { for (size_t i = 0; i < n; i++) on_byte(d[i]); }

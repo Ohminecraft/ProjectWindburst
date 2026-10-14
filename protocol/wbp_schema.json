@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0xB0570D17",
+ "hash": "0xCCF703C7",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -99,7 +99,8 @@
    "SERIAL_RX",
    "GPS",
    "TELEMETRY",
-   "FLOW_MSP"
+   "FLOW_MSP",
+   "ESC_SENSOR"
   ],
   "mode": [
    "ARM",
@@ -1346,10 +1347,17 @@
      "t": "bool",
      "d": 0,
      "desc": "bidirectional DShot: the motor signal lines have pull-up resistors of their own (e.g. 1-4.7 kOhm to 3.3 V): the internal ~45 kOhm pull-up of the pins is left off"
+    },
+    {
+     "n": "esc_sensor",
+     "t": "bool",
+     "d": 0,
+     "desc": "ESC telemetry on its own wire (KISS protocol: BLHeli_32, AM32, KISS ESCs): the ESCs' telemetry pads joined to one UART RX (pins.esc_tlm). DShot only: the firmware asks one ESC at a time with the telemetry bit"
     }
    ],
    "live": false,
    "compat": [
+    36,
     35,
     34
    ]
@@ -1593,7 +1601,7 @@
   {
    "id": 10,
    "name": "ports",
-   "desc": "Serial ports: which UART serves the GPS, the serial receiver and an MSP flow sensor",
+   "desc": "Serial ports: which UART serves the GPS, the serial receiver, an MSP flow sensor and the ESC telemetry wire",
    "fields": [
     {
      "n": "function",
@@ -1625,7 +1633,7 @@
      "t": "u8",
      "d": 0,
      "enum": "port_assign",
-     "desc": "AUTO = GPS on UART1, serial receiver on UART2, MSP flow sensor on the UART left; TABLE = as the function table says"
+     "desc": "AUTO = GPS on UART1, serial receiver on UART2, MSP flow sensor and ESC telemetry on the UARTs left; TABLE = as the function table says"
     }
    ],
    "live": false,
@@ -1797,13 +1805,19 @@
      "count": 8,
      "d": 255,
      "desc": "PWM receiver: one pin per channel (channel 1 first); receiver.protocol = PWM"
+    },
+    {
+     "n": "esc_tlm",
+     "t": "u8",
+     "d": 255,
+     "desc": "ESC telemetry wire (motors.esc_sensor): the RX pin of the UART it is on"
     }
    ],
    "live": false,
    "compat": [
+    46,
     37,
-    33,
-    27
+    33
    ]
   },
   {
@@ -3004,6 +3018,28 @@
      "t": "u16",
      "count": 4,
      "desc": "pulse sent to servo 1..4 (us), 0 = off"
+    },
+    {
+     "n": "amps",
+     "t": "u16",
+     "count": 8,
+     "scale": 0.01,
+     "desc": "current per ESC (A): extended DShot telemetry or the ESC telemetry wire"
+    },
+    {
+     "n": "tlm_frames",
+     "t": "u16",
+     "desc": "ESC telemetry wire (motors.esc_sensor): good answers in the last second"
+    },
+    {
+     "n": "tlm_crc",
+     "t": "u16",
+     "desc": "... answers with a bad CRC in the last second"
+    },
+    {
+     "n": "tlm_timeouts",
+     "t": "u16",
+     "desc": "... ESCs that did not answer within 100 ms, in the last second"
     }
    ]
   },

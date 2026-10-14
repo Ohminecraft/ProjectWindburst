@@ -1,8 +1,14 @@
 // Pins and ports: which GPIO each module uses. Stored in the "pins" settings section (flash); the firmware loads it into
 // HardwareConfig at boot, so every change here needs "Lưu và khởi động lại".
-import { store, fieldDef, setFields } from '../store.js';
+import { store, fieldDef, setFields, setField } from '../store.js';
 import { h, block, fields, control, listen, note, toast } from '../ui.js';
 import { tr } from '../i18n.js';
+import { pinName, pinParse } from '../pinname.js';
+
+// An STM32 board (device info feature STM32): pins are written PA0 .. PK15 (pinname.js).
+const isStm32 = () => ((store.conn.info || {}).features || []).includes('STM32');
+// STM32 pins that are usually not free (only a warning).
+const STM32_NOTES = { 11: 'USB D-', 12: 'USB D+', 13: tr('cổng debug (SWDIO)'), 14: tr('cổng debug (SWCLK)') };
 
 const GROUPS = [
   [tr('IMU qua SPI'), tr('Điền chân CS thì firmware dùng SPI; để trống cả bốn thì IMU chạy I2C trên bus cảm biến bên dưới.'),
@@ -16,6 +22,7 @@ const GROUPS = [
     [['sd_cs', 'CS'], ['sd_clk', 'SCK / CLK'], ['sd_cmd', 'MOSI / CMD'], ['sd_d0', 'MISO / D0']]],
   ['Optical flow', tr('PMW3901: bốn chân SPI của riêng nó (không chung bus với IMU, và không dùng được cùng lúc với thẻ SD kiểu SPI). Cảm biến MSP qua UART: chỉ cần RX, nối với TX của cảm biến; firmware tự lấy cổng UART còn trống (UART1 nếu không có GPS, UART2 nếu không có receiver nối tiếp, UART0 khi app nối qua USB của chip - RX mặc định của UART0 là GPIO44). Chọn loại cảm biến ở tab Vị trí.'),
     [['flow_cs', 'CS'], ['flow_sck', 'SCK'], ['flow_miso', 'MISO'], ['flow_mosi', 'MOSI'], ['flow_rx', 'RX (UART)'], ['flow_tx', 'TX (UART)']]],
+  [tr('Telemetry ESC'), tr('Dây telemetry chung của các ESC (tab Motor: Dây telemetry ESC). Nối vào RX của một UART; firmware lấy UART còn trống (hoặc UART có chức năng Telemetry ESC trong bảng cổng).'), [['esc_tlm', 'RX']]],
   [tr('Khác'), tr('Firmware mới chỉ lưu chân này, chưa dùng.'), [['led', 'LED']]],
 ];
 // ESP32-S3 pins that are usually not free. Only a warning: boards differ.
@@ -37,9 +44,29 @@ export const S3_DEVKIT_PRESET = {
 const FLOW_SPI = ['flow_cs', 'flow_sck', 'flow_miso', 'flow_mosi'], FLOW_UART = ['flow_rx', 'flow_tx'];
 
 function pinBox(name, label, index) {
+  if (isStm32()) return h('label', { class: 'pin' }, h('span', {}, label), stm32Box(name, label, index));
   const input = control('pins', name, { index, empty: 255, width: '92px' });
   input.min = 0; input.max = 48;
   return h('label', { class: 'pin' }, h('span', {}, label), input);
+}
+
+// A text box that shows and takes a pin name (PB3); the setting keeps the number.
+function stm32Box(name, label, index) {
+  const el = h('input', { type: 'text', class: 'num pin-name', placeholder: tr('trống'), spellcheck: 'false', autocomplete: 'off' });
+  el.style.width = '92px';
+  el.dataset.field = `pins.${name}` + (index === undefined ? '' : `[${index}]`);
+  const get = () => { const v = (store.settings.pins || {})[name]; return index === undefined ? v : (v ? v[index] : undefined); };
+  const sync = (force) => { if (!force && document.activeElement === el) return; el.value = pinName(get(), true); };
+  el.addEventListener('change', () => {
+    const v = pinParse(el.value, true);
+    if (v === null) { toast(tr('{label}: "{text}" không phải tên chân STM32 (PA0 đến PK15).', { label, text: el.value.trim() }), 'warn'); sync(true); return; }
+    if (v !== get()) setField('pins', name, v, index);
+    sync(true);
+  });
+  const lock = () => { el.disabled = store.armed; };
+  listen('settings:pins', () => sync()); listen('armed', lock);
+  sync(); lock();
+  return el;
 }
 
 function problems() {
@@ -50,8 +77,15 @@ function problems() {
   // on UART0's pins is the normal wiring of a board that talks to the app over USB
   const flowType = (store.settings.flow || {}).type;
   const unused = (name) => (FLOW_SPI.includes(name) && flowType !== 'PMW3901') || (FLOW_UART.includes(name) && flowType !== 'MSP');
+  const stm32 = isStm32();
   const visit = (label, v, name) => {
     if (v === 255 || v === undefined || v === null || unused(name)) return;
+    if (stm32) {                                          // (which pin can be which UART / SPI / timer: the firmware checks it at boot)
+      if (STM32_NOTES[v]) out.push(tr('{label}: {pin} thường là {what}.', { label, pin: pinName(v, true), what: STM32_NOTES[v] }));
+      if (used.has(v)) out.push(tr('{pin} đang gán cho cả "{a}" và "{b}".', { pin: pinName(v, true), a: used.get(v), b: label }));
+      else used.set(v, label);
+      return;
+    }
     if (v > 48) out.push(tr('{label}: GPIO{pin} không tồn tại trên ESP32-S3 (0 đến 48).', { label, pin: v }));
     if (S3_NOTES[v] && !((v === 43 || v === 44) && FLOW_UART.includes(name))) out.push(tr('{label}: GPIO{pin} thường là {what}.', { label, pin: v, what: S3_NOTES[v] }));
     if (used.has(v)) out.push(tr('GPIO{pin} đang gán cho cả "{a}" và "{b}".', { pin: v, a: used.get(v), b: label }));
@@ -77,8 +111,8 @@ function problems() {
     const proto = (store.settings.receiver || {}).protocol;
     if (proto && proto !== 'PPM' && proto !== 'PWM' && proto !== 'NRF24' && !fn.includes('SERIAL_RX')) out.push(tr('Cổng nối tiếp: bảng không có UART nào cho receiver nối tiếp.'));
   }
-  if (p.batt_adc !== 255 && (p.batt_adc < 1 || p.batt_adc > 20)) out.push(tr('ADC đo pin: GPIO{pin} không đo được điện áp trên ESP32-S3 (chỉ GPIO1 đến GPIO20).', { pin: p.batt_adc }));
-  if (p.curr_adc !== undefined && p.curr_adc !== 255 && (p.curr_adc < 1 || p.curr_adc > 20)) out.push(tr('ADC đo dòng: GPIO{pin} không đo được điện áp trên ESP32-S3 (chỉ GPIO1 đến GPIO20).', { pin: p.curr_adc }));
+  if (!stm32 && p.batt_adc !== 255 && (p.batt_adc < 1 || p.batt_adc > 20)) out.push(tr('ADC đo pin: GPIO{pin} không đo được điện áp trên ESP32-S3 (chỉ GPIO1 đến GPIO20).', { pin: p.batt_adc }));
+  if (!stm32 && p.curr_adc !== undefined && p.curr_adc !== 255 && (p.curr_adc < 1 || p.curr_adc > 20)) out.push(tr('ADC đo dòng: GPIO{pin} không đo được điện áp trên ESP32-S3 (chỉ GPIO1 đến GPIO20).', { pin: p.curr_adc }));
   const sd = [p.sd_clk, p.sd_cmd, p.sd_d0], sdSet = sd.filter((v) => v !== 255).length;
   if ((sdSet > 0 && sdSet < 3) || (p.sd_cs !== 255 && sdSet < 3)) out.push(tr('Thẻ SD: cần đủ SCK / CLK, MOSI / CMD và MISO / D0.'));
   if (sdSet === 3 && p.sd_cs === 255 && (store.settings.blackbox || {}).sd_mode === 'SPI') out.push(tr('Thẻ SD kiểu SPI cần thêm chân CS (hoặc đổi sang kiểu SDMMC ở tab Blackbox).'));
@@ -120,9 +154,11 @@ export default {
         h('div', {},
           block(tr('Kiểm tra'), warn,
             h('p', { class: 'help' }, tr('Firmware cũng kiểm tra lúc khởi động: hai chức năng trùng một chân thì không cho arm, và ghi rõ trong báo cáo ở tab Tổng quan.'))),
-          block(tr('Bộ chân gợi ý cho ESP32-S3 DevKitC'),
-            h('p', { class: 'help' }, tr('Một bộ chân không đụng chân strapping, USB, UART0, flash hay PSRAM của module N16R8: IMU 10-13, I2C 8/9, GPS 18/17, receiver 16/15, motor 4-7, ADC đo pin GPIO1, thẻ SD 39-42. Chỉ là điểm bắt đầu: dây nối trên mạch của bạn mới quyết định.')),
-            h('div', { class: 'btn-row' }, preset)),
+          isStm32()
+            ? block(tr('Mạch STM32'), h('p', { class: 'help', id: 'pins-stm32' }, tr('Chân ghi theo tên: PA0, PB3, PC13 ... Trên STM32 mỗi UART, SPI, I2C và timer chỉ ra được một số chân nhất định; firmware kiểm tra lúc khởi động và ghi lỗi vào báo cáo ở tab Tổng quan nếu chân không đúng chức năng.')))
+            : block(tr('Bộ chân gợi ý cho ESP32-S3 DevKitC'),
+              h('p', { class: 'help' }, tr('Một bộ chân không đụng chân strapping, USB, UART0, flash hay PSRAM của module N16R8: IMU 10-13, I2C 8/9, GPS 18/17, receiver 16/15, motor 4-7, ADC đo pin GPIO1, thẻ SD 39-42. Chỉ là điểm bắt đầu: dây nối trên mạch của bạn mới quyết định.')),
+              h('div', { class: 'btn-row' }, preset)),
           block(tr('Cổng nối tiếp'),
             fields('ports', ['assign']),
             h('table', { class: 'grid', id: 'ports-table' },

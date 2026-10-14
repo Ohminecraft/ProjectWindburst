@@ -41,6 +41,7 @@ public:
     virtual bool write(uint32_t addr, const uint8_t* data, uint32_t n) = 0;  // NOR program
     virtual bool erase(uint32_t addr, uint32_t n) = 0;                       // addr and n multiples of kSector
     virtual const char* name() const { return "flash"; }
+    virtual void sync() {}                                                   // end of a session: nothing may wait in RAM (bb_qword.h)
 };
 
 class FlashLog : public Storage {
@@ -136,6 +137,7 @@ public:
     }
     void end_session() override {
         while (writing_ && stage_n_) if (!pump(true)) break;
+        if (writing_ && st_) st_->sync();
         writing_ = false; stage_n_ = 0;
         head_ = (head_ + kPage - 1) / kPage * kPage;                       // "used" counts whole pages: the same number a scan after a reset finds
         if (verified_ < next_start()) verified_ = next_start();

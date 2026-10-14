@@ -925,7 +925,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.9.5" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.11.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -1934,13 +1934,13 @@ static void t_current() {
     { auto r = nav_rig([&](wbp::Settings& s, VirtualBoard&) { s.battery.current_source = CURR_SOURCE_ADC; });
       CHECK(has_line(*r, "current: FAILED - current sensor ADC pin not set"), "ADC chosen, no pin: reported"); }
     { auto r = nav_rig([&](wbp::Settings& s, VirtualBoard&) { s.battery.current_source = CURR_SOURCE_ESC; });
-      CHECK(has_line(*r, "current: FAILED - the ESCs report it only with bidirectional DShot and extended telemetry on"), "ESC chosen, extended telemetry off: reported"); }
+      CHECK(has_line(*r, "current: FAILED - the ESCs report it only over their telemetry wire, or with bidirectional DShot and extended telemetry on"), "ESC chosen, extended telemetry off: reported"); }
     { auto r = nav_rig([&](wbp::Settings& s, VirtualBoard&) { s.pins.curr_adc = 41; });
       CHECK(has_line(*r, "current: FAILED - current sensor pin is not an ADC pin"), "GPIO41 is no ADC pin: reported"); }
     { auto r = nav_rig([&](wbp::Settings& s, VirtualBoard&) { s.pins.curr_adc = VirtualBoard::kBattAdc; }); r->run(0.5);
       CHECK(has_line(*r, "pins: FAILED - GPIO2 is set for both batt_adc and curr_adc") && (r->tel().blockers & ARM_BLOCKER_PIN_CONFLICT), "the current sensor on the voltage pin: pin conflict, no arming"); }
     { auto r = nav_rig([&](wbp::Settings& s, VirtualBoard&) { s.battery.capacity_mah = 1000; }); r->stream(STR_BATTERY, 10); r->run(2.0); T_battery tb{};
-      CHECK(has_line(*r, "current: none (no sensor pin, no extended DShot telemetry)"), "nothing set up: no current, and no fault either");
+      CHECK(has_line(*r, "current: none (no sensor pin, no ESC telemetry)"), "nothing set up: no current, and no fault either");
       CHECK(r->latest(STR_BATTERY, tb) && abs((int)tb.remaining - 70) <= 2, "a capacity set but no current to count it down with: what is left from the voltage (%u %%), not a full battery for ever", tb.remaining); }
 }
 
@@ -2109,6 +2109,40 @@ static void t_ekf() {
       CHECK(r->tel().ekf_flags == 0 && r->tel().ekf_us == 0, "nav.ekf = OFF: not run at all"); }
 }
 
+// ESC telemetry on its own wire (hal/motor/esc_sensor.h): KISS frames on a UART RX, one ESC asked at a time
+static void t_esc_wire() {
+    printf("[esc telemetry wire] KISS answers on a UART, asked with the DShot telemetry bit, one ESC at a time\n");
+    const uint8_t pin = 44;
+    auto wire = [&](wbp::Settings& s, VirtualBoard& b) { s.motors.esc_sensor = 1; s.pins.esc_tlm = pin; Serial0.dev = &b.esc_wire; const float a[4] = {2, 3, 4, 5}; for (int i = 0; i < 4; i++) b.esc_amps[i] = a[i]; };
+    {   auto r = nav_rig(wire); VirtualBoard& b = r->board;          // (DShot600, GPS on UART1, receiver on UART2, the app on USB: UART0 is left)
+        CHECK(has_line(*r, "esc tlm: KISS telemetry on UART0 RX GPIO44, 115200 baud") && b.esc_wire.baud == 115200, "boot report: the wire on the UART that is left (UART0), 115200 baud");
+        CHECK(has_line(*r, "current: from the ESCs (telemetry wire)"), "the current comes from the ESCs");
+        T_motors tm{}; T_battery tb{};
+        r->stream(STR_MOTORS, 10); r->stream(STR_BATTERY, 10); r->run(3.0);
+        CHECK(r->latest(STR_MOTORS, tm) && tm.tlm_frames == 0 && tm.tlm_timeouts == 0, "the first 5 s nobody is asked (the ESCs are still starting)");
+        r->run(4.5);
+        CHECK(r->latest(STR_MOTORS, tm) && tm.tlm_frames > 400 && tm.tlm_crc == 0 && tm.tlm_timeouts == 0, "one answer per millisecond tick: %u good answers in the last second, %u bad, %u missing", tm.tlm_frames, tm.tlm_crc, tm.tlm_timeouts);
+        CHECK(tm.temp[0] == 35 && tm.temp[3] == 38 && tm.amps[0] == 200 && tm.amps[3] == 500, "each ESC's own temperature and current, in motor order (%u / %u degC, %u / %u x 10 mA)", tm.temp[0], tm.temp[3], tm.amps[0], tm.amps[3]);
+        CHECK(r->latest(STR_BATTERY, tb) && abs((int)tb.current - 1400) <= 2 && tb.current_source == CURR_SOURCE_ESC, "battery: the sum of the four, %d x 10 mA", tb.current);
+        CHECK((r->tel().health & HEALTH_ESC_TELEMETRY) != 0, "health: ESC telemetry");
+        // a motor spinning: its speed from the wire (no bidirectional DShot here)
+        float rpm = 0, truth = 0; for (int i = 0; i < 20; i++) { r->command(CMD_MOTOR_TEST, {0, 200, 0}); r->run(0.05); rpm = r->tel().rpm[0]; truth = b.motor_rpm(0); }
+        r->command(CMD_MOTOR_TEST, {255, 0, 0}); r->run(0.3);
+        CHECK(rpm > 1000.0f && fabsf(rpm - truth) < truth * 0.05f + 100.0f, "motor test: its rpm from the wire (%.0f, the motor %.0f)", rpm, truth);
+        b.esc_silent[2] = true; r->run(1.5); r->latest(STR_MOTORS, tm);
+        CHECK(tm.tlm_timeouts >= 8 && tm.tlm_timeouts <= 11 && tm.tlm_frames > 20, "one ESC does not answer: 100 ms lost on it each round, about 10 a second (%u timeouts, %u answers)", tm.tlm_timeouts, tm.tlm_frames);
+        b.esc_silent[2] = false; b.esc_wire_corrupt = 3; r->run(1.1); r->latest(STR_MOTORS, tm);
+        CHECK(tm.tlm_crc == 3, "three damaged answers: dropped and counted (%u)", tm.tlm_crc); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { wire(s, b); s.motors.protocol = ESC_PROTOCOL_ONESHOT125; });
+        CHECK(has_line(*r, "esc tlm: FAILED - the ESC telemetry wire needs a DShot protocol"), "Oneshot: no DShot frame to carry the request: refused"); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { wire(s, b); s.pins.esc_tlm = 255; });
+        CHECK(has_line(*r, "esc tlm: FAILED - no pin for the ESC telemetry wire"), "no pin set: says so"); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { wire(s, b); s.ports.assign = PORT_ASSIGN_TABLE; s.ports.function[0] = PORT_FUNCTION_NONE; s.ports.function[1] = PORT_FUNCTION_GPS; s.ports.function[2] = PORT_FUNCTION_SERIAL_RX; });
+        CHECK(has_line(*r, "esc tlm: FAILED - no UART has the function ESC_SENSOR"), "port table without ESC_SENSOR: says so"); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { wire(s, b); s.pins.buzzer = pin; });
+        CHECK(has_line(*r, "pins: FAILED - GPIO44 is set for both") && r->app().status.pin_conflict, "its pin is checked against the others (buzzer on the same pin)"); }
+}
+
 int main() {
     if (const char* only = getenv("WB_ONLY")) {            // one group alone (while working on it): WB_ONLY=nav ./build/test_fw
         if (!strcmp(only, "nav")) { t_nav_flow(); t_nav_mounting(); t_nav_uarts(); }
@@ -2124,6 +2158,7 @@ int main() {
         if (!strcmp(only, "rxdiag")) t_rx_diag();
         if (!strcmp(only, "esc")) t_esc_passthrough();
         if (!strcmp(only, "ekf")) t_ekf();
+        if (!strcmp(only, "escwire")) t_esc_wire();
         printf("%d checks, %d failed (only '%s')\n", g_pass + g_fail, g_fail, only); return 1;
     }
     t_boot();
@@ -2157,6 +2192,7 @@ int main() {
     t_frames();
     t_ports();
     t_gps_baud();
+    t_esc_wire();
     t_esc_passthrough();
     t_ekf();
     t_gps_alt();

@@ -7,6 +7,7 @@
 
 #include <Arduino.h>
 #include <SPI.h>
+#include "../../port/gpio.h"
 
 struct SPIBus_config_t
 {
@@ -25,7 +26,11 @@ struct SPIBus_config_t
 // (The first version of this file used 2 and 3 for every chip: on an ESP32-S3 the IMU's SPI bus then never started.)
 enum SPIBus_device_e
 {
-#if defined(CONFIG_IDF_TARGET_ESP32)
+#if WB_PLATFORM_STM32
+    // STM32: the SPI instance (SPI1, SPI2 ...) is the one the pins belong to; the number only tells two buses apart.
+    SPI_DEVICE_0 = 0,
+    SPI_DEVICE_1 = 1,
+#elif defined(CONFIG_IDF_TARGET_ESP32)
     SPI_DEVICE_0 = HSPI,
     SPI_DEVICE_1 = VSPI,
 #elif defined(HSPI)
@@ -40,24 +45,43 @@ enum SPIBus_device_e
 
 class SPIBus {
 public:
+#if WB_PLATFORM_STM32
+    SPIBus(SPIBus_device_e = SPI_DEVICE_0)
+        : _spi(PNUM_NOT_DEFINED, PNUM_NOT_DEFINED, PNUM_NOT_DEFINED)
+    {
+    }
+#else
     SPIBus(SPIBus_device_e port = SPI_DEVICE_0)
         : _spi((int)port)
     {
     }
+#endif
 
     bool SPIInit(const SPIBus_config_t& config)
     {
         _config = config;
 
+#if WB_PLATFORM_STM32
+        // The three pins must be SCK / MISO / MOSI of the same SPI instance; CS is a plain GPIO driven here.
+        if (!port::pin_exists(_config.ioCsGpio)) return false;
+        void* sck = pinmap_peripheral((PinName)_config.ioSckGpio, PinMap_SPI_SCLK);
+        if (!sck || sck != pinmap_peripheral((PinName)_config.ioSdoGpio, PinMap_SPI_MISO) || sck != pinmap_peripheral((PinName)_config.ioSdiGpio, PinMap_SPI_MOSI)) return false;
+        _spi.setSCLK((PinName)_config.ioSckGpio);
+        _spi.setMISO((PinName)_config.ioSdoGpio);
+        _spi.setMOSI((PinName)_config.ioSdiGpio);
+        _spi.begin();
+#else
         if (!_spi.begin(
             _config.ioSckGpio,
             _config.ioSdoGpio,  // MISO
             _config.ioSdiGpio,  // MOSI
             _config.ioCsGpio    // CS
         )) return false;
+#endif
+        _cs = port::apin(_config.ioCsGpio);
 
-        pinMode(_config.ioCsGpio, OUTPUT);
-        digitalWrite(_config.ioCsGpio, HIGH);
+        pinMode(_cs, OUTPUT);
+        digitalWrite(_cs, HIGH);
 
         _slowSettings = SPISettings(_config.bus_clock_slow_hz, MSBFIRST, SPI_MODE3);
         _fastSettings = SPISettings(_config.bus_clock_fast_hz, MSBFIRST, SPI_MODE3);
@@ -79,11 +103,11 @@ public:
 
         _spi.beginTransaction(_slowSettings);
 
-        digitalWrite(_config.ioCsGpio, LOW);
+        digitalWrite(_cs, LOW);
 
         _spi.transfer(value);
 
-        digitalWrite(_config.ioCsGpio, HIGH);
+        digitalWrite(_cs, HIGH);
 
         _spi.endTransaction();
 
@@ -102,11 +126,11 @@ public:
 
         _spi.beginTransaction(_fastSettings);
 
-        digitalWrite(_config.ioCsGpio, LOW);
+        digitalWrite(_cs, LOW);
 
         value = _spi.transfer(0x00);
 
-        digitalWrite(_config.ioCsGpio, HIGH);
+        digitalWrite(_cs, HIGH);
 
         _spi.endTransaction();
 
@@ -128,13 +152,13 @@ public:
 
         _spi.beginTransaction(_slowSettings);
 
-        digitalWrite(_config.ioCsGpio, LOW);
+        digitalWrite(_cs, LOW);
 
         for (size_t i = 0; i < length; i++) {
             _spi.transfer(data[i]);
         }
 
-        digitalWrite(_config.ioCsGpio, HIGH);
+        digitalWrite(_cs, HIGH);
 
         _spi.endTransaction();
 
@@ -156,13 +180,13 @@ public:
 
         _spi.beginTransaction(_fastSettings);
 
-        digitalWrite(_config.ioCsGpio, LOW);
+        digitalWrite(_cs, LOW);
 
         for (size_t i = 0; i < length; i++) {
             data[i] = _spi.transfer(0x00);
         }
 
-        digitalWrite(_config.ioCsGpio, HIGH);
+        digitalWrite(_cs, HIGH);
 
         _spi.endTransaction();
 
@@ -183,12 +207,12 @@ public:
 
         _spi.beginTransaction(_slowSettings);
 
-        digitalWrite(_config.ioCsGpio, LOW);
+        digitalWrite(_cs, LOW);
 
         _spi.transfer(reg);
         _spi.transfer(value);
 
-        digitalWrite(_config.ioCsGpio, HIGH);
+        digitalWrite(_cs, HIGH);
 
         _spi.endTransaction();
 
@@ -210,12 +234,12 @@ public:
 
         _spi.beginTransaction(_fastSettings);
 
-        digitalWrite(_config.ioCsGpio, LOW);
+        digitalWrite(_cs, LOW);
 
         _spi.transfer(reg);
         value = _spi.transfer(0x00);
 
-        digitalWrite(_config.ioCsGpio, HIGH);
+        digitalWrite(_cs, HIGH);
 
         _spi.endTransaction();
 
@@ -238,7 +262,7 @@ public:
 
         _spi.beginTransaction(_fastSettings);
 
-        digitalWrite(_config.ioCsGpio, LOW);
+        digitalWrite(_cs, LOW);
 
         _spi.transfer(reg);
 
@@ -246,7 +270,7 @@ public:
             buffer[i] = _spi.transfer(0x00);
         }
 
-        digitalWrite(_config.ioCsGpio, HIGH);
+        digitalWrite(_cs, HIGH);
 
         _spi.endTransaction();
 
@@ -267,12 +291,12 @@ public:
 
         _spi.beginTransaction(_slowSettings);
 
-        digitalWrite(_config.ioCsGpio, LOW);
+        digitalWrite(_cs, LOW);
 
         _spi.transfer(reg & 0x7F);
         _spi.transfer(value);
 
-        digitalWrite(_config.ioCsGpio, HIGH);
+        digitalWrite(_cs, HIGH);
 
         _spi.endTransaction();
 
@@ -294,12 +318,12 @@ public:
 
         _spi.beginTransaction(_fastSettings);
 
-        digitalWrite(_config.ioCsGpio, LOW);
+        digitalWrite(_cs, LOW);
 
         _spi.transfer(reg | 0x80);
         value = _spi.transfer(0x00);
 
-        digitalWrite(_config.ioCsGpio, HIGH);
+        digitalWrite(_cs, HIGH);
 
         _spi.endTransaction();
 
@@ -322,7 +346,7 @@ public:
 
         _spi.beginTransaction(_fastSettings);
 
-        digitalWrite(_config.ioCsGpio, LOW);
+        digitalWrite(_cs, LOW);
 
         if (length <= kBurstMax) {
             // One burst: the address and every data byte go through the SPI hardware in a single transfer (about 1 us per
@@ -330,7 +354,11 @@ public:
             uint8_t tx[kBurstMax + 1] = {};
             uint8_t rx[kBurstMax + 1];
             tx[0] = reg | 0x80;
+#if WB_PLATFORM_STM32
+            _spi.transfer(tx, rx, length + 1);
+#else
             _spi.transferBytes(tx, rx, (uint32_t)(length + 1));
+#endif
             for (size_t i = 0; i < length; i++) {
                 buffer[i] = rx[i + 1];
             }
@@ -342,7 +370,7 @@ public:
             }
         }
 
-        digitalWrite(_config.ioCsGpio, HIGH);
+        digitalWrite(_cs, HIGH);
 
         _spi.endTransaction();
 
@@ -361,4 +389,5 @@ private:
     SPISettings _fastSettings;
 
     bool _initialized = false;
+    uint32_t _cs = 0;          // the CS pin as the core numbers it (port/gpio.h)
 };

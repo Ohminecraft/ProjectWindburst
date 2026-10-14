@@ -5,6 +5,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "../../port/pwm.h"
 #include "motor_hw.h"
 
 // ============================================================================
@@ -14,11 +15,13 @@
 // ============================================================================
 class PulseHw : public MotorHw {
 public:
-    const char* name() const override { return "Pulse/LEDC"; }
+    const char* name() const override { return WB_PLATFORM_STM32 ? "Pulse/TIM" : "Pulse/LEDC"; }
 
     bool begin(const uint8_t* pins, int count, motor::Protocol proto, uint16_t pulse_hz, bool) override {
         if (motor::is_dshot(proto) || count < 1 || count > 8) return false;
+#if !WB_PLATFORM_STM32
         ledcSetClockSource(LEDC_USE_APB_CLK);
+#endif
         proto_ = proto; count_ = count; hz_ = pulse_hz ? pulse_hz : motor::default_pulse_hz(proto);
         if (1e6f / hz_ < motor::pulse_period_min_us(proto)) return false;      // period shorter than the longest pulse
 #ifdef CONFIG_IDF_TARGET_ESP32S3                                      // the IDF driver cannot do more than 4 kHz on the S3 (the RMT path is one-way DShot only)
@@ -29,8 +32,8 @@ public:
         while (bits_ > 8 && (uint64_t)hz_ * (1u << bits_) > 80000000ull) bits_--;
         for (int i = 0; i < count; i++) {
             pins_[i] = pins[i];
-            if (pins[i] == 255 || !ledcAttach(pins[i], hz_, bits_)) return false;
-            ledcWrite(pins[i], 0);
+            if (pins[i] == 255 || !port::pwm_attach(pins[i], hz_, bits_)) return false;
+            port::pwm_write(pins[i], 0);
         }
         return true;
     }
@@ -40,7 +43,7 @@ public:
             const float frac = proto_ == motor::PROTO_BRUSHED ? motor::brushed_duty((float)f.value[i]) : motor::pulse_us(proto_, (float)f.value[i]) * 1e-6f * (float)hz_;
             uint32_t duty = (uint32_t)lroundf(frac * (float)(1u << bits_));
             const uint32_t maxd = (1u << bits_) - 1; if (duty > maxd) duty = maxd;
-            ledcWrite(pins_[i], duty);
+            port::pwm_write(pins_[i], duty);
         }
     }
 private:

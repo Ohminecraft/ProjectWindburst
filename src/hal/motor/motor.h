@@ -7,9 +7,19 @@
 
 #include <Arduino.h>
 #include "motor_output.h"
+#include "../../port/platform.h"
 #if defined(ESP32)
 #include "dshot.h"
 #include "pwm_oneshot.h"
+#elif WB_PLATFORM_STM32                 // PWM / Oneshot / Multishot / brushed on the timers (port/pwm.h); DShot needs timer + DMA: not written yet
+#include "pwm_oneshot.h"
+class NoDshotHw : public MotorHw {
+public:
+    const char* name() const override { return "DShot (not on STM32 yet: use PWM, Oneshot or Multishot)"; }
+    bool begin(const uint8_t*, int, motor::Protocol, uint16_t, bool) override { return false; }
+    void write(const motor::Frame&) override {}
+};
+typedef NoDshotHw DshotHw;
 #else                                   // PC build (tests / simulator): frames are captured instead of driving pins
 #include "motor_hw_host.h"
 typedef HostMotorHw DshotHw;

@@ -50,7 +50,7 @@ struct MotorConfig {
 
 struct Frame {
     uint16_t value[kMaxMotors] = {};                // per hardware slot: DShot value 0..2047, or pulse scale value (0 / 1000..2000)
-    bool telem_request[kMaxMotors] = {};            // DShot telemetry-request bit (commands only)
+    bool telem_request[kMaxMotors] = {};            // DShot telemetry-request bit (commands; ESC telemetry on its own wire)
     bool send = true;                               // false: hold the line quiet this cycle (paced command gaps)
 };
 
@@ -162,6 +162,7 @@ public:
         if (armed) {
             test_stop(); cmd_active_ = false; q_head_ = q_tail_ = 0;
             for (int i = 0; i < cfg.count; i++) { out.value[cfg.order[i]] = to_value(cmd[i], e); out_frac_[i] = cmd[i] < 0 ? 0 : (cmd[i] > 1 ? 1 : cmd[i]); }
+            ask_telemetry(out);
             return;
         }
         for (int i = 0; i < kMaxMotors; i++) out_frac_[i] = 0;
@@ -172,7 +173,19 @@ public:
             if (testing && test_frac_[i] > 0.0f) { v = to_value(test_frac_[i], e); out_frac_[i] = test_frac_[i]; }
             out.value[cfg.order[i]] = (uint16_t)lroundf(v);
         }
+        ask_telemetry(out);
         if (!testing) test_stop();
+    }
+
+    // ---------------------------------------------------------------- ESC telemetry on its own wire (esc_sensor.h)
+    // The next DShot frame (not a command) carries the telemetry-request bit to this logical motor. (Both calls under the app's lock.)
+    void request_telemetry(int logical) { if (logical >= 0 && logical < cfg.count && is_dshot(cfg.protocol)) tlm_ask_ = (int8_t)logical; }
+    // An answer of that ESC. Its eRPM counts only without bidirectional DShot: the DShot reply is newer and comes every frame.
+    void feed_serial(int logical, uint8_t temp_c, float volt, float amps, uint32_t erpm, uint32_t now_ms) {
+        if (logical < 0 || logical >= cfg.count) return;
+        Slot& s = tel_[logical];
+        s.temp = temp_c; s.volt = volt; s.volt_ms = now_ms; s.amps = amps; s.amps_ms = now_ms; s.amps_seen = true;
+        if (!cfg.bidirectional) { s.rpm = erpm * 2.0f / (cfg.pole_count ? cfg.pole_count : 14); s.rpm_ms = now_ms; s.rpm_seen = true; }
     }
 
     // ---------------------------------------------------------------- telemetry in
@@ -260,6 +273,11 @@ private:
         v = v < e.low ? e.low : (v > e.high ? e.high : v);        // armed motors never fall below idle, never exceed the limit
         return (float)lroundf(v);
     }
+    WB_FAST void ask_telemetry(Frame& out) {
+        const int8_t m = tlm_ask_;
+        if (m < 0 || !is_dshot(cfg.protocol)) return;
+        out.telem_request[cfg.order[m]] = true; tlm_ask_ = -1;
+    }
     int logical_of(int slot) const { for (int i = 0; i < cfg.count; i++) if (cfg.order[i] == slot) return i; return -1; }
     bool push(uint8_t slot, uint8_t cmd) {
         const uint8_t n = (uint8_t)((q_tail_ + 1) % kQ);
@@ -293,6 +311,7 @@ private:
     Slot tel_[kMaxMotors];
     DynamicIdle dyn_; float dyn_inc_ = 0;
     QCmd q_[kQ]; uint8_t q_head_ = 0, q_tail_ = 0;
+    int8_t tlm_ask_ = -1;
     bool cmd_active_ = false; QCmd cur_{0, 0}; uint8_t phase_ = 0, sent_ = 0, repeats_ = 0; uint32_t t_phase_ = 0, next_due_ = 0, post_ = 0;
     float test_frac_[kMaxMotors] = {}; uint32_t test_until_us_ = 0; float out_frac_[kMaxMotors] = {};
 };

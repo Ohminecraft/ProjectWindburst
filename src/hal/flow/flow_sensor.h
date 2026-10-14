@@ -5,7 +5,8 @@
 #pragma once
 
 #include <Arduino.h>
-#include <HardwareSerial.h>
+#include "../../port/uart.h"
+#include "../../port/gpio.h"
 #include <SPI.h>
 #include "flow_driver.h"
 #include "pmw3901.h"
@@ -31,12 +32,19 @@
 class ArduinoPixartPort : public flow::PixartPort {
 public:
     bool begin(uint8_t cs, uint8_t sck, uint8_t miso, uint8_t mosi) {
-        cs_ = cs; pinMode(cs_, OUTPUT); digitalWrite(cs_, HIGH);
+        cs_ = cs; pinMode(port::apin(cs_), OUTPUT); digitalWrite(port::apin(cs_), HIGH);
+#if WB_PLATFORM_STM32
+        void* inst = pinmap_peripheral((PinName)sck, PinMap_SPI_SCLK);           // the three pins: one SPI instance
+        if (!inst || inst != pinmap_peripheral((PinName)miso, PinMap_SPI_MISO) || inst != pinmap_peripheral((PinName)mosi, PinMap_SPI_MOSI)) return false;
+        spi_.setSCLK((PinName)sck); spi_.setMISO((PinName)miso); spi_.setMOSI((PinName)mosi); spi_.begin();
+        return true;
+#else
         return spi_.begin((int8_t)sck, (int8_t)miso, (int8_t)mosi, (int8_t)-1);
+#endif
     }
     void select(bool on) override {
-        if (on) { spi_.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE3)); digitalWrite(cs_, LOW); }
-        else { digitalWrite(cs_, HIGH); spi_.endTransaction(); }
+        if (on) { spi_.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE3)); digitalWrite(port::apin(cs_), LOW); }
+        else { digitalWrite(port::apin(cs_), HIGH); spi_.endTransaction(); }
     }
     uint8_t transfer(uint8_t v) override { return spi_.transfer(v); }
     void delay_us(uint32_t us) override { if (us >= 1000) delay(us / 1000); else delayMicroseconds(us); }      // (long pauses let other tasks run)
@@ -46,10 +54,10 @@ private:
 
 class ArduinoBytePort : public flow::BytePort {
 public:
-    void attach(HardwareSerial& s) { s_ = &s; in_.clear(); }
+    void attach(port::SerialPort& s) { s_ = &s; in_.clear(); }
     int read() override { return s_ ? in_.get(*s_) : -1; }                 // (in blocks: serial_block.h)
 private:
-    HardwareSerial* s_ = nullptr; SerialBlock<64> in_;
+    port::SerialPort* s_ = nullptr; SerialBlock<64> in_;
 };
 
 // The lidar inside an MSP flow sensor, as a range driver.
@@ -81,7 +89,7 @@ public:
     void setType(uint8_t t) { type_ = t <= MSP ? (Type)t : NONE; }
     void setSpiPins(uint8_t cs, uint8_t sck, uint8_t miso, uint8_t mosi) { spi_pins_[0] = cs; spi_pins_[1] = sck; spi_pins_[2] = miso; spi_pins_[3] = mosi; }
     // uart: nullptr = none could be given to this sensor (uart_name says why in failReason)
-    void setUart(HardwareSerial* uart, const char* uart_name, uint8_t rx, uint8_t tx, uint32_t baud) { uart_ = uart; uart_name_ = uart_name; rx_ = rx; tx_ = tx; baud_ = baud; }
+    void setUart(port::SerialPort* uart, const char* uart_name, uint8_t rx, uint8_t tx, uint32_t baud) { uart_ = uart; uart_name_ = uart_name; rx_ = rx; tx_ = tx; baud_ = baud; }
     void setSpiBusTaken(bool taken) { spi_taken_ = taken; }    // the second SPI bus already belongs to the SD card
     // Test hook / other sensor types: any driver (init() is called here).
     bool useDriver(flow::Driver* d) { drv_ = d && d->init() ? d : nullptr; fail_ = drv_ ? "" : "the flow driver did not start"; return drv_ != nullptr; }
@@ -99,8 +107,7 @@ public:
         }
         if (rx_ == 255) { fail_ = "flow sensor on a UART: pin flow_rx not set"; return false; }
         if (!uart_) { fail_ = "no UART left for the flow sensor: the GPS, the receiver and the app's link use all of them"; return false; }
-        uart_->setRxBufferSize(512);
-        uart_->begin(baud_, SERIAL_8N1, rx_, tx_ == 255 ? -1 : (int)tx_);
+        if (!port::uart_begin(*uart_, baud_, SERIAL_8N1, rx_, tx_, false, 512)) { fail_ = "flow sensor: the UART did not start on these pins"; return false; }
         byte_port_.attach(*uart_);
         msp_.init(); drv_ = &msp_; msp_active_ = true;
         return true;
@@ -135,7 +142,7 @@ private:
     ArduinoBytePort byte_port_; flow::MspFlow msp_{byte_port_};
     FlowRangeDriver range_;
     flow::Driver* drv_ = nullptr; flow::Reading reading_;
-    HardwareSerial* uart_ = nullptr; const char* uart_name_ = ""; const char* fail_ = "";
+    port::SerialPort* uart_ = nullptr; const char* uart_name_ = ""; const char* fail_ = "";
     Type type_ = NONE; uint8_t spi_pins_[4] = {255, 255, 255, 255}, rx_ = 255, tx_ = 255, rate_ = 0; uint32_t baud_ = 115200;
     bool spi_taken_ = false, msp_active_ = false, seen_ = false; uint32_t last_ms_ = 0, rate_ms_ = 0, samples_ = 0;
 };

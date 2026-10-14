@@ -5,7 +5,7 @@
 #pragma once
 
 #include <Arduino.h>
-#include <HardwareSerial.h>
+#include "../../port/uart.h"
 #include "gps_engine.h"
 #include "../serial_block.h"
 #include "gps_nav.h"
@@ -26,19 +26,19 @@
 // ============================================================================
 class ArduinoGpsPort : public gps::Port {
 public:
-    void attach(HardwareSerial& s, int rx, int tx) { s_ = &s; rx_ = rx; tx_ = tx; started_ = false; }
+    void attach(port::SerialPort& s, int rx, int tx) { s_ = &s; rx_ = rx; tx_ = tx; started_ = false; }
     int read() override { return s_ ? in_.get(*s_) : -1; }                 // (in blocks: serial_block.h)
     void write(const uint8_t* d, size_t n) override { if (s_) s_->write(d, n); }
     void set_baud(uint32_t baud) override {
         if (!s_) return;
-        if (!started_) { s_->setRxBufferSize(1024); s_->begin(baud, SERIAL_8N1, rx_, tx_); started_ = true; }
-        else { s_->flush(); s_->updateBaudRate(baud); }
+        if (!started_) { started_ = port::uart_begin(*s_, baud, SERIAL_8N1, (uint8_t)rx_, (uint8_t)tx_, false, 1024); }
+        else port::uart_set_baud(*s_, baud);
         while (s_->available()) s_->read();                      // bytes received at the old rate are garbage now
         in_.clear();
     }
     bool tx_empty() override { return true; }                    // our frames are < 100 bytes and the TX ring is 256: write() never blocks
 private:
-    HardwareSerial* s_ = nullptr; int rx_ = -1, tx_ = -1; bool started_ = false; SerialBlock<64> in_;
+    port::SerialPort* s_ = nullptr; int rx_ = -1, tx_ = -1; bool started_ = false; SerialBlock<64> in_;
 };
 
 class GpsSensor {
@@ -49,7 +49,7 @@ public:
     // limits for usable(): BF requires fix + min sats; accuracy limits protect Position Hold / Return-To-Home
     void setLimits(uint8_t min_sats, uint16_t max_hdop_x100, uint32_t max_hacc_mm) { min_sats_ = min_sats; max_hdop_ = max_hdop_x100; max_hacc_ = max_hacc_mm; }
 
-    bool begin(HardwareSerial& uart) {
+    bool begin(port::SerialPort& uart) {
         fail_ = ""; started_ = false;
         if (!enabled_) { fail_ = "GPS disabled"; return false; }
         const gps::Provider p = eng_.cfg.provider;

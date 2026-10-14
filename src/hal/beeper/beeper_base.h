@@ -5,6 +5,8 @@
 #pragma once
 
 #include <Arduino.h>
+#include "../../port/pwm.h"
+#include "../../port/gpio.h"
 #include "beeper_core.h"
 #include "../../config/hardware_config.h"
 
@@ -35,14 +37,14 @@ public:
     }
 
     bool begin() {
-        if (began_ && ok_ && attached_pwm_) { ledcDetach(pin_); attached_pwm_ = false; }
+        if (began_ && ok_ && attached_pwm_) { port::pwm_detach(pin_); attached_pwm_ = false; }
         uint8_t pin[1]; hw_.getBuzzerPin(pin);
         pin_ = pin[0]; ok_ = false; fail_ = ""; began_ = true; on_ = false;
         if (pin_ == GPIO_UNUSED) { fail_ = "buzzer pin not set (app: Pins tab, or hardware_config.h)"; return false; }
         if (type_ == PASSIVE) {
-            if (!ledcAttach(pin_, freq_, kBits)) { fail_ = "no free PWM channel for the buzzer tone (the motor outputs use them)"; return false; }
+            if (!port::pwm_attach(pin_, freq_, kBits)) { fail_ = WB_PLATFORM_STM32 ? "buzzer tone: the pin has no timer channel, or its timer runs at another rate (motors / servos)" : "no free PWM channel for the buzzer tone (the motor outputs use them)"; return false; }
             attached_pwm_ = true;
-        } else pinMode(pin_, OUTPUT);
+        } else pinMode(port::apin(pin_), OUTPUT);
         ok_ = true;
         drive(false);
         return true;
@@ -61,8 +63,8 @@ private:
             const uint32_t full = (1u << kBits) - 1u;
             uint32_t duty = on ? (full * volume_) / 200u : 0u;                 // 100 % volume = 50 % duty
             if (inverted_) duty = full - duty;
-            ledcWrite(pin_, duty);
-        } else digitalWrite(pin_, (on != inverted_) ? HIGH : LOW);
+            port::pwm_write(pin_, duty);
+        } else digitalWrite(port::apin(pin_), (on != inverted_) ? HIGH : LOW);
     }
     HardwareConfig hw_;
     Type type_ = ACTIVE; bool inverted_ = false; uint16_t freq_ = 2700; uint8_t volume_ = 100;

@@ -6,7 +6,7 @@
 // (the app talks to this board over USB, so UART0 is free) and a PMW3901 on the second SPI bus (without a lidar).
 //
 //   build:  make sim            ->  build/wb_sim
-//   run:    build/wb_sim [--port 5760] [--flash sim_flash.bin] [--fresh] [--speed 1.0] [--no-baro] [--no-mag] [--no-imu] [--no-flow] [--logmem KB]
+//   run:    build/wb_sim [--port 5760] [--flash sim_flash.bin] [--fresh] [--speed 1.0] [--no-baro] [--no-mag] [--no-imu] [--no-flow] [--stm32] [--logmem KB]
 //           --logmem: size of the blackbox flash partition (default 1024 kB, 0 = a board without one); its contents are kept in <flash>.log
 //   app:    connect to   socket://127.0.0.1:5760      (python -m wbclient --port socket://127.0.0.1:5760 info)
 //
@@ -194,7 +194,7 @@ static std::string control(Rig& r, const std::string& line, bool& quit) {
 }
 
 int main(int argc, char** argv) {
-    int port = 5760; std::string flash_path = "sim_flash.bin"; bool fresh = false; double speed = 1.0; bool no_baro = false, no_mag = false, no_imu = false, no_flow = false; int logmem_kb = 1024;
+    int port = 5760; std::string flash_path = "sim_flash.bin"; bool fresh = false; double speed = 1.0; bool no_baro = false, no_mag = false, no_imu = false, no_flow = false, stm32 = false; int logmem_kb = 1024;
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i];
         if (a == "--port" && i + 1 < argc) port = atoi(argv[++i]);
@@ -205,8 +205,9 @@ int main(int argc, char** argv) {
         else if (a == "--no-mag") no_mag = true;
         else if (a == "--no-imu") no_imu = true;
         else if (a == "--no-flow") no_flow = true;
+        else if (a == "--stm32") stm32 = true;      // says it is an STM32 board (FEAT_STM32: the app names the pins PA0 .. PK15); the virtual board stays the same
         else if (a == "--logmem" && i + 1 < argc) logmem_kb = atoi(argv[++i]);
-        else { fprintf(stderr, "usage: wb_sim [--port N] [--flash FILE] [--fresh] [--speed X] [--no-baro] [--no-mag] [--no-imu] [--no-flow] [--logmem KB]\n"); return 2; }
+        else { fprintf(stderr, "usage: wb_sim [--port N] [--flash FILE] [--fresh] [--speed X] [--no-baro] [--no-mag] [--no-imu] [--no-flow] [--stm32] [--logmem KB]\n"); return 2; }
     }
     sock_init();
     const sock_t l_app = listen_on(port), l_ctl = listen_on(port + 1);
@@ -234,6 +235,7 @@ int main(int argc, char** argv) {
     }
     int flash_writes = rig.flash.writes; uint32_t log_ops = rig.logmem.writes + rig.logmem.erases; double log_saved = 0;
     rig.boot();
+    if (stm32) rig.fw->server.set_features(wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | wbp::FEAT_STM32);
     printf("wb_sim: firmware %s, app on socket://127.0.0.1:%d, control on %d, flash '%s'%s\n", rig.fw->began ? "running" : "started WITHOUT a working IMU/motor setup", port, port + 1, flash_path.c_str(), fresh ? " (fresh)" : "");
     for (int i = 0; i < rig.app().report_lines(); i++) printf("  %s\n", rig.app().report()[i]);
     fflush(stdout);
@@ -265,7 +267,7 @@ int main(int argc, char** argv) {
         const uint64_t target = sim0 + (uint64_t)(wall * speed * 1e6);
         int budget = 50;
         while (g_stub_us < target && budget-- > 0) rig.run(0.001);
-        if (rig.boots != boots) { boots = rig.boots; printf("wb_sim: firmware restarted (boot %d)\n", boots); fflush(stdout); }
+        if (rig.boots != boots) { boots = rig.boots; if (stm32) rig.fw->server.set_features(wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | wbp::FEAT_STM32); printf("wb_sim: firmware restarted (boot %d)\n", boots); fflush(stdout); }
         if (rig.flash.writes != flash_writes) { flash_writes = rig.flash.writes; flash_save(rig.flash, flash_path); }
         if (rig.has_logmem && rig.logmem.writes + rig.logmem.erases != log_ops && wall - log_saved > 0.5) { log_ops = rig.logmem.writes + rig.logmem.erases; log_saved = wall; logmem_save(rig.logmem, log_path); }
 

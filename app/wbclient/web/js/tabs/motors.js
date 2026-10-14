@@ -153,21 +153,22 @@ function perMotor() {
       return h('tr', {},
         h('th', { scope: 'row' }, `Motor ${i + 1}`),
         h('td', {}, readout('motors', (mo) => Math.round(mo.cmd[i] * 100) + ' %')),
-        h('td', {}, readout('motors', (mo) => (m.bidirectional ? String(mo.rpm[i]) : '–'))),
+        h('td', {}, readout('motors', (mo) => (m.bidirectional || m.esc_sensor ? String(mo.rpm[i]) : '–'))),
         h('td', {}, readout('motors', (mo) => (m.bidirectional ? mo.err[i] + ' %' : '–'))),
         h('td', {}, readout('motors', (mo) => (mo.temp[i] ? mo.temp[i] + ' °C' : '–'))),
+        h('td', {}, readout('motors', (mo) => (mo.amps && mo.amps[i] ? mo.amps[i].toFixed(1) + ' A' : '–'))),
         h('td', {}, slotSelect(i)),
         h('td', {}, rev),
         h('td', {}, cmdButton(tr('Kêu'), 'MOTOR_BEACON', { motor: i }, { class: 'quiet', fail: (e) => toast(e.code === 'NOT_SUPPORTED' ? tr('ESC chỉ kêu được qua DShot.') : errorText(e), 'warn') })));
     }));
   };
   let sig = '';
-  const maybe = () => { const m = store.settings.motors, k = [m.layout, m.bidirectional, m.reversed_mask].join(); if (k !== sig) { sig = k; build(); } };
+  const maybe = () => { const m = store.settings.motors, k = [m.layout, m.bidirectional, m.esc_sensor, m.reversed_mask].join(); if (k !== sig) { sig = k; build(); } };
   listen('settings:motors', maybe); listen('armed', build); maybe();
   return block(tr('Từng motor'),
     h('table', { class: 'grid motors' },
-      h('thead', {}, h('tr', {}, ['', tr('Lệnh'), 'RPM', tr('Lỗi telemetry'), tr('Nhiệt độ ESC'), tr('Slot phần cứng'), tr('Đảo chiều'), ''].map((t) => h('th', {}, t)))), body),
-    h('p', { class: 'help' }, tr('Slot phần cứng: motor này nối vào chân "Slot" nào ở tab Chân và cổng. RPM và lỗi telemetry chỉ có khi bật DShot hai chiều.')),
+      h('thead', {}, h('tr', {}, ['', tr('Lệnh'), 'RPM', tr('Lỗi telemetry'), tr('Nhiệt độ ESC'), tr('Dòng'), tr('Slot phần cứng'), tr('Đảo chiều'), ''].map((t) => h('th', {}, t)))), body),
+    h('p', { class: 'help' }, tr('Slot phần cứng: motor này nối vào chân "Slot" nào ở tab Chân và cổng. RPM có khi bật DShot hai chiều hoặc dây telemetry ESC; lỗi telemetry chỉ với DShot hai chiều. Dòng: extended DShot telemetry hoặc dây telemetry ESC.')),
     h('p', { class: 'help' }, tr('"Khung bỏ qua": vòng điều khiển gọi nhanh hơn một khung DShot kèm lượt trả lời có thể đi hết (DShot300 hai chiều cần 182 µs, DShot600 cần 116 µs) - hạ tần số vòng hoặc dùng DShot nhanh hơn. "Lượt trả lời bị lỡ": firmware đổi chiều chân tín hiệu không kịp.')),
     h('div', { class: 'link-read', id: 'dshot-state' }, h('span', {}, tr('DShot hai chiều: '), readout('motors', (mo) => {
       const label = ENUM_LABELS.bidir_state[mo.bidir]; let text = label ? tr(label) : String(mo.bidir);
@@ -182,6 +183,8 @@ function perMotor() {
       h('span', {}, tr('Khung DShot bỏ qua trong giây vừa rồi: '), readout('motors', (mo) => String(mo.skipped))),
       h('span', {}, tr('Lượt trả lời bị lỡ: '), readout('motors', (mo) => String(mo.late))),
       h('span', {}, tr('Trả lời nhận được / hỏng mỗi giây: '), readout('motors', (mo) => `${mo.replies} / ${mo.garbled}`))),
+    h('div', { class: 'link-read', id: 'esc-wire-state' }, h('span', {}, tr('Dây telemetry ESC, mỗi giây: '), readout('motors', (mo) => (store.settings.motors.esc_sensor
+      ? tr('{ok} trả lời, {crc} hỏng CRC, {lost} ESC không trả lời', { ok: mo.tlm_frames, crc: mo.tlm_crc, lost: mo.tlm_timeouts }) : tr('tắt'))))),
     h('div', { class: 'link-read' }, h('span', {}, tr('Điện áp ESC báo: '), readout('motors', (mo) => (mo.volt[0] ? mo.volt[0].toFixed(2) + ' V' : tr('không có')))),
       h('span', {}, 'Dynamic idle: ', readout('motors', (mo) => (mo.dyn_idle * 100).toFixed(1) + ' %'))));
 }
@@ -213,7 +216,7 @@ export default {
   streams: { motors: 20, status: 10 },
   mount(view) {
     const pulse = h('div', { id: 'pulse-fields' }, fields('motors', ['pulse_disarmed', 'pulse_armed', 'pulse_max', 'pulse_hz']));
-    const dshot = h('div', { id: 'dshot-fields' }, fields('motors', ['dshot_driver', 'bidirectional', 'ext_pullup', 'pole_count', 'edt', 'dir_cmd_extended', 'dyn_idle_min_rpm', 'dyn_idle_p', 'dyn_idle_i', 'dyn_idle_d', 'dyn_idle_max_inc']));
+    const dshot = h('div', { id: 'dshot-fields' }, fields('motors', ['dshot_driver', 'bidirectional', 'ext_pullup', 'pole_count', 'edt', 'esc_sensor', 'dir_cmd_extended', 'dyn_idle_min_rpm', 'dyn_idle_p', 'dyn_idle_i', 'dyn_idle_d', 'dyn_idle_max_inc']));
     const tooMany = h('p', { class: 'note bad', id: 'dshot-count' });
     const which = () => {
       const m = store.settings.motors, d = /^(DSHOT|PROSHOT)/.test(String(m.protocol));

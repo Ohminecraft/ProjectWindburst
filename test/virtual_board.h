@@ -128,6 +128,18 @@ struct VirtualBoard {
               esc->reply[slot] = edt_frame ? motor::gcr_encode((uint16_t)(0x0600 | (uint8_t)lroundf(esc_amps[i] < 0 ? 0 : esc_amps[i] > 255 ? 255 : esc_amps[i]))) : esc_gcr(motor_rpm(i), app.motors.cfg().pole_count);
               esc->has_reply[slot] = true; } }
         app.run();
+        { HostMotorHw* esc = static_cast<HostMotorHw*>(app.motors.hw());               // ESC telemetry wire: an ESC asked by the telemetry bit answers (KISS)
+          if (esc && esc_wire_on && esc->last.send) for (int i = 0; i < plant.n && i < app.motors.cfg().count; i++) {
+              const int slot = app.motors.cfg().order[i];
+              if (!esc->last.telem_request[slot] || esc_silent[i]) continue;
+              uint8_t f[escs::kFrame];
+              const uint32_t v = (uint32_t)lround(batt_v * 100.0), a = (uint32_t)lround(fmax(esc_amps[i], 0.0f) * 100.0);
+              const uint32_t erpm100 = (uint32_t)lround(motor_rpm(i) * (app.motors.cfg().pole_count / 2) / 100.0);
+              f[0] = (uint8_t)(esc_temp_c + i); f[1] = (uint8_t)(v >> 8); f[2] = (uint8_t)v; f[3] = (uint8_t)(a >> 8); f[4] = (uint8_t)a;
+              f[5] = 0; f[6] = (uint8_t)(10 + i); f[7] = (uint8_t)(erpm100 >> 8); f[8] = (uint8_t)erpm100; f[9] = escs::crc8(f, 9);
+              if (esc_wire_corrupt > 0) { f[3] ^= 0x40; esc_wire_corrupt--; }
+              for (uint8_t c : f) esc_wire.q.push_back(c);
+              esc_wire.asked++; } }
         // motor outputs -> plant (DShot value 48..2047 = 0..100 %)
         float cmd[8] = {};
         HostMotorHw* hw = static_cast<HostMotorHw*>(app.motors.hw());
@@ -238,6 +250,16 @@ private:
         void dev_write(const uint8_t*, size_t) override {}
         void dev_config(uint32_t baud, uint32_t, bool) override { b->mtf.host_baud = baud; }
     } flow_uart;
+public:
+    struct EscWire : StubUartDevice {                     // the ESCs' telemetry pads joined to one UART RX (wire it: SerialN.dev = &b.esc_wire)
+        std::deque<uint8_t> q; uint32_t baud = 0, asked = 0;
+        int dev_read() override { if (q.empty()) return -1; const uint8_t c = q.front(); q.pop_front(); return c; }
+        int dev_pending() override { return (int)q.size(); }
+        void dev_write(const uint8_t*, size_t) override {}
+        void dev_config(uint32_t bd, uint32_t, bool) override { baud = bd; }
+    } esc_wire;
+    bool esc_wire_on = true; int esc_wire_corrupt = 0; float esc_temp_c = 35.0f;
+private:
     struct RcUart : StubUartDevice {
         VirtualBoard* b = nullptr; std::deque<uint8_t> q; uint32_t baud = 0, format = 0; bool inverted = false; std::vector<uint8_t> sent;     // sent: what the firmware wrote (telemetry)
         int dev_read() override { if (q.empty()) return -1; const uint8_t c = q.front(); q.pop_front(); return c; }

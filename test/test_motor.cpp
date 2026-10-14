@@ -5,6 +5,7 @@
 #include <vector>
 #include "../src/hal/motor/motor_protocol.h"
 #include "../src/hal/motor/motor_output.h"
+#include "../src/hal/motor/esc_sensor.h"
 using namespace motor;
 
 static int g_pass = 0, g_fail = 0;
@@ -274,7 +275,42 @@ static void t_proshot_brushed() {
     m.cfg.protocol = PROTO_BRUSHED; CHECK(!m.beacon(0, 3), "brushed: no beacon");
 }
 
+static void t_esc_wire() {
+    printf("[ESC telemetry wire] KISS frames, the request round, the telemetry bit\n");
+    // a frame as a BLHeli_32 ESC sends it: 41 degC, 16.20 V, 12.34 A, 456 mAh, 23400 eRPM
+    uint8_t f[10] = {41, 0x06, 0x54, 0x04, 0xD2, 0x01, 0xC8, 0x00, 0xEA, 0};
+    f[9] = escs::crc8(f, 9);
+    { uint8_t t[3] = {0x01, 0x02, 0x03}; CHECK(escs::crc8(t, 3) == 0x48, "CRC8 poly 0x07, init 0 (Betaflight's updateCrc8): 01 02 03 -> 0x48 (%02X)", escs::crc8(t, 3)); }
+    escs::Reading r;
+    CHECK(escs::decode(f, r) && r.temp_c == 41 && fabsf(r.volt - 16.20f) < 1e-3f && fabsf(r.amps - 12.34f) < 1e-3f && r.mah == 456 && r.erpm == 23400, "decoded: %u degC, %.2f V, %.2f A, %u mAh, %u eRPM", r.temp_c, r.volt, r.amps, r.mah, (unsigned)r.erpm);
+    f[4] ^= 1; CHECK(!escs::decode(f, r), "one bit wrong: refused"); f[4] ^= 1;
+    escs::Poller p; p.begin(4, 0);
+    CHECK(p.ask_now(4999) == -1 && p.ask_now(5000) == 0, "nobody asked for 5 s, then motor 0");
+    CHECK(p.ask_now(5001) == -1, "while waiting for its answer nobody else is asked");
+    p.feed(f, 4, 5001); CHECK(p.ask_now(5002) == -1, "half a frame: still waiting");
+    p.feed(f + 4, 6, 5002); int m = -1; CHECK(p.take(m, r) && m == 0 && r.temp_c == 41 && p.frames() == 1, "the answer of motor 0");
+    CHECK(p.ask_now(5003) == 1, "then motor 1");
+    CHECK(p.ask_now(5102) == -1 && p.ask_now(5103) == 2 && p.timeouts() == 1, "motor 1 silent for 100 ms: skipped, motor 2 (timeouts %u)", p.timeouts());
+    f[2] ^= 0x10; p.feed(f, 10, 5104); f[2] ^= 0x10;
+    CHECK(!p.take(m, r) && p.crc_errors() == 1 && p.ask_now(5105) == 3, "a damaged answer: dropped, counted, the next motor");
+    p.feed(f, 10, 5106); CHECK(p.take(m, r) && m == 3 && p.ask_now(5107) == 0, "after motor 3 the round starts again at 0");
+    escs::Poller q; q.begin(4, 0); q.feed(f, 10, 100);
+    CHECK(!q.take(m, r) && q.stray() == 10, "bytes nobody asked for (a KISS ESC's start-up text): ignored (%u)", q.stray());
+    // the manager: the bit goes out once, with the next frame, to the right hardware slot
+    MotorOutputManager mm; mm.cfg.protocol = PROTO_DSHOT600; mm.cfg.count = 4; mm.cfg.order[0] = 2; mm.cfg.order[2] = 0; mm.begin();
+    Frame fr; float z[8] = {};
+    mm.request_telemetry(0); mm.update(1000, z, true, fr);
+    CHECK(fr.telem_request[2] && !fr.telem_request[0] && !fr.telem_request[1] && !fr.telem_request[3], "armed: the bit on the slot of logical motor 0 (slot 2), nowhere else");
+    mm.update(1250, z, true, fr); CHECK(!fr.telem_request[2], "only once");
+    mm.request_telemetry(1); mm.update(1500, z, false, fr); CHECK(fr.telem_request[1], "disarmed too");
+    mm.feed_serial(0, 41, 16.2f, 12.34f, 23400, 10);
+    const MotorTelemetry t = mm.telemetry(0, 20);
+    CHECK(t.temp_c == 41 && fabsf(t.amps - 12.34f) < 1e-3f && fabsf(t.volt - 16.2f) < 1e-3f && fabsf(t.rpm - 23400.0f * 2 / 14) < 1.0f && !mm.rpm_any_valid(20), "an answer: temperature, current, voltage, rpm (14 poles: %.0f) - but not for the RPM filter", t.rpm);
+    MotorOutputManager pw; pw.cfg.protocol = PROTO_ONESHOT125; pw.cfg.count = 4; pw.begin();
+    pw.request_telemetry(0); pw.update(1000, z, true, fr); CHECK(!fr.telem_request[0], "Oneshot has no telemetry bit: nothing set");
+}
+
 int main() {
-    t_frame(); t_gcr(); t_pulse(); t_manager(); t_commands(); t_telemetry(); t_proshot_brushed();
+    t_frame(); t_gcr(); t_pulse(); t_manager(); t_commands(); t_telemetry(); t_proshot_brushed(); t_esc_wire();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

@@ -10,6 +10,7 @@
  *       core 0  "wb_sd"     : writes the flight log to the SD card, when the settings select the card      [SdCardTask + bb::CardLog]
  *   TX build (-D_WINDBURST_TX, ESP32-C5): not written yet - placeholder that only identifies itself.
  */
+#if defined(ARDUINO_ARCH_ESP32)                   // (the STM32 build: main_stm32.cpp)
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
@@ -17,9 +18,7 @@
 #ifndef WB_LINK_BAUD
 #define WB_LINK_BAUD 230400          // UART0 / USB-serial bridge. Ignored on USB (see WB_LINK_KIND in app/link_arduino.h).
 #endif
-#define WB_FW_MAJOR 0
-#define WB_FW_MINOR 9
-#define WB_FW_PATCH 5
+#include "config/version.h"
 
 #if defined(_WINDBURST_TX)
 
@@ -160,3 +159,5 @@ void setup() {
 void loop() { sensor_entry(nullptr); }                       // only if the sensor task could not be created
 
 #endif
+
+#endif  // ARDUINO_ARCH_ESP32

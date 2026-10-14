@@ -219,6 +219,8 @@ static void t_msp() {
     { uint8_t ck = 0; for (size_t i = 3; i < n - 1; i++) ck ^= out[i]; CHECK(ck == out[n - 1], "reply checksum"); }
     CHECK(run(v1(msp::FC_VARIANT)) == msp::Bridge::REPLY && memcmp(out + 5, "BTFL", 4) == 0, "FC_VARIANT BTFL (the tools only talk to firmwares they know)");
     CHECK(run(v1(msp::BATTERY_STATE)) == msp::Bridge::REPLY && out[5] == 4 && out[8] == 164 && out[9] == 120 && (out[11] | out[12] << 8) == 125 && (out[14] | out[15] << 8) == 1640, "BATTERY_STATE: 4 cells, 16.4 V, 120 mAh, 1.25 A");
+    in.fw_major = 0; in.fw_minor = 10; in.fw_patch = 3;
+    CHECK(run(v1(msp::BUILD_INFO)) == msp::Bridge::REPLY && out[3] == 26 && memcmp(out + 5 + 19, "w01003x", 7) == 0, "BUILD_INFO: date, time, and the version as w + major + 2-digit minor + 2-digit patch");
     CHECK(run(v1(msp::MOTOR_CONFIG)) == msp::Bridge::REPLY && out[11] == 4, "MOTOR_CONFIG: 4 motors");
     CHECK(run(v1(msp::SET_MOTOR, {0xE8, 0x03, 0xE8, 0x03})) == msp::Bridge::REPLY && out[2] == '!' && out[3] == 0, "SET_MOTOR (spin a motor from the ESC tool): refused with $M!");
     CHECK(run(v1(77)) == msp::Bridge::REPLY && out[2] == '!', "an unknown request: $M!, as Betaflight");

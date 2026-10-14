@@ -8,7 +8,7 @@
 // so a struct is its own wire image). The Python client builds the same layouts from the same json.
 namespace wbp {
 constexpr uint8_t kProtocolVersion = 1;
-constexpr uint32_t kSchemaHash = 0xB0570D17u;
+constexpr uint32_t kSchemaHash = 0xCCF703C7u;
 
 enum Err : uint8_t { ERR_OK, ERR_UNKNOWN, ERR_BAD_ARG, ERR_ARMED, ERR_BUSY, ERR_NOT_SUPPORTED, ERR_BAD_SECTION, ERR_SIZE_MISMATCH, ERR_STORAGE, ERR_NO_SENSOR, ERR_BAD_STATE, ERR_FAILED };
 enum Cmd : uint8_t { CMD_GYRO_CAL = 1, CMD_ACC_CAL_POINT = 2, CMD_ACC_CAL_FINISH = 3, CMD_LEVEL_TRIM = 4, CMD_MAG_CAL_START = 5, CMD_MAG_CAL_FINISH = 6, CMD_MAG_CAL_CANCEL = 7, CMD_MOTOR_TEST = 8, CMD_MOTOR_STOP = 9, CMD_MOTOR_DIRECTION = 10, CMD_MOTOR_BEACON = 11, CMD_SET_HOME = 12, CMD_ESC_TELEMETRY = 13, CMD_APPLY_SETTINGS = 14, CMD_REPORT = 15, CMD_ACC_CAL_CANCEL = 16, CMD_BEEP = 17, CMD_BLACKBOX_ERASE = 18, CMD_BLACKBOX_STREAM = 19, CMD_BLACKBOX_SESSION = 20, CMD_BLACKBOX_READ = 21 };
@@ -24,7 +24,7 @@ enum GPS_MODEL_E : uint8_t { GPS_MODEL_PORTABLE, GPS_MODEL_STATIONARY, GPS_MODEL
 enum UTC_E : uint8_t { UTC_AUTO, UTC_USNO, UTC_EU, UTC_SU, UTC_NTSC };
 enum RANGE_MODEL_E : uint8_t { RANGE_MODEL_AUTO, RANGE_MODEL_VL53L1X, RANGE_MODEL_VL53L0X, RANGE_MODEL_MSP };
 enum MAG_MODEL_E : uint8_t { MAG_MODEL_AUTO, MAG_MODEL_HMC5883L, MAG_MODEL_QMC5883L, MAG_MODEL_QMC5883P, MAG_MODEL_AK8963_MPU9250 };
-enum PORT_FUNCTION_E : uint8_t { PORT_FUNCTION_NONE, PORT_FUNCTION_SERIAL_RX, PORT_FUNCTION_GPS, PORT_FUNCTION_TELEMETRY, PORT_FUNCTION_FLOW_MSP };
+enum PORT_FUNCTION_E : uint8_t { PORT_FUNCTION_NONE, PORT_FUNCTION_SERIAL_RX, PORT_FUNCTION_GPS, PORT_FUNCTION_TELEMETRY, PORT_FUNCTION_FLOW_MSP, PORT_FUNCTION_ESC_SENSOR };
 enum MODE_E : uint8_t { MODE_ARM, MODE_ANGLE, MODE_STABILIZE, MODE_ALTHOLD, MODE_POSHOLD, MODE_FAILSAFE, MODE_BEEPER, MODE_BLACKBOX, MODE_CALIB, MODE_RESCUE };
 enum FAILSAFE_E : uint8_t { FAILSAFE_NONE, FAILSAFE_GUARD, FAILSAFE_DESCENT, FAILSAFE_LANDED };
 enum AH_STATE_E : uint8_t { AH_STATE_STOPPED, AH_STATE_LANDED_IDLE, AH_STATE_LANDED_PRE_TAKEOFF, AH_STATE_TAKEOFF, AH_STATE_FLYING };
@@ -479,8 +479,9 @@ struct __attribute__((packed)) S_motors {
     uint8_t dir_cmd_extended;
     uint8_t dshot_driver;
     uint8_t ext_pullup;
+    uint8_t esc_sensor;
 };
-static_assert(sizeof(S_motors) == 36, "S_motors layout");
+static_assert(sizeof(S_motors) == 37, "S_motors layout");
 inline void defaults(S_motors& s) {
     s.layout = 0;
     s.props_out = 0;
@@ -511,6 +512,7 @@ inline void defaults(S_motors& s) {
     s.dir_cmd_extended = 0;
     s.dshot_driver = 0;
     s.ext_pullup = 0;
+    s.esc_sensor = 0;
 }
 inline int validate(S_motors& s) {
     int fixed = 0; (void)s;
@@ -535,6 +537,7 @@ inline int validate(S_motors& s) {
     { if (s.dir_cmd_extended > 1) { s.dir_cmd_extended = 1; fixed++; } }
     { if (s.dshot_driver > 1) { s.dshot_driver = 1; fixed++; } }
     { if (s.ext_pullup > 1) { s.ext_pullup = 1; fixed++; } }
+    { if (s.esc_sensor > 1) { s.esc_sensor = 1; fixed++; } }
     return fixed;
 }
 
@@ -682,7 +685,7 @@ inline void defaults(S_ports& s) {
 }
 inline int validate(S_ports& s) {
     int fixed = 0; (void)s;
-    for (int i = 0; i < 3; i++) { if (s.function[i] > 4) { s.function[i] = 4; fixed++; } }
+    for (int i = 0; i < 3; i++) { if (s.function[i] > 5) { s.function[i] = 5; fixed++; } }
     for (int i = 0; i < 3; i++) { if (s.baud[i] < 1200u) { s.baud[i] = 1200u; fixed++; } else if (s.baud[i] > 2000000u) { s.baud[i] = 2000000u; fixed++; } }
     { if (s.assign > 1) { s.assign = 1; fixed++; } }
     return fixed;
@@ -718,8 +721,9 @@ struct __attribute__((packed)) S_pins {
     uint8_t servo[4];
     uint8_t curr_adc;
     uint8_t rx_pwm[8];
+    uint8_t esc_tlm;
 };
-static_assert(sizeof(S_pins) == 46, "S_pins layout");
+static_assert(sizeof(S_pins) == 47, "S_pins layout");
 inline void defaults(S_pins& s) {
     s.imu_cs = 255;
     s.imu_miso = 255;
@@ -767,6 +771,7 @@ inline void defaults(S_pins& s) {
     s.rx_pwm[5] = 255;
     s.rx_pwm[6] = 255;
     s.rx_pwm[7] = 255;
+    s.esc_tlm = 255;
 }
 inline int validate(S_pins& s) {
     int fixed = 0; (void)s;
@@ -1227,7 +1232,7 @@ inline void defaults(Settings& s) { defaults(s.general); defaults(s.receiver); d
 // up to that size (fields were only appended or cut at the end since): such a stored record is still loaded. 0 = none.
 struct SectionInfo { uint8_t id; const char* name; uint16_t size; bool live; uint16_t compat, compat2, compat3; };
 constexpr int kSectionCount = 19;
-constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 22, false, 23, 0, 0}, {SEC_RECEIVER, "receiver", 12, false, 9, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0}, {SEC_PID, "pid", 75, true, 0, 0, 0}, {SEC_MOTORS, "motors", 36, false, 35, 34, 0}, {SEC_SENSORS, "sensors", 16, false, 0, 0, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0}, {SEC_PINS, "pins", 46, false, 37, 33, 27}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0}, {SEC_NAV, "nav", 31, true, 30, 29, 27}, {SEC_SERVO, "servo", 26, true, 0, 0, 0}, {SEC_ALTHOLD, "althold", 6, true, 0, 0, 0}};
+constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 22, false, 23, 0, 0}, {SEC_RECEIVER, "receiver", 12, false, 9, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0}, {SEC_PID, "pid", 75, true, 0, 0, 0}, {SEC_MOTORS, "motors", 37, false, 36, 35, 34}, {SEC_SENSORS, "sensors", 16, false, 0, 0, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0}, {SEC_PINS, "pins", 47, false, 46, 37, 33}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0}, {SEC_NAV, "nav", 31, true, 30, 29, 27}, {SEC_SERVO, "servo", 26, true, 0, 0, 0}, {SEC_ALTHOLD, "althold", 6, true, 0, 0, 0}};
 inline const SectionInfo* find_section(uint8_t id) { for (const auto& s : kSections) if (s.id == id) return &s; return nullptr; }
 // pointer to / size of a section inside a Settings object (nullptr if unknown)
 inline uint8_t* section_ptr(Settings& st, uint8_t id) { switch (id) {
@@ -1356,8 +1361,12 @@ struct __attribute__((packed)) T_motors {
     uint16_t replies;
     uint16_t garbled;
     uint16_t servo[4];
+    uint16_t amps[8];
+    uint16_t tlm_frames;
+    uint16_t tlm_crc;
+    uint16_t tlm_timeouts;
 };
-static_assert(sizeof(T_motors) == 70, "T_motors layout");
+static_assert(sizeof(T_motors) == 92, "T_motors layout");
 struct __attribute__((packed)) T_sensors {
     int16_t gyro[3];
     int16_t acc[3];
@@ -1518,6 +1527,7 @@ constexpr float motors_cmd = 0.001f;
 constexpr float motors_rpm = 10.0f;
 constexpr float motors_volt = 0.01f;
 constexpr float motors_dyn_idle = 0.001f;
+constexpr float motors_amps = 0.01f;
 constexpr float sensors_gyro = 0.1f;
 constexpr float sensors_acc = 0.001f;
 constexpr float sensors_mag = 0.001f;
@@ -1568,6 +1578,6 @@ constexpr float link_uptime = 0.001f;
 } // namespace scale
 struct StreamInfo { uint8_t id; const char* name; uint16_t size; uint16_t default_rate; uint16_t max_rate; };
 constexpr int kStreamCount = 14;
-constexpr StreamInfo kStreams[kStreamCount] = {{STR_ATTITUDE, "attitude", 18, 50, 200}, {STR_RC, "rc", 42, 20, 100}, {STR_STATUS, "status", 49, 10, 50}, {STR_MOTORS, "motors", 70, 20, 100}, {STR_SENSORS, "sensors", 28, 50, 200}, {STR_GPS, "gps", 32, 5, 25}, {STR_ESTIMATE, "estimate", 32, 20, 100}, {STR_GYRO_FAST, "gyro_fast", 12, 0, 1000}, {STR_CALIBRATION, "calibration", 11, 10, 20}, {STR_BATTERY, "battery", 19, 2, 20}, {STR_BLACKBOX, "blackbox", 34, 2, 10}, {STR_TUNING, "tuning", 53, 0, 50}, {STR_NAV, "nav", 28, 10, 50}, {STR_LINK, "link", 32, 1, 10}};
+constexpr StreamInfo kStreams[kStreamCount] = {{STR_ATTITUDE, "attitude", 18, 50, 200}, {STR_RC, "rc", 42, 20, 100}, {STR_STATUS, "status", 49, 10, 50}, {STR_MOTORS, "motors", 92, 20, 100}, {STR_SENSORS, "sensors", 28, 50, 200}, {STR_GPS, "gps", 32, 5, 25}, {STR_ESTIMATE, "estimate", 32, 20, 100}, {STR_GYRO_FAST, "gyro_fast", 12, 0, 1000}, {STR_CALIBRATION, "calibration", 11, 10, 20}, {STR_BATTERY, "battery", 19, 2, 20}, {STR_BLACKBOX, "blackbox", 34, 2, 10}, {STR_TUNING, "tuning", 53, 0, 50}, {STR_NAV, "nav", 28, 10, 50}, {STR_LINK, "link", 32, 1, 10}};
 inline const StreamInfo* find_stream(uint8_t id) { for (const auto& s : kStreams) if (s.id == id) return &s; return nullptr; }
 } // namespace wbp

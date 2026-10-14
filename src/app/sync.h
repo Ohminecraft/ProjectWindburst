@@ -122,13 +122,25 @@ inline int flow_uart(bool gps_on_uart1, bool receiver_on_uart2, bool uart0_free)
     if (!receiver_on_uart2) return 2;
     return uart0_free ? 0 : -1;
 }
+// AUTO: the ESC telemetry wire gets the UART that is left after the GPS, the receiver and an MSP flow sensor (flow_uart: -1 = none).
+inline int esc_uart(bool gps_on_uart1, bool receiver_on_uart2, bool uart0_free, int flow_uart) {
+    const int order[3] = {1, 2, 0};
+    for (int u : order) {
+        if (u == flow_uart) continue;
+        if (u == 1 && gps_on_uart1) continue;
+        if (u == 2 && receiver_on_uart2) continue;
+        if (u == 0 && !uart0_free) continue;
+        return u;
+    }
+    return -1;
+}
 // Which UART (0..2, -1 = none) serves the GPS, the serial receiver and an MSP flow sensor.
 //   AUTO:  GPS on UART1, receiver on UART2 (fixed, as before); the flow sensor gets what is left (flow_uart(), decided after the
 //          other two have started - pass gps_on / rx_on then).
 //   TABLE: the ports section's function per UART (port_function: NONE, SERIAL_RX, GPS, TELEMETRY = unused, FLOW_MSP).
 //          UART0 only when the app link does not use it (native USB). A device with no UART in the table gets a reason.
-enum PortFn : uint8_t { PF_NONE, PF_SERIAL_RX, PF_GPS, PF_TELEMETRY, PF_FLOW_MSP };     // == schema enum port_function
-struct UartPlan { int gps = -1, rx = -1, flow = -1; const char* why = ""; };
+enum PortFn : uint8_t { PF_NONE, PF_SERIAL_RX, PF_GPS, PF_TELEMETRY, PF_FLOW_MSP, PF_ESC_SENSOR };     // == schema enum port_function
+struct UartPlan { int gps = -1, rx = -1, flow = -1, esc = -1; const char* why = ""; };
 inline UartPlan plan_uarts(bool table, const uint8_t fn[3], bool want_gps, bool want_rx, bool want_flow, bool uart0_free, bool gps_on, bool rx_on) {
     UartPlan p;
     if (!table) {
@@ -138,9 +150,9 @@ inline UartPlan plan_uarts(bool table, const uint8_t fn[3], bool want_gps, bool 
     }
     bool uart0_wanted = false;
     for (int u = 0; u < 3; u++) {
-        if (fn[u] != PF_GPS && fn[u] != PF_SERIAL_RX && fn[u] != PF_FLOW_MSP) continue;
+        if (fn[u] != PF_GPS && fn[u] != PF_SERIAL_RX && fn[u] != PF_FLOW_MSP && fn[u] != PF_ESC_SENSOR) continue;
         if (u == 0 && !uart0_free) { uart0_wanted = true; continue; }
-        int& slot = fn[u] == PF_GPS ? p.gps : fn[u] == PF_SERIAL_RX ? p.rx : p.flow;
+        int& slot = fn[u] == PF_GPS ? p.gps : fn[u] == PF_SERIAL_RX ? p.rx : fn[u] == PF_FLOW_MSP ? p.flow : p.esc;
         if (slot < 0) slot = u;
     }
     if (!want_gps) p.gps = -1;

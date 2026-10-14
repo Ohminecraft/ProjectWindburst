@@ -19,8 +19,13 @@ src/proto/*                  khung WBP, server, lưu settings, settings → cấ
 src/hal/rx/*                 receiver nối tiếp CRSF / SBUS / IBUS (xem docs/RX.md)
 src/hal/battery/*, beeper/*  đo pin (ADC / ESC), tiếng báo bằng còi và bằng motor (xem docs/POWER.md)
 src/blackbox/*               log chuyến bay: hàng đợi, flash thô, thẻ SD, luồng về app (xem docs/BLACKBOX.md)
-src/config/pin_check.h       kiểm tra bảng chân lúc khởi động: trùng chân, chân của flash / PSRAM          [portable]
+src/config/pin_check.h       kiểm tra bảng chân lúc khởi động: trùng chân, chân của flash / PSRAM / USB / SWD  [portable]
 src/app/sysload.h            % CPU của nhân chạy vòng bay, RAM, PSRAM                                       [portable]
+src/main_stm32.cpp           bản STM32H5 của main.cpp (0.10.0, docs/STM32.md)
+src/config/version.h         số phiên bản firmware, chung cho hai chip
+src/port/*                   phần khác nhau giữa chip: UART, PWM, GPIO / ADC, FreeRTOS, tên chân, flash quad-word (docs/STM32.md mục 4)
+src/proto/kv_flash.h         settings trên flash ECC của STM32H5 (ESP32: NVS)                               [portable]
+src/blackbox/bb_qword.h      FlashLog trên flash ECC của STM32H5                                             [portable]
 ```
 Mạch mặc định là ESP32-S3 **N16R8**: env, bảng phân vùng, chân không dùng được, bộ chân gợi ý, thẻ SD → `docs/BOARD_N16R8.md`.
 
