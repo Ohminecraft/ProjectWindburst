@@ -64,6 +64,15 @@ public:
         started_ = true;
         return true;
     }
+    // A provider without a UART (MSP / VIRTUAL / DRONECAN): the solutions arrive through inject().
+    bool beginExternal() {
+        fail_ = ""; started_ = false;
+        if (!enabled_) { fail_ = "GPS disabled"; return false; }
+        home_.configure(eng_.cfg);
+        eng_.begin(port_, millis());
+        started_ = true;
+        return true;
+    }
     // Returns true when a NEW complete solution was received during this call.
     bool update(uint32_t now_ms, bool armed) {
         if (!started_) return false;

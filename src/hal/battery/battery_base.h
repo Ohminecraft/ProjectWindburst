@@ -24,6 +24,7 @@
 // so the only number to set is the divider ratio (battery voltage / pin voltage; 11.0 for 10k : 1k). The pin must stay below
 // ~3.1 V at the highest battery voltage (default attenuation 11 dB). ESP32-S3: GPIO1..GPIO10 are ADC1, GPIO11..GPIO20 are ADC2.
 // ESC: the pack voltage the ESCs report over bidirectional DShot (extended telemetry); no wiring, but only while the ESCs talk.
+// DRONECAN: a power module on the CAN bus (BatteryInfo); the flight app hands its numbers in with setExternal() before update().
 // One ADC conversion takes a few tens of microseconds and runs in the flight loop's slow part, 50 times a second.
 // ============================================================================
 class BatterySensor {
@@ -35,6 +36,8 @@ public:
     // the current sensor (live: takes effect at the next sample; a new pin only with begin())
     void setCurrent(batt::CurrentSource src, uint8_t pin, int16_t scale, int16_t offset_ma) { cur_wanted_ = src; cur_pin_wanted_ = pin; cur_scale_ = scale; cur_offset_ = offset_ma; }
     void setDivider(float ratio) { divider_ = ratio > 0.0f ? ratio : 1.0f; }
+    // a DroneCAN power module's latest reading (ok = false: none, or it went quiet)
+    void setExternal(float volts, float amps, bool ok) { ext_v_ = volts; ext_a_ = amps; ext_ok_ = ok; }
 
     // true when the configured source can deliver a voltage (AUTO without an ADC pin relies on the ESCs: still true)
     bool begin() {
@@ -66,6 +69,7 @@ public:
         switch (currentSource()) {
         case batt::CUR_ADC: current.update(batt::adc_to_amps(cur_mv_, cur_scale_, cur_offset_), cur_adc_ok_, dt); break;
         case batt::CUR_ESC: current.update(esc_amps, esc_amps_valid, dt); break;
+        case batt::CUR_DRONECAN: current.update(ext_a_, ext_ok_, dt); break;
         default: current.update(0.0f, false, dt); break;
         }
         const batt::Source src = source();
@@ -73,6 +77,7 @@ public:
         switch (src) {
         case batt::SRC_ADC: monitor.update(now_ms, batt::adc_to_volts(pin_mv_, divider_), adc_ok_); break;
         case batt::SRC_ESC: monitor.update(now_ms, esc_volts, esc_volts > 0.5f); break;
+        case batt::SRC_DRONECAN: monitor.update(now_ms, ext_v_, ext_ok_ && ext_v_ > 0.5f); break;
         default: monitor.update(now_ms, 0.0f, false); break;
         }
     }
@@ -82,14 +87,14 @@ public:
     uint16_t currentPinMv() const { return cur_mv_; }
     const char* currentFailReason() const { return cur_fail_; }
     const char* currentName() const {
-        switch (currentSource()) { case batt::CUR_ADC: return "current sensor (ADC)"; case batt::CUR_ESC: return "ESC telemetry"; default: return "off"; }
+        switch (currentSource()) { case batt::CUR_ADC: return "current sensor (ADC)"; case batt::CUR_ESC: return "ESC telemetry"; case batt::CUR_DRONECAN: return "DroneCAN power module"; default: return "off"; }
     }
     bool adcOk() const { return adc_ok_; }
     uint16_t pinMv() const { return pin_mv_; }
     float divider() const { return divider_; }
     const char* failReason() const { return fail_; }
     const char* name() const {
-        switch (source()) { case batt::SRC_ADC: return "ADC"; case batt::SRC_ESC: return "ESC telemetry"; default: return "off"; }
+        switch (source()) { case batt::SRC_ADC: return "ADC"; case batt::SRC_ESC: return "ESC telemetry"; case batt::SRC_DRONECAN: return "DroneCAN power module"; default: return "off"; }
     }
 
 private:
@@ -98,5 +103,6 @@ private:
     batt::Source wanted_ = batt::SRC_AUTO; float divider_ = 11.0f;
     uint8_t pin_ = GPIO_UNUSED; bool adc_ok_ = false, started_ = false; uint16_t pin_mv_ = 0; uint32_t last_ms_ = 0; const char* fail_ = "";
     batt::CurrentSource cur_wanted_ = batt::CUR_AUTO; uint8_t cur_pin_wanted_ = GPIO_UNUSED, cur_pin_ = GPIO_UNUSED; bool cur_adc_ok_ = false;
+    float ext_v_ = 0, ext_a_ = 0; bool ext_ok_ = false;
     int16_t cur_scale_ = 400, cur_offset_ = 0; uint16_t cur_mv_ = 0; const char* cur_fail_ = "";
 };

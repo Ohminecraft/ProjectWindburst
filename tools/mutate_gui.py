@@ -214,7 +214,6 @@ M=[
  ('page: stage times not shown', W+'tabs/overview.js', "{ imu: s.t_imu, core: s.t_core, motor: s.t_motor, rest: s.t_rest }", "{ imu: '', core: '', motor: '', rest: '' }", 'tests/test_gui_browser.py -k loop_timing'),
  ('page: missed cycles not shown', W+'tabs/overview.js', "{ hz: s.loop_hz, target: s.loop_target, n: s.overruns }", "{ hz: s.loop_hz, target: s.loop_target, n: '' }", 'tests/test_gui_browser.py -k loop_timing'),
  ('page: failsafe row always says none', W+'tabs/overview.js', "(s.failsafe === 'NONE' ? tr('không') : failsafeText(s).replace('Failsafe: ', ''))", "tr('không')", 'tests/test_gui_browser.py -k loop_timing'),
- ('page: DShot driver choice missing', W+'tabs/motors.js', "fields('motors', ['dshot_driver', 'bidirectional',", "fields('motors', ['bidirectional',", 'tests/test_gui_browser.py -k loop_timing'),
  ('page: silent ESCs not named', W+'tabs/motors.js', "for (let i = 0; i < n; i++) if (!((mo.answers >> i) & 1)) silent.push(i + 1);", "", 'tests/test_gui_browser.py -k loop_timing'),
  ('page: silent ESC numbered from zero', W+'tabs/motors.js', "if (!((mo.answers >> i) & 1)) silent.push(i + 1);", "if (!((mo.answers >> i) & 1)) silent.push(i);", 'tests/test_gui_browser.py -k loop_timing'),
  ('page: bidirectional state shown as its code', W+'tabs/motors.js', "let text = label ? tr(label) : String(mo.bidir);", "let text = String(mo.bidir);", 'tests/test_gui_browser.py -k loop_timing'),

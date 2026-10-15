@@ -33,6 +33,7 @@ static std::unique_ptr<Rig> fresh(bool provision = true) {
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------
+template <class F> static std::unique_ptr<Rig> nav_rig(F edit, bool usb = true);     // (below: a rig whose settings are edited before the boot)
 static bool status_now(Rig& r, T_status& st) { r.clear_inbox(); r.stream(STR_STATUS, 50); r.run(0.05); const bool ok = r.latest(STR_STATUS, st); r.stream(STR_STATUS, 0); return ok; }
 static void t_loop() {
     printf("[loop] rate, lost cycles, where the time goes, output driver state\n");
@@ -49,6 +50,20 @@ static void t_loop() {
       r->board.cost_imu_us = 0; static_cast<HostMotorHw*>(r->app().motors.hw())->on_write = nullptr; r->board.cost_i2c_us = 300; r->run(2.2);
       const bool got2 = status_now(*r, st); r->board.cost_i2c_us = 0;
       CHECK(got2 && st.t_slow_max >= 300 && st.t_slow_max <= 1500 && st.t_imu == 0 && st.t_core == 0 && st.t_motor == 0 && st.loop_us == 0, "a slow bus shows up as the sensor thread's time (%u us), not in the control cycle", st.t_slow_max); }
+    { // the control rate apart from the gyro's: pid_denom 2 at 4 kHz = a motor command and a log record every second sample
+      auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.general.pid_denom = 2; });
+      CHECK(has_line(*r, ", gyro 4000 Hz, control 2000 Hz (1/2)"), "boot report: both rates");
+      static int writes = 0; writes = 0; static_cast<HostMotorHw*>(r->app().motors.hw())->on_write = [] { writes++; };
+      r->run(2.5); writes = 0; const uint32_t n0 = r->app().loops(); r->run(1.0); const int w = writes; const uint32_t n = r->app().loops() - n0;
+      static_cast<HostMotorHw*>(r->app().motors.hw())->on_write = nullptr;
+      T_status st; CHECK(status_now(*r, st) && st.loop_hz == 4000 && st.loop_target == 4000 && st.pid_hz == 2000 && st.pid_target == 2000 && !(st.blockers & ARM_BLOCKER_LOOP_RATE), "status: gyro %u of %u Hz, control %u of %u Hz", st.loop_hz, st.loop_target, st.pid_hz, st.pid_target);
+      CHECK(n == 4000 && w >= 1999 && w <= 2001, "in one second: %u gyro samples, %d motor commands", (unsigned)n, w);
+      CHECK(r->app().core.cfg.pid_hz() == 2000.0f && r->app().core.cfg.est_hz == 500.0f, "the controllers are set up for 2 kHz, the estimators keep 500 Hz");
+      CHECK(r->fw->blackbox.loop_hz() == 2000.0f && r->fw->blackbox.gyro_hz() == 4000.0f, "the flight log: a record per control cycle at most (its time base 2000 Hz), the gyro rate in its header"); }
+    { // a denominator that would take the control rate under 500 Hz is lowered
+      auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.general.loop_hz = 2000; s.general.pid_denom = 8; });
+      CHECK(r->app().core.cfg.pid_denom == 4 && has_line(*r, ", gyro 2000 Hz, control 500 Hz (1/4)"), "gyro 2 kHz with 1/8 asked: 1/4 (500 Hz) - the lowest control rate"); }
+    { auto r = fresh(); r->run(2.5); T_status st; CHECK(status_now(*r, st) && st.pid_hz == 4000 && st.pid_target == 4000, "default (1/1): the control rate is the gyro's (%u Hz)", st.pid_hz); }
     { // one IMU sample = one burst on the SPI bus (not 15 single-byte transfers)
       auto r = fresh(); r->run(2.0); const uint32_t b0 = g_stub_spi_bursts, n0 = r->app().loops(); r->run(1.0);
       CHECK(r->app().loops() - n0 == 4000 && g_stub_spi_bursts - b0 == 4000, "IMU read in one SPI burst per cycle (%u bursts for %u cycles)", (unsigned)(g_stub_spi_bursts - b0), (unsigned)(r->app().loops() - n0)); }
@@ -108,12 +123,7 @@ static void t_loop() {
       CHECK(r->latest(STR_MOTORS, mo) && mo.answers == 0x0B && !(r->tel().health & HEALTH_ESC_TELEMETRY), "the ESC of motor 3 stops answering: shown per motor (0x%x)", mo.answers);
       r->board.esc_silent[2] = false; r->run(0.2); r->clear_inbox(); r->run(0.1);
       CHECK(r->latest(STR_MOTORS, mo) && mo.answers == 0x0F, "and when it is back");
-      // the IDF driver cannot listen
-      r->get_section(SEC_MOTORS, &m, sizeof(m)); m.dshot_driver = DSHOT_DRIVER_IDF; r->set_section(SEC_MOTORS, &m, sizeof(m));
-      r->request(MSG_SETTINGS_SAVE); r->request(MSG_REBOOT); r->run(2.0); r->stream(STR_MOTORS, 50); r->run(0.2);
-      CHECK(r->latest(STR_MOTORS, mo) && mo.bidir == BIDIR_STATE_UNAVAILABLE && mo.answers == 0, "bidirectional with the IDF driver: UNAVAILABLE, shown instead of silently doing nothing");
-      CHECK(!(r->tel().health & HEALTH_ESC_TELEMETRY) && r->tel().rpm[0] == 0, "no rpm: the RPM filter and dynamic idle stay off");
-      arm_switch_setup(*r); r->board.rc[4] = 2000; r->run(0.5); CHECK(r->tel().armed && r->board.motor_frac[0] > 0.03f, "the motors still run"); }
+      arm_switch_setup(*r); r->board.rc[4] = 2000; r->run(0.5); CHECK(r->tel().armed && r->board.motor_frac[0] > 0.03f, "armed with bidirectional DShot: the motors run"); }
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------
@@ -925,7 +935,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.11.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.17.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -1367,7 +1377,7 @@ static void t_runaway() {
 // ------------------------------------------------------------------------------------------------------------------------------
 // Navigation on the virtual board: optical flow sensors, the position estimate, Position Hold, GPS Rescue.
 // Switches: ARM ch5, ANGLE ch6, ALTHOLD ch7, POSHOLD ch8 (RESCUE ch9 where a test maps it).
-template <class F> static std::unique_ptr<Rig> nav_rig(F edit, bool usb = true) {
+template <class F> static std::unique_ptr<Rig> nav_rig(F edit, bool usb) {
     g_stub_us = 0; g_stub_delay_advances = true;
     std::unique_ptr<Rig> r(new Rig()); r->provision(); r->usb_link = usb;
     { wbp::Settings s; wbp::SettingsStore st(r->flash); st.load(s);
@@ -2143,6 +2153,172 @@ static void t_esc_wire() {
         CHECK(has_line(*r, "pins: FAILED - GPIO44 is set for both") && r->app().status.pin_conflict, "its pin is checked against the others (buzzer on the same pin)"); }
 }
 
+
+// Two IMUs on one SPI bus (pins.imu2_cs, sensors.gyro_use): what the boot reports, which gyro flies, a chip that dies in flight.
+static bool sensors_now(Rig& r, T_sensors& t) { r.clear_inbox(); r.stream(STR_SENSORS, 50); r.run(0.05); const bool ok = r.latest(STR_SENSORS, t); r.stream(STR_SENSORS, 0); return ok; }
+static void t_dual_imu() {
+    printf("[two IMUs] second chip on the same SPI bus: boot, gyro_use FIRST / SECOND / BOTH, a chip dying in flight\n");
+    // the second chip sits turned by 90 degrees on the board, and has a gyro bias of its own (the boot calibration removes it)
+    auto two = [](uint8_t use) { return [use](wbp::Settings& s, VirtualBoard& b) { b.has_imu2 = true; b.imu2_align = ALIGN_CW90; b.gyro2_bias[0] = 1.5f; b.gyro2_bias[2] = -2.0f;
+                                                                                      s.pins.imu2_cs = VirtualBoard::kCs2; s.sensors.imu2_align = ALIGN_CW90; s.sensors.gyro_use = use; }; };
+    {   auto r = nav_rig(two(GYRO_USE_FIRST)); VirtualBoard& b = r->board;
+        CHECK(has_line(*r, "imu2: SPI ICM42688P on CS GPIO34, stand-by (gyro_use FIRST)") && r->app().status.imu2, "boot report: the second chip, on its chip select, as the stand-by");
+        r->run(2.5); T_sensors t{};
+        CHECK(sensors_now(*r, t) && t.imu2 == IMU2_STATE_OK && t.gyro_src == 1 && (r->tel().health & HEALTH_IMU2) && (r->tel().health & HEALTH_GYRO_CAL), "sensors stream: IMU 2 OK, the loop's gyro from IMU 1; health IMU2, gyros calibrated");
+        CHECK(abs(t.gyro2[0]) < 10 && abs(t.gyro2[2]) < 10, "IMU 2 at rest after the boot calibration: %.1f / %.1f deg/s (its bias was 1.5 / -2.0)", t.gyro2[0] * 0.1, t.gyro2[2] * 0.1);
+        // in the air: IMU 2 (turned 90 degrees, imu2_align CW90) reads what IMU 1 reads
+        nav_takeoff(*r, 1.5); b.rc[0] = 1800; double d = 0, m = 0; int n = 0;
+        for (int i = 0; i < 20; i++) { r->run(0.01); if (sensors_now(*r, t)) { for (int k = 0; k < 3; k++) { d = fmax(d, fabs(t.gyro2[k] - t.gyro[k]) * 0.1); m = fmax(m, fabs(t.gyro[k]) * 0.1); } n++; } }
+        b.rc[0] = 1500; r->run(1.0);
+        CHECK(n > 15 && m > 30 && d < 3.0, "a roll at up to %.0f deg/s: IMU 2 in the board frame differs from IMU 1 by %.1f deg/s at most - its own orientation applied", m, d);
+        // IMU 1 dies in flight: IMU 2 takes over, nothing is disarmed
+        b.has_imu = false; r->run(2.0);
+        CHECK(r->tel().armed && b.plant.z > 0.5f && fabsf(b.plant.right_down_deg()) < 5 && fabsf(b.plant.nose_down_deg()) < 5, "IMU 1 dead in flight: still armed, flying level on IMU 2 (z %.2f m, roll %.1f, pitch %.1f)", b.plant.z, b.plant.right_down_deg(), b.plant.nose_down_deg());
+        CHECK(sensors_now(*r, t) && t.gyro_src == 2 && (r->tel().health & HEALTH_IMU) && !(r->tel().blockers & ARM_BLOCKER_NO_IMU), "the loop's gyro from IMU 2 now; no NO_IMU blocker"); }
+    {   auto r = nav_rig(two(GYRO_USE_BOTH)); VirtualBoard& b = r->board;
+        CHECK(has_line(*r, "both gyros averaged (gyro_use BOTH)"), "BOTH: said at boot");
+        r->run(2.5); nav_takeoff(*r, 1.5); T_sensors t{};
+        CHECK(sensors_now(*r, t) && t.gyro_src == 3 && r->tel().armed && b.plant.z > 0.5f, "flies on the mean of both gyros (gyro_src %u)", t.gyro_src);
+        b.has_imu2 = false; r->run(2.0);
+        CHECK(sensors_now(*r, t) && t.imu2 == IMU2_STATE_LOST && t.gyro_src == 1 && !(r->tel().health & HEALTH_IMU2) && r->tel().armed && fabsf(b.plant.right_down_deg()) < 5, "IMU 2 dies: LOST, IMU 1 alone, still flying level"); }
+    {   auto r = nav_rig(two(GYRO_USE_SECOND)); VirtualBoard& b = r->board;
+        r->run(2.5); nav_takeoff(*r, 1.5); T_sensors t{};
+        CHECK(sensors_now(*r, t) && t.gyro_src == 2 && r->tel().armed && b.plant.z > 0.5f && fabsf(b.plant.right_down_deg()) < 5, "SECOND: flies on the gyro of IMU 2 (gyro_src %u)", t.gyro_src); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.pins.imu2_cs = VirtualBoard::kCs2; s.sensors.gyro_use = GYRO_USE_BOTH; });
+        r->run(2.5); T_sensors t{};
+        CHECK(has_line(*r, "imu2: FAILED - no known IMU answered on SPI") && !r->app().status.imu2 && sensors_now(*r, t) && t.imu2 == IMU2_STATE_FAILED && t.gyro_src == 1, "a chip select set but no chip: FAILED at boot, IMU 1 flies (BOTH asked)");
+        CHECK(!(r->tel().blockers & ARM_BLOCKER_NO_IMU) && (r->tel().health & HEALTH_GYRO_CAL), "and that is not a reason to refuse arming"); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.pins.imu2_cs = s.pins.imu_cs; });
+        CHECK(r->app().status.pin_conflict && !r->app().status.imu2, "the first IMU's chip select given for the second one: a pin conflict"); }
+    {   auto r = nav_rig([](wbp::Settings&, VirtualBoard& b) { b.has_imu2 = true; }); r->run(2.5); T_sensors t{};
+        CHECK(!r->app().status.imu2 && sensors_now(*r, t) && t.imu2 == IMU2_STATE_NONE && !has_line(*r, "imu2:"), "no chip select: no second IMU looked for (NONE)"); }
+}
+
+
+// DroneCAN on the virtual board's CAN bus: a GPS + compass module (Here3-like) gets a node id from the flight controller and
+// is what Position Hold flies on.
+static bool can_now(Rig& r, T_can& c) { r.clear_inbox(); r.stream(STR_CAN, 10); r.run(0.6); const bool ok = r.latest(STR_CAN, c); r.stream(STR_CAN, 0); return ok; }
+static void dronecan_setup(wbp::Settings& s, VirtualBoard& b) {
+    gps_compass(s, b); b.has_can_gps = true;
+    s.can.mode = CAN_MODE_DRONECAN; s.pins.can_tx = VirtualBoard::kCanTx; s.pins.can_rx = VirtualBoard::kCanRx;
+    s.gps.provider = GPS_PROVIDER_DRONECAN; s.sensors.mag_model = MAG_MODEL_DRONECAN;
+}
+static void t_dronecan() {
+    printf("[dronecan] a GPS + compass module on the CAN bus: node id, names, Position Hold on it, the module going silent\n");
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { dronecan_setup(s, b); b.plant.set_tilt(0, 0, 60); }, false); VirtualBoard& b = r->board;
+        CHECK(has_line(*r, "can: DroneCAN node 10, 1000 kbit/s, TX GPIO33 RX GPIO0, hands out node ids") && b.can_port.bitrate == 1000000 && b.can_port.tx_pin == 33, "boot report: the node, its speed and pins");
+        CHECK(has_line(*r, "gps: DroneCAN (the first node on the bus that sends a fix)") && has_line(*r, "mag: DroneCAN"), "the GPS and the compass take their data from the bus");
+        r->run(6.0); T_can c{};
+        CHECK(b.can_gps.id == 125 && can_now(*r, c) && c.state == CAN_STATE_RUNNING && c.nodes == 1 && c.node[0] == 125 && c.allocations == 1 && c.gnss_node == 125 && c.mag_node == 125,
+              "the module asked for an id and got 125; can stream: running, 1 node, GNSS and compass from it");
+        CHECK(!strncmp((const char*)c.names, "org.ardupilot.he", 16) && c.health[0] == 0 && c.uptime[0] >= 4 && c.rx_fps > 140 && c.tx_fps >= 1 && (r->tel().health & HEALTH_CAN),
+              "its name (cut to 16: '%.16s'), healthy, up %u s; %u frames/s in, %u out; health CAN", (const char*)c.names, (unsigned)c.uptime[0], c.rx_fps, c.tx_fps);
+        T_gps g{}; r->clear_inbox(); r->stream(STR_GPS, 5); r->run(0.5);
+        CHECK(r->latest(STR_GPS, g) && g.sats == 15 && g.hdop == 70 && (r->tel().health & HEALTH_GPS) && r->app().gnss.rateHz() > 8.0f, "gps stream: 15 satellites, HDOP 0.70 (from gnss.Auxiliary), %.1f fixes/s", r->app().gnss.rateHz());
+        CHECK((r->tel().health & HEALTH_MAG_READY) && r->tel().yaw_from_mag && fabsf(r->tel().yaw - 60.0f) < 3.0f, "heading %.1f deg from the module's compass (true 60), %.0f samples/s", r->tel().yaw, r->app().mag.rateHz());
+        b.rc[7] = 2000; nav_takeoff(*r, 4.0); T_nav n{};
+        CHECK(r->tel().armed && b.plant.z > 1.5f && r->tel().pos_valid && nav_now(*r, n) && (n.flags & NAV_FLAGS_POSHOLD) && n.ph_roll == PH_AXIS_LOITER, "Position Hold on the DroneCAN GPS, %.1f m up", b.plant.z);
+        const float n0 = b.plant.pn, e0 = b.plant.pe; float far = 0; for (int i = 0; i < 100; i++) { r->run(0.1); far = fmaxf(far, nav_far(*r, n0, e0)); }
+        CHECK(far < 0.8f, "10 s: it stays within %.2f m", far);
+        b.can_gps.silent = true; r->run(3.5);
+        CHECK(!(r->tel().health & HEALTH_GPS) && !(r->tel().health & HEALTH_MAG_READY) && can_now(*r, c) && c.health[0] == 255 && r->tel().armed && fabsf(b.plant.right_down_deg()) < 3.0f,
+              "the module goes silent: no GPS, no compass, the node offline (255) - the craft stays level in the pilot's hands");
+        b.can_gps.silent = false; r->run(2.0);
+        CHECK((r->tel().health & HEALTH_GPS) && (r->tel().health & HEALTH_MAG_READY) && can_now(*r, c) && c.health[0] == 0, "it talks again: the GPS and the compass come back by themselves"); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { dronecan_setup(s, b); s.pins.can_rx = 255; });
+        CHECK(has_line(*r, "can: FAILED - CAN pins not set (Pins tab: CAN bus)") && has_line(*r, "gps: FAILED - gps.provider is DRONECAN but the CAN bus is not running"), "a CAN pin missing: says so, and the GPS that depends on it too"); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { dronecan_setup(s, b); b.can_port.refuse = true; });
+        CHECK(has_line(*r, "can: FAILED - the simulated controller refuses") && !r->app().status.can, "the controller does not start: its reason"); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { dronecan_setup(s, b); s.pins.buzzer = VirtualBoard::kCanTx; });
+        CHECK(has_line(*r, "pins: FAILED - GPIO33 is set for both") && r->app().status.pin_conflict, "its pins are checked against the others"); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { dronecan_setup(s, b); s.can.dna_server = 0; }); r->run(4.0); T_can c{};
+        CHECK(r->board.can_gps.id == 0 && can_now(*r, c) && c.nodes == 0 && c.allocations == 0, "no allocation server: a module that asks for an id gets none (and stays off the bus)"); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { dronecan_setup(s, b); s.can.mode = CAN_MODE_OFF; }); r->run(1.0); T_can c{};
+        CHECK(!r->app().status.can && r->board.can_port.state() == CanPort::OFF && can_now(*r, c) && c.state == CAN_STATE_OFF && has_line(*r, "gps: FAILED - gps.provider is DRONECAN but the CAN bus is not running"), "CAN off but the GPS set to DroneCAN: the controller is never started (OFF), the GPS says why it has nothing"); }
+}
+
+
+// A prop strike on the virtual board: bidirectional DShot reports the motor at 0 rpm; with motors.stall_disarm the craft is
+// disarmed, the app is told which motor (motors stream) and why (blocker MOTOR_STALL).
+static void t_stall() {
+    printf("[stall guard] a motor stops in the air, bidirectional DShot sees it\n");
+    for (int on = 1; on >= 0; on--) {
+        auto r = nav_rig([on](wbp::Settings& s, VirtualBoard&) { s.motors.bidirectional = 1; s.motors.stall_disarm = (uint8_t)on; }); VirtualBoard& b = r->board;
+        r->run(2.5); nav_takeoff(*r, 2.0); T_motors m{};
+        CHECK(r->tel().armed && b.plant.z > 0.4f && (r->tel().health & HEALTH_ESC_TELEMETRY), "%s: flying at %.1f m with rpm telemetry", on ? "stall_disarm ON" : "OFF", b.plant.z);
+        r->run(3.0); CHECK(r->tel().armed, "%s: hovering for 3 s, nothing trips", on ? "ON" : "OFF");
+        b.motor_dead[1] = true; r->run(0.25);
+        if (on) {
+            CHECK(!r->tel().armed && (r->tel().blockers & ARM_BLOCKER_MOTOR_STALL) && b.motor_frac[0] == 0 && b.motor_frac[2] == 0, "motor 2 stops: disarmed within 250 ms, every motor off, blocker MOTOR_STALL");
+            r->clear_inbox(); r->stream(STR_MOTORS, 10); r->run(1.2);
+            CHECK(r->latest(STR_MOTORS, m) && m.stall_motor == 2, "motors stream: motor %u stopped", m.stall_motor);
+        } else CHECK(r->tel().armed, "OFF: nothing disarms (the craft falls on three motors)");
+    }
+}
+
+
+// A craft that is all DroneCAN: the GPS + compass module, a barometer + power module and four ESCs on the bus, no barometer
+// on the board's own I2C bus. It flies (Altitude Hold on the CAN barometer, the motors driven by esc.RawCommand), the battery
+// and the ESC telemetry come from the bus, a prop strike is seen in esc.Status.
+static void dronecan_all(wbp::Settings& s, VirtualBoard& b) {
+    dronecan_setup(s, b); b.has_can_escs = true; b.has_can_sens = true; b.has_baro = false;
+    s.motors.protocol = ESC_PROTOCOL_DRONECAN; s.sensors.baro_model = BARO_MODEL_DRONECAN; s.battery.source = BATT_SOURCE_DRONECAN; s.battery.current_source = CURR_SOURCE_DRONECAN;
+    for (int i = 0; i < 8; i++) s.pins.motor[i] = 255;                         // (no motor pins at all)
+}
+static void t_dronecan2() {
+    printf("[dronecan] barometer, power module and ESCs on the CAN bus: a whole craft on it\n");
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { dronecan_all(s, b); s.motors.stall_disarm = 1; }); VirtualBoard& b = r->board;
+        CHECK(has_line(*r, "baro: DroneCAN (the first node on the bus that sends StaticPressure)") && has_line(*r, "motors: DroneCAN x4 (esc.RawCommand, ESC index = motor slot)")
+              && has_line(*r, "battery: DroneCAN power module") && has_line(*r, "current: from a DroneCAN power module (BatteryInfo)") && r->app().status.motors && !r->app().status.pin_conflict,
+              "boot report: barometer, motors (no pins), battery voltage and current from the bus");
+        r->run(4.0); T_can c{};
+        CHECK(can_now(*r, c) && c.baro_node == 50 && c.batt_node == 50 && c.esc_mask == 0x0F && c.gnss_node == 125, "can stream: barometer and battery from node 50, ESC 0..3 heard (%02X), GNSS from 125", c.esc_mask);
+        { const uint32_t n0 = r->app().can_node.esc_sent(); const uint32_t k0 = b.can_escs.commands; r->run(1.0); const uint32_t n = r->app().can_node.esc_sent() - n0, k = b.can_escs.commands - k0;
+          CHECK(n > 380 && n < 420 && k == n && b.can_escs.cmd[0] == 0, "esc.RawCommand: %u a second (400 Hz), every one heard by the ESCs; disarmed: 0 (stop)", n); }
+        T_battery tb{}; r->clear_inbox(); r->stream(STR_BATTERY, 10); r->run(0.5);
+        CHECK(r->latest(STR_BATTERY, tb) && abs((int)tb.voltage - 16000) < 60 && tb.source == BATT_SOURCE_DRONECAN && tb.current_source == CURR_SOURCE_DRONECAN && tb.cells == 4, "battery stream: %u mV from the power module, 4 cells", tb.voltage);
+        r->stream(STR_BATTERY, 0);
+        b.rc[7] = 1000; nav_takeoff(*r, 4.0);
+        CHECK(r->tel().armed && b.plant.z > 1.0f && fabsf(r->app().baro.altitudeM() - b.plant.z) < 0.6f && r->app().baro.rateHz() > 40.0f, "flying on the CAN ESCs, %.1f m up; the CAN barometer says %.1f m (%.0f samples/s)", b.plant.z, r->app().baro.altitudeM(), r->app().baro.rateHz());
+        const float z0 = b.plant.z; float dz = 0; for (int i = 0; i < 30; i++) { r->run(0.1); dz = fmaxf(dz, fabsf(b.plant.z - z0)); }
+        CHECK(dz < 0.5f, "Altitude Hold on the CAN barometer: within %.2f m for 3 s", dz);
+        T_motors m{}; r->clear_inbox(); r->stream(STR_MOTORS, 10); r->run(0.5); r->latest(STR_MOTORS, m); r->stream(STR_MOTORS, 0);
+        CHECK(m.rpm[0] * 10 > 5000 && m.temp[0] == 45 && m.volt[0] > 1500 && m.amps[0] > 100, "motors stream from esc.Status: %u rpm, %u C, %.2f V, %.2f A", m.rpm[0] * 10, m.temp[0], m.volt[0] * 0.01, m.amps[0] * 0.01);
+        r->clear_inbox(); r->stream(STR_BATTERY, 10); r->run(0.5); r->latest(STR_BATTERY, tb); r->stream(STR_BATTERY, 0);
+        CHECK(tb.current > 1000 && tb.mah > 0, "the power module's current while flying: %.1f A, %u mAh drawn", tb.current * 0.01, tb.mah);
+        { b.can_escs.status_ms = 125; r->run(0.5); int valid = 0; for (int i = 0; i < 100; i++) { r->run(0.01); valid += r->app().motors.manager().telemetry(0, millis()).rpm_valid; }
+          CHECK(valid == 100, "ESCs that report only 8 times a second: their rpm stays valid in between (%d of 100 looks; the CAN timeout is 500 ms)", valid); }
+        b.motor_dead[1] = true; r->run(0.8);
+        CHECK(!r->tel().armed && (r->tel().blockers & ARM_BLOCKER_MOTOR_STALL) && b.can_escs.cmd[0] == 0, "motor 2 stops (a prop strike, 0 rpm in its esc.Status): the stall guard disarms, the ESCs are told 0"); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { dronecan_all(s, b); s.pins.motor[0] = 3; s.led.count = 4; s.pins.led = 3; });
+        CHECK(!r->app().status.pin_conflict && r->app().status.motors, "ESCs on the CAN bus: an old motor pin left in the settings is free for something else (no pin conflict)"); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { dronecan_all(s, b); s.can.mode = CAN_MODE_OFF; });
+        CHECK(has_line(*r, "motors: FAILED - motors.protocol is DRONECAN but the CAN bus is not running") && has_line(*r, "baro: FAILED - sensors.baro_model is DRONECAN but the CAN bus is not running")
+              && has_line(*r, "battery: FAILED - battery.source is DRONECAN but the CAN bus is not running") && !r->app().status.motors, "the CAN bus off: motors, barometer and battery say why they have nothing"); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { dronecan_all(s, b); }); VirtualBoard& b = r->board; r->run(3.0);
+        b.can_sens.silent = true; r->run(6.0);
+        CHECK(!r->app().baro.healthy() && r->app().battery.monitor.state() == batt::State::NOT_PRESENT, "the barometer + power module goes silent: no barometer, no battery (after the voltage filter settles: what an unplugged ADC does too) (%d %d)", (int)r->app().baro.healthy(), (int)r->app().battery.monitor.state());
+        b.can_sens.silent = false; r->run(4.0);
+        CHECK(r->app().baro.healthy() && r->app().battery.monitor.state() == batt::State::OK, "it talks again: both come back"); }
+}
+
+// The LED strip on the virtual board: the colors the firmware sends follow the craft's state.
+static void t_led() {
+    printf("[led strip] the craft's state in colors\n");
+    auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.led.count = 4; s.led.brightness = 100; s.pins.led = 3; });
+    CHECK(has_line(*r, "led: 4 LEDs on GPIO3, 100 % brightness") && r->app().status.led, "boot report");
+    r->run(3.0); const app::Rgb* c = r->app().ledColors();
+    CHECK(r->app().ledCount() == 4 && c[0].g == 255 && c[0].r == 0 && c[3].g == 255, "disarmed, nothing blocks: green");
+    nav_takeoff(*r, 1.0); c = r->app().ledColors();
+    CHECK(r->tel().armed && c[0].r == 170 && c[0].b == 255 && c[0].g == 0, "armed in Altitude Hold: purple (%u %u %u)", c[0].r, c[0].g, c[0].b);
+    r->board.tx_on = false; r->run(1.5); bool red = false, dark = false; for (int i = 0; i < 40; i++) { r->run(0.025); c = r->app().ledColors(); red |= c[0].r == 255 && c[0].g == 0; dark |= c[0].r == 0 && c[0].g == 0 && c[0].b == 0; }
+    CHECK(red && dark, "the transmitter lost (failsafe): red, flashing");
+    { auto q = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.led.count = 4; s.pins.led = 3; s.blackbox.device = BB_DEVICE_SDCARD; s.blackbox.sd_mode = SD_MODE_SPI; });
+      CHECK(has_line(*q, "led: FAILED - the second SPI bus is taken") && !q->app().status.led, "an SD card on SPI: the bus is taken, says so"); }
+    { auto q = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.led.count = 4; s.pins.led = 3; s.pins.buzzer = 3; });
+      CHECK(q->app().status.pin_conflict, "its pin is checked against the others"); }
+}
+
 int main() {
     if (const char* only = getenv("WB_ONLY")) {            // one group alone (while working on it): WB_ONLY=nav ./build/test_fw
         if (!strcmp(only, "nav")) { t_nav_flow(); t_nav_mounting(); t_nav_uarts(); }
@@ -2159,6 +2335,11 @@ int main() {
         if (!strcmp(only, "esc")) t_esc_passthrough();
         if (!strcmp(only, "ekf")) t_ekf();
         if (!strcmp(only, "escwire")) t_esc_wire();
+        if (!strcmp(only, "dualimu")) t_dual_imu();
+        if (!strcmp(only, "dronecan")) t_dronecan();
+        if (!strcmp(only, "stall")) t_stall();
+        if (!strcmp(only, "led")) t_led();
+        if (!strcmp(only, "dronecan2")) t_dronecan2();
         printf("%d checks, %d failed (only '%s')\n", g_pass + g_fail, g_fail, only); return 1;
     }
     t_boot();
@@ -2193,6 +2374,11 @@ int main() {
     t_ports();
     t_gps_baud();
     t_esc_wire();
+    t_dual_imu();
+    t_dronecan();
+    t_stall();
+    t_led();
+    t_dronecan2();
     t_esc_passthrough();
     t_ekf();
     t_gps_alt();

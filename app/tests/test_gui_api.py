@@ -104,6 +104,7 @@ def test_not_connected_is_an_answer_not_a_crash(gui):
     assert isinstance(ports["ports"], list) and 230400 in ports["bauds"] and ports["default_baud"] == 230400
     for p in ports["ports"]:
         assert set(p) >= {"port", "description", "likely", "sim", "vid", "pid"}
+    assert [p for p in ports["ports"] if p.get("wifi")] == [p for p in ports["ports"] if p["port"] == "socket://192.168.4.1:5760"] != [], "the board's own access point is always offered (never probed)"
     assert gui.raw("POST", "/api/connect", {"port": "socket://127.0.0.1:1", "baud": "fast"})[1]["error"] == "BAD_REQUEST"
     assert gui.raw("POST", "/api/connect", {"port": "socket://127.0.0.1:1", "baud": 50})[1]["error"] == "BAD_REQUEST"
 

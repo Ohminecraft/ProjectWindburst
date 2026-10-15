@@ -62,24 +62,24 @@ static void t_schema() {
     CHECK(s.filters.gyro_lpf1_dyn_min_hz == 250 && s.filters.gyro_lpf1_dyn_max_hz == 500 && s.filters.gyro_lpf2_hz == 500 && s.filters.dterm_lpf1_dyn_min_hz == 75 && s.filters.dterm_lpf2_hz == 150 && s.filters.dyn_notch_count == 3 &&
           s.filters.rpm_harmonics == 3 && s.filters.yaw_lowpass_hz == 100 && s.filters.slider_gyro == 1 && s.filters.slider_dterm_mult == 100, "filter defaults = Betaflight's");
     CHECK(s.beeper.conditions == 0x1FFFFu && s.general.fs_guard_ms == 500 && s.general.airmode_start_throttle == 25 && s.receiver.rc_smoothing == 1 && s.receiver.rc_smoothing_factor == 30, "u32 default, general, receiver");
-    size_t total = 0; for (const SectionInfo& si : kSections) total += si.size; CHECK(kSectionCount == 19 && total == sizeof(Settings), "section table covers the Settings struct exactly (%zu vs %zu)", total, sizeof(Settings));
+    size_t total = 0; for (const SectionInfo& si : kSections) total += si.size; CHECK(kSectionCount == 22 && total == sizeof(Settings), "section table covers the Settings struct exactly (%zu vs %zu)", total, sizeof(Settings));
     CHECK(find_section(SEC_PID)->size == sizeof(S_pid) && find_section(99) == nullptr, "lookup");
     S_general g; defaults(g); g.loop_hz = 60000; g.max_arm_angle = 0; g.board_align = 99; g.airmode = 7; g.board_trim_yaw = -9999;
     Settings t; defaults(t); t.general = g; const int fixed = validate_section(t, SEC_GENERAL);
     CHECK(fixed == 5 && t.general.loop_hz == 8000 && t.general.max_arm_angle == 5 && t.general.board_align == 7 && t.general.airmode == 2 && t.general.board_trim_yaw == -1800, "validation clamps ranges, enums and bools (%d fixed)", fixed);
     t.motors.protocol = 200; t.motors.order[3] = 99; t.pid.p[1] = 255; t.pid.f[0] = 5000; t.pid.ff_smooth_factor = 200; t.pid.iterm_relax = 9; t.pid.slider_d = 201; t.pid.stab_p[1] = 50.0f; t.pid.stab_p[2] = NAN; t.pid.iterm_windup = 5;
     validate_section(t, SEC_MOTORS); validate_section(t, SEC_PID);
-    CHECK(t.motors.protocol == ESC_PROTOCOL_BRUSHED && t.motors.order[3] == 7 && t.pid.p[1] == 250 && t.pid.f[0] == 1000 && t.pid.ff_smooth_factor == 95 && t.pid.iterm_relax == ITERM_RELAX_RPY_INC && t.pid.slider_d == 200 && t.pid.stab_p[1] == 12.0f &&
+    CHECK(t.motors.protocol == ESC_PROTOCOL_DRONECAN && t.motors.order[3] == 7 && t.pid.p[1] == 250 && t.pid.f[0] == 1000 && t.pid.ff_smooth_factor == 95 && t.pid.iterm_relax == ITERM_RELAX_RPY_INC && t.pid.slider_d == 200 && t.pid.stab_p[1] == 12.0f &&
           t.pid.stab_p[2] == 4.5f && t.pid.iterm_windup == 30, "motors / pid clamps (a NaN gain becomes the default)");
     t.filters.gyro_lpf1_type = 9; t.filters.gyro_lpf2_hz = 4000; t.filters.dyn_notch_count = 20; t.filters.rpm_harmonics = 5; t.filters.rpm_q = 10; t.filters.slider_gyro_mult = 3; t.filters.rpm_weights[2] = 180; validate_section(t, SEC_FILTERS);
     CHECK(t.filters.gyro_lpf1_type == LPF_TYPE_PT3 && t.filters.gyro_lpf2_hz == 1000 && t.filters.dyn_notch_count == 7 && t.filters.rpm_harmonics == 3 && t.filters.rpm_q == 250 && t.filters.slider_gyro_mult == 10 && t.filters.rpm_weights[2] == 100, "filter clamps");
-    CHECK(kProtocolVersion == 1 && kStreamCount == 14 && find_stream(STR_LINK)->size == sizeof(T_link) && find_stream(STR_TUNING)->size == sizeof(T_tuning) && find_stream(STR_ATTITUDE)->size == sizeof(T_attitude), "streams");
+    CHECK(kProtocolVersion == 1 && kStreamCount == 15 && find_stream(STR_CAN)->size == sizeof(T_can) && find_stream(STR_LINK)->size == sizeof(T_link) && find_stream(STR_TUNING)->size == sizeof(T_tuning) && find_stream(STR_ATTITUDE)->size == sizeof(T_attitude), "streams");
 }
 
 static void t_store() {
     printf("[settings store]\n");
     MemStorage m; SettingsStore st(m); Settings a; defaults(a); a.general.max_arm_angle = 33; a.pid.anti_gravity_gain = 123; a.motors.reversed_mask = 0x05; a.modes.mode[0] = 0; a.modes.aux[0] = 4; a.modes.lo[0] = 1700; a.modes.hi[0] = 2100;
-    CHECK(st.save(a) && m.kv.size() == 19, "19 records written");
+    CHECK(st.save(a) && m.kv.size() == (size_t)kSectionCount, "one record per section written");
     Settings b; auto r = st.load(b);
     CHECK(r.defaulted_mask == 0 && r.loaded_mask != 0 && b.general.max_arm_angle == 33 && b.pid.anti_gravity_gain == 123 && b.motors.reversed_mask == 5 && b.modes.hi[0] == 2100, "round trip");
     m.kv["wbs05"][6] ^= 0xFF; Settings c; r = st.load(c);
@@ -96,16 +96,16 @@ static void t_store() {
         std::vector<uint8_t> rec(size + 5u); rec[0] = 1; rec[1] = (uint8_t)size; rec[2] = (uint8_t)(size >> 8); memcpy(rec.data() + 3, data, size);
         const uint16_t c = crc16(rec.data(), size + 3u); rec[size + 3u] = (uint8_t)c; rec[size + 4u] = (uint8_t)(c >> 8); ms.kv[key] = rec;
     };
-    CHECK(find_section(SEC_PINS)->compat == 46 && find_section(SEC_PINS)->compat2 == 37 && find_section(SEC_PINS)->compat3 == 33 && offsetof(S_pins, esc_tlm) == 46 && offsetof(S_pins, flow_cs) == 27 && offsetof(S_pins, curr_adc) == 37 && offsetof(S_pins, servo) == 33 && find_section(SEC_BATTERY)->compat == 13 && offsetof(S_battery, current_source) == 13 && find_section(SEC_BLACKBOX)->compat == 8 && find_section(SEC_MOTORS)->compat == 36 && find_section(SEC_MOTORS)->compat2 == 35 && find_section(SEC_MOTORS)->compat3 == 34 && offsetof(S_motors, esc_sensor) == 36 && offsetof(S_motors, dshot_driver) == 34 && offsetof(S_motors, ext_pullup) == 35 && find_section(SEC_NAV)->compat == 30 && find_section(SEC_NAV)->compat2 == 29 && find_section(SEC_NAV)->compat3 == 27 && offsetof(S_nav, gps_alt) == 27 && offsetof(S_nav, ph_min_gps_hz) == 29 && offsetof(S_nav, ekf) == 30 && find_section(SEC_GENERAL)->compat == 23 && find_section(SEC_GPS)->compat == 0 && offsetof(S_blackbox, sd_mode) == 8,
+    CHECK(find_section(SEC_PINS)->compat == 48 && find_section(SEC_PINS)->compat2 == 47 && find_section(SEC_PINS)->compat3 == 46 && find_section(SEC_PINS)->compat4 == 37 && offsetof(S_pins, can_tx) == 48 && offsetof(S_pins, imu2_cs) == 47 && offsetof(S_pins, esc_tlm) == 46 && find_section(SEC_SENSORS)->compat == 18 && find_section(SEC_SENSORS)->compat2 == 16 && offsetof(S_sensors, baro_model) == 18 && offsetof(S_sensors, gyro_use) == 16 && offsetof(S_pins, flow_cs) == 27 && offsetof(S_pins, curr_adc) == 37 && offsetof(S_pins, servo) == 33 && find_section(SEC_BATTERY)->compat == 13 && offsetof(S_battery, current_source) == 13 && find_section(SEC_BLACKBOX)->compat == 8 && find_section(SEC_MOTORS)->compat == 37 && find_section(SEC_MOTORS)->compat2 == 36 && find_section(SEC_MOTORS)->compat3 == 35 && find_section(SEC_MOTORS)->compat4 == 34 && offsetof(S_motors, stall_disarm) == 37 && offsetof(S_motors, esc_sensor) == 36 && offsetof(S_motors, reserved1) == 34 && offsetof(S_motors, ext_pullup) == 35 && find_section(SEC_NAV)->compat == 30 && find_section(SEC_NAV)->compat2 == 29 && find_section(SEC_NAV)->compat3 == 27 && offsetof(S_nav, gps_alt) == 27 && offsetof(S_nav, ph_min_gps_hz) == 29 && offsetof(S_nav, ekf) == 30 && find_section(SEC_GENERAL)->compat == 22 && find_section(SEC_GENERAL)->compat2 == 23 && offsetof(S_general, reserved_g) == 22 && offsetof(S_general, pid_denom) == 23 && find_section(SEC_GPS)->compat == 0 && offsetof(S_blackbox, sd_mode) == 8,
           "pins (three times: the flow sensor's, the servos', the current sensor's and PWM receiver's), battery and blackbox grew at their end: their old sizes are known, and the old layout really is the start of the new one");
     { MemStorage ms; SettingsStore so(ms); Settings w; defaults(w); so.save(w);
-      S_pins op; defaults(op); op.imu_cs = 10; op.motor[3] = 7; op.batt_adc = 2; op.sd_cs = 42; op.flow_cs = 38; op.servo[0] = 99; op.servo[3] = 98;   // (the servo bytes lie beyond the 33 bytes that are stored)
-      old_record(ms, "wbs11", &op, 33);
+      S_pins op; defaults(op); op.imu_cs = 10; op.motor[3] = 7; op.batt_adc = 2; op.sd_cs = 42; op.flow_cs = 38; op.servo[0] = 99; op.esc_tlm = 44; op.imu2_cs = 34;   // (imu2_cs lies beyond the 47 bytes that are stored)
+      old_record(ms, "wbs11", &op, 47);
       S_blackbox ob; defaults(ob); ob.device = BB_DEVICE_FLASH; ob.rate_hz = 1000; ob.sd_mhz = 3;
       old_record(ms, "wbs14", &ob, 8);
       Settings got; const auto rr = so.load(got);
       CHECK(got.pins.imu_cs == 10 && got.pins.motor[3] == 7 && got.pins.batt_adc == 2, "an old pin map is kept: nobody has to type his pins again after an update");
-      CHECK(got.pins.sd_cs == 42 && got.pins.flow_cs == 38 && got.pins.servo[0] == 255 && got.pins.servo[3] == 255 && got.pins.curr_adc == 255, "the pins the old firmware did not know stay unset (%u %u %u)", got.pins.servo[0], got.pins.servo[3], got.pins.curr_adc);
+      CHECK(got.pins.sd_cs == 42 && got.pins.flow_cs == 38 && got.pins.servo[0] == 99 && got.pins.esc_tlm == 44 && got.pins.imu2_cs == 255, "the pin map of 0.11 (47 bytes): the pin the old firmware did not know (the second IMU's) stays unset (%u)", got.pins.imu2_cs);
       CHECK(got.blackbox.device == BB_DEVICE_FLASH && got.blackbox.rate_hz == 1000 && got.blackbox.sd_mode == SD_MODE_SPI && got.blackbox.sd_mhz == 20, "the same for the blackbox section");
       CHECK(rr.migrated_mask == ((1u << SEC_PINS) | (1u << SEC_BLACKBOX)) && rr.defaulted_mask == 0 && (rr.loaded_mask & (1u << SEC_PINS)), "and the boot report can say which sections came from an older firmware (0x%x)", (unsigned)rr.migrated_mask);
       so.save(got); Settings again; const auto r2 = so.load(again);
@@ -124,21 +124,37 @@ static void t_store() {
       old_record(ms, "wbs11", &op, 33); ms.kv["wbs11"][5] ^= 0x10; Settings bad1; const auto r3 = so.load(bad1);
       CHECK((r3.defaulted_mask & (1u << SEC_PINS)) && bad1.pins.imu_cs == 255, "a damaged old record: defaults");
       { S_pins p6; defaults(p6); p6.imu_cs = 9; p6.sd_cs = 40; p6.flow_cs = 38; old_record(ms, "wbs11", &p6, 27); Settings g6; const auto rr6 = so.load(g6);     // (flow_cs lies beyond the 27 bytes)
-        CHECK(g6.pins.imu_cs == 255 && (rr6.defaulted_mask & (1u << SEC_PINS)), "a pin map of firmware 0.6 (27 bytes): no longer known (0.11 added the ESC telemetry pin, three older sizes are kept): defaults"); }
+        CHECK(g6.pins.imu_cs == 255 && (rr6.defaulted_mask & (1u << SEC_PINS)), "a pin map of firmware 0.6 (27 bytes): no longer known (three older sizes are kept): defaults"); }
+      { S_pins p70; defaults(p70); p70.imu_cs = 9; old_record(ms, "wbs11", &p70, 33); Settings g70; const auto rr70 = so.load(g70);
+        CHECK(g70.pins.imu_cs == 255 && (rr70.defaulted_mask & (1u << SEC_PINS)), "a pin map of firmware 0.7.0 (33 bytes): no longer known (four older sizes are kept): defaults"); }
       { S_pins p9; defaults(p9); p9.imu_cs = 9; p9.servo[0] = 4; old_record(ms, "wbs11", &p9, 46); Settings g9; const auto rr9 = so.load(g9);
         CHECK(g9.pins.imu_cs == 9 && g9.pins.servo[0] == 4 && g9.pins.esc_tlm == 255 && (rr9.migrated_mask & (1u << SEC_PINS)), "the pin map of 0.8 - 0.10 (46 bytes): kept, the ESC telemetry pin unset"); }
       old_record(ms, "wbs11", &op, 23); Settings bad2; const auto r4 = so.load(bad2);
       CHECK((r4.defaulted_mask & (1u << SEC_PINS)) && bad2.pins.imu_cs == 255, "a size that is neither today's nor a known old one (23 bytes: firmware 0.5, four layouts ago): defaults");
       S_gps og; defaults(og); og.rate_hz = 5; old_record(ms, "wbs08", &og, (uint16_t)(sizeof(S_gps) - 1)); Settings bad3; const auto r5 = so.load(bad3);
       CHECK((r5.defaulted_mask & (1u << SEC_GPS)) && bad3.gps.rate_hz == 10, "a section without a known old size (gps) never takes a shorter record");
-      { S_general og2; defaults(og2); og2.loop_hz = 2000; uint8_t rec[23]; memcpy(rec, &og2, sizeof(og2)); rec[22] = 0;
+      { S_general og2; defaults(og2); og2.loop_hz = 2000; uint8_t rec[23]; memcpy(rec, &og2, 22); rec[22] = 1;
         old_record(ms, "wbs01", rec, 23); Settings g8; const auto r8 = so.load(g8);
-        CHECK(sizeof(S_general) == 22 && g8.general.loop_hz == 2000 && (r8.migrated_mask & (1u << SEC_GENERAL)), "the general section of 0.9.0 - 0.9.4 (23 bytes, with the USB RTS setting that is gone again): kept, the extra byte ignored"); }
+        CHECK(sizeof(S_general) == 24 && g8.general.loop_hz == 2000 && g8.general.pid_denom == 1 && (r8.migrated_mask & (1u << SEC_GENERAL)), "the general section of 0.9.0 - 0.9.4 (23 bytes, with the USB RTS setting that is gone again): kept, its last byte lands on the unused byte, not on pid_denom"); }
+      { S_general og3; defaults(og3); og3.loop_hz = 8000; og3.est_hz = 250; old_record(ms, "wbs01", &og3, 22); Settings g9; const auto r9 = so.load(g9);
+        CHECK(g9.general.loop_hz == 8000 && g9.general.est_hz == 250 && g9.general.pid_denom == 1 && (r9.migrated_mask & (1u << SEC_GENERAL)), "the general section of 0.9.5 - 0.11 (22 bytes): kept, the control rate = the gyro's (pid_denom 1)"); }
+      { S_sensors os; defaults(os); os.mag_enabled = 1; os.range_l1x_mode = 2; old_record(ms, "wbs07", &os, 16); Settings g16; const auto r16 = so.load(g16);
+        CHECK(sizeof(S_sensors) == 19 && g16.sensors.baro_model == BARO_MODEL_AUTO && g16.sensors.mag_enabled == 1 && g16.sensors.range_l1x_mode == 2 && g16.sensors.gyro_use == GYRO_USE_FIRST && g16.sensors.imu2_align == ALIGN_CW0 && (r16.migrated_mask & (1u << SEC_SENSORS)),
+              "the sensors section before 0.13 (16 bytes): kept, the second IMU's settings at their defaults (FIRST, CW0)"); }
+      { S_sensors os; defaults(os); os.gyro_use = GYRO_USE_BOTH; os.mag_model = MAG_MODEL_DRONECAN; old_record(ms, "wbs07", &os, 18); Settings g18; const auto r18 = so.load(g18);
+        CHECK(g18.sensors.gyro_use == GYRO_USE_BOTH && g18.sensors.mag_model == MAG_MODEL_DRONECAN && g18.sensors.baro_model == BARO_MODEL_AUTO && (r18.migrated_mask & (1u << SEC_SENSORS)),
+              "the sensors section of 0.13 - 0.16 (18 bytes): kept, the barometer AUTO (the one on the sensor bus)"); }
+      { S_can c; defaults(c); CHECK(c.mode == CAN_MODE_OFF && c.bitrate == CAN_BITRATE_M1 && c.node_id == 10 && c.dna_server == 1 && !find_section(SEC_CAN)->live, "can: off by default, 1 Mbit/s, node 10, hands out ids, needs a reboot");
+        c.node_id = 0; validate(c); CHECK(c.node_id == 1, "node id 0 is not a node id: 1"); }
+      { S_pins p11; defaults(p11); p11.imu_cs = 9; p11.imu2_cs = 34; old_record(ms, "wbs11", &p11, 48); Settings g11; const auto r11 = so.load(g11);
+        CHECK(g11.pins.imu2_cs == 34 && g11.pins.can_tx == 255 && g11.pins.can_rx == 255 && (r11.migrated_mask & (1u << SEC_PINS)), "the pin map of 0.14 (48 bytes): kept, the CAN pins unset"); }
+      { S_wifi w; defaults(w); CHECK(sizeof(S_wifi) == 100 && w.mode == WIFI_MODE_OFF && w.port == 5760 && w.channel == 6 && w.ssid[0] == 0 && w.pass[63] == 0 && !find_section(SEC_WIFI)->live, "wifi: off by default, port 5760, channel 6, empty texts, needs a reboot");
+        w.channel = 14; w.mode = 9; validate(w); CHECK(w.channel == 13 && w.mode == WIFI_MODE_STA, "a channel past 13 is clamped (an unknown mode: the last one, as every enum)"); }
       // the motors section of firmware 0.5 (34 bytes, before the DShot driver choice was added)
-      S_motors om; defaults(om); om.pole_count = 12; om.protocol = ESC_PROTOCOL_DSHOT600; om.bidirectional = 1; om.dshot_driver = DSHOT_DRIVER_IDF;
+      S_motors om; defaults(om); om.pole_count = 12; om.protocol = ESC_PROTOCOL_DSHOT600; om.bidirectional = 1; om.reserved1 = 1;
       old_record(ms, "wbs06", &om, 34); Settings got2; const auto r6 = so.load(got2);
       CHECK(got2.motors.pole_count == 12 && got2.motors.protocol == ESC_PROTOCOL_DSHOT600 && got2.motors.bidirectional == 1 && (r6.migrated_mask & (1u << SEC_MOTORS)), "the motor settings of firmware 0.5 are kept");
-      CHECK(got2.motors.dshot_driver == DSHOT_DRIVER_DIRECT, "and the new field gets its default (the direct driver)"); }
+      CHECK(got2.motors.reserved1 == 0, "and the field after it gets its default"); }
 }
 
 struct Rig {
@@ -165,7 +181,7 @@ static void t_server() {
       r.host.is_armed = true; nr.max_rate[0] = 100; memcpy(p.data() + 1, &nr, sizeof(nr)); r.send(frame(MSG_SECTION_SET, 5, p)); fr = r.tx.frames();
       CHECK(fr[0].first.type == MSG_ACK && fr[0].second[2] == ERR_ARMED && r.s.rates.max_rate[0] == 800, "while ARMED nothing is changed");
       r.host.is_armed = false; p.pop_back(); r.send(frame(MSG_SECTION_SET, 6, p)); fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_SIZE_MISMATCH, "wrong size refused"); }
-    { Rig r; r.s.general.max_arm_angle = 30; r.send(frame(MSG_SETTINGS_SAVE, 1)); auto fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_OK && r.mem.kv.size() == 19 && !(r.srv.flags() & SF_DIRTY), "save writes flash and clears the unsaved flag");
+    { Rig r; r.s.general.max_arm_angle = 30; r.send(frame(MSG_SETTINGS_SAVE, 1)); auto fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_OK && r.mem.kv.size() == (size_t)kSectionCount && !(r.srv.flags() & SF_DIRTY), "save writes flash and clears the unsaved flag");
       r.mem.fail_write = true; r.send(frame(MSG_SETTINGS_SAVE, 2)); fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_STORAGE, "flash failure reported");
       r.host.is_armed = true; r.send(frame(MSG_SETTINGS_SAVE, 3)); fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_ARMED, "no flash writes while armed (they stall the loop)"); }
     { Rig r; r.s.pid.tpa_rate = 10; r.s.general.loop_hz = 2000; r.send(frame(MSG_SETTINGS_DEFAULTS, 1, {SEC_PID})); CHECK(r.s.pid.tpa_rate == 65 && r.s.general.loop_hz == 2000, "defaults for one section");
@@ -321,7 +337,9 @@ static void t_apply() {
     CHECK(mc.count == 6 && mc.protocol == motor::PROTO_DSHOT300 && fabsf(mc.idle - 0.055f) < 1e-6f && fabsf(mc.output_limit - 1.0f) < 1e-6f, "motors: hex => 6 motors, idle 5.5 %%");
     s.motors.reversed_mask = 0x0A; s.motors.order[0] = 3; s.motors.order[3] = 0; s.motors.dyn_idle_min_rpm = 120; s.motors.bidirectional = 1; s.motors.protocol = motor::PROTO_ONESHOT125; apply_motors(s, mc);
     CHECK(!mc.reversed[0] && mc.reversed[1] && !mc.reversed[2] && mc.reversed[3] && mc.order[0] == 3 && mc.order[3] == 0 && mc.dyn.min_rpm_100 == 120 && mc.bidirectional && mc.protocol == motor::PROTO_ONESHOT125, "reversed mask, reorder, dynamic idle, protocol");
-    CHECK(mc.dshot_driver == 0, "DShot driver: direct by default"); s.motors.dshot_driver = DSHOT_DRIVER_IDF; apply_motors(s, mc); CHECK(mc.dshot_driver == 1, "IDF driver selected"); s.motors.dshot_driver = DSHOT_DRIVER_DIRECT;
+    { wbp::Settings t = s; t.motors.idle_x10 = 55; t.motors.protocol = motor::PROTO_ONESHOT125; motor::MotorConfig a; apply_motors(t, a);
+      t.motors.protocol = motor::PROTO_DSHOT600; motor::MotorConfig b; apply_motors(t, b);
+      CHECK(a.idle == 0.0f && fabsf(b.idle - 0.055f) < 1e-6f, "motor idle only with DShot: Oneshot idles at its 'armed' pulse (Betaflight's min_throttle), DShot at 5.5 %% (%.3f / %.3f)", a.idle, b.idle); }
     gps::Config gc; s.gps.baud = 115200; s.gps.sbas = gps::SBAS_EGNOS; s.gps.use_galileo = 1; s.gps.flight_model = gps::MODEL_AIRBORNE_1G; s.gps.min_sats = 10; apply_gps(s, gc);
     CHECK(gc.baud == 115200 && gc.sbas == gps::SBAS_EGNOS && gc.use_galileo && gc.flight_model == gps::MODEL_AIRBORNE_1G && gc.min_sats == 10 && gc.provider == gps::PROV_UBLOX && gc.update_rate_hz == 10, "gps config");
     MagCal mcal; mcal.valid = true; mcal.radius = 0.47f; mcal.offset[0] = 0.1f; mcal.offset[2] = -0.2f; mcal.m[0][1] = 0.03f; mcal.m[2][2] = 1.1f; S_calibration cal; defaults(cal); from_magcal(mcal, cal);

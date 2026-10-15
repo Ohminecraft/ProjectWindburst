@@ -39,7 +39,7 @@ public:
         config_nacks_ = config_timeouts_ = 0; nav_dt_ms_ = 0; sweep_steps_ = 0;
         user_baud_idx_ = baud_index(cfg.baud);
         temp_baud_idx_ = user_baud_idx_;
-        if (cfg.provider == PROV_MSP || cfg.provider == PROV_VIRTUAL) { set_state(ST_INITIALIZED); return; }
+        if (!uses_uart(cfg.provider)) { set_state(ST_INITIALIZED); return; }
         port_->set_baud(kBauds[temp_baud_idx_]);
         set_state(ST_DETECT_BAUD);
     }
@@ -47,8 +47,8 @@ public:
     // Call often (>= 100 Hz is plenty). Returns true when a NEW complete solution was received during this call.
     bool update(uint32_t now_ms) {
         now_ = now_ms;
-        bool fresh = false;
-        if (port_ && cfg.provider != PROV_MSP && cfg.provider != PROV_VIRTUAL) {
+        bool fresh = injected_; injected_ = false;           // (a solution handed in since the last call counts as new as well)
+        if (port_ && uses_uart(cfg.provider)) {
             int c, budget = 512;
             while (budget-- > 0 && (c = port_->read()) >= 0) fresh |= feed((uint8_t)c);
         }
@@ -59,7 +59,7 @@ public:
             break;
         case ST_LOST_COMMUNICATION:
             timeouts_++; sol_.num_sat = 0; sol_.fix = false; sol_.fix_type = 0;
-            set_state(ST_DETECT_BAUD); break;
+            set_state(uses_uart(cfg.provider) ? ST_DETECT_BAUD : ST_INITIALIZED); break;      // (a solution from elsewhere: wait for the next one)
         case ST_RECEIVING_DATA:
             if (cfg.provider == PROV_UBLOX && cfg.auto_config && !flight_model_ && sol_.fix && port_->tx_empty()) {
                 flight_model_ = true; send_nav_model(cfg.flight_model);
@@ -71,9 +71,9 @@ public:
         return fresh;
     }
 
-    // MSP / VIRTUAL providers: another subsystem supplies the solution (BF: GPS_MSP, GPS_VIRTUAL).
+    // MSP / VIRTUAL / DRONECAN providers: another subsystem supplies the solution (BF: GPS_MSP, GPS_VIRTUAL).
     void inject(const Solution& s, uint32_t now_ms) {
-        now_ = now_ms; sol_ = s; note_solution();
+        now_ = now_ms; sol_ = s; note_solution(); injected_ = true;
         if (state_ == ST_INITIALIZED || state_ == ST_LOST_COMMUNICATION) set_state(ST_RECEIVING_DATA);
     }
     // BF turns NAV-SAT off while armed to reduce in-flight serial traffic (and back on after landing).
@@ -112,8 +112,9 @@ private:
         return best;
     }
     void set_state(State s) { state_ = s; state_ts_ = now_; cfg_pos_ = 0; if (s == ST_DETECT_BAUD) { test_count_ = 0; test_sent_ = false; } if (s == ST_CONFIGURE) { ack_ = ACK_IDLE; retries_ = 0; step_ts_ = now_; gnss_set_sent_ = false; } }
+    bool injected_ = false;
     void note_solution() {
-        if (last_nav_ms_ && (cfg.provider == PROV_NMEA || sol_.time_ms != prev_itow_)) {      // (NMEA: every completed GGA is a solution - it carries no iTOW)
+        if (last_nav_ms_ && (cfg.provider == PROV_NMEA || !uses_uart(cfg.provider) || sol_.time_ms != prev_itow_)) {      // (NMEA, or a solution from elsewhere: every one counts - no iTOW to tell repeats)
             const uint32_t dt = now_ - last_nav_ms_; if (dt > 0 && dt < 2000) nav_dt_ms_ = nav_dt_ms_ ? (nav_dt_ms_ * 7 + dt) / 8 : dt; }
         prev_itow_ = sol_.time_ms; last_nav_ms_ = now_;
     }

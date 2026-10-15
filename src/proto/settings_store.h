@@ -35,7 +35,7 @@ public:
             uint8_t buf[kMaxPayload + 8]; char key[8]; make_key(key, si.id);
             const int n = st_.read(key, buf, sizeof(buf));
             uint16_t stored = 0;                              // the size the record was written with, if it is one we can read
-            const uint16_t sizes[4] = {si.size, si.compat, si.compat2, si.compat3};
+            const uint16_t sizes[5] = {si.size, si.compat, si.compat2, si.compat3, si.compat4};
             for (const uint16_t want : sizes) {
                 if (!want || stored) continue;
                 if (n == (int)want + 5 && buf[0] == kFormat && (uint16_t)(buf[1] | (buf[2] << 8)) == want &&

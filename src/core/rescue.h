@@ -74,10 +74,10 @@ public:
             if (!in.pos_valid) return failed(RescueFail::NO_POSITION);
             if (!in.heading_valid) return failed(RescueFail::NO_HEADING);
             if (!in.alt_valid) return failed(RescueFail::NO_ALTITUDE);
-            if (dist < cfg.min_start_dist_m) return_z_ = fmaxf(7.5f, in.z + cfg.initial_climb_m);
+            if (dist < cfg.min_start_dist_m) return_z_ = maxf(7.5f, in.z + cfg.initial_climb_m);
             else if (cfg.alt_mode == RESCUE_ALT_FIXED) return_z_ = cfg.return_alt_m;
             else if (cfg.alt_mode == RESCUE_ALT_CURRENT) return_z_ = in.z + cfg.initial_climb_m;
-            else return_z_ = fmaxf(max_z_, in.z) + cfg.initial_climb_m;
+            else return_z_ = maxf(max_z_, in.z) + cfg.initial_climb_m;
             from_below_ = in.z < return_z_;
             phase_ = RescuePhase::CLIMB; t_phase_ = 0; ramp_yaw_ = ramp_xy_ = 0; sec_ = 0; stalled_ = flyaway_ = lowsats_ = 0; z_1s_ = in.z; dist_1s_ = dist; speed_1s_ = 0; climb_1s_ = 0;
         }
@@ -107,7 +107,7 @@ public:
         // ---- towards home: the heading that points there, and how far the nose is off it
         float err = 0.0f;
         if (dist > 0.2f) err = wrap180(in.yaw_deg - atan2f(-in.pos_e, -in.pos_n) * kRad2Deg);
-        const float slowdown = fmaxf(2.0f * cfg.descent_dist_m, 5.0f);
+        const float slowdown = maxf(2.0f * cfg.descent_dist_m, 5.0f);
         float speed = 0.0f;
 
         o.active = true;
@@ -122,18 +122,18 @@ public:
             break;
         case RescuePhase::ROTATE:
             if (dist < cfg.descent_dist_m) { next(RescuePhase::DESCENT); break; }
-            ramp_yaw_ = fminf(ramp_yaw_ + dt, 1.0f);
+            ramp_yaw_ = minf(ramp_yaw_ + dt, 1.0f);
             o.yaw_control = true;
             if (fabsf(err) < cfg.rotate_ok_deg || t_phase_ >= cfg.rotate_timeout_s) next(RescuePhase::FLY_HOME);
             break;
         case RescuePhase::FLY_HOME:
-            ramp_yaw_ = fminf(ramp_yaw_ + dt, 1.0f); ramp_xy_ = fminf(ramp_xy_ + dt, 1.0f);
+            ramp_yaw_ = minf(ramp_yaw_ + dt, 1.0f); ramp_xy_ = minf(ramp_xy_ + dt, 1.0f);
             o.yaw_control = true;
             if (dist < cfg.descent_dist_m) { next(RescuePhase::DESCENT); break; }
             speed = cfg.ground_speed_mps * clampf(dist / slowdown, 0.0f, 1.0f) * ramp_xy_;
             break;
         case RescuePhase::DESCENT: case RescuePhase::LANDING:
-            ramp_xy_ = fminf(ramp_xy_ + dt, 1.0f);
+            ramp_xy_ = minf(ramp_xy_ + dt, 1.0f);
             speed = cfg.ground_speed_mps * clampf(dist / slowdown, 0.0f, 1.0f) * ramp_xy_;
             // fast high up, slowly near the ground: x 0.6 below 10 m, x 3 from 50 m on
             o.climb_mps = -cfg.descend_mps * (0.6f + 2.4f * clampf((in.z - 10.0f) / 40.0f, 0.0f, 1.0f));

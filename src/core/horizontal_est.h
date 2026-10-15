@@ -36,7 +36,7 @@ public:
     // GPS solution in metres relative to home. sigma_pos/sigma_vel from the receiver (hAcc / sAcc), floored to sane values.
     WB_FAST void fuse_gps(float pn, float pe, float vn, float ve, float sigma_pos, float sigma_vel) {
         const float tau = cfg.gps_delay_s;
-        const float sp = fmaxf(sigma_pos, 0.5f), sv = fmaxf(sigma_vel, 0.1f);
+        const float sp = maxf(sigma_pos, 0.5f), sv = maxf(sigma_vel, 0.1f);
         const float pm[2] = {pn, pe}, vm[2] = {vn, ve}, acc[2] = {last_an_, last_ae_};
         if (!have_) { for (int a = 0; a < 2; a++) { ax_[a].x[0] = pm[a]; ax_[a].x[1] = vm[a]; } have_ = true; }
         for (int a = 0; a < 2; a++) {
@@ -55,8 +55,8 @@ public:
     float pos_n() const { return ax_[0].x[0]; } float pos_e() const { return ax_[1].x[0]; }
     float vel_n() const { return ax_[0].x[1]; } float vel_e() const { return ax_[1].x[1]; }
     float speed() const { return sqrtf(vel_n() * vel_n() + vel_e() * vel_e()); }
-    float pos_sigma() const { return sqrtf(fmaxf(0.5f * (ax_[0].P[0][0] + ax_[1].P[0][0]), 0.0f)); }
-    float vel_sigma() const { return sqrtf(fmaxf(0.5f * (ax_[0].P[1][1] + ax_[1].P[1][1]), 0.0f)); }
+    float pos_sigma() const { return sqrtf(maxf(0.5f * (ax_[0].P[0][0] + ax_[1].P[0][0]), 0.0f)); }
+    float vel_sigma() const { return sqrtf(maxf(0.5f * (ax_[0].P[1][1] + ax_[1].P[1][1]), 0.0f)); }
     float bias_n() const { return ax_[0].x[2]; } float bias_e() const { return ax_[1].x[2]; }
     bool initialised() const { return have_; }
 private:

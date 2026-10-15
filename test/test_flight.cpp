@@ -31,6 +31,7 @@ struct Rig {
     uint16_t rc_us[16] = {1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
     float gyro_noise = 0.15f, tone_hz = 0, tone_dps = 0, raw_roll = 0;   // sensor noise (dps rms); a vibration on the roll gyro; what the roll gyro read last
     bool esc_rpm = false; float rpm_all = 0;                              // the ESCs report this motor speed (bidirectional DShot)
+    bool rpm_per_motor = false; int dead_motor = -1;                      // each ESC reports its own motor's speed (from its thrust); dead_motor: that motor (of the plant) stops - a prop strike
     float gyro_bias[3] = {0, 0, 0};                                       // the gyro reads this much too high (deg/s): what is left after the boot calibration, or grows as the board warms up
     int slow_every = 0, waited = 1; uint32_t slow_us = 1750, cycle_n = 0;             // every slow_every-th control cycle takes slow_us instead of 250 us (the craft flies on meanwhile)
     int motor_map[kMaxMotors] = {0, 1, 2, 3, 4, 5, 6, 7};                 // which output of the core is plugged to which motor of the craft
@@ -65,7 +66,9 @@ struct Rig {
             Vec3 g = pl.gyro_dps(); g.x += gauss(gyro_noise) + gyro_bias[0]; g.y += gauss(gyro_noise) + gyro_bias[1]; g.z += gauss(gyro_noise) + gyro_bias[2];
             if (tone_dps > 0) g.x += tone_dps * sinf(2 * kPi * tone_hz * (float)(us * 1e-6));
             in.gyro_dps = g; in.acc_g = a; raw_roll = g.x;
-            in.motors.rpm_valid = esc_rpm; for (auto& m : in.motors.rpm) m = rpm_all;
+            in.motors.rpm_valid = esc_rpm; for (auto& m : in.motors.rpm) m = rpm_all; in.motors.valid_mask = esc_rpm ? 0xFF : 0;
+            if (rpm_per_motor) { in.motors.rpm_valid = true; in.motors.valid_mask = 0xFF;
+                for (int k = 0; k < pl.n; k++) in.motors.rpm[motor_map[k]] = k == dead_motor ? 0.0f : 24000.0f * sqrtf(fmaxf(pl.T[k], 0.0f) / (pl.Tmax * fmaxf(pl.gain[k], 0.05f))); }
             const float wash = (out.armed && pl.z < 0.3f) ? prop_wash_m : 0.0f;
             if (us / 20000 != prev / 20000) { drift += drift_rate * 0.02f; if (baro) core.on_baro(pl.z + drift + gauss(0.25f) - wash, 0.3f, in.now_ms); }
             if (us / 33000 != prev / 33000 && range && pl.z - ground_level < 3.5f && pl.z >= ground_level) core.on_range(pl.z - ground_level + gauss(0.03f), 0.03f, in.now_ms);
@@ -88,7 +91,7 @@ struct Rig {
                 core.on_flow(f, in.now_ms);
             }
             out = core.update(in);
-            float cmd[kMaxMotors]; for (int k = 0; k < kMaxMotors; k++) cmd[k] = out.armed ? out.motor[motor_map[k]] : 0.0f;
+            float cmd[kMaxMotors]; for (int k = 0; k < kMaxMotors; k++) cmd[k] = out.armed && k != dead_motor ? out.motor[motor_map[k]] : 0.0f;
             waited = slow_every && (cycle_n++ % (uint32_t)slow_every) == 3 ? (int)(slow_us / 250) : 1;      // how long until the next cycle comes: the craft flies on
             for (int k = 0; k < waited; k++) pl.step(cmd, dt);
         }
@@ -660,6 +663,62 @@ static void t_uneven_cycles() {
       CHECK(fabsf(wrap180(r.out.est.att.roll - r.pl.right_down_deg())) < 2.0f && r.pl.right_down_deg() - y0 > 0.6f * rate * 0.5f, "a roll at %.0f deg/s through such cycles: the attitude estimate stays with the craft (%.1f vs %.1f deg)", rate, r.out.est.att.roll, r.pl.right_down_deg()); }
 }
 
+// The gyro rate and the control rate apart (CoreConfig::pid_denom, Betaflight pid_process_denom): the gyro filters see every
+// sample, the attitude, the modes, the PID and the mixer run on every n-th one, and the motors hold their command in between.
+static void t_pid_denom() {
+    printf("[pid_denom] gyro at 4 kHz, control at 2 / 1 kHz\n");
+    { Rig r; r.core.cfg.pid_denom = 2; r.core.configure(); arm(r, 0); Pilot p = armed_pilot(0); p.roll = 0.3f; r.run(0.2f, p);
+      // step by hand: which samples are control cycles, and what the others give
+      FastInput in; in.dt = r.dt; in.limits = r.lim; in.rc_link = true; in.health = r.h; in.now_ms = r.us / 1000; memcpy(in.rc_us, r.rc_us, sizeof(in.rc_us)); in.rc_seq = r.rc_seq; in.acc_g = {0, 0, -1};
+      int ctl = 0, held = 0, fresh = 0; CoreOutput prev = r.core.update(in);
+      for (int k = 0; k < 40; k++) {
+          in.gyro_dps = {10.0f * (float)(k % 5), 0, 0};
+          const CoreOutput o = r.core.update(in);
+          if (o.pid_stepped) ctl++; else { bool same = true; for (int m = 0; m < 4; m++) same = same && o.motor[m] == prev.motor[m]; held += same; }
+          fresh += o.gyro_f_dps[0] != prev.gyro_f_dps[0];
+          prev = o;
+      }
+      CHECK(ctl == 20 && held == 20, "every second sample is a control cycle (%d of 40); on the others the motor command is the last one (%d of 20)", ctl, held);
+      CHECK(fresh >= 38, "the filtered gyro is new on every sample, control cycle or not (%d of 40)", fresh); }
+    // the estimators keep their own rate whatever the control rate
+    for (int d : {1, 2, 4}) { FlightCore c; c.cfg.pid_denom = d; c.configure(); FastInput in; in.dt = 0.00025f; in.acc_g = {0, 0, -1}; in.health.imu_ok = in.health.gyro_calibrated = true; int est = 0, pid = 0;
+      for (int k = 0; k < 4000; k++) { in.now_ms = (uint32_t)(k / 4); const CoreOutput o = c.update(in); est += o.est_stepped; pid += o.pid_stepped; }
+      CHECK(abs(est - 500) <= 1 && pid == 4000 / d, "pid_denom %d: %d control cycles and %d estimator steps in one second (est_hz 500)", d, pid, est); }
+    // the craft flies the same: Angle, Acro steps, the attitude estimate through fast turns
+    for (int d : {1, 2, 4}) {
+      { Rig r; r.core.cfg.pid_denom = d; r.core.configure(); arm(r); Pilot p = armed_pilot(); p.roll = 0.5f; r.run(1.5f, p); const float want = angle_cmd(r, ROLL, 0.5f);
+        CHECK(fabsf(r.pl.right_down_deg() - want) < 1.0f && fabsf(r.out.est.att.roll - want) < 1.5f, "1/%d: angle, roll right 0.5: %.2f deg (want %.2f), estimate %.2f", d, r.pl.right_down_deg(), want, r.out.est.att.roll); }
+      { Rig r; r.pl.make_five_inch(); r.core.cfg.pid_denom = d; r.core.configure(); const StepResult s = acro_step(r, ROLL, 1.0f, 0.06f);
+        CHECK(s.over() < 0.10f && s.t90 > 0 && s.t90 < 0.12f && fabsf(s.last - s.target) < 0.03f * s.target, "1/%d: 5-inch, full roll in 60 ms: 90 %% after %.0f ms, overshoot %.1f %%, then %.0f of %.0f dps", d, s.t90 * 1000, s.over() * 100, s.last, s.target); }
+      { Rig r; r.core.cfg.pid_denom = d; r.core.configure(); Pilot p; fly_up(r, p, 0); p.roll = 0.6f; r.run(0.15f, p); p.roll = 0; r.run(0.3f, p);
+        CHECK(fabsf(wrap180(r.out.est.att.roll - r.pl.right_down_deg())) < 2.5f, "1/%d: acro roll at %.0f deg/s and back: the attitude estimate stays with the craft (%.1f vs %.1f deg)", d, apply_actual_rate(r.core.cfg.rates, ROLL, 0.6f), r.out.est.att.roll, r.pl.right_down_deg()); }
+      { Rig r; r.core.cfg.pid_denom = d; r.core.configure(); arm(r, 2); Pilot p = armed_pilot(2); p.roll = 0.5f; r.run(2.5f, p); CHECK(fabsf(r.pl.right_down_deg() - 22.5f) < 1.5f, "1/%d: stabilize roll 0.5: %.2f deg", d, r.pl.right_down_deg()); }
+    }
+}
+
+// A motor that stops in flight (prop strike, safety.h StallGuard) - and no false alarm in hard flying.
+static void t_stall() {
+    printf("[stall guard] a motor stops in the air: everything off; hard flying never trips it\n");
+    { Rig r; r.pl.make_five_inch(); r.rpm_per_motor = true; r.core.cfg.stall.enabled = true; r.core.cfg.runaway.enabled = false; r.core.configure();     // (runaway prevention would trip on flips right after the take-off: not what is tested)
+      Pilot p; fly_up(r, p, 0); bool off = false;
+      for (int k = 0; k < 6 && !off; k++) {                                  // flips, rolls, throttle punch and chop
+          p.roll = 1.0f; r.run(0.55f, p); p.roll = 0; r.run(0.3f, p); off |= !r.out.armed;
+          p.pitch = -1.0f; r.run(0.55f, p); p.pitch = 0; r.run(0.3f, p); off |= !r.out.armed;
+          p.yaw = 1.0f; r.run(0.4f, p); p.yaw = 0; p.thr = 0.95f; r.run(0.25f, p); p.thr = 0.0f; r.run(0.3f, p); p.thr = r.pl.hover_cmd(); r.run(0.5f, p); off |= !r.out.armed;
+      }
+      CHECK(!off && r.out.stall_motor == 0, "6 rounds of flips, rolls, yaw spins, full throttle punches and chops: never tripped");
+      r.pl.set_tilt(0, 0, 0); r.pl.w[0] = r.pl.w[1] = r.pl.w[2] = 0; r.run(1.0f, p);
+      r.dead_motor = 2; float t = 0; while (r.out.armed && t < 1.0f) { r.run(0.001f, p); t += 0.001f; }
+      CHECK(!r.out.armed && t < 0.2f && r.out.stall_motor == 3 && (r.out.arm_blockers & AB_MOTOR_STALL), "motor 3 stops (a prop strike): disarmed after %.0f ms, motor %u named, blocker MOTOR_STALL", t * 1000, r.out.stall_motor);
+      float s = 0; for (int m = 0; m < 4; m++) s += r.out.motor[m]; CHECK(s == 0, "every motor off");
+      const bool held = (r.out.arm_blockers & AB_MOTOR_STALL) != 0; r.dead_motor = -1; p.thr = 0; p.arm = false; r.run(0.2f, p);
+      CHECK(held && !(r.out.arm_blockers & AB_MOTOR_STALL), "the blocker stays until the arm switch goes off"); }
+    { Rig r; r.pl.make_five_inch(); r.rpm_per_motor = true; r.core.cfg.stall.enabled = false; r.core.cfg.runaway.enabled = false; r.core.configure(); Pilot p; fly_up(r, p, 0); r.run(0.5f, p);
+      r.dead_motor = 1; r.run(0.4f, p); CHECK(r.out.armed, "switched off (the default): it flies on (or does not) - nothing disarms"); }
+    { Rig r; r.pl.make_five_inch(); r.esc_rpm = false; r.core.cfg.stall.enabled = true; r.core.configure(); Pilot p; fly_up(r, p, 0); r.run(1.0f, p);
+      CHECK(r.out.armed, "no rpm telemetry at all: nothing to judge, never trips"); }
+}
+
 // Runaway take-off prevention inside the full core (the rules themselves: test_core).
 static void t_runaway() {
     printf("[runaway take-off] the rate loop pushes the wrong way: motors off before the craft is on its back\n");
@@ -903,7 +962,7 @@ static void t_gps_rescue() {
 }
 
 int main() {
-    t_arming(); t_attitude_modes(); t_rate_loop(); t_filters_in_the_loop(); t_throttle_boost(); t_level_modes(); t_mode_details(); t_airmode(); t_compass(); t_althold(); t_failsafe(); t_uneven_cycles(); t_runaway(); t_motor_layer(); t_estimator_in_flight();
+    t_arming(); t_attitude_modes(); t_rate_loop(); t_filters_in_the_loop(); t_throttle_boost(); t_level_modes(); t_mode_details(); t_airmode(); t_compass(); t_althold(); t_failsafe(); t_uneven_cycles(); t_pid_denom(); t_stall(); t_runaway(); t_motor_layer(); t_estimator_in_flight();
     t_position_hold(); t_gps_rescue();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

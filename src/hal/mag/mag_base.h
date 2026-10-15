@@ -12,6 +12,7 @@
 #include "hmc5883l_mag.h"
 #include "qmc5883_mag.h"
 #include "ak8963_mpu9250_mag.h"
+#include "external_mag.h"
 #include "mag_processor.h"
 #include "../../config/hardware_config.h"
 
@@ -30,7 +31,7 @@
 // ============================================================================
 class MagSensor {
 public:
-    enum class Model : uint8_t { AUTO, HMC5883L, QMC5883L, QMC5883P, AK8963_MPU9250 };
+    enum class Model : uint8_t { AUTO, HMC5883L, QMC5883L, QMC5883P, AK8963_MPU9250, DRONECAN };      // == the schema's mag_model
 
     void attachI2C(I2CBus& shared) { shared_ = &shared; }
     void attachImuBus(AgRegBus* imu_bus, IMUAccGyroDevice imu_device) { imu_bus_ = imu_bus; imu_dev_ = imu_device; }
@@ -43,6 +44,7 @@ public:
     bool MagInit() {
         drv_ = nullptr; fail_ = ""; detected_ = Model::AUTO;
         if (!enabled_) { fail_ = "magnetometer disabled"; return false; }
+        if (model_ == Model::DRONECAN) { can_.init(); drv_ = &can_; detected_ = Model::DRONECAN; return true; }      // (samples: pushExternal(), from the CAN node)
         const bool want_i2c = model_ == Model::AUTO || (model_ != Model::AK8963_MPU9250);
         if (want_i2c && (shared_ || pins_ok())) {
             I2CBus* bus = shared_;
@@ -88,6 +90,9 @@ public:
         return r;
     }
 
+    // A sample of an external compass (DroneCAN: the module's frame, x forward, y right, z down; gauss)
+    void pushExternal(const float frd_ga[3], uint32_t now_us) { if (drv_ == &can_) can_.push(frd_ga, now_us); }
+    uint32_t externalSamples() const { return can_.samples(); }
     bool available() const { return drv_ != nullptr; }
     bool healthy() const { return drv_ && drv_->healthy(); }
     bool calibrated() const { return proc_.calibrated(); }
@@ -120,6 +125,7 @@ private:
     Qmc5883Mag qmcl_{proxy_, Qmc5883Mag::Variant::L};
     Qmc5883Mag qmcp_{proxy_, Qmc5883Mag::Variant::P};
     Ak8963Mpu9250Mag ak_{proxy_};
+    ExternalMag can_{"DroneCAN"};
     MagDriver* drv_ = nullptr;
     MagProcessor proc_;
     MagCalibrator cal_;

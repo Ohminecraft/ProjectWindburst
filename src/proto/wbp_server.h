@@ -28,7 +28,7 @@ namespace wbp {
 
 enum Role : uint8_t { ROLE_RX = 0, ROLE_TX = 1 };
 enum Feature : uint32_t { FEAT_STREAMS = 1u << 0, FEAT_CALIBRATION = 1u << 1, FEAT_MOTOR_TEST = 1u << 2, FEAT_GPS = 1u << 3, FEAT_BLACKBOX = 1u << 4, FEAT_BATTERY = 1u << 5, FEAT_BEEPER = 1u << 6,
-                         FEAT_STM32 = 1u << 7 };   // STM32: pin numbers are port * 16 + pin (PA0 = 0, PB3 = 19: src/port/pin_names.h), not GPIO numbers
+                         FEAT_STM32 = 1u << 7, FEAT_WIFI = 1u << 8 };   // STM32: pin numbers are port * 16 + pin (PA0 = 0, PB3 = 19: src/port/pin_names.h), not GPIO numbers
 enum SettingsFlags : uint8_t { SF_DIRTY = SETTINGS_FLAGS_DIRTY, SF_REBOOT_REQUIRED = SETTINGS_FLAGS_REBOOT_REQUIRED };
 
 class Transport {
@@ -97,6 +97,15 @@ public:
     void log(uint8_t level, const char* text, bool droppable = false) { uint8_t b[200]; const size_t n = strlen(text) > 190 ? 190 : strlen(text); b[0] = level; memcpy(b + 1, text, n); send(MSG_LOG, log_seq_++, b, (uint16_t)(n + 1), droppable); }
 
     uint8_t flags() const { return (dirty_ ? SF_DIRTY : 0) | (reboot_required_ ? SF_REBOOT_REQUIRED : 0); }
+    // ---- the CLI (src/app/cli.h) edits the settings in place, in the same task; these are the steps a SECTION_SET / SAVE takes
+    bool rx_mid_frame() const { return parser_.mid_frame(); }
+    bool armed() const { return host_.armed(); }
+    void commit_section(uint8_t id) {                      // a section was changed in RAM: clamp it, derive what follows, apply or ask for a reboot
+        validate_section(s_, id); apply_rules(s_, id); dirty_ = true;
+        if (!host_.apply_live(id)) reboot_required_ = true;
+    }
+    bool save_all() { if (host_.armed() || !store_ || !store_->save(s_)) return false; dirty_ = false; return true; }
+    void reboot_now() { host_.reboot(); }
     void mark_reboot_required() { reboot_required_ = true; }
     void mark_dirty() { dirty_ = true; }
     uint32_t frames() const { return parser_.frames(); }

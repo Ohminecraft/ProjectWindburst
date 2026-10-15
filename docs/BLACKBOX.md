@@ -32,7 +32,7 @@ File = chuỗi **khung WBP** (cùng khung, cùng CRC với đường truyền, x
 | `BB_DATA` 0x61 | các bản ghi nối nhau: `'F'` nhanh `[t_us u32][các trường]`, `'S'` chậm (10 Hz), `'E'` sự kiện `[t_us][mã][n][dữ liệu]` |
 | `BB_BLOB` 0x62 | chỉ trên đường truyền: một mẩu của bộ nhớ log khi tải về (`[offset u32][dữ liệu]`) |
 
-Header **tự mô tả**: mỗi trường ghi `tên:kiểu:scale:đơn vị` (ví dụ `gyro[0]:i16:0.1:deg/s`), kèm tên sự kiện, phiên bản firmware, schema hash, `loop_hz`, `rate_hz`, số motor, và **toàn bộ settings của chuyến bay** (`set <section> <hex>`). Trình đọc chỉ dựa vào header, nên log của bản firmware khác vẫn đọc được; settings kèm theo chỉ giải mã được khi schema khớp.
+Header **tự mô tả**: mỗi trường ghi `tên:kiểu:scale:đơn vị` (ví dụ `gyro[0]:i16:0.1:deg/s`), kèm tên sự kiện, phiên bản firmware, schema hash, `loop_hz` (tần số PID, từ 0.12), `gyro_hz`, `rate_hz`, số motor, và **toàn bộ settings của chuyến bay** (`set <section> <hex>`). Trình đọc chỉ dựa vào header, nên log của bản firmware khác vẫn đọc được; settings kèm theo chỉ giải mã được khi schema khớp.
 
 Sự kiện: `ARM`, `DISARM`, `FAILSAFE`, `MODES`, `DROPPED` (firmware bỏ bản ghi vì hàng đợi đầy), `BATTERY`, `END` (lý do kết thúc), `AH_STATE`. Một phiên không có `END` = mất nguồn lúc đang ghi; dữ liệu trước đó vẫn dùng được. Khung hỏng hay thiếu chỉ mất các bản ghi bên trong nó (đếm trong `gaps`).
 

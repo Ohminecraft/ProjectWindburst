@@ -201,8 +201,8 @@ public:
 private:
     WB_FAST void update_cutoffs() {
         const float hz = rx_.smoothed_hz();
-        sp_cutoff_ = fmaxf(kRcSmoothingMinCutoffHz, hz * 1.5f / (1.0f + sm_.auto_factor / 10.0f));
-        thr_cutoff_ = fmaxf(kRcSmoothingMinCutoffHz, hz * 1.5f / (1.0f + sm_.auto_factor_throttle / 10.0f));
+        sp_cutoff_ = maxf(kRcSmoothingMinCutoffHz, hz * 1.5f / (1.0f + sm_.auto_factor / 10.0f));
+        thr_cutoff_ = maxf(kRcSmoothingMinCutoffHz, hz * 1.5f / (1.0f + sm_.auto_factor_throttle / 10.0f));
         const float k = pt1_gain(sp_cutoff_ * kPt3Correction, dt_), kt = pt1_gain(thr_cutoff_ * kPt3Correction, dt_);
         for (int a = 0; a < 3; a++) { f_rate_[a].set_gain(k); f_ff_[a].set_gain(k); f_stick_[a].set_gain(k); ff_[a].set_rx_rate(hz); }
         f_thr_.set_gain(kt);

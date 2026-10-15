@@ -92,6 +92,25 @@ public:
     }
 
 
+    // A second device on a bus another SPIBus has started (SPIInit): its own CS pin, the host's SPIClass. The bus pins are not
+    // attached again - on the ESP32 a second SPIClass on the same host would take the pins from the first one.
+    // The host must outlive this object; both must be used from the same thread (or under one lock).
+    bool SPIInitShared(SPIBus& host, uint8_t csGpio)
+    {
+        if (!host._initialized || !port::pin_exists(csGpio) || csGpio == host._config.ioCsGpio) return false;
+        _config = host._config;
+        _config.ioCsGpio = csGpio;
+        _bus = host._bus;
+        _cs = port::apin(csGpio);
+        pinMode(_cs, OUTPUT);
+        digitalWrite(_cs, HIGH);
+        _slowSettings = host._slowSettings;
+        _fastSettings = host._fastSettings;
+        _initialized = true;
+        return true;
+    }
+
+
     /*
      * Write one byte.
      */
@@ -101,15 +120,15 @@ public:
             return false;
         }
 
-        _spi.beginTransaction(_slowSettings);
+        _bus->beginTransaction(_slowSettings);
 
         digitalWrite(_cs, LOW);
 
-        _spi.transfer(value);
+        _bus->transfer(value);
 
         digitalWrite(_cs, HIGH);
 
-        _spi.endTransaction();
+        _bus->endTransaction();
 
         return true;
     }
@@ -124,15 +143,15 @@ public:
             return false;
         }
 
-        _spi.beginTransaction(_fastSettings);
+        _bus->beginTransaction(_fastSettings);
 
         digitalWrite(_cs, LOW);
 
-        value = _spi.transfer(0x00);
+        value = _bus->transfer(0x00);
 
         digitalWrite(_cs, HIGH);
 
-        _spi.endTransaction();
+        _bus->endTransaction();
 
         return true;
     }
@@ -150,17 +169,17 @@ public:
             return false;
         }
 
-        _spi.beginTransaction(_slowSettings);
+        _bus->beginTransaction(_slowSettings);
 
         digitalWrite(_cs, LOW);
 
         for (size_t i = 0; i < length; i++) {
-            _spi.transfer(data[i]);
+            _bus->transfer(data[i]);
         }
 
         digitalWrite(_cs, HIGH);
 
-        _spi.endTransaction();
+        _bus->endTransaction();
 
         return true;
     }
@@ -178,17 +197,17 @@ public:
             return false;
         }
 
-        _spi.beginTransaction(_fastSettings);
+        _bus->beginTransaction(_fastSettings);
 
         digitalWrite(_cs, LOW);
 
         for (size_t i = 0; i < length; i++) {
-            data[i] = _spi.transfer(0x00);
+            data[i] = _bus->transfer(0x00);
         }
 
         digitalWrite(_cs, HIGH);
 
-        _spi.endTransaction();
+        _bus->endTransaction();
 
         return true;
     }
@@ -205,16 +224,16 @@ public:
             return false;
         }
 
-        _spi.beginTransaction(_slowSettings);
+        _bus->beginTransaction(_slowSettings);
 
         digitalWrite(_cs, LOW);
 
-        _spi.transfer(reg);
-        _spi.transfer(value);
+        _bus->transfer(reg);
+        _bus->transfer(value);
 
         digitalWrite(_cs, HIGH);
 
-        _spi.endTransaction();
+        _bus->endTransaction();
 
         return true;
     }
@@ -232,16 +251,16 @@ public:
             return false;
         }
 
-        _spi.beginTransaction(_fastSettings);
+        _bus->beginTransaction(_fastSettings);
 
         digitalWrite(_cs, LOW);
 
-        _spi.transfer(reg);
-        value = _spi.transfer(0x00);
+        _bus->transfer(reg);
+        value = _bus->transfer(0x00);
 
         digitalWrite(_cs, HIGH);
 
-        _spi.endTransaction();
+        _bus->endTransaction();
 
         return true;
     }
@@ -260,19 +279,19 @@ public:
             return false;
         }
 
-        _spi.beginTransaction(_fastSettings);
+        _bus->beginTransaction(_fastSettings);
 
         digitalWrite(_cs, LOW);
 
-        _spi.transfer(reg);
+        _bus->transfer(reg);
 
         for (size_t i = 0; i < length; i++) {
-            buffer[i] = _spi.transfer(0x00);
+            buffer[i] = _bus->transfer(0x00);
         }
 
         digitalWrite(_cs, HIGH);
 
-        _spi.endTransaction();
+        _bus->endTransaction();
 
         return true;
     }
@@ -289,16 +308,16 @@ public:
             return false;
         }
 
-        _spi.beginTransaction(_slowSettings);
+        _bus->beginTransaction(_slowSettings);
 
         digitalWrite(_cs, LOW);
 
-        _spi.transfer(reg & 0x7F);
-        _spi.transfer(value);
+        _bus->transfer(reg & 0x7F);
+        _bus->transfer(value);
 
         digitalWrite(_cs, HIGH);
 
-        _spi.endTransaction();
+        _bus->endTransaction();
 
         return true;
     }
@@ -316,16 +335,16 @@ public:
             return false;
         }
 
-        _spi.beginTransaction(_fastSettings);
+        _bus->beginTransaction(_fastSettings);
 
         digitalWrite(_cs, LOW);
 
-        _spi.transfer(reg | 0x80);
-        value = _spi.transfer(0x00);
+        _bus->transfer(reg | 0x80);
+        value = _bus->transfer(0x00);
 
         digitalWrite(_cs, HIGH);
 
-        _spi.endTransaction();
+        _bus->endTransaction();
 
         return true;
     }
@@ -344,7 +363,7 @@ public:
             return false;
         }
 
-        _spi.beginTransaction(_fastSettings);
+        _bus->beginTransaction(_fastSettings);
 
         digitalWrite(_cs, LOW);
 
@@ -355,24 +374,24 @@ public:
             uint8_t rx[kBurstMax + 1];
             tx[0] = reg | 0x80;
 #if WB_PLATFORM_STM32
-            _spi.transfer(tx, rx, length + 1);
+            _bus->transfer(tx, rx, length + 1);
 #else
-            _spi.transferBytes(tx, rx, (uint32_t)(length + 1));
+            _bus->transferBytes(tx, rx, (uint32_t)(length + 1));
 #endif
             for (size_t i = 0; i < length; i++) {
                 buffer[i] = rx[i + 1];
             }
         } else {
-            _spi.transfer(reg | 0x80);
+            _bus->transfer(reg | 0x80);
 
             for (size_t i = 0; i < length; i++) {
-                buffer[i] = _spi.transfer(0x00);
+                buffer[i] = _bus->transfer(0x00);
             }
         }
 
         digitalWrite(_cs, HIGH);
 
-        _spi.endTransaction();
+        _bus->endTransaction();
 
         return true;
     }
@@ -382,6 +401,7 @@ private:
     static constexpr size_t kBurstMax = 31;   // address + data fit the SPI hardware buffer (64 bytes) with room to spare
 
     SPIClass _spi;
+    SPIClass* _bus = &_spi;    // the bus the transfers go through: our own, or the host's (SPIInitShared)
 
     SPIBus_config_t _config{};
 

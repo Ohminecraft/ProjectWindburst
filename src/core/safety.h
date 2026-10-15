@@ -12,7 +12,7 @@ enum ArmBlock : uint32_t {
     AB_NONE = 0, AB_NO_IMU = 1u << 0, AB_GYRO_NOT_CAL = 1u << 1, AB_RX_LOST = 1u << 2, AB_THROTTLE_HIGH = 1u << 3,
     AB_ANGLE_TOO_HIGH = 1u << 4, AB_FAILSAFE = 1u << 5, AB_ALTHOLD_NO_BARO = 1u << 6, AB_BATT_LOW = 1u << 7,
     AB_ARM_SWITCH_ON = 1u << 8, AB_CONFIG_UNSAVED = 1u << 9, AB_CALIBRATING = 1u << 10, AB_POSHOLD_NO_GPS = 1u << 11, AB_MAG_NOT_CALIBRATED = 1u << 12,
-    AB_PIN_CONFLICT = 1u << 13, AB_LOOP_RATE = 1u << 14, AB_RUNAWAY_TAKEOFF = 1u << 15, AB_RESCUE_NO_FIX = 1u << 16, AB_RESCUE_NO_COMPASS = 1u << 17,
+    AB_PIN_CONFLICT = 1u << 13, AB_LOOP_RATE = 1u << 14, AB_RUNAWAY_TAKEOFF = 1u << 15, AB_RESCUE_NO_FIX = 1u << 16, AB_RESCUE_NO_COMPASS = 1u << 17, AB_MOTOR_STALL = 1u << 18,
 };
 
 struct ArmInput {
@@ -193,7 +193,7 @@ public:
         if (!cfg.enabled || !in.armed || flown_ || !in.motors_mixed) { trigger_t_ = 0.0f; return false; }
         const float sr = fabsf(in.pid_sum[0]), sp = fabsf(in.pid_sum[1]), sy = fabsf(in.pid_sum[2]);
         // ---- has it flown normally?
-        const float mid = fminf(cfg.deactivate_throttle * 2.0f, cfg.high_throttle);
+        const float mid = minf(cfg.deactivate_throttle * 2.0f, cfg.high_throttle);
         const bool stable = ((in.throttle >= cfg.deactivate_throttle && in.stick >= cfg.deactivate_stick) || in.throttle >= mid)
                          && sr < cfg.deactivate_pidsum && sp < cfg.deactivate_pidsum && sy < cfg.deactivate_pidsum;
         if (stable) {
@@ -211,6 +211,41 @@ public:
     void reset() { flown_ = false; stable_t_ = trigger_t_ = 0.0f; }
 private:
     bool flown_ = false; float stable_t_ = 0.0f, trigger_t_ = 0.0f;
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A motor that stops (a prop strike, a motor blocked by grass, a desync): disarm, before the other motors flip the craft into
+// the ground or a stuck motor burns. Needs the motor's speed: bidirectional DShot or the ESC telemetry wire. Per motor, while
+// it is commanded at least min_command and its speed is known:
+//   stalled - below min_rpm;
+//   dropped - below drop_ratio of the highest speed it had since its command last fell (a motor whose command goes down
+//             slows down for that reason: the reference starts again then).
+// Either one for delay_s: the craft is disarmed (blocker MOTOR_STALL until the arm switch is cycled). A motor without speed
+// telemetry is never judged - a missing reply is a telemetry fault, not a stall. Off by default (motors.stall_disarm).
+// ---------------------------------------------------------------------------------------------------------------------
+struct StallConfig { bool enabled = false; float min_command = 0.25f, min_rpm = 1500.0f, drop_ratio = 0.35f, delay_s = 0.10f; };
+class StallGuard {
+public:
+    StallConfig cfg;
+    struct Input { bool armed = false; int motors = 0; const float* command = nullptr; const float* rpm = nullptr; uint8_t valid_mask = 0; };
+    // the motor (1..8) that stopped, 0 = none
+    WB_FAST int update(const Input& in, float dt) {
+        if (!cfg.enabled || !in.armed || !in.command || !in.rpm) { reset(); return 0; }
+        for (int m = 0; m < in.motors && m < kMaxMotors; m++) {
+            const float c = in.command[m], r = in.rpm[m];
+            if (!((in.valid_mask >> m) & 1u) || c < cfg.min_command) { t_[m] = 0.0f; peak_[m] = 0.0f; peak_cmd_[m] = c; continue; }
+            if (c < 0.8f * peak_cmd_[m]) { peak_[m] = r; peak_cmd_[m] = c; }                 // asked to slow down: a new reference
+            if (r > peak_[m]) { peak_[m] = r; peak_cmd_[m] = c; }
+            const bool stalled = r < cfg.min_rpm, dropped = r < cfg.drop_ratio * peak_[m];
+            if (stalled || dropped) { t_[m] += dt; if (t_[m] >= cfg.delay_s) { last_ = m + 1; reset(); return last_; } }
+            else t_[m] = 0.0f;
+        }
+        return 0;
+    }
+    WB_FAST void reset() { for (int m = 0; m < kMaxMotors; m++) { t_[m] = 0.0f; peak_[m] = 0.0f; peak_cmd_[m] = 0.0f; } }
+    int last() const { return last_; }               // the motor that stopped last (1..8), 0 = none since boot
+private:
+    float t_[kMaxMotors] = {}, peak_[kMaxMotors] = {}, peak_cmd_[kMaxMotors] = {}; int last_ = 0;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------

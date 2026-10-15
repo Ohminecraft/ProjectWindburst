@@ -6,7 +6,7 @@
 | `hal/motor/motor_protocol.h` | Khung DShot + CRC, sóng RMT, GCR/eRPM/EDT, độ rộng xung PWM/Oneshot/Multishot, endpoints | 164 test PC, đối chiếu công thức Betaflight |
 | `hal/motor/motor_output.h` | `MotorOutputManager`: disarm/idle/limit, reorder, lệnh DShot (đảo chiều, save, beacon), test slider, telemetry, dynamic idle | test PC + 12 lỗi cố ý đều bị bắt |
 | `hal/motor/dshot_direct.h` | `DshotDirect<Port>`: DShot một chiều / hai chiều trên bộ nhớ và thanh ghi của RMT, không phụ thuộc phần cứng (mô phỏng được) | `test_dshot`: mô hình dây tín hiệu, 91 kiểm tra |
-| `hal/motor/dshot.h` | `RmtDirectPort` (ESP32-S3: thanh ghi RMT, GPIO, một gptimer) + `DshotHw`; lối lùi dùng driver RMT của ESP-IDF (một chiều) | **biên dịch + link cho ESP32-S3**; chưa chạy trên mạch |
+| `hal/motor/dshot.h` | `RmtDirectPort` (ESP32-S3: thanh ghi RMT, GPIO, một gptimer) + `DshotHw` (lối lùi qua driver ESP-IDF đã bỏ ở 0.12) | **biên dịch + link cho ESP32-S3**; chưa chạy trên mạch |
 | `hal/motor/pwm_oneshot.h` | PWM / Oneshot125 / Oneshot42 / Multishot trên LEDC (tối đa 8 motor) | biên dịch + link S3; chưa chạy trên mạch |
 | `hal/motor/motor.h` | `MotorSystem`: ghép manager + backend theo protocol | biên dịch S3 |
 
@@ -40,7 +40,9 @@ ngắt timer (IRAM): nhả chân (ESC kéo đường dây), bật thu
 `send()` được gọi sớm hơn một chu kỳ thì khung đó bị **bỏ qua** (đếm ở `stats().skipped`), không bao giờ ghi đè lên khung đang phát. Vòng 4 kHz (250 µs) hợp với DShot300 và DShot600 hai chiều; DShot150 hai chiều thì không.
 Ngắt đến trễ (khung sau đã tới hạn mà chân chưa được nhả): trả lời đó bị bỏ, đếm ở `late_switch`. ESC không trả lời 20 khung liền: `rx_responsive(slot) = false`.
 
-Lối lùi: `motors.dshot_driver = IDF` (tab Motor, "Cách phát DShot") dùng `rmt_transmit` của ESP-IDF, **chỉ một chiều**; bật hai chiều với driver này thì trạng thái là "đã bật nhưng cách phát đang chọn không hỗ trợ".
+**0.12:** lối lùi qua `rmt_transmit` của ESP-IDF (`motors.dshot_driver = IDF`, chỉ một chiều, ~130 µs mỗi chu kỳ cho 4 motor) đã bị bỏ theo yêu cầu: tốn tài nguyên và không cần nữa. Byte đó trong settings giờ là `reserved1` để các trường sau giữ nguyên vị trí. Settings cũ đặt IDF thì nay chạy cách trực tiếp.
+
+**Motor idle với giao thức analog (0.12):** PWM / Oneshot / Multishot / brushed không có "Motor idle" (giống Betaflight): ga thấp nhất khi đã arm là `pulse_armed` (min_throttle của Betaflight). Firmware bỏ qua `idle_x10` với các giao thức này, tab Motor ẩn ô đó. Trước 0.12 idle được cộng thêm trên `pulse_armed`, nên một máy analog cũ giờ idle thấp hơn: nếu motor dừng hoặc mất đồng bộ ở ga thấp, tăng `pulse_armed`.
 
 Số liệu lên app (stream `motors`): `bidir` (OFF / ACTIVE / UNAVAILABLE), `answers` (bit i = ESC của motor i đang trả lời), `skipped`, `late` (trong giây vừa rồi).
 

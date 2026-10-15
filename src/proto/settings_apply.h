@@ -19,8 +19,8 @@ namespace wbp {
 WB_SAME(LAYOUT_QUAD_X, fc::QUAD_X); WB_SAME(LAYOUT_QUAD_PLUS, fc::QUAD_PLUS); WB_SAME(LAYOUT_HEX_X, fc::HEX_X); WB_SAME(LAYOUT_QUAD_X_1234, fc::QUAD_X_1234); WB_SAME(LAYOUT_OCTO_X8, fc::OCTO_X8); WB_SAME(LAYOUT_ATAIL4, fc::ATAIL4);
 WB_SAME(ESC_PROTOCOL_PWM, motor::PROTO_PWM); WB_SAME(ESC_PROTOCOL_ONESHOT125, motor::PROTO_ONESHOT125); WB_SAME(ESC_PROTOCOL_ONESHOT42, motor::PROTO_ONESHOT42);
 WB_SAME(ESC_PROTOCOL_MULTISHOT, motor::PROTO_MULTISHOT); WB_SAME(ESC_PROTOCOL_DSHOT150, motor::PROTO_DSHOT150); WB_SAME(ESC_PROTOCOL_DSHOT300, motor::PROTO_DSHOT300);
-WB_SAME(ESC_PROTOCOL_DSHOT600, motor::PROTO_DSHOT600); WB_SAME(ESC_PROTOCOL_DSHOT1200, motor::PROTO_DSHOT1200); WB_SAME(ESC_PROTOCOL_PROSHOT1000, motor::PROTO_PROSHOT1000); WB_SAME(ESC_PROTOCOL_BRUSHED, motor::PROTO_BRUSHED);
-WB_SAME(GPS_PROVIDER_NMEA, gps::PROV_NMEA); WB_SAME(GPS_PROVIDER_UBLOX, gps::PROV_UBLOX); WB_SAME(GPS_PROVIDER_MSP, gps::PROV_MSP); WB_SAME(GPS_PROVIDER_VIRTUAL, gps::PROV_VIRTUAL);
+WB_SAME(ESC_PROTOCOL_DSHOT600, motor::PROTO_DSHOT600); WB_SAME(ESC_PROTOCOL_DSHOT1200, motor::PROTO_DSHOT1200); WB_SAME(ESC_PROTOCOL_PROSHOT1000, motor::PROTO_PROSHOT1000); WB_SAME(ESC_PROTOCOL_BRUSHED, motor::PROTO_BRUSHED); WB_SAME(ESC_PROTOCOL_DRONECAN, motor::PROTO_DRONECAN);
+WB_SAME(GPS_PROVIDER_NMEA, gps::PROV_NMEA); WB_SAME(GPS_PROVIDER_UBLOX, gps::PROV_UBLOX); WB_SAME(GPS_PROVIDER_MSP, gps::PROV_MSP); WB_SAME(GPS_PROVIDER_VIRTUAL, gps::PROV_VIRTUAL); WB_SAME(GPS_PROVIDER_DRONECAN, gps::PROV_DRONECAN);
 WB_SAME(SBAS_AUTO, gps::SBAS_AUTO); WB_SAME(SBAS_EGNOS, gps::SBAS_EGNOS); WB_SAME(SBAS_WAAS, gps::SBAS_WAAS); WB_SAME(SBAS_MSAS, gps::SBAS_MSAS); WB_SAME(SBAS_GAGAN, gps::SBAS_GAGAN); WB_SAME(SBAS_NONE, gps::SBAS_NONE);
 WB_SAME(GPS_MODEL_PORTABLE, gps::MODEL_PORTABLE); WB_SAME(GPS_MODEL_STATIONARY, gps::MODEL_STATIONARY); WB_SAME(GPS_MODEL_PEDESTRIAN, gps::MODEL_PEDESTRIAN); WB_SAME(GPS_MODEL_AUTOMOTIVE, gps::MODEL_AUTOMOTIVE);
 WB_SAME(GPS_MODEL_AT_SEA, gps::MODEL_AT_SEA); WB_SAME(GPS_MODEL_AIRBORNE_1G, gps::MODEL_AIRBORNE_1G); WB_SAME(GPS_MODEL_AIRBORNE_2G, gps::MODEL_AIRBORNE_2G); WB_SAME(GPS_MODEL_AIRBORNE_4G, gps::MODEL_AIRBORNE_4G);
@@ -42,7 +42,7 @@ WB_SAME(ARM_BLOCKER_ANGLE_TOO_HIGH, fc::AB_ANGLE_TOO_HIGH); WB_SAME(ARM_BLOCKER_
 WB_SAME(ARM_BLOCKER_ARM_SWITCH_ON, fc::AB_ARM_SWITCH_ON); WB_SAME(ARM_BLOCKER_CONFIG_UNSAVED, fc::AB_CONFIG_UNSAVED); WB_SAME(ARM_BLOCKER_CALIBRATING, fc::AB_CALIBRATING);
 WB_SAME(ARM_BLOCKER_POSHOLD_NO_GPS, fc::AB_POSHOLD_NO_GPS); WB_SAME(ARM_BLOCKER_MAG_NOT_CALIBRATED, fc::AB_MAG_NOT_CALIBRATED); WB_SAME(ARM_BLOCKER_PIN_CONFLICT, fc::AB_PIN_CONFLICT); WB_SAME(ARM_BLOCKER_LOOP_RATE, fc::AB_LOOP_RATE); WB_SAME(ARM_BLOCKER_RUNAWAY_TAKEOFF, fc::AB_RUNAWAY_TAKEOFF);
 WB_SAME(FS_CAUSE_LINK, fc::FS_LINK); WB_SAME(FS_CAUSE_SWITCH, fc::FS_SWITCH); WB_SAME(FS_CAUSE_BATTERY, fc::FS_BATTERY);
-WB_SAME(ARM_BLOCKER_RESCUE_NO_FIX, fc::AB_RESCUE_NO_FIX); WB_SAME(ARM_BLOCKER_RESCUE_NO_COMPASS, fc::AB_RESCUE_NO_COMPASS);
+WB_SAME(ARM_BLOCKER_RESCUE_NO_FIX, fc::AB_RESCUE_NO_FIX); WB_SAME(ARM_BLOCKER_RESCUE_NO_COMPASS, fc::AB_RESCUE_NO_COMPASS); WB_SAME(ARM_BLOCKER_MOTOR_STALL, fc::AB_MOTOR_STALL);
 WB_SAME(FS_PROCEDURE_LAND, fc::FSP_LAND); WB_SAME(FS_PROCEDURE_RESCUE, fc::FSP_RESCUE);
 WB_SAME(FLOW_REJECT_OK, fc::FLOW_OK); WB_SAME(FLOW_REJECT_QUALITY, fc::FLOW_QUALITY); WB_SAME(FLOW_REJECT_HEIGHT, fc::FLOW_HEIGHT); WB_SAME(FLOW_REJECT_TILT, fc::FLOW_TILT);
 WB_SAME(FLOW_REJECT_TURNING, fc::FLOW_TURNING); WB_SAME(FLOW_REJECT_NO_GYRO, fc::FLOW_NO_GYRO); WB_SAME(FLOW_REJECT_NO_SAMPLE, fc::FLOW_NO_SAMPLE);
@@ -53,7 +53,8 @@ WB_SAME(RESCUE_PHASE_DESCENT, fc::RescuePhase::DESCENT); WB_SAME(RESCUE_PHASE_LA
 WB_SAME(RESCUE_FAIL_NONE, fc::RescueFail::NONE); WB_SAME(RESCUE_FAIL_NO_POSITION, fc::RescueFail::NO_POSITION); WB_SAME(RESCUE_FAIL_NO_HEADING, fc::RescueFail::NO_HEADING); WB_SAME(RESCUE_FAIL_NO_ALTITUDE, fc::RescueFail::NO_ALTITUDE);
 WB_SAME(RESCUE_FAIL_GPS_LOST, fc::RescueFail::GPS_LOST); WB_SAME(RESCUE_FAIL_LOW_SATS, fc::RescueFail::LOW_SATS); WB_SAME(RESCUE_FAIL_STALLED, fc::RescueFail::STALLED); WB_SAME(RESCUE_FAIL_FLYAWAY, fc::RescueFail::FLYAWAY);
 WB_SAME(RESCUE_ALT_MAX, fc::RESCUE_ALT_MAX); WB_SAME(RESCUE_ALT_FIXED, fc::RESCUE_ALT_FIXED); WB_SAME(RESCUE_ALT_CURRENT, fc::RESCUE_ALT_CURRENT);
-WB_SAME(BATT_SOURCE_AUTO, batt::SRC_AUTO); WB_SAME(BATT_SOURCE_ADC, batt::SRC_ADC); WB_SAME(BATT_SOURCE_ESC, batt::SRC_ESC); WB_SAME(BATT_SOURCE_NONE, batt::SRC_NONE);
+WB_SAME(BATT_SOURCE_AUTO, batt::SRC_AUTO); WB_SAME(BATT_SOURCE_ADC, batt::SRC_ADC); WB_SAME(BATT_SOURCE_ESC, batt::SRC_ESC); WB_SAME(BATT_SOURCE_NONE, batt::SRC_NONE); WB_SAME(BATT_SOURCE_DRONECAN, batt::SRC_DRONECAN);
+WB_SAME(CURR_SOURCE_NONE, batt::CUR_NONE); WB_SAME(CURR_SOURCE_DRONECAN, batt::CUR_DRONECAN);
 WB_SAME(BATT_STATE_NOT_PRESENT, batt::State::NOT_PRESENT); WB_SAME(BATT_STATE_OK, batt::State::OK); WB_SAME(BATT_STATE_WARNING, batt::State::WARNING); WB_SAME(BATT_STATE_CRITICAL, batt::State::CRITICAL);
 #define WB_BEEP(n) WB_SAME(BEEPER_COND_##n, beep::n)
 WB_BEEP(GYRO_CALIBRATED); WB_BEEP(RX_LOST); WB_BEEP(RX_LOST_LANDING); WB_BEEP(DISARMING); WB_BEEP(ARMING); WB_BEEP(ARMING_GPS_FIX); WB_BEEP(ARMING_GPS_NO_FIX); WB_BEEP(BAT_CRIT_LOW); WB_BEEP(BAT_LOW);
@@ -153,9 +154,11 @@ inline void apply_althold(const Settings& s, fc::AltHoldConfig& a) {
 }
 
 inline void apply_core(const Settings& s, fc::CoreConfig& c, fc::RcInterpreter& rc) {
-    c.loop_hz = s.general.loop_hz; c.est_hz = s.general.est_hz; c.max_arm_angle_deg = s.general.max_arm_angle;
+    c.loop_hz = s.general.loop_hz; c.pid_denom = s.general.pid_denom < 1 ? 1 : s.general.pid_denom; c.est_hz = s.general.est_hz; c.max_arm_angle_deg = s.general.max_arm_angle;
     c.fs.guard_s = s.general.fs_guard_ms * 0.001f; c.fs.recover_s = s.general.fs_recover_ms * 0.001f; c.fs.max_descent_s = s.general.fs_max_descent_s;
     c.fs.fallback_throttle_scale = s.general.fs_fallback_throttle * 0.01f; c.runaway.enabled = s.general.runaway_takeoff != 0;
+    c.stall.enabled = s.motors.stall_disarm != 0; c.stall.min_rpm = s.motors.stall_min_rpm; c.stall.drop_ratio = s.motors.stall_drop * 0.01f;
+    c.stall.min_command = s.motors.stall_min_cmd * 0.01f; c.stall.delay_s = s.motors.stall_ms * 0.001f;
     c.airmode = s.general.airmode; c.airmode_threshold = s.general.airmode_start_throttle * 0.01f;
     c.mixer.layout = (fc::Layout)s.motors.layout; c.mixer.props_out = s.motors.props_out != 0;
     c.use_mag = s.sensors.mag_enabled != 0; c.declination_deg = s.sensors.mag_declination * 0.1f;
@@ -166,8 +169,11 @@ inline void apply_motors(const Settings& s, motor::MotorConfig& m) {
     m.protocol = (motor::Protocol)s.motors.protocol; m.count = (uint8_t)fc::mixer_motor_count((fc::Layout)s.motors.layout);
     for (int i = 0; i < motor::kMaxMotors; i++) { m.reversed[i] = ((s.motors.reversed_mask >> i) & 1) != 0; m.order[i] = s.motors.order[i]; }
     m.pulse.disarmed = s.motors.pulse_disarmed; m.pulse.armed = s.motors.pulse_armed; m.pulse.max = s.motors.pulse_max; m.pulse_hz = s.motors.pulse_hz;
-    m.bidirectional = s.motors.bidirectional != 0; m.dshot_driver = s.motors.dshot_driver; m.ext_pullup = s.motors.ext_pullup != 0; m.edt = s.motors.edt != 0; m.pole_count = s.motors.pole_count; m.dir_cmd_extended = s.motors.dir_cmd_extended != 0;
-    m.idle = s.motors.idle_x10 * 0.001f; m.output_limit = s.motors.output_limit * 0.01f;
+    m.bidirectional = s.motors.bidirectional != 0; m.ext_pullup = s.motors.ext_pullup != 0; m.edt = s.motors.edt != 0; m.pole_count = s.motors.pole_count; m.dir_cmd_extended = s.motors.dir_cmd_extended != 0;
+    m.telem_timeout_ms = motor::is_can(m.protocol) ? 500 : 100;            // (esc.Status comes at 10 .. 50 Hz, not every frame)
+    // motor idle is a DShot setting (Betaflight: motor_idle). PWM / Oneshot / Multishot / brushed: the lowest armed output is the
+    // 'armed' pulse itself (Betaflight's min_throttle), no idle on top of it.
+    m.idle = motor::is_dshot(m.protocol) ? s.motors.idle_x10 * 0.001f : 0.0f; m.output_limit = s.motors.output_limit * 0.01f;
     m.dyn.min_rpm_100 = s.motors.dyn_idle_min_rpm; m.dyn.p_gain = s.motors.dyn_idle_p; m.dyn.i_gain = s.motors.dyn_idle_i; m.dyn.d_gain = s.motors.dyn_idle_d; m.dyn.max_increase = s.motors.dyn_idle_max_inc;
 }
 

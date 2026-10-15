@@ -73,7 +73,7 @@ inline MixRow mixer_row(Layout l, int m) {
     if (l > HEX_X && l < LAYOUT_COUNT) {                // Betaflight's table, each axis scaled so that its largest |coefficient| is 1
         const LayoutTable& t = layout_table(l);
         float mx[3] = {0, 0, 0};
-        for (int i = 0; i < t.n; i++) for (int k = 0; k < 3; k++) mx[k] = fmaxf(mx[k], fabsf(t.r[i][k]));
+        for (int i = 0; i < t.n; i++) for (int k = 0; k < 3; k++) mx[k] = maxf(mx[k], fabsf(t.r[i][k]));
         MixRow r;
         r.roll = mx[0] > 0 ? t.r[m][0] / mx[0] : 0.0f; r.pitch = mx[1] > 0 ? t.r[m][1] / mx[1] : 0.0f; r.yaw = mx[2] > 0 ? t.r[m][2] / mx[2] : 0.0f;
         return r;
@@ -92,7 +92,7 @@ inline MixRow mixer_row(Layout l, int m) {
     const int n = mixer_motor_count(l);
     for (int i = 0; i < n; i++) {
         const float ti = (l == QUAD_X ? quad_x[i] : l == QUAD_PLUS ? quad_p[i] : 30.0f + 60.0f * (float)i) * kDeg2Rad;
-        rmax = fmaxf(rmax, fabsf(sinf(ti))); pmax = fmaxf(pmax, fabsf(cosf(ti)));
+        rmax = maxf(rmax, fabsf(sinf(ti))); pmax = maxf(pmax, fabsf(cosf(ti)));
     }
     MixRow r;
     r.roll = -sinf(t) / rmax; r.pitch = -cosf(t) / pmax; r.yaw = (float)spin;
@@ -118,7 +118,7 @@ public:
         const float top = lim.limit, bot = lim.idle, avail = top - bot;
         for (int i = 0; i < n_; i++) {
             raw[i] = (r * row_[i].roll + p * row_[i].pitch + y * row_[i].yaw * ys) * avail;
-            lo = fminf(lo, raw[i]); hi = fmaxf(hi, raw[i]);
+            lo = minf(lo, raw[i]); hi = maxf(hi, raw[i]);
         }
         if (ground_idle) { for (int i = 0; i < n_; i++) out[i] = bot; for (int i = n_; i < kMaxMotors; i++) out[i] = 0.0f; return; }
         const float range = hi - lo;

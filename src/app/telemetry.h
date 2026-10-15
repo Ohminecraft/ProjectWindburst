@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <math.h>
 #include <string.h>
+#include "../config/fast_code.h"
 #include "../proto/wbp_schema.h"
 
 // ============================================================================
@@ -22,6 +23,7 @@ struct Telemetry {
     float roll = 0, pitch = 0, yaw = 0;                 // deg
     float gyro_f[3] = {}, sp[3] = {};                   // filtered gyro and rate setpoints, deg/s
     float gyro_raw[3] = {};                             // unfiltered gyro, deg/s
+    float gyro2[3] = {}; uint8_t imu2 = 0, gyro_src = 0;     // the second IMU: its gyro (pilot convention), imusel::Imu2State, where the loop's gyro comes from
     float acc[3] = {};                                  // board frame, g
     // ---- receiver
     uint16_t rc[16] = {1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
@@ -29,7 +31,7 @@ struct Telemetry {
     // ---- status
     bool armed = false; uint32_t blockers = 0; uint8_t failsafe = 0, fs_cause = 0; uint32_t modes = 0; uint16_t health = 0; uint8_t ah_state = 0;
     uint16_t loop_us = 0, loop_max_us = 0, gap_max_us = 0, loop_hz = 0; float throttle = 0;
-    uint16_t t_imu_us = 0, t_core_us = 0, t_motor_us = 0, t_rest_us = 0, t_slow_max_us = 0, overruns = 0, loop_target_hz = 0;   // where a control cycle spends its time (averages of the last second)
+    uint16_t t_imu_us = 0, t_core_us = 0, t_motor_us = 0, t_rest_us = 0, t_slow_max_us = 0, overruns = 0, loop_target_hz = 0, pid_hz = 0, pid_target_hz = 0;   // where a control cycle spends its time (averages of the last second)
     uint8_t cpu_pct = 0, ram_pct = 0; uint16_t heap_free_kb = 0, psram_free_kb = 0, psram_total_kb = 0;    // load of the flight-loop core, memory
     // ---- battery (batt::Monitor) and beeper
     uint16_t servo_us[4] = {};                            // pulses sent to the servos (us), 0 = off
@@ -37,7 +39,7 @@ struct Telemetry {
     float batt_amps = 0, batt_mah = 0; uint8_t batt_remaining = 0, curr_source = 0; uint16_t curr_pin_mv = 0;      // current sensor, consumption, what is left (%)
     // ---- motors (logical order)
     float motor_cmd[8] = {}, rpm[8] = {}; uint8_t esc_err_pct[8] = {}, esc_temp[8] = {}; float esc_volt = 0, dyn_idle = 0;
-    float esc_amps[8] = {}; uint16_t esc_tlm_frames = 0, esc_tlm_crc = 0, esc_tlm_timeouts = 0;   // per-ESC current; ESC telemetry wire: answers / bad CRC / no answer, last second
+    float esc_amps[8] = {}; uint16_t esc_tlm_frames = 0, esc_tlm_crc = 0, esc_tlm_timeouts = 0; uint8_t stall_motor = 0;   // per-ESC current; ESC telemetry wire: answers / bad CRC / no answer, last second
     uint8_t bidir_state = 0, esc_answers = 0, motor_count = 0; uint16_t hw_skipped = 0, hw_late = 0, hw_replies = 0, hw_garbled = 0;                 // output driver: bidirectional DShot state, which ESCs answer, frames skipped / replies lost in the last second
     // ---- sensors
     float mag[3] = {}; float baro_alt = 0, baro_pa = 0, temp_c = 0, range_m = 0;
@@ -53,6 +55,13 @@ struct Telemetry {
     // ---- the app link (link stream): slow_gap_ms from the sensor thread, the rest filled in by the link task itself (LinkHost)
     uint16_t slow_gap_ms = 0;
     uint32_t up_ms = 0, boot_id = 0, link_rx = 0, link_dropped = 0; uint16_t link_bad = 0, link_busy = 0, link_tx_lost = 0, link_kicks = 0, link_cmd_max_ms = 0, link_gap_ms = 0, link_queued = 0;
+    uint8_t wifi_state = 0, wifi_clients = 0, link_via = 0; uint32_t wifi_ip = 0; int16_t wifi_rssi = 0;     // the WiFi wire (link task: LinkHost::set_net)
+    struct Can {                                        // the CAN bus (once a second, sensor thread)
+        uint8_t state = 0, node_id = 0, tec = 0, rec = 0, allocations = 0, gnss_node = 0, mag_node = 0, nodes = 0;
+        uint16_t rx_fps = 0, tx_fps = 0, tx_dropped = 0, crc_errors = 0, bus_off = 0;
+        uint8_t node[8] = {}, health[8] = {}, mode[8] = {}; uint32_t uptime[8] = {}; char names[128] = {};
+        uint8_t baro_node = 0, batt_node = 0, esc_mask = 0; uint32_t esc_sent = 0; uint16_t esc_dropped = 0;
+    } can;
     // ---- navigation: optical flow, Position Hold, GPS Rescue
     uint8_t nav_flags = 0, flow_quality = 0, flow_reject = wbp::FLOW_REJECT_NO_SAMPLE, flow_rate = 0, ph_state[2] = {}, rescue_phase = 0, rescue_fail = 0;
     float flow_fwd = 0, flow_right = 0, nav_roll = 0, nav_pitch = 0, nav_target_n = 0, nav_target_e = 0, nav_wind_n = 0, nav_wind_e = 0, nav_home_dist = 0, rescue_return_alt = 0;
@@ -77,9 +86,11 @@ inline uint16_t u16(float v, float scale) { return (uint16_t)scaled(v, scale, 0,
 inline uint16_t sat_u16(uint32_t v) { return v > 65535u ? (uint16_t)65535u : (uint16_t)v; }
 // yaw as a heading: 0 .. 360 deg (0 = north, clockwise), what a compass and Betaflight's MSP_ATTITUDE show. The flight core keeps
 // -180 .. 180 inside (its arithmetic does not care); only what leaves the firmware (app, flight log) is converted.
-inline float heading360(float yaw_deg) {
+WB_FAST inline float heading360(float yaw_deg) {
     if (!(yaw_deg == yaw_deg)) return 0.0f;
-    float h = fmodf(yaw_deg, 360.0f); if (h < 0.0f) h += 360.0f;
+    // (the flight core keeps -180 .. 180: no fmodf - a library function in flash - for what the flight log asks for every record)
+    float h = yaw_deg >= -360.0f && yaw_deg < 360.0f ? yaw_deg : fmodf(yaw_deg, 360.0f);
+    if (h < 0.0f) h += 360.0f;
     return h >= 359.995f ? 0.0f : h;                       // (rounds to 36000 at a scale of 0.01: that is 0)
 }
 
@@ -114,7 +125,7 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
         T_status o; o.armed = t.armed ? 1 : 0; o.blockers = t.blockers; o.failsafe = t.failsafe; o.modes = t.modes; o.health = t.health; o.ah_state = t.ah_state;
         o.loop_us = t.loop_us; o.loop_max_us = t.loop_max_us; o.gap_max_us = t.gap_max_us; o.loop_hz = t.loop_hz; o.cell_mv = u16(t.cell_v, 0.001f); o.settings_dirty = settings_flags; o.throttle = u16(t.throttle, scale::status_throttle);
         o.cpu = t.cpu_pct; o.ram = t.ram_pct; o.heap_free = t.heap_free_kb; o.psram_free = t.psram_free_kb; o.psram_total = t.psram_total_kb;
-        o.t_imu = t.t_imu_us; o.t_core = t.t_core_us; o.t_motor = t.t_motor_us; o.t_rest = t.t_rest_us; o.t_slow_max = t.t_slow_max_us; o.overruns = t.overruns; o.loop_target = t.loop_target_hz; o.fs_cause = t.fs_cause;
+        o.t_imu = t.t_imu_us; o.t_core = t.t_core_us; o.t_motor = t.t_motor_us; o.t_rest = t.t_rest_us; o.t_slow_max = t.t_slow_max_us; o.overruns = t.overruns; o.loop_target = t.loop_target_hz; o.fs_cause = t.fs_cause; o.pid_hz = t.pid_hz; o.pid_target = t.pid_target_hz;
         memcpy(out, &o, sizeof(o)); break; }
     case STR_MOTORS: {
         T_motors o;
@@ -123,12 +134,14 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
         o.bidir = t.bidir_state; o.answers = t.esc_answers; o.skipped = t.hw_skipped; o.late = t.hw_late; o.replies = t.hw_replies; o.garbled = t.hw_garbled;
         for (int i = 0; i < 4; i++) o.servo[i] = t.servo_us[i];
         for (int i = 0; i < 8; i++) o.amps[i] = u16(t.esc_amps[i], scale::motors_amps);
-        o.tlm_frames = t.esc_tlm_frames; o.tlm_crc = t.esc_tlm_crc; o.tlm_timeouts = t.esc_tlm_timeouts;
+        o.tlm_frames = t.esc_tlm_frames; o.tlm_crc = t.esc_tlm_crc; o.tlm_timeouts = t.esc_tlm_timeouts; o.stall_motor = t.stall_motor;
         memcpy(out, &o, sizeof(o)); break; }
     case STR_SENSORS: {
         T_sensors o;
         for (int i = 0; i < 3; i++) { o.gyro[i] = s16(t.gyro_raw[i], scale::sensors_gyro); o.acc[i] = s16(t.acc[i], scale::sensors_acc); o.mag[i] = s16(t.mag[i], scale::sensors_mag); }
         o.baro_alt = s16(t.baro_alt, scale::sensors_baro_alt); o.baro_pa = t.baro_pa > 0 ? (uint32_t)lroundf(t.baro_pa) : 0; o.temp = s16(t.temp_c, scale::sensors_temp); o.range = s16(t.range_m, scale::sensors_range);
+        for (int i = 0; i < 3; i++) o.gyro2[i] = s16(t.gyro2[i], scale::sensors_gyro2);
+        o.imu2 = t.imu2; o.gyro_src = t.gyro_src;
         memcpy(out, &o, sizeof(o)); break; }
     case STR_GPS: {
         T_gps o; o.fix = t.gps_fix; o.sats = t.gps_sats; o.lat = t.lat; o.lon = t.lon; o.alt = t.alt_cm; o.gs = t.gs_cms; o.course = t.course_ddeg; o.hdop = t.hdop;
@@ -143,9 +156,18 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
         o.ekf_pn = s16(t.ekf_pn, scale::estimate_ekf_pn); o.ekf_pe = s16(t.ekf_pe, scale::estimate_ekf_pe); o.ekf_vn = s16(t.ekf_vn, scale::estimate_ekf_vn); o.ekf_ve = s16(t.ekf_ve, scale::estimate_ekf_ve);
         o.ekf_flags = t.ekf_flags; o.ekf_us = t.ekf_us;
         memcpy(out, &o, sizeof(o)); break; }
+    case STR_CAN: {
+        T_can o; const Telemetry::Can& c = t.can;
+        o.state = c.state; o.node_id = c.node_id; o.rx_fps = c.rx_fps; o.tx_fps = c.tx_fps; o.tx_dropped = c.tx_dropped; o.crc_errors = c.crc_errors; o.bus_off = c.bus_off;
+        o.tec = c.tec; o.rec = c.rec; o.allocations = c.allocations; o.gnss_node = c.gnss_node; o.mag_node = c.mag_node; o.nodes = c.nodes;
+        o.baro_node = c.baro_node; o.batt_node = c.batt_node; o.esc_mask = c.esc_mask; o.esc_sent = c.esc_sent; o.esc_dropped = c.esc_dropped;
+        for (int i = 0; i < 8; i++) { o.node[i] = c.node[i]; o.health[i] = c.health[i]; o.mode[i] = c.mode[i]; o.uptime[i] = c.uptime[i]; }
+        memcpy(o.names, c.names, sizeof(o.names));
+        memcpy(out, &o, sizeof(o)); break; }
     case STR_LINK: {
         T_link o; o.uptime = t.up_ms; o.boot_id = t.boot_id; o.rx_frames = t.link_rx; o.rx_bad = t.link_bad; o.busy = t.link_busy; o.tx_lost = t.link_tx_lost; o.dropped = t.link_dropped;
         o.kicks = t.link_kicks; o.cmd_max_ms = t.link_cmd_max_ms; o.link_gap_ms = t.link_gap_ms; o.slow_gap_ms = t.slow_gap_ms; o.queued = t.link_queued;
+        o.wifi = t.wifi_state; o.wifi_ip = t.wifi_ip; o.wifi_rssi = t.wifi_rssi; o.wifi_clients = t.wifi_clients; o.via = t.link_via;
         memcpy(out, &o, sizeof(o)); break; }
     case STR_GYRO_FAST: {
         T_gyro_fast o; for (int i = 0; i < 3; i++) { o.raw[i] = s16(t.gyro_raw[i], scale::gyro_fast_raw); o.filt[i] = s16(t.gyro_f[i], scale::gyro_fast_filt); }

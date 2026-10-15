@@ -15,7 +15,8 @@ namespace gps {
 
 constexpr int kMaxSats = 40;
 
-enum Provider : uint8_t { PROV_NMEA, PROV_UBLOX, PROV_MSP, PROV_VIRTUAL };       // DroneCAN (BF has it) is not implemented
+enum Provider : uint8_t { PROV_NMEA, PROV_UBLOX, PROV_MSP, PROV_VIRTUAL, PROV_DRONECAN };       // DroneCAN: Fix2 from a module on the CAN bus (hal/can)
+inline bool uses_uart(Provider p) { return p == PROV_NMEA || p == PROV_UBLOX; }
 enum SbasMode : uint8_t { SBAS_AUTO, SBAS_EGNOS, SBAS_WAAS, SBAS_MSAS, SBAS_GAGAN, SBAS_NONE };
 enum AcquireModel : uint8_t { MODEL_PORTABLE, MODEL_STATIONARY, MODEL_PEDESTRIAN, MODEL_AUTOMOTIVE, MODEL_AT_SEA, MODEL_AIRBORNE_1G, MODEL_AIRBORNE_2G, MODEL_AIRBORNE_4G };
 enum UtcStandard : uint8_t { UTC_AUTO, UTC_USNO, UTC_EU, UTC_SU, UTC_NTSC };

@@ -97,11 +97,12 @@ def test_layout_pack_unpack():
         pass
     st = s.layout("stream", "status")
     import struct
-    blob = struct.pack(st.fmt, 1, 0xB004, 2, 0x0B, 0x83, 4, 80, 120, 310, 3987, 3900, 3, 456, 37, 25, 240, 7680, 8192, 31, 62, 13, 9, 412, 17, 4000, 0x05)
+    blob = struct.pack(st.fmt, 1, 0xB004, 2, 0x0B, 0x83, 4, 80, 120, 310, 3987, 3900, 3, 456, 37, 25, 240, 7680, 8192, 31, 62, 13, 9, 412, 17, 4000, 0x05, 1995, 2000)
     u = st.unpack(blob)
     assert u["cpu"] == 37 and u["ram"] == 25 and u["heap_free"] == 240 and u["psram_free"] == 7680 and u["psram_total"] == 8192
     assert (u["t_imu"], u["t_core"], u["t_motor"], u["t_rest"], u["t_slow_max"], u["overruns"], u["loop_target"]) == (31, 62, 13, 9, 412, 17, 4000)
-    assert "LOOP_RATE" in s.bits["arm_blocker"] and s.enums["dshot_driver"] == ["DIRECT", "IDF"] and s.enums["bidir_state"] == ["OFF", "ACTIVE", "UNAVAILABLE"]
+    assert (u["pid_hz"], u["pid_target"]) == (1995, 2000)
+    assert "LOOP_RATE" in s.bits["arm_blocker"] and "dshot_driver" not in s.enums and s.enums["bidir_state"] == ["OFF", "ACTIVE", "UNAVAILABLE"]
     assert u["blockers"] == ["RX_LOST", "MAG_NOT_CALIBRATED", "PIN_CONFLICT", "RUNAWAY_TAKEOFF"] and u["failsafe"] == "DESCENT" and u["modes"] == ["ARM", "ANGLE", "ALTHOLD"]
     assert u["fs_cause"] == ["LINK", "BATTERY"] and s.bits["fs_cause"] == ["LINK", "SWITCH", "BATTERY"]
     assert u["health"] == ["IMU", "GYRO_CAL", "RX"] and u["ah_state"] == "FLYING" and u["settings_dirty"] == ["DIRTY", "REBOOT_REQUIRED"] and abs(u["throttle"] - 0.456) < 1e-9

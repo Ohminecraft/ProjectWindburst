@@ -14,6 +14,8 @@
 #include "../src/app/link_host.h"
 #include "../src/app/sync.h"
 #include "../src/app/tx_queue.h"
+#include "../src/app/link_mux.h"
+#include "../src/hal/led/ws2812.h"
 #include "../src/proto/settings_apply.h"
 #include "../src/config/hardware_config.h"
 #include "../src/config/pin_check.h"
@@ -25,7 +27,7 @@ using namespace wbp;
 
 static void t_pack() {
     printf("[telemetry] wire structs: scaling, saturation, NaN\n");
-    app::Telemetry t; uint8_t b[96];
+    app::Telemetry t; uint8_t b[256];
     t.roll = 12.345f; t.pitch = -7.891f; t.yaw = -179.99f; t.gyro_f[0] = 123.44f; t.gyro_f[2] = -2000.06f; t.sp[1] = 360.0f;
     CHECK(app::pack_stream(STR_ATTITUDE, t, 0, b, sizeof(b)) == sizeof(T_attitude), "attitude size");
     { T_attitude a; memcpy(&a, b, sizeof(a)); CHECK(a.roll == 1235 && a.pitch == -789 && a.yaw == 18001 && a.gyro[0] == 1234 && a.gyro[2] == -20001 && a.sp[1] == 3600, "0.01 deg / 0.1 deg/s, rounded to nearest; yaw -179.99 goes out as the heading 180.01: %d %d %d %d %d %d", a.roll, a.pitch, a.yaw, a.gyro[0], a.gyro[2], a.sp[1]); }
@@ -76,6 +78,9 @@ static void t_pack() {
     CHECK(app::pack_stream(77, t, 0, b, sizeof(b)) == 0, "unknown stream id => 0");
     CHECK(app::pack_stream(STR_MOTORS, t, 0, b, sizeof(T_motors) - 1) == 0, "buffer too small => 0, nothing written past it");
     // every stream comes from the flight loop's telemetry, except "blackbox": the log lives in the link task (bb::Service::pack_status)
+    { app::Telemetry ct; ct.can.state = CAN_STATE_RUNNING; ct.can.node_id = 10; ct.can.nodes = 2; ct.can.node[1] = 125; ct.can.health[1] = 255; ct.can.uptime[1] = 99; memcpy(ct.can.names + 16, "org.ardupilot.he", 16); ct.can.rx_fps = 157;
+      CHECK(app::pack_stream(STR_CAN, ct, 0, b, sizeof(b)) == sizeof(T_can), "can"); T_can c; memcpy(&c, b, sizeof(c));
+      CHECK(c.state == CAN_STATE_RUNNING && c.node_id == 10 && c.nodes == 2 && c.node[1] == 125 && c.health[1] == 255 && c.uptime[1] == 99 && !memcmp(c.names + 16, "org.ardupilot.he", 16) && c.rx_fps == 157, "can stream: the node table and its names"); }
     for (const StreamInfo& si : kStreams) CHECK(app::pack_stream(si.id, t, 0, b, sizeof(b)) == (si.id == STR_BLACKBOX ? 0 : si.size), "stream %s packs to its schema size", si.name);
     { app::Telemetry bt; bt.batt_v = 15.87f; bt.cell_v = 3.968f; bt.batt_cells = 4; bt.batt_state = BATT_STATE_WARNING; bt.batt_source = BATT_SOURCE_ADC; bt.batt_pin_mv = 1443; bt.beeping = 9;
       app::pack_stream(STR_BATTERY, bt, 0, b, sizeof(b)); T_battery o; memcpy(&o, b, sizeof(o));
@@ -280,7 +285,11 @@ static void t_host() {
       clk = 1000; h2.tick(clk); clk = 1001; h2.tick(clk); clk = 1041; h2.tick(clk); clk = 1042; h2.tick(clk);          // one pause of 40 ms
       clk = 61500; const uint16_t n = h2.fill_stream(STR_LINK, b, sizeof(b)); T_link L; memcpy(&L, b, sizeof(L));
       CHECK(n == sizeof(T_link) && L.uptime == 61500 && L.kicks == 3 && L.queued == 10 && L.slow_gap_ms == 7 && L.link_gap_ms == 40 && L.busy == 0,
-            "link stream: uptime %u ms, kicks %u, %u bytes queued, sensor-thread pause %u ms, link-task pause %u ms", (unsigned)L.uptime, L.kicks, L.queued, L.slow_gap_ms, L.link_gap_ms); }
+            "link stream: uptime %u ms, kicks %u, %u bytes queued, sensor-thread pause %u ms, link-task pause %u ms", (unsigned)L.uptime, L.kicks, L.queued, L.slow_gap_ms, L.link_gap_ms);
+      CHECK(L.wifi == WIFI_STATE_OFF && L.wifi_ip == 0 && L.via == LINK_VIA_SERIAL, "no WiFi wire: OFF, no address, the serial port");
+      h2.set_net([](app::LinkHost::NetInfo& ni) { ni.wifi = WIFI_STATE_CONNECTED; ni.ip = 0x2A01A8C0u; ni.rssi = -61; ni.clients = 0; ni.via = 1; });
+      h2.fill_stream(STR_LINK, b, sizeof(b)); memcpy(&L, b, sizeof(L));
+      CHECK(L.wifi == WIFI_STATE_CONNECTED && L.wifi_ip == 0x2A01A8C0u && L.wifi_rssi == -61 && L.via == LINK_VIA_WIFI, "the WiFi wire: joined, 192.168.1.42 (lowest byte first), -61 dBm, the app on it"); }
 }
 
 static void t_exchange() {
@@ -519,10 +528,54 @@ static void t_uart_plan() {
     { UartPlan p = plan_uarts(true, t3, true, true, false, true, false, false); CHECK(p.gps == -1 && p.rx == 2 && !*p.why, "TABLE: TELEMETRY is not a device (unused)"); }
 }
 
+
+// One server, two wires (app/link_mux.h): the frames follow the wire the app last spoke on.
+static void t_link_mux() {
+    printf("[link mux] serial port and WiFi: replies go where the app spoke\n");
+    FakePort usb(4096, 4096), net(4096, 4096);
+    app::LinkMux mux(usb, &net); app::QueuedTransport q(mux, 0);
+    const uint8_t a[3] = {1, 2, 3}, b[2] = {7, 8};
+    q.write(a, 3);
+    CHECK(usb.wire.size() == 3 && net.wire.empty() && mux.active() == app::LinkMux::SERIAL_WIRE, "at boot: the serial port");
+    CHECK(mux.heard(app::LinkMux::WIFI_WIRE) && !mux.heard(app::LinkMux::WIFI_WIRE) && mux.switches() == 1, "bytes on WiFi: the link moves there once (true), then stays (false)");
+    q.write(b, 2);
+    CHECK(net.wire.size() == 2 && net.wire[0] == 7 && usb.wire.size() == 3, "from then on the frames go out on WiFi");
+    mux.lost(app::LinkMux::SERIAL_WIRE); CHECK(mux.active() == app::LinkMux::WIFI_WIRE, "(the serial port 'lost' changes nothing: it is never down)");
+    mux.lost(app::LinkMux::WIFI_WIRE); q.write(a, 3);
+    CHECK(mux.active() == app::LinkMux::SERIAL_WIRE && usb.wire.size() == 6 && net.wire.size() == 2, "the TCP client went away: back to the serial port");
+    CHECK(mux.heard(app::LinkMux::WIFI_WIRE) && mux.heard(app::LinkMux::SERIAL_WIRE) && mux.active() == app::LinkMux::SERIAL_WIRE, "and the app speaking on the serial port again takes it back");
+    { FakePort u(4096, 4096); app::LinkMux one(u, nullptr); CHECK(!one.heard(app::LinkMux::WIFI_WIRE) && one.active() == app::LinkMux::SERIAL_WIRE, "a board without a radio: never moves"); }
+    { FakePort u(4096, 4096), slow(10, 0); app::LinkMux m(u, &slow); app::QueuedTransport qq(m, 0); m.heard(app::LinkMux::WIFI_WIRE);
+      uint8_t big[40] = {}; qq.write(big, 40);
+      CHECK(slow.wire.size() == 10 && qq.queued() == 30 && u.wire.empty(), "a slow WiFi takes what fits, the rest waits in the queue (never on the serial port)"); }
+}
+
+
+// The LED strip: what it shows for each state, and the WS2812 bits on the SPI line.
+static void t_led() {
+    printf("[led strip] pictures and WS2812 bits\n");
+    using app::Rgb; app::LedLogic L; L.configure(4, 100, app::LedLogic::ALL); Rgb c[32]; app::LedInput in;
+    auto eq = [](Rgb a, Rgb b) { return a.r == b.r && a.g == b.g && a.b == b.b; };
+    in.ready = true; CHECK(L.render(in, 0, c) == 4 && eq(c[0], app::LedLogic::kGreen) && eq(c[3], app::LedLogic::kGreen), "disarmed and ready: green");
+    in.ready = false; L.render(in, 100, c); const bool on = eq(c[0], app::LedLogic::kAmber); L.render(in, 600, c); CHECK(on && eq(c[0], Rgb()), "something blocks arming: amber, blinking");
+    in.armed = true; in.mode = app::LedInput::ANGLE; L.render(in, 0, c); CHECK(eq(c[2], app::LedLogic::kBlue), "armed in Angle: blue");
+    in.mode = app::LedInput::POSHOLD; L.render(in, 300, c); CHECK(eq(c[1], app::LedLogic::kTeal), "Position Hold: teal");
+    in.batt_warning = true; L.render(in, 100, c); CHECK(eq(c[0], app::LedLogic::kAmber), "battery warning: an amber blink on top"); in.batt_warning = false;
+    in.failsafe = true; L.render(in, 0, c); const bool red = eq(c[0], app::LedLogic::kRed); L.render(in, 100, c); CHECK(red && eq(c[0], Rgb()), "failsafe: red, flashing 5 Hz"); in.failsafe = false;
+    { app::LedLogic N; N.configure(6, 100, app::LedLogic::NAV); N.render(in, 30, c);
+      CHECK(eq(c[0], app::LedLogic::kRed) && eq(c[2], app::LedLogic::kRed) && eq(c[3], app::LedLogic::kTeal) && eq(c[4], app::LedLogic::kGreen) && eq(c[5], app::LedLogic::kWhite), "navigation lights: left red, right green, the mode in the middle, a white strobe at the end");
+      N.render(in, 500, c); CHECK(eq(c[5], Rgb()), "the strobe is a flash"); }
+    { app::LedLogic D; D.configure(1, 50, app::LedLogic::ALL); in = app::LedInput(); in.ready = true; D.render(in, 0, c); CHECK(c[0].g == 127 && c[0].r == 0, "brightness 50 %%: half (%u)", c[0].g); }
+    { Rgb k[3] = {{255, 0, 0}, {0, 0x81, 0}, {0x12, 0x34, 0x56}}; uint8_t b[200]; const size_t n = led::encode(k, 3, b, sizeof(b)); Rgb back[3]; const int m = led::decode(b, n, back, 3);
+      CHECK(n == 3 * 12 + led::kLatchBytes && b[0] == 0x88 && b[4] == 0xEE && b[sizeof(b) > n ? n - 1 : 0] == 0 && m == 3 && eq(back[0], k[0]) && eq(back[1], k[1]) && eq(back[2], k[2]),
+            "WS2812 on SPI: 12 bytes per LED, G R B, 1000 = 0 / 1110 = 1 (first bytes %02X %02X), the latch, decoded back", b[0], b[4]);
+      CHECK(led::encode(k, 3, b, 40) == 0, "a buffer too small: nothing"); }
+}
+
 int main() {
     t_pack();
     t_sync();
-    t_tx_queue(); t_gate(); t_host(); t_exchange(); t_acc(); t_level(); t_settings(); t_hwconfig(); t_pins_load(); t_uart_plan();
+    t_tx_queue(); t_gate(); t_host(); t_exchange(); t_acc(); t_level(); t_settings(); t_hwconfig(); t_pins_load(); t_uart_plan(); t_link_mux(); t_led();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

@@ -57,7 +57,7 @@ struct Health {                    // straight from the drivers' valid() / usabl
     bool loop_slow = false;                             // the loop ran less than 80 % of its configured cycles, two seconds in a row
 };
 
-struct MotorFeedback { float rpm[kMaxMotors] = {}; bool rpm_valid = false; };   // MotorOutputManager::rpm_array() (logical motor order; 0 = that motor has no telemetry). rpm_valid: there is telemetry at all
+struct MotorFeedback { float rpm[kMaxMotors] = {}; bool rpm_valid = false; uint8_t valid_mask = 0; };   // valid_mask: bit per motor whose speed is known (bidirectional DShot or the ESC telemetry wire)   // MotorOutputManager::rpm_array() (logical motor order; 0 = that motor has no telemetry). rpm_valid: there is telemetry at all
 
 struct GpsMeas {                   // metres / m/s relative to the home point, altitude relative to the home altitude
     bool valid = false;
@@ -72,7 +72,9 @@ struct GpsMeas {                   // metres / m/s relative to the home point, a
 struct EkfNav { bool valid = false, gps_aiding = false, heading_ok = false; float pn = 0, pe = 0, vn = 0, ve = 0, yaw_deg = 0; };
 
 struct CoreConfig {
-    float loop_hz = 4000.0f, est_hz = 500.0f;
+    float loop_hz = 4000.0f, est_hz = 500.0f;      // loop_hz: the gyro's rate (one FastInput per sample)
+    int pid_denom = 1;                             // the control part (attitude, modes, PID, mixer) runs on every pid_denom-th gyro sample (Betaflight pid_process_denom)
+    float pid_hz() const { return loop_hz / (float)(pid_denom < 1 ? 1 : pid_denom); }
     RcConfig rc; RateProfile rates;
     PidConfig pid; GyroFilterConfig gyro; FeedforwardConfig ff; RcSmoothingConfig rc_smoothing;
     AngleConfig angle; StabilizeConfig stab;
@@ -84,6 +86,7 @@ struct CoreConfig {
     AltHoldConfig alt;
     FsConfig fs;
     RunawayConfig runaway;
+    StallConfig stall;                             // a motor that stops: disarm (needs rpm telemetry)
     float max_arm_angle_deg = 25.0f;
     Ahrs::Config ahrs; KfConfig vertical; HorizontalConfig horizontal;
     bool use_mag = false; float declination_deg = 0.0f;
@@ -150,7 +153,9 @@ struct CoreOutput {
     bool airmode_active = false;   // stabilised (full authority, I-terms) although the throttle stick is at the bottom
     bool airborne = false;         // the craft is taken to be in the air (see FlightCore::update, step 6)
     bool ground_idle = false;      // every motor at idle, nothing mixed: armed and standing on the ground
-    bool est_stepped = false;      // this cycle also ran the estimators (every loop_hz / est_hz cycles): it takes longer than the others
+    uint8_t stall_motor = 0;       // the motor (1..8) the stall guard last saw stop (0 = none since boot): safety.h StallGuard
+    bool est_stepped = false;      // this cycle also ran the estimators (every pid_hz / est_hz control cycles): it takes longer than the others
+    bool pid_stepped = true;       // this gyro sample was also a control cycle (PID + mixer ran, motor[] is new); false: only the gyro filters ran, the rest is the last control cycle's
     float stick[4] = {};           // pilot command: roll, pitch, yaw (-1..1) and the throttle stick (0..1), before modes / failsafe
     bool throttle_low = true;      // throttle stick at the bottom
     uint32_t arm_refused = 0;      // arm attempts rejected by a blocker since boot
@@ -182,8 +187,9 @@ public:
         ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue;
         was_poshold_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false; rescue_out_ = RescueOutput(); nav_tgt_[0] = nav_tgt_[1] = 0;
         alt_.cfg = cfg.alt; alt_.init();
-        fs_.cfg = cfg.fs; runaway_.cfg = cfg.runaway;
-        decim_ = (int)(cfg.loop_hz / cfg.est_hz + 0.5f); if (decim_ < 1) decim_ = 1;
+        fs_.cfg = cfg.fs; runaway_.cfg = cfg.runaway; stall_.cfg = cfg.stall; stall_.reset();
+        decim_ = (int)(cfg.pid_hz() / cfg.est_hz + 0.5f); if (decim_ < 1) decim_ = 1;
+        denom_ = cfg.pid_denom < 1 ? 1 : cfg.pid_denom; pid_n_ = 0; win_dt_ = 0.0f; win_g_ = Vec3(); win_a_ = Vec3(); last_ = CoreOutput();
         acc_n_ = 0; acc_sum_ = Vec3(); est_dt_ = 0.0f; ground_t_ = 0.0f; have_att_ = false; mag_seeded_ = false; was_althold_ = false; last_thr_ = 0;
         have_rc_ = false; rc_seq_ = 0; raised_ = airborne_ = false; up_t_ = 0.0f; land_.reset(); was_angle_ = was_stab_ = false; ctl_dirty_ = true;
         baro_new_ = range_new_ = gps_new_ = false; baro_ms_ = range_ms_ = gps_ms_ = mag_ms_ = 0; have_baro_ = have_range_ = have_gps_ = false; mag_ready_ = false;
@@ -213,33 +219,56 @@ public:
     // Live re-tune of the navigation settings from the app (disarmed)
     void apply_nav() { ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue; tilt_aid_.cfg = cfg.tilt_aid; fs_.cfg = cfg.fs; }
 
+    // One gyro sample. Every sample goes through the gyro filters; every pid_denom-th one is also a control cycle (control()).
     WB_FAST CoreOutput update(const FastInput& in) {
-        CoreOutput o; const float dt = in.dt; const uint32_t now = in.now_ms;
-        o.motor_count = mixer_.motor_count();
-
-        // ---- 1. gyro: FRD deg/s -> user rates (pitch is negated), filtered for the rate loop
+        // ---- 1. gyro: FRD deg/s -> user rates (pitch is negated), filtered for the rate loop - at the gyro's rate, so that the
+        // filters see every sample (nothing above the control rate aliases into it: Betaflight filters at the gyro rate as well)
         g_f_[0] = in.gyro_dps.x; g_f_[1] = -in.gyro_dps.y; g_f_[2] = in.gyro_dps.z;
         gf_.apply(g_f_, in.motors.rpm_valid ? in.motors.rpm : nullptr);
+        // the estimators' sums take every sample, each for the time it stands for
+        acc_sum_.x += in.acc_g.x * in.dt; acc_sum_.y += in.acc_g.y * in.dt; acc_sum_.z += in.acc_g.z * in.dt; est_dt_ += in.dt;
+        gyro_sum_.x += in.gyro_dps.x * in.dt; gyro_sum_.y += in.gyro_dps.y * in.dt;
+        if (denom_ <= 1) { CoreOutput o = control(in, in.gyro_dps, in.acc_g, in.dt); return o; }
+        // the attitude of a control cycle is integrated over the mean rate of its window (the rate times the time that really passed)
+        win_dt_ += in.dt;
+        win_g_.x += in.gyro_dps.x * in.dt; win_g_.y += in.gyro_dps.y * in.dt; win_g_.z += in.gyro_dps.z * in.dt;
+        win_a_.x += in.acc_g.x * in.dt; win_a_.y += in.acc_g.y * in.dt; win_a_.z += in.acc_g.z * in.dt;
+        if (++pid_n_ < denom_ || !(win_dt_ > 0.0f)) {          // a gyro-only sample: the last control cycle's output with the new filtered gyro
+            CoreOutput o = last_; o.pid_stepped = false; o.est_stepped = false;
+            for (int a = 0; a < 3; a++) o.gyro_f_dps[a] = g_f_[a];
+            return o;
+        }
+        const float w = win_dt_, iw = 1.0f / w;
+        const Vec3 g = {win_g_.x * iw, win_g_.y * iw, win_g_.z * iw}, acc = {win_a_.x * iw, win_a_.y * iw, win_a_.z * iw};
+        pid_n_ = 0; win_dt_ = 0.0f; win_g_ = Vec3(); win_a_ = Vec3();
+        last_ = control(in, g, acc, w);
+        return last_;
+    }
+
+private:
+    // The control cycle: gyro_dps / acc_g = the (mean) rate and acceleration of its window, dt = the window's length.
+    WB_FAST CoreOutput control(const FastInput& in, const Vec3& gyro_dps, const Vec3& acc_g, float dt) {
+        CoreOutput o; const uint32_t now = in.now_ms;
+        o.motor_count = mixer_.motor_count();
+        o.stall_motor = (uint8_t)stall_.last();
         for (int a = 0; a < 3; a++) o.gyro_f_dps[a] = g_f_[a];
 
         // ---- 2. attitude (unfiltered gyro) with the compass when it is trustworthy
         if (!have_att_) {                                      // initial attitude from gravity - only from a plausible reading (never from a zero / 0 g vector)
-            const float an = sqrtf(in.acc_g.x * in.acc_g.x + in.acc_g.y * in.acc_g.y + in.acc_g.z * in.acc_g.z);
-            if (an > 0.5f && an < 1.5f) { ahrs_.reset_to_accel(in.acc_g); have_att_ = true; }
+            const float an = sqrtf(acc_g.x * acc_g.x + acc_g.y * acc_g.y + acc_g.z * acc_g.z);
+            if (an > 0.5f && an < 1.5f) { ahrs_.reset_to_accel(acc_g); have_att_ = true; }
         }
         const bool mag_fresh = cfg.use_mag && mag_ready_ && age_ms(now, mag_ms_) <= (uint32_t)cfg.mag_stale_ms;
         if (mag_fresh && !mag_seeded_ && !armed_) mag_seeded_ = ahrs_.seed_yaw_from_mag(mag_, cfg.declination_deg);
-        const float turning = fmaxf(fabsf(in.gyro_dps.x), fmaxf(fabsf(in.gyro_dps.y), fabsf(in.gyro_dps.z)));
+        const float turning = maxf(fabsf(gyro_dps.x), maxf(fabsf(gyro_dps.y), fabsf(gyro_dps.z)));
         const float acc_gain = acc_gain_.update(armed_, turning, ahrs_.acc_weight() > 0.0f, dt);
-        ahrs_.update({in.gyro_dps.x * kDeg2Rad, in.gyro_dps.y * kDeg2Rad, in.gyro_dps.z * kDeg2Rad}, in.acc_g, dt, mag_fresh ? &mag_ : nullptr, cfg.declination_deg, acc_gain,
+        ahrs_.update({gyro_dps.x * kDeg2Rad, gyro_dps.y * kDeg2Rad, gyro_dps.z * kDeg2Rad}, acc_g, dt, mag_fresh ? &mag_ : nullptr, cfg.declination_deg, acc_gain,
                      !armed_ && turning < cfg.ahrs_ground.gyro_limit_dps);
         att_ = ahrs_.euler_user();
 
         // ---- 3. estimators at est_hz on the averaged accelerometer
         // The cycles are not all the same length: each reading counts for the time it stands for, and the step is made over the
         // time that really passed (not "the last cycle x n").
-        acc_sum_.x += in.acc_g.x * dt; acc_sum_.y += in.acc_g.y * dt; acc_sum_.z += in.acc_g.z * dt; est_dt_ += dt;
-        gyro_sum_.x += in.gyro_dps.x * dt; gyro_sum_.y += in.gyro_dps.y * dt;
         float dt_est = 0.0f;                                   // > 0: this cycle is an estimator step, over this much time
         if (++acc_n_ >= decim_ && est_dt_ > 0.0f) {
             dt_est = est_dt_;
@@ -276,7 +305,7 @@ public:
         FsInput fi;
         fi.rx_ok = in.rc_link; fi.batt_critical = in.health.batt_critical; fi.alt_valid = est_.alt_valid;
         fi.landed = alt_.get_state() == AhState::LANDED_IDLE; fi.airborne = airborne_; fi.armed = armed_; fi.switch_on = (cmd.modes >> M_FAILSAFE_SW) & 1u; fi.vz = est_.vz;
-        fi.rescue_active = rescue_out_.active; fi.stick_move = in.rc_link ? fmaxf(fabsf(cmd.roll), fmaxf(fabsf(cmd.pitch), fabsf(cmd.yaw))) : 0.0f;
+        fi.rescue_active = rescue_out_.active; fi.stick_move = in.rc_link ? maxf(fabsf(cmd.roll), maxf(fabsf(cmd.pitch), fabsf(cmd.yaw))) : 0.0f;
         const FsOutput fo = fs_.update(fi, dt);
         if (fo.disarm) { arming_.force_disarm(); armed_ = false; }
         o.failsafe = fo.stage; o.fs_cause = fo.cause; o.armed = armed_;
@@ -348,7 +377,7 @@ public:
         // airborne_: the throttle has been up (25 % at once, or anything above "low" for a second), or Altitude Hold has lifted the
         // craft off. It ends when the craft is found standing still with the throttle down (LandDetector), when Altitude Hold has
         // landed it, and with the disarm. raised_ is Betaflight's latch: set with it, cleared only by the disarm.
-        const float turning_f = fmaxf(fabsf(g_f_[0]), fmaxf(fabsf(g_f_[1]), fabsf(g_f_[2])));
+        const float turning_f = maxf(fabsf(g_f_[0]), maxf(fabsf(g_f_[1]), fabsf(g_f_[2])));
         if (pilot_throttle) {
             up_t_ = cmd.throttle_low ? 0.0f : up_t_ + dt;
             if (cmd.throttle_cmd >= cfg.airmode_threshold || up_t_ >= cfg.airborne_after_s) airborne_ = raised_ = true;
@@ -399,7 +428,7 @@ public:
                 nav_lean_ = true; was_poshold_ = false;
             } else if (ph_on && ph_ok) {
                 PosHoldInput pi; pi.airborne = airborne_; pi.yaw_deg = yaw; pi.pos_n = npn; pi.pos_e = npe; pi.vel_n = nvn; pi.vel_e = nve;
-                pi.pilot_roll_deg = cfg.angle.limit_deg * ss.rate[ROLL] / fmaxf(cfg.rates.max_rate_dps[ROLL], 1.0f); pi.pilot_pitch_deg = cfg.angle.limit_deg * ss.rate[PITCH] / fmaxf(cfg.rates.max_rate_dps[PITCH], 1.0f);
+                pi.pilot_roll_deg = cfg.angle.limit_deg * ss.rate[ROLL] / maxf(cfg.rates.max_rate_dps[ROLL], 1.0f); pi.pilot_pitch_deg = cfg.angle.limit_deg * ss.rate[PITCH] / maxf(cfg.rates.max_rate_dps[PITCH], 1.0f);
                 pi.roll_centred = cmd.roll == 0.0f; pi.pitch_centred = cmd.pitch == 0.0f;
                 if (!was_poshold_) ph_.init(pi);
                 ph_.update(pi, dt_est, nav_tgt_[ROLL], nav_tgt_[PITCH]);
@@ -450,17 +479,22 @@ public:
         // ---- 9. runaway take-off prevention (safety.h): the loop fights the craft instead of steering it -> motors off
         RunawayTakeoff::Input ri;
         ri.armed = true; ri.motors_mixed = !ground_idle; ri.throttle = pilot_throttle ? cmd.throttle_cmd : thr;
-        ri.stick = fmaxf(fabsf(cmd.roll), fmaxf(fabsf(cmd.pitch), fabsf(cmd.yaw)));
+        ri.stick = maxf(fabsf(cmd.roll), maxf(fabsf(cmd.pitch), fabsf(cmd.yaw)));
         for (int a = 0; a < 3; a++) { ri.pid_sum[a] = o.pid_p[a] + o.pid_i[a] + o.pid_d[a] + o.pid_f[a]; ri.gyro_dps[a] = g_f_[a]; }
         if (runaway_.update(ri, dt)) {
             arming_.force_disarm(AB_RUNAWAY_TAKEOFF); armed_ = false;
             o.armed = false; o.arm_blockers |= AB_RUNAWAY_TAKEOFF; for (auto& m : o.motor) m = 0;
         }
+        // ---- 9b. a motor that stopped (a prop strike, a blocked motor, a desync): everything off (safety.h StallGuard)
+        { StallGuard::Input si; si.armed = o.armed; si.motors = o.motor_count; si.command = o.motor; si.rpm = in.motors.rpm; si.valid_mask = in.motors.valid_mask;
+          if (stall_.update(si, dt)) { arming_.force_disarm(AB_MOTOR_STALL); armed_ = false; o.armed = false; o.arm_blockers |= AB_MOTOR_STALL; for (auto& m : o.motor) m = 0; }
+          o.stall_motor = (uint8_t)stall_.last(); }
         // a rescue from the switch has brought the craft down: motors off (after a failsafe the failsafe itself does that)
         if (rescue_landed && !fo.rescue) { arming_.force_disarm(); armed_ = false; o.armed = false; for (auto& m : o.motor) m = 0; }
         return o;
     }
 
+public:
     const Ahrs& ahrs() const { return ahrs_; }
     const VerticalEstimator& vertical() const { return vert_; }
     const HorizontalEstimator& horizontal() const { return horiz_; }
@@ -473,6 +507,7 @@ public:
     const Estimate& estimate() const { return est_; }
     bool armed() const { return armed_; }
     const RunawayTakeoff& runaway() const { return runaway_; }
+    const StallGuard& stall_guard() const { return stall_; }
     const TiltAid& tilt_aid() const { return tilt_aid_; }
     const PosHold& poshold() const { return ph_; }
     const Rescue& rescue() const { return rescue_; }
@@ -486,8 +521,9 @@ public:
 
 private:
     void configure_control() {
-        pid_.configure(cfg.pid, cfg.loop_hz); sp_gen_.configure(cfg.ff, cfg.rc_smoothing, cfg.loop_hz);
-        angle_.configure(cfg.angle, cfg.loop_hz); stab_.configure(cfg.stab); boost_.configure(cfg.throttle_boost, cfg.throttle_boost_cutoff, cfg.loop_hz);
+        const float hz = cfg.pid_hz();                 // the controllers run at the control rate, the gyro filters (gf_) at the gyro's
+        pid_.configure(cfg.pid, hz); sp_gen_.configure(cfg.ff, cfg.rc_smoothing, hz);
+        angle_.configure(cfg.angle, hz); stab_.configure(cfg.stab); boost_.configure(cfg.throttle_boost, cfg.throttle_boost_cutoff, hz);
         have_rc_ = false; ctl_dirty_ = true;
     }
     // disarmed: the controllers forget everything, once
@@ -524,7 +560,7 @@ private:
                 if (!baro_fresh && !range_fresh) {                 // the GPS is all there is: as the height (seamless when a baro was there a moment ago)
                     if (vert_.gps_ref_ok()) vert_.update_gps_relative(gps_.alt_m, sa, true); else vert_.update_gps(gps_.alt_m, sa);
                 } else if (cfg.gps_alt == GA_BLEND && baro_fresh && !range_fresh) {
-                    vert_.update_gps_relative(gps_.alt_m, fmaxf(sa, cfg.vertical.gps_blend_sigma_min), true);
+                    vert_.update_gps_relative(gps_.alt_m, maxf(sa, cfg.vertical.gps_blend_sigma_min), true);
                 } else vert_.update_gps_relative(gps_.alt_m, sa, false);      // only keeps the reference
             }
             // GPS vertical velocity: measured gps_delay_s ago - brought forward with the acceleration since (as the horizontal estimator does)
@@ -567,10 +603,11 @@ private:
         est_.flow_valid = flow_now;                             // (one sample that was not used - a dark patch - does not end it: flow_stale_ms without any does)
     }
 
-    Ahrs ahrs_; AccelGainSchedule acc_gain_; VerticalEstimator vert_; HorizontalEstimator horiz_; Mixer mixer_; AltHold alt_; Failsafe fs_; Arming arming_; RunawayTakeoff runaway_;
+    Ahrs ahrs_; AccelGainSchedule acc_gain_; VerticalEstimator vert_; HorizontalEstimator horiz_; Mixer mixer_; AltHold alt_; Failsafe fs_; Arming arming_; RunawayTakeoff runaway_; StallGuard stall_;
     GyroFilter gf_; SetpointGenerator sp_gen_; PidController pid_; AngleController angle_; StabilizeController stab_; ThrottleBoost boost_;
     float g_f_[3] = {};
     EulerDeg att_; Estimate est_;
+    int denom_ = 1, pid_n_ = 0; float win_dt_ = 0.0f; Vec3 win_g_, win_a_; CoreOutput last_;     // the gyro samples of the control cycle to come
     Vec3 acc_sum_, gyro_sum_; int acc_n_ = 0, decim_ = 8; float est_dt_ = 0.0f, ground_t_ = 0.0f;
     TiltAid tilt_aid_; GyroHistory gyro_hist_; FlowSample flow_; bool flow_new_ = false, flow_seen_ = false, have_flow_ = false, have_gps_xy_ = false, heading_ok_ = false; uint32_t flow_ms_ = 0, flow_ok_ms_ = 0, gps_xy_ms_ = 0;
     PosHold ph_; PosControlNE rctl_; Rescue rescue_; RescueOutput rescue_out_; bool was_poshold_ = false, nav_lean_ = false, ph_unavail_ = false, ph_slow_gps_ = false, rescue_ok_ = false; float nav_tgt_[2] = {0, 0};

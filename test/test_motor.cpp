@@ -6,6 +6,7 @@
 #include "../src/hal/motor/motor_protocol.h"
 #include "../src/hal/motor/motor_output.h"
 #include "../src/hal/motor/esc_sensor.h"
+#include "../src/hal/motor/can_esc.h"
 using namespace motor;
 
 static int g_pass = 0, g_fail = 0;
@@ -36,6 +37,10 @@ static void t_frame() {
     CHECK(s[0].lvl0 == 0 && s[0].lvl1 == 1 && abs(s[0].dur0 + s[0].dur1 - 267) <= 1, "bidirectional = inverted, DShot300 bit 267 ticks");
     dshot_symbols(pk, PROTO_DSHOT1200, 80000000, false, s);
     CHECK(abs(s[0].dur0 + s[0].dur1 - 67) <= 1, "DShot1200 bit 833 ns");
+    // the rounding the frame path uses instead of lroundf: the same for every value a motor can get, and 0 for nonsense (never a huge number)
+    bool same = true; for (float x = 0.0f; x < 4100.0f; x += 0.0625f) same &= (uint32_t)round_pos(x) == (uint32_t)lroundf(x);
+    CHECK(same, "round_pos == lroundf over 0 .. 4100 in steps of 1/16 (halves up)");
+    CHECK(round_pos(-5.0f) == 0.0f && round_pos(NAN) == 0.0f && round_pos(47.5f) == 48.0f && round_pos(0.49f) == 0.0f, "round_pos: negative and NaN -> 0, 47.5 -> 48, 0.49 -> 0");
 }
 
 static void t_gcr() {
@@ -275,6 +280,44 @@ static void t_proshot_brushed() {
     m.cfg.protocol = PROTO_BRUSHED; CHECK(!m.beacon(0, 3), "brushed: no beacon");
 }
 
+// ESCs on the CAN bus: the values, the rate of the RawCommands, esc.Status back into the telemetry
+struct CapBus : dcan::Bus { std::vector<dcan::Frame> out; bool full = false;
+    bool send(const dcan::Frame& f) override { if (full) return false; out.push_back(f); return true; } bool receive(dcan::Frame&) override { return false; } };
+static void t_can_esc() {
+    printf("[DroneCAN ESCs] values 0..8191, one RawCommand per 1/400 s, esc.Status\n");
+    CHECK(is_can(PROTO_DRONECAN) && !is_dshot(PROTO_DRONECAN) && !is_dshot_wire(PROTO_DRONECAN) && !is_can(PROTO_DSHOT600) && default_pulse_hz(PROTO_DRONECAN) == 400, "DRONECAN: not DShot, 400 commands a second by default");
+    PulseEndpoints pe; Endpoints e = endpoints(PROTO_DRONECAN, pe, 0.05f, 1.0f);
+    CHECK(e.disarm == 0 && fabsf(e.low - (1 + 0.05f * 8190)) < 0.01f && e.high == 8191, "endpoints: stop 0, idle 5 %% = %.1f, full 8191", e.low);
+    e = endpoints(PROTO_DRONECAN, pe, 0.0f, 0.8f); CHECK(e.low == 1 && fabsf(e.high - (8191 - 8190 * 0.2f)) < 0.01f, "idle 0: never below 1 armed (0 is stop); limit 80 %% = %.0f", e.high);
+    MotorOutputManager m; m.cfg.protocol = PROTO_DRONECAN; m.cfg.count = 4; m.cfg.idle = 0.05f; m.cfg.order[0] = 1; m.cfg.order[1] = 0; m.begin();
+    Frame f; const float cmd[4] = {0.0f, 0.5f, 1.0f, 0.2f};
+    m.update(0, cmd, true, f);
+    CHECK(f.value[1] == (uint16_t)lroundf(1 + 0.05f * 8190) && f.value[0] == (uint16_t)lroundf(1 + 0.5f * 8190) && f.value[2] == 8191 && f.value[3] == (uint16_t)lroundf(1 + 0.2f * 8190),
+          "armed: motor 1 at 0 -> idle (%u, on slot 2: the order tab), motor 2 at 50 %% -> %u, full -> 8191", f.value[1], f.value[0]);
+    m.update(1000, cmd, false, f); CHECK(f.value[0] == 0 && f.value[1] == 0 && f.value[2] == 0, "disarmed: 0 (stop) on every slot");
+    CHECK(!m.beacon(0, 2) && !m.request_direction(0, true) && !m.enable_extended_telemetry(true), "no DShot commands on the CAN bus (beacon, direction, telemetry)");
+    m.update(2000, cmd, true, f);
+    m.feed_can(1, 40.0f, 15.8f, 6.5f, -12000, 500);          // slot 1 = motor 1
+    MotorTelemetry t = m.telemetry(0, 600);
+    CHECK(t.rpm_valid && t.rpm == 12000 && t.temp_c == 40 && fabsf(t.volt - 15.8f) < 1e-4f && fabsf(t.amps - 6.5f) < 1e-4f, "esc.Status of slot 1 lands on motor 1: %.0f rpm (reverse counts as speed), %u C, %.1f V, %.1f A", t.rpm, t.temp_c, t.volt, t.amps);
+    m.cfg.telem_timeout_ms = 500; CHECK(m.telemetry(0, 900).rpm_valid && !m.telemetry(0, 1100).rpm_valid, "valid for the CAN timeout (500 ms: esc.Status is slower than DShot replies)");
+    float a = 0; CHECK(m.esc_current(900, a) && fabsf(a - 6.5f) < 1e-4f && fabsf(m.esc_voltage(900) - 15.8f) < 1e-4f, "the ESC current / voltage sum for the battery (ESC source works over CAN too)");
+    float rpm[kMaxMotors]; CHECK(m.rpm_array(rpm, 900) == 0x01, "rpm_array: motor 1 known (the stall guard can use it)");
+    // the backend: the rate and what goes on the bus
+    CapBus bus; dcan::Node node; dcan::Node::Config nc; nc.node_id = 10; node.begin(&bus, nc, 0);
+    CanEscHw hw; uint8_t pins[8] = {255, 255, 255, 255, 255, 255, 255, 255};
+    CHECK(!hw.begin(pins, 4, PROTO_DRONECAN, 400, false), "without a node (no CAN bus): does not start");
+    hw.set_node(&node); hw.set_loop_hz(4000.0f); CHECK(hw.begin(pins, 4, PROTO_DRONECAN, 400, false) && hw.divider() == 10 && !strcmp(hw.name(), "DroneCAN"), "4 kHz control loop, 400 Hz commands: every 10th write (%u)", hw.divider());
+    m.update(3000, cmd, true, f); bus.out.clear();
+    for (int i = 0; i < 100; i++) hw.write(f);
+    dcan::Receiver<4, 256> rx([](dcan::Kind k, uint16_t id, void*) -> uint64_t { return k == dcan::MESSAGE && id == dcan::kRawCommandId ? dcan::kRawCommandSig : 0; }, nullptr);
+    int got = 0; dcan::RawCommand rc; dcan::Transfer tr; for (const dcan::Frame& x : bus.out) if (rx.feed(x, 0, tr)) { got++; dcan::decode(tr.data, tr.len, rc); }
+    CHECK(bus.out.size() == 10 && got == 10 && hw.stats().frames == 10, "100 writes: 10 RawCommands, one frame each (%zu)", bus.out.size());
+    CHECK(rc.n == 4 && rc.cmd[0] == f.value[0] && rc.cmd[1] == f.value[1] && rc.cmd[3] == f.value[3], "the values per slot (%d %d %d %d)", rc.cmd[0], rc.cmd[1], rc.cmd[2], rc.cmd[3]);
+    bus.full = true; for (int i = 0; i < 10; i++) hw.write(f); CHECK(hw.stats().skipped == 1, "a full transmit queue: counted (%u)", hw.stats().skipped);
+    hw.set_loop_hz(250.0f); hw.begin(pins, 4, PROTO_DRONECAN, 400, false); CHECK(hw.divider() == 1, "a loop slower than 400 Hz: every write goes out");
+}
+
 static void t_esc_wire() {
     printf("[ESC telemetry wire] KISS frames, the request round, the telemetry bit\n");
     // a frame as a BLHeli_32 ESC sends it: 41 degC, 16.20 V, 12.34 A, 456 mAh, 23400 eRPM
@@ -311,6 +354,6 @@ static void t_esc_wire() {
 }
 
 int main() {
-    t_frame(); t_gcr(); t_pulse(); t_manager(); t_commands(); t_telemetry(); t_proshot_brushed(); t_esc_wire();
+    t_frame(); t_gcr(); t_pulse(); t_manager(); t_commands(); t_telemetry(); t_proshot_brushed(); t_esc_wire(); t_can_esc();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

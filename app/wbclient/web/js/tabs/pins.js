@@ -13,6 +13,7 @@ const STM32_NOTES = { 11: 'USB D-', 12: 'USB D+', 13: tr('cổng debug (SWDIO)')
 const GROUPS = [
   [tr('IMU qua SPI'), tr('Điền chân CS thì firmware dùng SPI; để trống cả bốn thì IMU chạy I2C trên bus cảm biến bên dưới.'),
     [['imu_cs', 'CS'], ['imu_miso', 'MISO'], ['imu_mosi', 'MOSI'], ['imu_sck', 'SCK'], ['imu_int', tr('INT (chưa dùng)')]]],
+  [tr('IMU thứ hai'), tr('Chip IMU thứ hai trên cùng bus SPI với IMU đầu (chung SCK, MISO, MOSI), chỉ cần chân CS riêng. Chọn cách dùng ở tab Cảm biến (Dùng gyro nào). Để trống nếu mạch chỉ có một IMU.'), [['imu2_cs', 'CS']]],
   [tr('Bus I2C cảm biến'), tr('Barometer, lidar, la bàn (và IMU nếu không có chân CS).'), [['i2c_sda', 'SDA'], ['i2c_scl', 'SCL']]],
   ['GPS (UART1)', tr('RX của ESP32 nối với TX của module GPS.'), [['gps_rx', 'RX'], ['gps_tx', 'TX']]],
   [tr('Receiver nối tiếp (UART2)'), tr('CRSF / SBUS / IBUS / Spektrum. TX chỉ cần khi dùng telemetry.'), [['rx_rx', 'RX'], ['rx_tx', 'TX']]],
@@ -22,8 +23,9 @@ const GROUPS = [
     [['sd_cs', 'CS'], ['sd_clk', 'SCK / CLK'], ['sd_cmd', 'MOSI / CMD'], ['sd_d0', 'MISO / D0']]],
   ['Optical flow', tr('PMW3901: bốn chân SPI của riêng nó (không chung bus với IMU, và không dùng được cùng lúc với thẻ SD kiểu SPI). Cảm biến MSP qua UART: chỉ cần RX, nối với TX của cảm biến; firmware tự lấy cổng UART còn trống (UART1 nếu không có GPS, UART2 nếu không có receiver nối tiếp, UART0 khi app nối qua USB của chip - RX mặc định của UART0 là GPIO44). Chọn loại cảm biến ở tab Vị trí.'),
     [['flow_cs', 'CS'], ['flow_sck', 'SCK'], ['flow_miso', 'MISO'], ['flow_mosi', 'MOSI'], ['flow_rx', 'RX (UART)'], ['flow_tx', 'TX (UART)']]],
+  [tr('CAN bus'), tr('Nối với bộ thu phát CAN 3,3 V: TX vào chân D (TXD), RX từ chân R (RXD). Bật ở tab Cảm biến (CAN bus).'), [['can_tx', 'TX'], ['can_rx', 'RX']]],
   [tr('Telemetry ESC'), tr('Dây telemetry chung của các ESC (tab Motor: Dây telemetry ESC). Nối vào RX của một UART; firmware lấy UART còn trống (hoặc UART có chức năng Telemetry ESC trong bảng cổng).'), [['esc_tlm', 'RX']]],
-  [tr('Khác'), tr('Firmware mới chỉ lưu chân này, chưa dùng.'), [['led', 'LED']]],
+  [tr('Khác'), tr('Chân dữ liệu (DIN) của dải LED WS2812 / SK6812 (tab Pin và còi: Đèn LED).'), [['led', 'LED']]],
 ];
 // ESP32-S3 pins that are usually not free. Only a warning: boards differ.
 const S3_NOTES = {
@@ -98,6 +100,7 @@ function problems() {
   if ((store.settings.receiver || {}).protocol === 'PWM' && p.rx_pwm && p.rx_pwm[0] === 255) out.push(tr('Receiver PWM: chưa có chân của kênh 1.'));
   if ((store.settings.receiver || {}).protocol === 'PPM' && p.ppm === 255) out.push(tr('Receiver PPM: chưa có chân PPM.'));
   if ((p.imu_cs !== 255) && [p.imu_miso, p.imu_mosi, p.imu_sck].some((v) => v === 255)) out.push(tr('IMU SPI: đã có CS nhưng còn thiếu MISO, MOSI hoặc SCK.'));
+  if (p.imu2_cs !== undefined && p.imu2_cs !== 255 && p.imu_cs === 255) out.push(tr('IMU thứ hai dùng chung bus SPI của IMU đầu: IMU đầu cũng phải nối SPI (có chân CS).'));
   if (flowType === 'PMW3901' && FLOW_SPI.some((n) => p[n] === 255)) out.push(tr('Optical flow PMW3901: cần đủ bốn chân CS, SCK, MISO, MOSI.'));
   if (flowType === 'MSP' && p.flow_rx === 255) out.push(tr('Optical flow qua UART: chưa có chân RX.'));
   if (flowType === 'PMW3901' && (store.settings.blackbox || {}).device === 'SDCARD' && (store.settings.blackbox || {}).sd_mode === 'SPI') out.push(tr('PMW3901 và thẻ SD kiểu SPI cần cùng một bus SPI: đổi thẻ sang SDMMC (tab Blackbox) hoặc dùng cảm biến optical flow qua UART.'));

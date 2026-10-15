@@ -9,6 +9,10 @@
 #include <Wire.h>
 #include <SPI.h>
 #include "../hal/acc_gyro/acc_gyro_base.h"
+#include "../hal/acc_gyro/imu_select.h"
+#include "../hal/led/ws2812.h"
+#include "../hal/can/can_port.h"
+#include "../hal/can/dronecan_gps.h"
 #include "../hal/motor/motor.h"
 #include "../hal/motor/esc_sensor.h"
 #include "../hal/baro/baro_base.h"
@@ -30,6 +34,7 @@
 #include "link_host.h"
 #include "../blackbox/bb_recorder.h"
 #include "../config/pin_check.h"
+#include "../config/version.h"
 #include "../port/platform.h"
 #include "../port/pin_names.h"
 #include "sysload.h"
@@ -57,10 +62,11 @@ inline const char* pin_str(uint8_t p, char (&b)[8]) { port::pin_name(p, WB_PLATF
 
 class FlightApp {
 public:
-    struct Status { bool imu = false, motors = false, baro = false, range = false, gps = false, mag = false, rx = false, battery = false, buzzer = false, motor_beep = false, pin_conflict = false, flow = false, servo = false; } status;
+    struct Status { bool imu = false, motors = false, baro = false, range = false, gps = false, mag = false, rx = false, battery = false, buzzer = false, motor_beep = false, pin_conflict = false, flow = false, servo = false, imu2 = false, can = false, led = false; } status;
 
     fc::FlightCore core;
     IMUAccGyro imu;
+    IMUAccGyro imu2;                                      // a second IMU on imu's SPI bus (pins.imu2_cs, sensors.gyro_use): imu_sel_ picks
     MotorSystem motors;
     BaroSensor baro;
     RangeFinder sonar;
@@ -85,6 +91,9 @@ public:
     fc::InflightTrim inflight_trim;
     bool use_external_rc = false;                         // true: channels come from set_rc() (tests / a radio module) instead of `rc`
     bool usb_link = false;                                // the app link is the chip's own USB (GPIO19 / 20): set before begin(), for the pin check
+    CanPort* can_port = nullptr;                          // the CAN controller (twai_bus.h on the ESP32): set before begin(); nullptr = none on this chip
+    dcan::Node can_node;                                  // the flight controller as a DroneCAN node (section can)
+    uint8_t chip_uid[12] = {};                            // the chip's unique id (DroneCAN's hardware unique id): set before begin()
 
     // ---------------------------------------------------------------- settings -> configuration (before begin())
     void configure(wbp::Settings& s) {
@@ -94,7 +103,7 @@ public:
         wbp::apply_motors(s, motors.cfg());
         wbp::apply_gps(s, gnss.config());
         apply_battery(); apply_beeper(); apply_servo();
-        baro.setEnabled(s.sensors.baro_enabled != 0); sonar.setEnabled(s.sensors.range_enabled != 0);
+        baro.setEnabled(s.sensors.baro_enabled != 0); baro.setModel((BaroSensor::Model)s.sensors.baro_model); sonar.setEnabled(s.sensors.range_enabled != 0);
         mag.setEnabled(s.sensors.mag_enabled != 0); gnss.setEnabled(s.sensors.gps_enabled != 0);
         mag.setModel((MagSensor::Model)s.sensors.mag_model);
         sonar.setModel((RangeFinder::Model)s.sensors.range_model); sonar.setL1xMode(s.sensors.range_l1x_mode);
@@ -141,26 +150,64 @@ public:
         // ---- loop rate: never faster than the gyro delivers new samples; an I2C IMU cannot be read faster than ~1 kHz
         float hz = s.general.loop_hz;
         if (status.imu && imu.gyroRateHz() > 0 && hz > imu.gyroRateHz()) hz = imu.gyroRateHz();
+        // ---- a second IMU: on the first one's SPI bus, its own chip select
+        const uint8_t cs2 = s.pins.imu2_cs; imu2_cfg_ = cs2 != GPIO_UNUSED;
+        if (imu2_cfg_) {
+            const char* why = !status.imu ? "the first IMU is missing (the second one shares its SPI bus)" : !imu_spi ? "the first IMU is on I2C (a second IMU shares the first one's SPI bus)" : nullptr;
+            status.imu2 = !why && imu2.IMUInitShared(imu, cs2, ic);
+            if (!why) why = imu2.failReason();
+            if (status.imu2 && s.sensors.gyro_use != imusel::FIRST && imu2.gyroRateHz() > 0 && hz > imu2.gyroRateHz()) hz = imu2.gyroRateHz();     // (flown on: its rate counts too)
+            static const char* const kUse[3] = {"stand-by (gyro_use FIRST)", "its gyro flies (gyro_use SECOND)", "both gyros averaged (gyro_use BOTH)"};
+            char pb[8]; say(status.imu2, "imu2", imu2.name(), why, "SPI %s on CS %s, %s", imu2.name(), pin_str(cs2, pb), kUse[s.sensors.gyro_use < 3 ? s.sensors.gyro_use : 0]);
+        }
+        imu_sel_.configure((imusel::Use)s.sensors.gyro_use, status.imu, status.imu2);
         if (!imu_spi && hz > 1000.0f) hz = 1000.0f;
-        core.cfg.loop_hz = hz; if (core.cfg.est_hz > hz) core.cfg.est_hz = hz;
+        core.cfg.loop_hz = hz;
+        // the control rate: loop_hz / pid_denom, never below 500 Hz (the denominator is lowered until it fits)
+        while (core.cfg.pid_denom > 1 && hz / (float)core.cfg.pid_denom < 500.0f) core.cfg.pid_denom--;
+        const float pid_hz = core.cfg.pid_hz();
+        if (core.cfg.est_hz > pid_hz) core.cfg.est_hz = pid_hz;
         period_us_ = (uint32_t)(1e6f / hz + 0.5f);
         pub_div_ = (uint16_t)(hz / 1000.0f + 0.5f); if (pub_div_ < 1) pub_div_ = 1;
         cal_samples_ = hz > 8000.0f ? 8000 : (uint16_t)hz;                         // ~1 s of samples
-        if (status.imu) { apply_alignment(); imu.startGyroCalibration(cal_samples_); cal_kind_ = wbp::CAL_KIND_GYRO; }
-        say(status.imu, "imu", imu.name(), imu.failReason(), "%s %s %.0f Hz loop", imu_spi ? "SPI" : "I2C", imu.name(), (double)hz);
+        if (status.imu) { apply_alignment(); start_gyro_cal(); cal_kind_ = wbp::CAL_KIND_GYRO; }
+        say(status.imu, "imu", imu.name(), imu.failReason(), "%s %s, gyro %.0f Hz, control %.0f Hz (1/%d)", imu_spi ? "SPI" : "I2C", imu.name(), (double)hz, (double)pid_hz, core.cfg.pid_denom);
 
         // ---- shared sensor I2C bus: barometer, lidar, compass
         if (bus[0] != GPIO_UNUSED && bus[1] != GPIO_UNUSED) {
             I2CBus_config_t c; c.bus_clock_speed = 400000; c.ioSdaGpio = bus[0]; c.ioSclGpio = bus[1]; c.addr = 0x76; sensorBus.I2CInit(c);
             baro.attachI2C(sensorBus); sonar.attachI2C(sensorBus); mag.attachI2C(sensorBus);
         }
-        status.baro = baro.BaroInit(false);
-        say(status.baro, "baro", baro.name(), baro.failReason(), "%s", baro.name());
+        const bool can_baro = s.sensors.baro_model == wbp::BARO_MODEL_DRONECAN;
+        if (!can_baro) { status.baro = baro.BaroInit(false); say(status.baro, "baro", baro.name(), baro.failReason(), "%s", baro.name()); }
         status.range = sonar.RangeInit();
         // the lidar may be the one inside an MSP flow sensor (asked for, or nothing else answered): that is known after the UARTs
         const bool range_from_flow = app::lidar_of_flow(s.sensors.range_enabled, s.flow.type == FlowSensor::MSP, s.sensors.range_model == wbp::RANGE_MODEL_MSP,
                                                         s.sensors.range_model == wbp::RANGE_MODEL_AUTO, status.range);
         if (!range_from_flow) say(status.range, "range", sonar.name(), sonar.failReason(), "%s", sonar.name());
+        // ---- CAN bus: DroneCAN modules (a GPS, a compass) - before the compass and the GPS, which may take their data from it
+        status.can = false; can_gps_ = can_mag_ = can_baro_ = can_batt_ = false;
+        if (s.can.mode == wbp::CAN_MODE_DRONECAN) {
+            static const uint32_t kBps[4] = {125000, 250000, 500000, 1000000};
+            const uint32_t bps = kBps[s.can.bitrate < 4 ? s.can.bitrate : 3];
+            const char* why = !can_port ? "this chip has no CAN controller in this build" : (s.pins.can_tx == GPIO_UNUSED || s.pins.can_rx == GPIO_UNUSED) ? "CAN pins not set (Pins tab: CAN bus)" : nullptr;
+            if (!why && !can_port->start(s.pins.can_tx, s.pins.can_rx, bps)) why = can_port->why();
+            status.can = !why;
+            if (status.can) {
+                dcan::Node::Config nc; nc.node_id = s.can.node_id; nc.dna_server = s.can.dna_server != 0; nc.sw_major = WB_FW_MAJOR; nc.sw_minor = WB_FW_MINOR;
+                for (int i = 0; i < 16; i++) nc.uid[i] = chip_uid[i % 12] ^ (uint8_t)(i / 12);
+                can_node.begin(can_port, nc, millis());
+                can_gps_ = s.gps.provider == wbp::GPS_PROVIDER_DRONECAN; can_mag_ = s.sensors.mag_model == wbp::MAG_MODEL_DRONECAN; can_baro_ = can_baro;
+                can_batt_ = s.battery.source == batt::SRC_DRONECAN || s.battery.current_source == batt::CUR_DRONECAN;
+            }
+            char tb[8], rb[8];
+            say(status.can, "can", "", why, "DroneCAN node %u, %lu kbit/s, TX %s RX %s%s", (unsigned)s.can.node_id, (unsigned long)(bps / 1000u), pin_str(s.pins.can_tx, tb), pin_str(s.pins.can_rx, rb),
+                s.can.dna_server ? ", hands out node ids" : "");
+        }
+        if (can_baro) {                                      // a DroneCAN barometer: only once the bus is known to run
+            status.baro = status.can && baro.BaroInit(false);
+            say(status.baro, "baro", "DroneCAN", status.can ? baro.failReason() : "sensors.baro_model is DRONECAN but the CAN bus is not running (section can)", "DroneCAN (the first node on the bus that sends StaticPressure)");
+        }
         mag.attachImuBus(imu.regBus(), imu.detected());
         status.mag = mag.MagInit();
         say(status.mag, "mag", mag.name(), mag.failReason(), "%s%s", mag.name(), mag.calibrated() ? "" : " (not calibrated)");
@@ -174,9 +221,13 @@ public:
         const bool serial_rx = !use_external_rc && rxp_ != rx::PROTO_PPM && rxp_ != rx::PROTO_PWM;
         const bool port_table = s.ports.assign == wbp::PORT_ASSIGN_TABLE;
         uint8_t pfn[3]; for (int i = 0; i < 3; i++) pfn[i] = s.ports.function[i];
-        const app::UartPlan plan = app::plan_uarts(port_table, pfn, s.sensors.gps_enabled != 0, serial_rx, s.flow.type == FlowSensor::MSP, uart0 != nullptr, false, false);
+        const bool gps_uart = s.sensors.gps_enabled && gps::uses_uart((gps::Provider)s.gps.provider);        // (a DroneCAN GPS needs no UART)
+        const app::UartPlan plan = app::plan_uarts(port_table, pfn, gps_uart, serial_rx, s.flow.type == FlowSensor::MSP, uart0 != nullptr, false, false);
         if (*plan.why) { char line[kReportLen]; snprintf(line, sizeof(line), "ports: WARNING - %s", plan.why); add_report(line); }
-        if (plan.gps >= 0 || !s.sensors.gps_enabled) {
+        if (s.sensors.gps_enabled && s.gps.provider == wbp::GPS_PROVIDER_DRONECAN) {
+            status.gps = status.can && gnss.beginExternal();
+            say(status.gps, "gps", "DroneCAN", status.can ? gnss.failReason() : "gps.provider is DRONECAN but the CAN bus is not running (section can)", "DroneCAN (the first node on the bus that sends a fix)");
+        } else if (plan.gps >= 0 || !s.sensors.gps_enabled) {
             status.gps = gnss.begin(*uarts[plan.gps >= 0 ? plan.gps : 1]);        // (disabled: begin() only says so)
             say(status.gps, "gps", "started", gnss.failReason(), "%s %lu baud", uname[plan.gps >= 0 ? plan.gps : 1], (unsigned long)gnss.config().baud);
         } else { status.gps = false; say(false, "gps", "", "no UART has the function GPS in the serial ports table (Pins and ports tab)", ""); }
@@ -228,25 +279,31 @@ public:
 
         // ---- core + motors
         core.configure();
-        status.motors = motors.begin(1.0f / core.cfg.loop_hz);
+        motors.setCanNode(status.can ? &can_node : nullptr);               // (protocol DRONECAN: the ESCs' commands go out on the bus)
+        status.motors = motors.begin(1.0f / core.cfg.pid_hz());          // a motor command per control cycle
         esc_poll_.begin(esc_uart_ ? motors.cfg().count : 0, millis());
         {   // why the outputs did not start, as precisely as it can be said
             static char why[150]; why[0] = 0;
             const motor::MotorConfig& mc = motors.cfg();
             uint8_t mp[8]; hw.getMotorPins(mp);
-            for (int i = 0; i < mc.count && !why[0]; i++) if (mp[i] == GPIO_UNUSED) snprintf(why, sizeof(why), "the pin of motor slot %d is not set (Pins tab)", i + 1);
+            if (motor::is_can(mc.protocol) && !status.can) snprintf(why, sizeof(why), "motors.protocol is DRONECAN but the CAN bus is not running (section can)");
+            for (int i = 0; i < mc.count && !why[0] && !motor::is_can(mc.protocol); i++) if (mp[i] == GPIO_UNUSED) snprintf(why, sizeof(why), "the pin of motor slot %d is not set (Pins tab)", i + 1);
             if (!why[0] && motor::is_dshot(mc.protocol) && mc.count > 4)
                 snprintf(why, sizeof(why), "DShot / ProShot drive at most 4 motors on the ESP32-S3 (4 RMT transmitters); this frame has %d: use PWM, Oneshot or Multishot", (int)mc.count);
             if (!why[0]) snprintf(why, sizeof(why), "output driver failed: %s", motors.backend());
-            say(status.motors, "motors", motors.backend(), why, "%s x%d", motors.backend(), (int)mc.count);
+            if (motor::is_can(mc.protocol)) say(status.motors, "motors", motors.backend(), why, "DroneCAN x%d (esc.RawCommand, ESC index = motor slot)", (int)mc.count);
+            else say(status.motors, "motors", motors.backend(), why, "%s x%d", motors.backend(), (int)mc.count);
         }
         edt_wanted_ = status.motors && s.motors.edt && s.motors.bidirectional && motor::is_dshot_wire(motors.cfg().protocol); edt_asked_ = false;
 
         // ---- battery voltage and buzzer
-        status.battery = battery.begin();
-        say(status.battery, "battery", battery.name(), battery.failReason(), "%s%s", battery.name(), battery.source() == batt::SRC_ADC ? "" : " (no ADC pin)");
+        status.battery = battery.begin() && (battery.source() != batt::SRC_DRONECAN || can_batt_);
+        if (battery.source() == batt::SRC_DRONECAN && !can_batt_) say(false, "battery", "", "battery.source is DRONECAN but the CAN bus is not running (section can)", "");
+        else
+        say(status.battery, "battery", battery.name(), battery.failReason(), "%s%s", battery.name(), battery.source() == batt::SRC_ADC || battery.source() == batt::SRC_DRONECAN ? "" : " (no ADC pin)");
         // current: the ADC sensor, or the ESCs (only with extended DShot telemetry); AUTO with neither is no fault, just no current
         if (*battery.currentFailReason()) say(false, "current", "", battery.currentFailReason(), "");
+        else if (battery.currentSource() == batt::CUR_DRONECAN) say(can_batt_, "current", "", "battery.current_source is DRONECAN but the CAN bus is not running (section can)", "from a DroneCAN power module (BatteryInfo)");
         else if (battery.currentSource() == batt::CUR_ADC) { char pb[8]; say(true, "current", "", "", "ADC sensor on %s, %d x 0.1 mV/A", pin_str(s.pins.curr_adc, pb), (int)s.battery.current_scale); }
         else if (battery.currentSource() == batt::CUR_ESC) {
             if (esc_uart_) say(true, "current", "", "", "from the ESCs (telemetry wire)");
@@ -263,12 +320,25 @@ public:
         { bool any = false; for (int i = 0; i < servo::kServos; i++) any |= s.pins.servo[i] != 255;
           if (any) { status.servo = servos.begin(s.pins.servo, s.servo.rate_hz);
                      say(status.servo, "servo", "", servos.failReason(), "%d output%s at %u Hz", servos.count(), servos.count() == 1 ? "" : "s", (unsigned)servos.rateHz()); } }
+        // ---- LED strip (WS2812 on pins.led, through the second SPI bus)
+        status.led = false;
+        if (s.led.count) {
+            const bool spi2_taken = (s.blackbox.device == bb::DEV_SDCARD && s.blackbox.sd_mode == wbp::SD_MODE_SPI) || s.flow.type == FlowSensor::PMW3901;
+            const char* why = s.pins.led == GPIO_UNUSED ? "no pin for the LED strip (Pins tab: LED)" : WB_PLATFORM_STM32 ? "not on the STM32 yet"
+                            : spi2_taken ? "the second SPI bus is taken (SD card on SPI, or a PMW3901)" : nullptr;
+#if WB_HAS_LED_STRIP
+            if (!why && !led_strip_.begin(s.pins.led)) why = "the SPI bus did not start";
+#endif
+            status.led = !why;
+            led_logic_.configure(s.led.count, s.led.brightness, (app::LedLogic::Layout)s.led.layout);
+            char pb[8]; say(status.led, "led", "", why, "%u LEDs on %s, %u %% brightness%s", (unsigned)s.led.count, pin_str(s.pins.led, pb), (unsigned)s.led.brightness, s.led.layout ? ", navigation lights" : "");
+        }
         { char line[kReportLen]; sys::Memory m = sys::memory();
           snprintf(line, sizeof(line), "memory: %lu kB internal RAM free of %lu, PSRAM %lu kB", (unsigned long)(m.heap_free / 1024u), (unsigned long)(m.heap_total / 1024u), (unsigned long)(m.psram_total / 1024u));
           add_report(line); }
 
         next_us_ = micros() + period_us_; last_us_ = micros(); start_us_ = last_us_; slow_us_ = last_us_; stat_ms_ = millis();
-        health_ = health(millis()); busy_other_ = busy_other(millis()); batt_state_ = (uint8_t)battery.monitor.state(); tel_.loop_target_hz = (uint16_t)(core.cfg.loop_hz + 0.5f); tel_.motor_count = status.motors ? motors.cfg().count : 0;
+        health_ = health(millis()); busy_other_ = busy_other(millis()); batt_state_ = (uint8_t)battery.monitor.state(); tel_.loop_target_hz = (uint16_t)(core.cfg.loop_hz + 0.5f); tel_.pid_target_hz = (uint16_t)(core.cfg.pid_hz() + 0.5f); tel_.motor_count = status.motors ? motors.cfg().count : 0;
         fill_slow(millis()); link.publish(tel_);
         return status.imu && status.motors;
     }
@@ -312,7 +382,7 @@ public:
     WB_FAST bool flight_cycle(uint32_t now_us) { sync_->lock(); const bool ok = fast_cycle(now_us, micros()); sync_->unlock(); return ok; }
 
     // ~1 kHz, the sensor thread.
-    WB_FAST void slow_update() {
+    void slow_update() {
         const uint32_t now_us = micros(), now_ms = millis();
         // how regularly this thread gets the CPU: it runs the app's requests, so a long pause here is a firmware that "does not answer"
         if (slow_seen_) { const uint32_t gap = now_ms - slow_last_ms_; if (gap > slow_gap_cur_) slow_gap_cur_ = gap; }
@@ -323,6 +393,15 @@ public:
 
         bool rc_new = false;
         if (!use_external_rc) rc_new = rc.update(now_us, now_ms);
+        if (status.can) {                                    // DroneCAN: what came in on the bus; a fix / a field for the GPS / the compass
+            can_port->service(now_ms); can_node.update(now_ms);
+            dcan::Fix2 fx; dcan::GnssAux aux; bool aux_ok = false;
+            if (can_node.take_gnss(fx, &aux, aux_ok) && can_gps_) gnss.inject(dcan::to_solution(fx, aux_ok ? &aux : nullptr), now_ms);
+            float ga[3]; if (can_node.take_mag(ga) && can_mag_) mag.pushExternal(ga, now_us);
+            float pa, tc; if (can_node.take_baro(pa, tc) && can_baro_) baro.pushExternal(pa, tc, now_us);
+            if (can_batt_) { dcan::Battery bi; const bool ok = can_node.battery(bi, now_ms); battery.setExternal(bi.voltage, bi.current, ok); }
+            if (motor::is_can(motors.cfg().protocol)) for (int i = 0; i < dcan::Node::kMaxEsc; i++) { dcan::EscStatus e; if (can_node.take_esc(i, e)) { can_esc_[i] = e; can_esc_new_ |= (uint8_t)(1u << i); } }
+        }
         gnss.update(now_ms, armed);
         const bool gps_new = gnss.newSolution() && gnss.usable() && gnss.home().has_home();
         const fc::GpsMeas gm = gps_new ? gps_meas() : fc::GpsMeas();
@@ -357,7 +436,7 @@ public:
             if (now_armed && !was_armed_) { core.reset_position(); ekf_rehome_ = true; }   // (the GPS home point is set by gnss.update() when it sees the same edge)
             was_armed_ = now_armed;
             if (ekf_mode_) {
-                if (ekf_acc_.dt >= 0.004f) { ekf_in_ = ekf_acc_; ekf_acc_ = EkfDelta(); ekf_due_ = true; ekf_ahrs_yaw_ = core.ahrs().euler_aero().yaw; ekf_armed_ = now_armed; ekf_gyro_ok_ = imu.gyroCalibrated(); }
+                if (ekf_acc_.dt >= 0.004f) { ekf_in_ = ekf_acc_; ekf_acc_ = EkfDelta(); ekf_due_ = true; ekf_ahrs_yaw_ = core.ahrs().euler_aero().yaw; ekf_armed_ = now_armed; ekf_gyro_ok_ = gyro_calibrated(); }
                 core.on_ekf(ekf_nav_, now_ms);                                  // (the result of the last step)
             }
 
@@ -370,6 +449,10 @@ public:
             if (flow_new) { const flow::Reading& r = flow.reading(); fc::FlowSample f; f.x = r.x; f.y = r.y; f.dt = r.dt; f.age_s = r.age_s; f.quality = r.quality; core.on_flow(f, now_ms); flow_quality_ = r.quality; }
             if (mag_new) { const float* b = mag.board(); core.on_mag({b[0], b[1], b[2]}, mag.readyForFusion(now_ms), now_ms); }
             if (esc_new) motors.manager().feed_serial(esc_m, esc_r.temp_c, esc_r.volt, esc_r.amps, esc_r.erpm, now_ms);
+            if (can_esc_new_) {                                                  // esc.Status of the ESCs on the bus (index = hardware slot)
+                for (int i = 0; i < dcan::Node::kMaxEsc; i++) if (can_esc_new_ & (1u << i)) { const dcan::EscStatus& e = can_esc_[i]; motors.manager().feed_can(i, e.temperature_k > 0 ? e.temperature_k - 273.15f : 0.0f, e.voltage, e.current, e.rpm, now_ms); }
+                can_esc_new_ = 0;
+            }
             if (esc_ask >= 0) motors.manager().request_telemetry(esc_ask);       // (the bit goes out with the next control cycle's frame)
             if (blackbox.take_erase_done()) beep_event(beep::BLACKBOX_ERASE);
             update_inflight_trim(now_ms);
@@ -384,7 +467,9 @@ public:
 
             // a gyro calibration that failed at boot (the craft was moved) is retried until it succeeds, like Betaflight
             if (!imu.gyroCalibrated() && imu.gyroCalState() == CalState::FAILED && !now_armed && status.imu) imu.startGyroCalibration(cal_samples_);
+            if (!imu2.gyroCalibrated() && imu2.gyroCalState() == CalState::FAILED && !now_armed && status.imu2) imu2.startGyroCalibration(cal2_samples());
 
+            if (status.led && (uint32_t)(now_ms - led_ms_) >= 20u) { led_ms_ = now_ms; led_in_ = led_input(); led_due_ = true; }      // (50 pictures a second, sent below)
             link.service([this](const app::Request& r) { return execute(r); });
             if (reboot_pending_ && (int32_t)(now_ms - reboot_at_ms_) >= 0) { float z[8] = {}; motors.update(micros(), z, false); restart = true; }
         }
@@ -405,6 +490,12 @@ public:
             if ((uint32_t)(now_ms - bb_slow_ms_) >= 1000u / bb::kSlowHz) { bb_slow_ms_ = now_ms; blackbox.log_slow(now_us, tel_); }
         }
         if (ekf_due_) { ekf_due_ = false; ekf_step(now_ms); }  // (outside the lock: the EKF is this thread's alone, ~30 - 60 us)
+        if (led_due_) {                                      // the LED strip (outside the lock: ~30 us per LED on the SPI bus)
+            led_due_ = false; led_n_ = led_logic_.render(led_in_, now_ms, led_rgb_);
+#if WB_HAS_LED_STRIP
+            led_strip_.show(led_rgb_, led_n_);
+#endif
+        }
         servos.update(servo_rc_, servo_have_rc_);              // (outside the lock: it writes the PWM peripheral; the channels were copied under it)
         if (tlm_n_) { rc.sendTelemetry(tlm_buf_, tlm_n_); tlm_n_ = 0; }                  // (outside the lock: a UART write)
         if (restart) {
@@ -446,7 +537,7 @@ public:
 
         case wbp::CMD_GYRO_CAL:
             if (!status.imu) return wbp::ERR_NO_SENSOR;
-            imu.startGyroCalibration(cal_samples_); cal_kind_ = wbp::CAL_KIND_GYRO; return wbp::ERR_OK;
+            start_gyro_cal(); cal_kind_ = wbp::CAL_KIND_GYRO; return wbp::ERR_OK;
 
         case wbp::CMD_ACC_CAL_POINT:
             if (!status.imu) return wbp::ERR_NO_SENSOR;
@@ -520,7 +611,7 @@ private:
     // One control cycle. The caller holds the lock: it asked for it at now_us and got it at locked_us.
     WB_FAST bool fast_cycle(uint32_t now_us, uint32_t locked_us) {
         AgSample s;
-        if (!imu.read(s)) {
+        if (!imu_sel_.read([this](AgSample& x) { return imu.read(x); }, [this](AgSample& x) { return imu2.read(x); }, s)) {
             // one missed sample: skip this cycle (the ESCs keep their last command). 20 in a row (5 ms at 4 kHz): the IMU is gone -
             // stop the motors explicitly, stay disarmed until the arm switch is cycled, and tell the app why.
             imu_errors_++;
@@ -554,26 +645,33 @@ private:
         in.dt = dt; in.now_ms = now_ms; in.rc_link = rc_link_; in.rc_seq = rc_seq_; for (int i = 0; i < 16; i++) in.rc_us[i] = rc_[i];
         in.health = health_;
         // (the sensor thread fills the health once per millisecond; what the IMU itself knows is taken now)
-        in.health.imu_ok = imu.available(); in.health.gyro_calibrated = imu.gyroCalibrated(); in.health.calibrating = busy_other_ || imu.gyroCalState() == CalState::RUNNING;
-        motors.manager().rpm_array(in.motors.rpm, now_ms); in.motors.rpm_valid = motors.manager().rpm_any_valid(now_ms);     // (a motor without telemetry reads 0: its notches fade out, the others stay)
+        in.health.imu_ok = imu_sel_.in_use() != 0; in.health.gyro_calibrated = gyro_calibrated(); in.health.calibrating = busy_other_ || gyro_cal_state() == CalState::RUNNING;
+        in.motors.valid_mask = motors.manager().rpm_array(in.motors.rpm, now_ms); in.motors.rpm_valid = motors.manager().rpm_any_valid(now_ms);     // (a motor without telemetry reads 0: its notches fade out, the others stay)
         in.limits.idle = motors.idleFraction(now_ms, last_out_.throttle > 0.1f); in.limits.limit = motors.cfg().output_limit;
         last_out_ = core.update(in);
         const uint32_t t_core = micros();
-        motors.update(now_us, last_out_.motor, last_out_.armed);
-        motors.pollTelemetry(now_ms);                     // the ESC replies of the previous frame: fresh rpm for the next cycle's filters
+        const bool ctl = last_out_.pid_stepped;           // a control cycle (every pid_denom-th sample): a new motor command, a log record
+        if (ctl) {
+            motors.update(now_us, last_out_.motor, last_out_.armed);
+            motors.pollTelemetry(now_ms);                 // the ESC replies of the previous frame: fresh rpm for the next cycle's filters
+            pid_loops_++;
+        }
         const uint32_t t_motor = micros();
+        ctl_gap_ += cycle_gap_;
         if (blackbox.active()) {                           // where the time goes: the longest of each stage, for the log (bb_format.h)
-            peak_.lock = peak16(peak_.lock, locked_us - now_us); peak_.imu = peak16(peak_.imu, t_imu - locked_us); peak_.motor = peak16(peak_.motor, t_motor - t_core);
+            peak_.lock = peak16(peak_.lock, locked_us - now_us); peak_.imu = peak16(peak_.imu, t_imu - locked_us); if (ctl) peak_.motor = peak16(peak_.motor, t_motor - t_core);
             if (last_out_.est_stepped) peak_.est = peak16(peak_.est, t_core - t_imu); else peak_.core = peak16(peak_.core, t_core - t_imu);
         } else peak_ = StagePeaks();
 
         // ---- telemetry: fast fields every cycle (a few copies), published at <= 1 kHz
         tel_.gyro_raw[0] = s.gyro_dps[0]; tel_.gyro_raw[1] = -s.gyro_dps[1]; tel_.gyro_raw[2] = s.gyro_dps[2];   // pilot convention, like the core
+        tel_.gyro_src = imu_sel_.gyro_src();
         for (int i = 0; i < 3; i++) { tel_.acc[i] = s.acc_g[i]; tel_.gyro_f[i] = last_out_.gyro_f_dps[i]; tel_.sp[i] = last_out_.sp_dps[i]; }
         loops_++;
         // ---- blackbox: edge events every cycle, one fast record every few cycles while a session runs
         blackbox.note_state(now_us, last_out_.armed, (uint8_t)last_out_.failsafe, last_out_.modes, batt_state_, (uint8_t)last_out_.ah_state);
-        if (blackbox.fast_due(cycle_gap_)) {
+        const uint32_t ctl_gap = ctl_gap_; if (ctl) ctl_gap_ = 0;
+        if (ctl && blackbox.fast_due(ctl_gap)) {
             float mo[8]; for (int i = 0; i < 8; i++) mo[i] = motors.manager().output(i);
             bb::FastSample fs;
             fs.t_us = now_us; fs.gyro = last_out_.gyro_f_dps; fs.gyro_raw = tel_.gyro_raw; fs.setpoint = last_out_.sp_dps;
@@ -587,7 +685,7 @@ private:
         if (++pub_n_ >= pub_div_) { pub_n_ = 0; fill_fast(); link.publish(tel_); }
         const uint32_t t_end = micros(), took = t_end - now_us;
         // ("rest" = waiting for the lock + log + telemetry: the IMU number is the bus alone)
-        t_imu_.add(t_imu - locked_us); t_core_.add(t_core - t_imu); t_motor_.add(t_motor - t_core); t_rest_.add((t_end - t_motor) + (locked_us - now_us));
+        t_imu_.add(t_imu - locked_us); t_core_.add(t_core - t_imu); if (ctl) t_motor_.add(t_motor - t_core); t_rest_.add((t_end - t_motor) + (locked_us - now_us));
         load_.add(took);
         tel_.loop_us = took > 65535u ? 65535 : (uint16_t)took; if (tel_.loop_us > loop_max_) loop_max_ = tel_.loop_us;
         return true;
@@ -602,6 +700,7 @@ private:
         const uint32_t cycles = loops_ - loops_mark_; loops_mark_ = loops_;
         const uint32_t hz = span_ms ? (cycles * 1000u + span_ms / 2) / span_ms : 0;
         tel_.loop_hz = hz > 65535u ? 65535 : (uint16_t)hz;
+        { const uint32_t pc = pid_loops_ - pid_mark_; pid_mark_ = pid_loops_; const uint32_t ph = span_ms ? (pc * 1000u + span_ms / 2) / span_ms : 0; tel_.pid_hz = ph > 65535u ? 65535 : (uint16_t)ph; }
         tel_.t_imu_us = t_imu_.take_avg(); tel_.t_core_us = t_core_.take_avg(); tel_.t_motor_us = t_motor_.take_avg(); tel_.t_rest_us = t_rest_.take_avg(); tel_.t_slow_max_us = t_slow_.take_max();
         tel_.overruns = app::cycles_lost(cycles, span_ms, core.cfg.loop_hz);
         // "The loop cannot hold its rate" is a lasting condition: two seconds in a row below 80 %. One slow second is a pause
@@ -613,6 +712,23 @@ private:
         loop_slow_ = slow_seconds_ >= 2;
         { auto d = [](uint32_t now, uint32_t& was) { const uint32_t x = now - was; was = now; return (uint16_t)(x > 65535u ? 65535u : x); };
           tel_.esc_tlm_frames = d(esc_poll_.frames(), esc_mark_[0]); tel_.esc_tlm_crc = d(esc_poll_.crc_errors(), esc_mark_[1]); tel_.esc_tlm_timeouts = d(esc_poll_.timeouts(), esc_mark_[2]); }
+        tel_.stall_motor = last_out_.stall_motor;
+        if (status.can) {                                    // the CAN bus and its nodes, for the app
+            app::Telemetry::Can& c = tel_.can; auto d = [](uint32_t now, uint32_t& was) { const uint32_t x = now - was; was = now; return (uint16_t)(x > 65535u ? 65535u : x); };
+            c.state = can_port->state(); c.node_id = can_node.id(); c.tec = can_port->tec(); c.rec = can_port->rec();
+            c.rx_fps = d(can_node.rx_frames(), can_mark_[0]); c.tx_fps = d(can_node.tx_frames(), can_mark_[1]); c.tx_dropped = d(can_node.tx_dropped(), can_mark_[2]);
+            c.crc_errors = (uint16_t)(can_node.crc_errors() > 65535u ? 65535u : can_node.crc_errors()); c.bus_off = (uint16_t)(can_port->bus_offs() > 65535u ? 65535u : can_port->bus_offs());
+            c.allocations = (uint8_t)(can_node.allocations() > 255u ? 255u : can_node.allocations()); c.gnss_node = can_node.gnss_node(); c.mag_node = can_node.mag_node();
+            c.baro_node = can_node.baro_node(); c.batt_node = can_node.battery_node(); c.esc_mask = can_node.esc_mask(now_ms); c.esc_sent = can_node.esc_sent();
+            c.esc_dropped = (uint16_t)(can_node.esc_dropped() > 65535u ? 65535u : can_node.esc_dropped());
+            c.nodes = (uint8_t)can_node.nodes(); memset(c.names, 0, sizeof(c.names));
+            for (int i = 0; i < 8; i++) {
+                if (i >= can_node.nodes()) { c.node[i] = 0; c.health[i] = 0; c.mode[i] = 0; c.uptime[i] = 0; continue; }
+                const dcan::NodeEntry& e = can_node.node(i); const bool on = can_node.online(e, now_ms);
+                c.node[i] = e.id; c.health[i] = on ? e.health : 255; c.mode[i] = on ? e.mode : 7; c.uptime[i] = e.uptime;
+                for (int k = 0; k < 16 && e.name[k]; k++) c.names[i * 16 + k] = e.name[k];
+            }
+        } else tel_.can.state = s_->can.mode == wbp::CAN_MODE_OFF ? 0 : 3;      // (asked for but not running: FAILED)
         const motor::HwStats hs = motors.hwStats();
         tel_.hw_skipped = (uint16_t)(hs.skipped - hw_mark_.skipped > 65535u ? 65535u : hs.skipped - hw_mark_.skipped);
         tel_.hw_late = (uint16_t)(hs.late_switch - hw_mark_.late_switch > 65535u ? 65535u : hs.late_switch - hw_mark_.late_switch);
@@ -661,7 +777,31 @@ private:
         }
         tel_.trim_progress = inflight_trim.collecting() ? (uint8_t)(inflight_trim.progress() * 100.0f + 0.5f) : (inflight_trim.pending() ? 100 : 0);
     }
-    void apply_alignment() { float r, p, y; wbp::board_fine_alignment(*s_, r, p, y); imu.setAlignment((AccGyroAlign)s_->general.board_align, r, p, y); }
+    void apply_alignment() {
+        float r, p, y; wbp::board_fine_alignment(*s_, r, p, y);
+        imu.setAlignment((AccGyroAlign)s_->general.board_align, r, p, y);
+        imu2.setAlignment((AccGyroAlign)s_->sensors.imu2_align, r, p, y);      // its own chip orientation, the same board trims
+    }
+    // ---- the two IMUs as one: what counts is the chip(s) the loop flies on (imusel::Selector::in_use)
+    uint16_t cal2_samples() const { return imu_sel_.use() == imusel::FIRST ? (uint16_t)(cal_samples_ / imusel::Selector::kStandbyEvery) : cal_samples_; }     // (the stand-by is read every 8th cycle)
+    void start_gyro_cal() { imu.startGyroCalibration(cal_samples_); if (status.imu2) imu2.startGyroCalibration(cal2_samples()); }
+    WB_FAST bool gyro_calibrated() const {
+        const uint8_t u = imu_sel_.in_use(); if (!u) return false;
+        return (!(u & imusel::kImu1) || imu.gyroCalibrated()) && (!(u & imusel::kImu2) || imu2.gyroCalibrated());
+    }
+    WB_FAST CalState gyro_cal_state() const {                    // RUNNING while one of them runs, FAILED when one failed, else the first one's
+        const uint8_t u = imu_sel_.in_use(); const CalState a = imu.gyroCalState(), b = imu2.gyroCalState();
+        const bool ua = (u & imusel::kImu1) != 0 || !u, ub = (u & imusel::kImu2) != 0;
+        if ((ua && a == CalState::RUNNING) || (ub && b == CalState::RUNNING)) return CalState::RUNNING;
+        if ((ua && a == CalState::FAILED) || (ub && b == CalState::FAILED)) return CalState::FAILED;
+        return ua ? a : b;
+    }
+    uint8_t gyro_cal_progress() const {
+        const uint8_t u = imu_sel_.in_use(); uint8_t p = 100;
+        if ((u & imusel::kImu1) || !u) p = imu.gyroCalProgress();
+        if ((u & imusel::kImu2) && imu2.gyroCalProgress() < p) p = imu2.gyroCalProgress();
+        return p;
+    }
     void apply_calibration() {
         MagCal m; wbp::to_magcal(s_->calibration, m); if (m.valid) mag.setCalibration(m);
         AccCal a; wbp::to_acccal(s_->calibration, a); imu.setAccCalibration(a);
@@ -706,7 +846,7 @@ private:
     bool busy_other(uint32_t now_ms) const { return acc_session_ || mag.calibrating() || (int32_t)(test_until_ms_ - now_ms) > 0 || reboot_pending_ || blackbox.busy(); }
     fc::Health health(uint32_t now_ms) {
         fc::Health h;
-        h.imu_ok = imu.available(); h.gyro_calibrated = imu.gyroCalibrated();      // (`calibrating` is filled in by the flight loop, see fill_fast)
+        h.imu_ok = imu_sel_.in_use() != 0; h.gyro_calibrated = gyro_calibrated();      // (`calibrating` is filled in by the flight loop, see fill_fast)
         h.baro_ok = baro.valid(now_ms); h.range_ok = sonar.valid(now_ms); h.gps_ok = gnss.usable(); h.flow_ok = status.flow && flow.healthy(now_ms) && sonar.available();      // (flow without a range sensor gives no speed: not something to hold a position with)
         h.mag_calibrated = mag.calibrated(); h.mag_ok = mag.readyForFusion(now_ms);
         h.batt_low = battery.monitor.low(); h.batt_critical = land_on_critical_ && battery.monitor.critical();
@@ -722,7 +862,7 @@ private:
 
         beep::Input bi;
         bi.now_ms = now_ms; bi.armed = armed; bi.rx_ok = rc_link_; bi.failsafe_landing = last_out_.failsafe == fc::FsStage::DESCENT;
-        bi.gyro_cal_running = imu.gyroCalState() == CalState::RUNNING; bi.gyro_calibrated = imu.gyroCalibrated();
+        bi.gyro_cal_running = gyro_cal_state() == CalState::RUNNING; bi.gyro_calibrated = gyro_calibrated();
         bi.gps_enabled = status.gps; bi.gps_ready = gnss.usable();
         bi.batt_state = (uint8_t)battery.monitor.state();
         bi.beeper_switch = ((last_out_.modes >> fc::M_BEEPER) & 1u) != 0; bi.throttle_low = last_out_.throttle_low; bi.arm_refused = last_out_.arm_refused;
@@ -744,9 +884,11 @@ private:
         pins::Use use[48]; int n = 0;
         auto add = [&](uint8_t pin, const char* what) { if (n < 48) use[n++] = {pin, what}; };
         uint8_t p[8];
+        add(s.pins.imu2_cs, "imu2_cs");
         hw.getSPIAccGyroSensorPins(p); add(p[0], "imu_cs"); add(p[1], "imu_miso"); add(p[2], "imu_mosi"); add(p[3], "imu_sck");
         hw.getI2CBaroSensorPins(p); add(p[0], "i2c_sda"); add(p[1], "i2c_scl");
-        if (s.sensors.gps_enabled) { hw.getGpsPins(p); add(p[0], "gps_rx"); add(p[1], "gps_tx"); }
+        if (s.sensors.gps_enabled && gps::uses_uart((gps::Provider)s.gps.provider)) { hw.getGpsPins(p); add(p[0], "gps_rx"); add(p[1], "gps_tx"); }
+        if (s.can.mode != wbp::CAN_MODE_OFF) { add(s.pins.can_tx, "can_tx"); add(s.pins.can_rx, "can_rx"); }
         if (!use_external_rc) {
             static const char* const pwname[8] = {"rx_pwm 1", "rx_pwm 2", "rx_pwm 3", "rx_pwm 4", "rx_pwm 5", "rx_pwm 6", "rx_pwm 7", "rx_pwm 8"};
             if (s.receiver.protocol == rx::PROTO_PPM) add(s.pins.ppm, "ppm");
@@ -754,15 +896,17 @@ private:
             else { hw.getSerialRxPins(p); add(p[0], "rx_rx"); add(p[1], "rx_tx"); }
         }
         static const char* const mname[8] = {"motor 1", "motor 2", "motor 3", "motor 4", "motor 5", "motor 6", "motor 7", "motor 8"};
-        hw.getMotorPins(p); for (int i = 0; i < fc::mixer_motor_count((fc::Layout)s.motors.layout); i++) add(p[i], mname[i]);
-        hw.getBatteryAdcPin(p); if (s.battery.source != batt::SRC_ESC && s.battery.source != batt::SRC_NONE) add(p[0], "batt_adc");
-        if (s.battery.current_source != batt::CUR_ESC && s.battery.current_source != batt::CUR_NONE) add(s.pins.curr_adc, "curr_adc");
+        if (!motor::is_can((motor::Protocol)s.motors.protocol)) hw.getMotorPins(p); else memset(p, GPIO_UNUSED, sizeof(p));        // (ESCs on the CAN bus: no motor pins)
+        for (int i = 0; i < fc::mixer_motor_count((fc::Layout)s.motors.layout); i++) add(p[i], mname[i]);
+        hw.getBatteryAdcPin(p); if (s.battery.source != batt::SRC_ESC && s.battery.source != batt::SRC_NONE && s.battery.source != batt::SRC_DRONECAN) add(p[0], "batt_adc");
+        if (s.battery.current_source != batt::CUR_ESC && s.battery.current_source != batt::CUR_NONE && s.battery.current_source != batt::CUR_DRONECAN) add(s.pins.curr_adc, "curr_adc");
         hw.getBuzzerPin(p); add(p[0], "buzzer");
         static const char* const sname[servo::kServos] = {"servo 1", "servo 2", "servo 3", "servo 4"};
         for (int i = 0; i < servo::kServos; i++) add(s.pins.servo[i], sname[i]);
         if (s.flow.type == FlowSensor::PMW3901) { add(s.pins.flow_cs, "flow_cs"); add(s.pins.flow_sck, "flow_sck"); add(s.pins.flow_miso, "flow_miso"); add(s.pins.flow_mosi, "flow_mosi"); }
         if (s.flow.type == FlowSensor::MSP) { add(s.pins.flow_rx, "flow_rx"); add(s.pins.flow_tx, "flow_tx"); }
         if (s.motors.esc_sensor) add(s.pins.esc_tlm, "esc_tlm");
+        if (s.led.count) add(s.pins.led, "led");
         if (s.blackbox.device == bb::DEV_SDCARD) { hw.getSdCardPins(p); if (s.blackbox.sd_mode == wbp::SD_MODE_SPI) add(p[0], "sd_cs"); add(p[1], "sd_clk"); add(p[2], "sd_cmd"); add(p[3], "sd_d0"); }
         const pins::Conflict c = pins::find_conflict(use, n);
         status.pin_conflict = c.found;
@@ -891,8 +1035,12 @@ private:
           tel_.air_state = !last_out_.armed || last_out_.ground_idle ? wbp::AIR_STATE_GROUND : last_out_.airmode_active ? wbp::AIR_STATE_AIRMODE : wbp::AIR_STATE_AIR; tel_.hover_throttle = core.althold().hover_throttle();
           for (int a = 0; a < 3; a++) tel_.pid_sum[a] = last_out_.pid_p[a] + last_out_.pid_i[a] + last_out_.pid_d[a] + last_out_.pid_f[a]; }
         uint16_t h = 0;
-        if (imu.available()) h |= wbp::HEALTH_IMU;
-        if (imu.gyroCalibrated()) h |= wbp::HEALTH_GYRO_CAL;
+        if (imu_sel_.in_use()) h |= wbp::HEALTH_IMU;
+        if (gyro_calibrated()) h |= wbp::HEALTH_GYRO_CAL;
+        if (status.imu2 && !imu_sel_.lost(1)) h |= wbp::HEALTH_IMU2;
+        if (status.can && can_port->state() == CanPort::RUNNING) h |= wbp::HEALTH_CAN;
+        tel_.imu2 = !imu2_cfg_ ? imusel::NONE : !status.imu2 ? imusel::FAILED : imu_sel_.lost(1) ? imusel::LOST : imusel::OK;
+        { const AgSample& b = imu_sel_.last2(); tel_.gyro2[0] = b.gyro_dps[0]; tel_.gyro2[1] = -b.gyro_dps[1]; tel_.gyro2[2] = b.gyro_dps[2]; }
         if (baro.valid(now_ms)) h |= wbp::HEALTH_BARO;
         if (sonar.valid(now_ms)) h |= wbp::HEALTH_RANGE;
         if (gnss.usable()) h |= wbp::HEALTH_GPS;
@@ -929,7 +1077,7 @@ private:
         tel_.cal_kind = cal_kind_; tel_.cal_mask = acc_cal_.mask();
         const float* raw = imu.rawAcc();
         switch (cal_kind_) {
-        case wbp::CAL_KIND_GYRO: tel_.cal_state = (uint8_t)imu.gyroCalState(); tel_.cal_progress = imu.gyroCalProgress(); raw = tel_.gyro_raw; break;
+        case wbp::CAL_KIND_GYRO: tel_.cal_state = (uint8_t)gyro_cal_state(); tel_.cal_progress = gyro_cal_progress(); raw = tel_.gyro_raw; break;
         case wbp::CAL_KIND_ACCEL: tel_.cal_state = (uint8_t)(acc_done_ && !acc_session_ ? CalState::DONE : acc_cal_.state()); tel_.cal_progress = acc_cal_.progress(); break;
         case wbp::CAL_KIND_MAG: tel_.cal_state = (uint8_t)mag_cal_state_; tel_.cal_progress = (uint8_t)(mag.calibrationProgress() * 100.0f + 0.5f); raw = mag.rawGauss(); break;
         default: tel_.cal_state = 0; tel_.cal_progress = 0; break;
@@ -947,7 +1095,7 @@ private:
         (void)name;
     }
 
-    static constexpr int kReportLines = 28, kReportLen = 176;      // (the longest boot: 14 devices, 3 pin lines, SD card, loop, link, settings)
+    static constexpr int kReportLines = 32, kReportLen = 176;      // (the longest boot: 16 devices, 3 pin lines, SD card, WiFi, loop, link, settings)
     char report_[kReportLines][kReportLen] = {}; const char* report_ptr_[kReportLines] = {}; int n_report_ = 0;
 
     wbp::Settings* s_ = nullptr;
@@ -960,6 +1108,7 @@ private:
     beep::Conditions beep_cond_; uint32_t beacons_ = 0, start_us_ = 0, gap_max_ = 0, cycle_gap_ = 0, bb_slow_ms_ = 0;
     uint32_t last_us_ = 0, next_us_ = 0, slow_us_ = 0, period_us_ = 250, stat_ms_ = 0, test_until_ms_ = 0, reboot_at_ms_ = 0, imu_errors_ = 0, imu_fail_streak_ = 0, slot_ = 0, loops_ = 0, loops_mark_ = 0;
     uint16_t pub_div_ = 4, pub_n_ = 0, loop_max_ = 0;
+    uint32_t pid_loops_ = 0, pid_mark_ = 0, ctl_gap_ = 0;   // control cycles (the gyro cycles are loops_); the time since the last control cycle
     sys::Load load_;
     app::Sync no_sync_; app::Sync* sync_ = &no_sync_;
     app::StageTime t_imu_, t_core_, t_motor_, t_rest_, t_slow_;
@@ -970,6 +1119,28 @@ private:
     EkfDelta ekf_acc_, ekf_in_; uint8_t ekf_mode_ = 1; bool ekf_due_ = false, ekf_armed_ = false, ekf_gyro_ok_ = false; float ekf_ahrs_yaw_ = 0;
     fc::Ekf ekf_; fc::EkfNav ekf_nav_; EkfOut ekf_out_; fc::GpsMeas ekf_gm_; float ekf_baro_ = 0; fc::Vec3 ekf_mag_;
     bool ekf_gps_pend_ = false, ekf_baro_pend_ = false, ekf_mag_pend_ = false, ekf_rehome_ = true; uint32_t ekf_wait_ms_ = 0, ekf_us_cur_ = 0;       // sensor thread: longest pause between two passes, this second
+    imusel::Selector imu_sel_; bool imu2_cfg_ = false;
+    // the LED strip (section led, pins.led): what it shows (app/led_logic.h), the colors of the last picture
+public:
+    const app::Rgb* ledColors() const { return led_rgb_; }
+    int ledCount() const { return led_n_; }
+private:
+    app::LedLogic led_logic_; app::LedInput led_in_; app::Rgb led_rgb_[app::LedLogic::kMax]; int led_n_ = 0; uint32_t led_ms_ = 0; bool led_due_ = false;
+#if WB_HAS_LED_STRIP
+    led::SpiStrip led_strip_;
+#endif
+    app::LedInput led_input() const {                     // (lock held)
+        app::LedInput in; const fc::CoreOutput& o = last_out_;
+        in.armed = o.armed; in.ready = o.arm_blockers == 0; in.failsafe = o.failsafe != fc::FsStage::NONE;
+        in.batt_warning = batt_state_ == wbp::BATT_STATE_WARNING; in.batt_critical = batt_state_ == wbp::BATT_STATE_CRITICAL;
+        in.calibrating = gyro_cal_state() == CalState::RUNNING || acc_cal_.running() || mag.calibrating();
+        in.stall = (o.arm_blockers & (fc::AB_MOTOR_STALL | fc::AB_RUNAWAY_TAKEOFF)) != 0;
+        in.mode = o.rescue_active ? app::LedInput::RESCUE : o.poshold_active ? app::LedInput::POSHOLD : o.althold_active ? app::LedInput::ALTHOLD
+                : ((o.modes >> fc::M_ANGLE) & 1u) ? app::LedInput::ANGLE : ((o.modes >> fc::M_STABILIZE) & 1u) ? app::LedInput::STABILIZE : app::LedInput::ACRO;
+        return in;
+    }
+    bool can_gps_ = false, can_mag_ = false, can_baro_ = false, can_batt_ = false; uint32_t can_mark_[3] = {};
+    dcan::EscStatus can_esc_[dcan::Node::kMaxEsc]; uint8_t can_esc_new_ = 0;   // (esc.Status taken off the bus in part A, fed under the lock in part B)      // (DroneCAN GPS / compass in use; frame counters of the last second)
     struct StagePeaks { uint16_t lock = 0, imu = 0, core = 0, est = 0, motor = 0; } peak_;
     WB_FAST static uint16_t peak16(uint16_t was, uint32_t us) { return us > 65535u ? (uint16_t)65535 : us > was ? (uint16_t)us : was; }
     bool loop_slow_ = false, busy_other_ = false, busy_seen_ = false; uint8_t slow_seconds_ = 0, batt_state_ = 0, flow_quality_ = 0; uint32_t flow_tel_ms_ = 0;

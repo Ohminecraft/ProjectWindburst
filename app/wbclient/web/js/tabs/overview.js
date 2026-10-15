@@ -94,6 +94,7 @@ export default {
             [tr('Pin'), readout('battery', (b) => (b.cells ? tr('{v} V, {cells} cell, {cell} V mỗi cell', { v: f(b.voltage, 2), cells: b.cells, cell: f(b.cell, 2) }) : tr('không có pin')))],
             [tr('Thời gian một chu kỳ'), readout('status', (s) => tr('{us} µs, dài nhất {max} µs', { us: s.loop_us, max: s.loop_max_us }))],
             [tr('Chu kỳ điều khiển thực tế'), withId('loop-rate', readout('status', (s) => (s.loop_hz ? (s.loop_target ? tr('{hz} Hz (đặt {target} Hz), bỏ lỡ {n} chu kỳ trong giây vừa rồi', { hz: s.loop_hz, target: s.loop_target, n: s.overruns }) : `${s.loop_hz} Hz`) : tr('đang đo'))))],
+            [tr('Vòng PID thực tế'), withId('pid-rate', readout('status', (s) => (s.pid_target ? tr('{hz} Hz (đặt {target} Hz = gyro / {n})', { hz: s.pid_hz, target: s.pid_target, n: Math.round(s.loop_target / s.pid_target) }) : '–')))],
             [tr('Thời gian từng khâu'), withId('stage-times', readout('status', (s) => (s.loop_target ? tr('đọc IMU {imu} · tính toán {core} · gửi motor {motor} · còn lại {rest} µs', { imu: s.t_imu, core: s.t_core, motor: s.t_motor, rest: s.t_rest }) : '–')))],
             [tr('Luồng cảm biến, lượt dài nhất'), withId('slow-max', readout('status', (s) => (s.loop_target ? `${s.t_slow_max} µs` : '–')))],
             ['Failsafe', withId('fs-state', readout('status', (s) => (s.failsafe === 'NONE' ? tr('không') : failsafeText(s).replace('Failsafe: ', ''))))],

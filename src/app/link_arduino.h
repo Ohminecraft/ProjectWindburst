@@ -11,6 +11,8 @@
 #include "../proto/wbp_server.h"
 #include "link_host.h"
 #include "tx_queue.h"
+#include "link_mux.h"
+#include "cli.h"
 #include "../hal/motor/esc4way.h"
 #if WB_PLATFORM_ESP32
 #include <Preferences.h>
@@ -174,6 +176,10 @@ public:
     // ESC passthrough: the MSP side, and who knows the motor pins (called once the flight side has let go of them)
     using EscPinsFn = void (*)(EscPins&);
     void set_msp(app::MspLink* m, EscPinsFn pins) { msp_ = m; pins_ = pins; }
+    // A second wire (WiFi): read like the serial port; mux decides where the replies go (link_mux.h). ESC tools stay on the serial port.
+    void set_net(app::NetWire* net, app::LinkMux* mux) { net_ = net; mux_ = mux; }
+    // The command line (cli.h): a terminal on the serial port sends '#' between two frames.
+    void set_cli(app::Cli* cli) { cli_ = cli; }
 
     // stack: the server keeps two ~520 byte frame buffers on the stack while answering, a log download another ~1 kB, and the
     // SD card's file system (FatFs with long file names on the stack) about 2 kB below that when a file is opened / listed / read
@@ -195,11 +201,25 @@ private:
             while (n < (int)sizeof(buf) && port_.available() > 0) buf[n++] = (uint8_t)port_.read();
             const uint32_t now = millis();
             if (n > 0) {
-                server_.on_bytes(buf, (size_t)n); last_rx = now;
-                if (msp_) for (int i = 0; i < n; i++) if (const uint8_t escs = msp_->on_byte(buf[i])) passthrough(escs);     // (does not return)
+                if (mux_ && mux_->heard(app::LinkMux::SERIAL_WIRE)) server_.on_idle();              // (the other wire's half frame is given up)
+                last_rx = now;
+                for (int i = 0; i < n; i++) {                       // byte by byte: a '#' between two frames opens the command line
+                    if (cli_ && cli_->active()) { cli_->feed(buf[i]); continue; }
+                    if (cli_ && app::Cli::opens(buf[i], server_.rx_mid_frame() || (msp_ && msp_->mid_frame()))) { cli_->enter(); continue; }
+                    server_.on_byte(buf[i]);
+                    if (msp_) if (const uint8_t escs = msp_->on_byte(buf[i])) passthrough(escs);     // (does not return)
+                }
             }
+            int m = 0;
+            if (net_) {
+                net_->poll(now);
+                if (net_->take_dropped() && mux_) mux_->lost(app::LinkMux::WIFI_WIRE);
+                m = net_->read(buf, (int)sizeof(buf));
+                if (m > 0) { if (mux_ && mux_->heard(app::LinkMux::WIFI_WIRE)) server_.on_idle(); server_.on_bytes(buf, (size_t)m); last_rx = now; }
+            }
+            if (n > 0 || m > 0) {}
             else if ((uint32_t)(now - last_rx) > 20u) { server_.on_idle(); last_rx = now; }   // a half-received frame is given up after 20 ms of silence
-            server_.tick(now);
+            if (!cli_ || !cli_->active()) server_.tick(now);     // (no stream frames into a terminal)
             tx_.pump();
             vTaskDelay(1);
         }
@@ -218,4 +238,5 @@ private:
     }
     wbp::Server& server_; Stream& port_; app::QueuedTransport& tx_; TaskHandle_t handle_ = nullptr;
     app::MspLink* msp_ = nullptr; EscPinsFn pins_ = nullptr;
+    app::NetWire* net_ = nullptr; app::LinkMux* mux_ = nullptr; app::Cli* cli_ = nullptr;
 };

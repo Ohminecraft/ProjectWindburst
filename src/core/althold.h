@@ -29,7 +29,7 @@ public:
     float value = 0.40f;               // motor output 0..1 at which the craft hovers
     void reset(float start) { value = start < min ? min : (start > max ? max : start); thr_lp_ = den_lp_ = 0.0f; primed_ = false; }
     // The craft just left the ground at this throttle, accelerating up with a_up (m/s^2): a first reading, taken at once.
-    void seed(float throttle, float up_cos, float a_up) { value = clampf(throttle * fmaxf(up_cos, 0.5f) / fmaxf(1.0f + a_up / kG0, 0.5f), min, max); primed_ = false; }
+    void seed(float throttle, float up_cos, float a_up) { value = clampf(throttle * maxf(up_cos, 0.5f) / maxf(1.0f + a_up / kG0, 0.5f), min, max); primed_ = false; }
     // throttle: here the mean MOTOR output 0..1. a_up: world-frame upward acceleration without gravity (m/s^2).
     WB_FAST void update(float throttle, float up_cos, float a_up, float dt) {
         if (up_cos < 0.7f || dt <= 0.0f) return;                                 // tilted more than 45 deg: not a hover measurement
@@ -105,7 +105,7 @@ public:
 
     // Returns throttle 0..1 for the mixer.
     WB_FAST float update(const AhInput& in, float dt) {
-        float cosT = fmaxf(in.up_cos, 0.5f);
+        float cosT = maxf(in.up_cos, 0.5f);
         switch (state) {
         case AhState::STOPPED:
             reset_ctl(in.z);
@@ -143,7 +143,7 @@ public:
             takeoff_t += dt;
             float ramp = clampf(takeoff_t / 0.6f, 0.0f, 1.0f); // ease the climb target in, don't slam
             float vt = cfg.takeoff_climb_mps * ramp;
-            z_target = fminf(z_target + vt * dt, z0 + cfg.takeoff_alt_m);
+            z_target = minf(z_target + vt * dt, z0 + cfg.takeoff_alt_m);
             float thr = control(in, dt, vt, cosT);
             bool reached = in.z >= z0 + cfg.takeoff_alt_m - 0.05f || takeoff_t > 4.0f;
             // Off the ground and the pilot pulls the stick down (or the failsafe wants down): that is "descend", flown by the
@@ -183,14 +183,14 @@ public:
     // full climb rate, down to low_stick to the full descent rate (an off-centre mid_stick gives each side its own travel).
     WB_FAST float stick_rate(float st) const {
         const float up0 = cfg.mid_stick + cfg.deadband, dn0 = cfg.mid_stick - cfg.deadband;
-        if (st > up0) { const float span = fmaxf(cfg.max_stick - up0, 0.02f); return clampf((st - up0) / span, 0.0f, 1.0f) * cfg.max_climb_mps; }
-        if (st < dn0) { const float span = fmaxf(dn0 - cfg.low_stick, 0.02f); return -clampf((dn0 - st) / span, 0.0f, 1.0f) * cfg.max_descend_mps; }
+        if (st > up0) { const float span = maxf(cfg.max_stick - up0, 0.02f); return clampf((st - up0) / span, 0.0f, 1.0f) * cfg.max_climb_mps; }
+        if (st < dn0) { const float span = maxf(dn0 - cfg.low_stick, 0.02f); return -clampf((dn0 - st) / span, 0.0f, 1.0f) * cfg.max_descend_mps; }
         return 0.0f;
     }
     // Call when Altitude Hold is (re)engaged in flight from another mode; seeds integrator so throttle does not jump.
     void begin_flight(float z, float current_throttle01, float up_cos) {
         state = AhState::FLYING;
-        z_target = z; vel_int = ((to_motor(current_throttle01) * fmaxf(up_cos, 0.5f)) / hover - 1.0f) * kG0;
+        z_target = z; vel_int = ((to_motor(current_throttle01) * maxf(up_cos, 0.5f)) / hover - 1.0f) * kG0;
         vel_int = clampf(vel_int, -cfg.i_limit_mps2, cfg.i_limit_mps2);
         land_t = 0; steady_t = 0; sat_ = 0;
     }
@@ -203,7 +203,7 @@ public:
 private:
     WB_FAST float control(const AhInput& in, float dt, float vt_ff, float cosT) {
         // (the limits follow a commanded rate that is beyond the pilot's own)
-        float v_des = clampf(cfg.kp_z * (z_target - in.z) + vt_ff, -fmaxf(cfg.max_descend_mps, -vt_ff) * 1.5f, fmaxf(cfg.max_climb_mps, vt_ff) * 1.5f);
+        float v_des = clampf(cfg.kp_z * (z_target - in.z) + vt_ff, -maxf(cfg.max_descend_mps, -vt_ff) * 1.5f, maxf(cfg.max_climb_mps, vt_ff) * 1.5f);
         float verr = v_des - in.v;
         // Anti-windup (AC_PosControl limits its integrator the same way): while the throttle stands at one of its ends, the
         // integrator may only move away from that end. Otherwise a craft held down, or one that cannot climb any faster, comes

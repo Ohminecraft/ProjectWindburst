@@ -73,7 +73,10 @@ public:
     void attach_store(BlockStore* store) { flash_.begin(store); select(); }       // the on-board flash region (device FLASH)
     void attach_card(Storage* card) { card_ = card; if (card_) card_->configure_device(cfg_.device == DEV_SDCARD, cfg_.sd_mode, cfg_.sd_mhz); select(); }   // the SD card (device SDCARD)
     void set_header_source(ExtraFn fn, void* ctx) { extra_ = fn; extra_ctx_ = ctx; }
-    void set_loop(float loop_hz, uint8_t motors) { loop_hz_ = loop_hz; motors_ = motors; }
+    // loop_hz: the control rate (one record candidate per control cycle); gyro_hz: the gyro's rate (0 = the same)
+    void set_loop(float loop_hz, uint8_t motors, float gyro_hz = 0.0f) { loop_hz_ = loop_hz; motors_ = motors; gyro_hz_ = gyro_hz > 0.0f ? gyro_hz : loop_hz; }
+    float loop_hz() const { return loop_hz_; }
+    float gyro_hz() const { return gyro_hz_; }
     void set_config(const Config& c) {                             // takes effect for the next session
         cfg_ = c;
         if (card_) card_->configure_device(cfg_.device == DEV_SDCARD, cfg_.sd_mode, cfg_.sd_mhz);
@@ -236,6 +239,7 @@ private:
         t.add("to %s\n", s == ST_LOGGING ? "storage" : "stream");
         t.add("boot_ms %lu\n", (unsigned long)now_ms_);
         t.add("loop_hz %g\n", (double)loop_hz_);
+        t.add("gyro_hz %g\n", (double)gyro_hz_);
         t.add("rate_div %u\n", (unsigned)div);
         t.add("rate_hz %g\n", (double)(loop_hz_ / (float)div));
         t.add("slow_hz %u\n", (unsigned)kSlowHz);
@@ -366,7 +370,7 @@ private:
 
     Recorder& rec_; wbp::Transport& tx_; FlashLog flash_; NoStorage none_; Storage* card_ = nullptr; Storage* cur_ = &none_; uint8_t dev_ = DEV_NONE, buffer_pct_ = 0;
     Config cfg_; State state_ = ST_OFF;
-    ExtraFn extra_ = nullptr; void* extra_ctx_ = nullptr; float loop_hz_ = 4000.0f; uint8_t motors_ = 4;
+    ExtraFn extra_ = nullptr; void* extra_ctx_ = nullptr; float loop_hz_ = 4000.0f, gyro_hz_ = 4000.0f; uint8_t motors_ = 4;
     bool stream_wanted_ = false, closing_ = false, end_written_ = false, out_droppable_ = false, armed_ = false;
     bool switch_held_ = false;                       // see poll(): the switch must go off before it starts a session again
     uint8_t close_reason_ = 0, hdr_seq_ = 0, data_seq_ = 0, blob_seq_ = 0; uint16_t close_polls_ = 0;

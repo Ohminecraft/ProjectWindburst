@@ -1,6 +1,6 @@
 // Motors: frame layout, ESC protocol, spin direction, motor order, motor test with live RPM, and the gyro vibration graph.
 import { store, setField, wantStreams, command } from '../store.js';
-import { h, block, fields, control, listen, note, toast, showError, track, readout, cmdButton, errorText } from '../ui.js';
+import { h, block, fields, control, listen, note, toast, showError, track, readout, cmdButton, errorText, kv } from '../ui.js';
 import { LAYOUTS, motorCount } from '../gfx/fwmath.js';
 import { ENUM_LABELS } from '../labels.js';
 import { scope } from '../gfx/scope.js';
@@ -100,7 +100,7 @@ function motorTest() {
       input.addEventListener('input', () => { values[i] = Number(input.value); val.textContent = values[i] + ' %'; tick(); });
       inputs.push({ input, val });
       return h('div', { class: 'test-row' }, h('span', { class: 'test-n' }, `Motor ${i + 1}`), input, val,
-        h('span', { class: 'num rpm' }, readout('motors', (m) => (store.settings.motors.bidirectional ? `${m.rpm[i]} rpm` : ''))));
+        h('span', { class: 'num rpm' }, readout('motors', (m) => (store.settings.motors.bidirectional || store.settings.motors.protocol === 'DRONECAN' ? `${m.rpm[i]} rpm` : ''))));
     }));
     enable();
   };
@@ -153,7 +153,7 @@ function perMotor() {
       return h('tr', {},
         h('th', { scope: 'row' }, `Motor ${i + 1}`),
         h('td', {}, readout('motors', (mo) => Math.round(mo.cmd[i] * 100) + ' %')),
-        h('td', {}, readout('motors', (mo) => (m.bidirectional || m.esc_sensor ? String(mo.rpm[i]) : '–'))),
+        h('td', {}, readout('motors', (mo) => (m.bidirectional || m.esc_sensor || m.protocol === 'DRONECAN' ? String(mo.rpm[i]) : '–'))),
         h('td', {}, readout('motors', (mo) => (m.bidirectional ? mo.err[i] + ' %' : '–'))),
         h('td', {}, readout('motors', (mo) => (mo.temp[i] ? mo.temp[i] + ' °C' : '–'))),
         h('td', {}, readout('motors', (mo) => (mo.amps && mo.amps[i] ? mo.amps[i].toFixed(1) + ' A' : '–'))),
@@ -189,24 +189,36 @@ function perMotor() {
       h('span', {}, 'Dynamic idle: ', readout('motors', (mo) => (mo.dyn_idle * 100).toFixed(1) + ' %'))));
 }
 
+// The gyro's vibration: roll, pitch and yaw at once, one colour each - raw (what the frame does) or filtered (what the PID sees).
+// Below it the RMS of every axis, raw and filtered, over the last 2 s.
 function vibration() {
   const AX = ['Roll', 'Pitch', 'Yaw'];
   const enable = h('input', { type: 'checkbox', class: 'switch', role: 'switch', id: 'vib-on' });
-  const axis = h('select', { id: 'vib-axis', 'aria-label': tr('Trục') }, AX.map((a, i) => h('option', { value: i }, a)));
-  const sc = scope({ series: [{ name: tr('Gyro thô'), color: '--series-1' }, { name: tr('Sau bộ lọc'), color: '--series-2' }], windowMs: 2000, unit: ' °/s', height: 230, minRange: 8 });
-  const stats = h('p', { class: 'help num', id: 'vib-stats' }, '');
-  enable.addEventListener('change', () => { wantStreams('vibration', enable.checked ? { gyro_fast: 500 } : null); if (!enable.checked) sc.clear(); });
-  axis.addEventListener('change', () => sc.clear());
-  listen('fast', (rows) => { const a = Number(axis.value); for (const r of rows) sc.push(r[0], [r[1 + a], r[4 + a]]); });
+  const which = h('select', { id: 'vib-signal', 'aria-label': tr('Tín hiệu') }, h('option', { value: 'raw' }, tr('Gyro thô')), h('option', { value: 'filt' }, tr('Sau bộ lọc')));
+  const sc = scope({ series: AX.map((a, i) => ({ name: a, color: `--series-${i + 1}` })), windowMs: 2000, unit: ' °/s', height: 230, minRange: 8 });
+  const stats = h('div', { class: 'help num', id: 'vib-stats' }, '');
+  // the last 2 s of both signals, every axis (for the RMS table: the scope keeps only what it draws)
+  const N = 1000; const buf = [0, 1, 2, 3, 4, 5].map(() => new Float32Array(N)); let at = 0, filled = 0;
+  enable.addEventListener('change', () => { wantStreams('vibration', enable.checked ? { gyro_fast: 500 } : null); if (!enable.checked) { sc.clear(); filled = 0; } });
+  which.addEventListener('change', () => sc.clear());
+  listen('fast', (rows) => {
+    const off = which.value === 'raw' ? 1 : 4;
+    for (const r of rows) {
+      sc.push(r[0], [r[off], r[off + 1], r[off + 2]]);
+      for (let k = 0; k < 6; k++) buf[k][at] = r[1 + k];
+      at = (at + 1) % N; if (filled < N) filled++;
+    }
+  });
+  const rms = (k) => { let a = 0, m = 0; for (let i = 0; i < filled; i++) m += buf[k][i]; m /= filled; for (let i = 0; i < filled; i++) { const d = buf[k][i] - m; a += d * d; } return Math.sqrt(a / filled); };
   const t = setInterval(() => {
-    const raw = sc.stats(0), fl = sc.stats(1);
-    stats.textContent = raw && raw.n > 10 ? tr('Độ rung trong 2 giây gần nhất: thô {raw} °/s RMS (đỉnh-đỉnh {p2p}), sau lọc {filt} °/s RMS.', { raw: raw.rms.toFixed(1), p2p: raw.p2p.toFixed(0), filt: fl.rms.toFixed(1) }) : '';
+    if (filled < 10) { stats.textContent = ''; return; }
+    stats.replaceChildren(kv(AX.map((a, i) => [a, tr('thô {raw} °/s RMS, sau lọc {filt} °/s RMS', { raw: rms(i).toFixed(1), filt: rms(3 + i).toFixed(1) })])));
   }, 500);
   track(() => { clearInterval(t); wantStreams('vibration', null); });
   return block(tr('Độ rung (gyro)'),
-    h('div', { class: 'btn-row' }, h('label', { class: 'inline' }, enable, tr(' Bật đồ thị (500 mẫu/giây)')), axis),
+    h('div', { class: 'btn-row' }, h('label', { class: 'inline' }, enable, tr(' Bật đồ thị (500 mẫu/giây)')), which),
     sc.el, stats,
-    h('p', { class: 'help' }, tr('Chạy từng motor ở tab này và xem đường "thô": motor hoặc cánh nào làm gyro rung mạnh hơn hẳn các motor khác là motor cần kiểm tra (cong trục, lỏng ốc, cánh mẻ).')));
+    h('p', { class: 'help' }, tr('Ba trục cùng lúc, mỗi trục một màu. Chạy từng motor ở tab này và xem gyro thô: motor hoặc cánh nào làm gyro rung mạnh hơn hẳn các motor khác là motor cần kiểm tra (cong trục, lỏng ốc, cánh mẻ).')));
 }
 
 export default {
@@ -215,12 +227,16 @@ export default {
   lead: tr('Kiểu khung, ESC, chiều quay và thứ tự motor. Tháo cánh trước khi test.'),
   streams: { motors: 20, status: 10 },
   mount(view) {
-    const pulse = h('div', { id: 'pulse-fields' }, fields('motors', ['pulse_disarmed', 'pulse_armed', 'pulse_max', 'pulse_hz']));
-    const dshot = h('div', { id: 'dshot-fields' }, fields('motors', ['dshot_driver', 'bidirectional', 'ext_pullup', 'pole_count', 'edt', 'esc_sensor', 'dir_cmd_extended', 'dyn_idle_min_rpm', 'dyn_idle_p', 'dyn_idle_i', 'dyn_idle_d', 'dyn_idle_max_inc']));
+    const pulse = h('div', { id: 'pulse-fields' }, fields('motors', ['pulse_disarmed', 'pulse_armed', 'pulse_max', 'pulse_hz']),
+      h('p', { class: 'help' }, tr('Với PWM, Oneshot, Multishot và brushed không có "Motor idle": ga thấp nhất khi đã arm chính là "Xung khi arm" (như min_throttle của Betaflight).')));
+    const dshot = h('div', { id: 'dshot-fields' }, fields('motors', ['bidirectional', 'ext_pullup', 'pole_count', 'edt', 'esc_sensor', 'dir_cmd_extended', 'dyn_idle_min_rpm', 'dyn_idle_p', 'dyn_idle_i', 'dyn_idle_d', 'dyn_idle_max_inc']));
+    const idle = h('div', { id: 'idle-field' }, fields('motors', ['idle_x10']));
     const tooMany = h('p', { class: 'note bad', id: 'dshot-count' });
+    const canNote = h('p', { class: 'help', id: 'can-esc-note' }, tr('ESC DroneCAN: lệnh ga đi trên bus CAN (esc.RawCommand, 400 lần/giây), ESC index = slot motor (thứ tự motor vẫn áp dụng). Không cần chân motor; CAN bus phải bật (tab Cảm biến). Vòng quay, điện áp, dòng, nhiệt độ lấy từ esc.Status của ESC. Không có lệnh DShot (beacon, đổi chiều): chiều quay đặt trong cấu hình của ESC.'));
     const which = () => {
       const m = store.settings.motors, d = /^(DSHOT|PROSHOT)/.test(String(m.protocol));
-      pulse.hidden = d; dshot.hidden = !d;
+      const can = m.protocol === 'DRONECAN';
+      pulse.hidden = d || can; dshot.hidden = !d; idle.hidden = !(d || can); canNote.hidden = !can;
       const n = motorCount(m.layout); tooMany.hidden = !(d && n > 4);
       tooMany.textContent = tr('Khung này có {n} motor: DShot / ProShot trên ESP32-S3 chỉ chạy được 4 (4 bộ phát RMT). Chọn PWM, Oneshot hoặc Multishot.', { n });
     };
@@ -231,9 +247,12 @@ export default {
         motorTest(),
         vibration()),
       h('div', {},
-        block('ESC', fields('motors', ['protocol', 'idle_x10', 'output_limit']), tooMany, pulse, dshot,
+        block('ESC', fields('motors', ['protocol']), idle, fields('motors', ['output_limit']), tooMany, canNote, pulse, dshot,
           note(tr('Kiểu khung, giao thức ESC và thứ tự motor có hiệu lực sau khi lưu và khởi động lại. DShot qua RMT của ESP32-S3 chạy được tối đa 4 motor.'))),
         perMotor(),
+        block(tr('Motor dừng giữa chừng'), fields('motors', ['stall_disarm', 'stall_min_rpm', 'stall_drop', 'stall_min_cmd', 'stall_ms']),
+          h('div', { class: 'link-read', id: 'stall-state' }, h('span', {}, tr('Lần gần nhất: '), readout('motors', (mo) => (mo.stall_motor ? tr('motor {n} đã dừng (máy đã disarm)', { n: mo.stall_motor }) : tr('chưa có lần nào'))))),
+          note(tr('Cần tốc độ của từng motor: DShot hai chiều hoặc dây telemetry ESC. Motor không có tốc độ thì không bị xét. Có hiệu lực sau khi lưu và khởi động lại.'))),
         escToolBlock(),
         servos())));
   },

@@ -26,7 +26,9 @@ namespace fc {
 
 constexpr float kPtermScale = 0.032029f, kItermScale = 0.244381f, kDtermScale = 0.000529f, kFeedforwardScale = 0.013754f;
 constexpr float kPidMixerScaling = 1000.0f;
+constexpr float kInvPidMixerScaling = 1.0f / kPidMixerScaling;   // (a float division is a library call on the ESP32: the cycle multiplies)
 constexpr float kItermRelaxSetpointThreshold = 40.0f;          // deg/s of high-passed setpoint at which the I-term is fully frozen
+constexpr float kInvItermRelaxThreshold = 1.0f / kItermRelaxSetpointThreshold;
 constexpr float kAntiGravityKi = 0.34f, kAntiGravityKp = 0.0034f;
 constexpr float kDMaxRangeHz = 85.0f, kDMaxLowpassHz = 35.0f, kDMaxGyroGainFactor = 0.00008f, kDMaxSetpointGainFactor = 0.00008f;
 constexpr int kDynLpfThrottleSteps = 100;
@@ -82,7 +84,7 @@ public:
         d_max_gyro_gain_ = kDMaxGyroGainFactor * c.d_max_gain / kDMaxLowpassHz; d_max_setpoint_gain_ = kDMaxSetpointGainFactor * c.d_max_advance / kDMaxLowpassHz;
         tpa_break_ = clampf(c.tpa_breakpoint, 0.0f, 0.99f);
         tpa_mult_ = (c.tpa_rate * 0.01f) / (1.0f - tpa_break_);
-        tpa_low_break_ = fminf(clampf(c.tpa_low_breakpoint, 0.01f, 1.0f), tpa_break_);
+        tpa_low_break_ = minf(clampf(c.tpa_low_breakpoint, 0.01f, 1.0f), tpa_break_);
         tpa_low_mult_ = tpa_low_break_ > 0.0f ? c.tpa_low_rate / (100.0f * tpa_low_break_) : 0.0f;
 
         dterm_dynamic_ = c.dterm_lpf1_dyn_min_hz > 0;
@@ -153,9 +155,7 @@ public:
             // ---- I-term relax: while the stick is moving, the error is "the craft has not caught up yet", not something to integrate
             const float sp_lpf = relax_lpf_[a].apply(sp), sp_hpf = fabsf(sp - sp_lpf);
             if (cfg_.iterm_relax != RELAX_OFF && (a < YAW || cfg_.iterm_relax == RELAX_RPY || cfg_.iterm_relax == RELAX_RPY_INC)) {
-                float threshold = kItermRelaxSetpointThreshold;
-                if (in.angle_mode) threshold *= 0.2f;
-                const float factor = fmaxf(0.0f, 1.0f - sp_hpf / threshold);
+                const float factor = maxf(0.0f, 1.0f - sp_hpf * (in.angle_mode ? 5.0f : 1.0f) * kInvItermRelaxThreshold);
                 const bool decreasing = (i_term[a] > 0.0f && iterm_error < 0.0f) || (i_term[a] < 0.0f && iterm_error > 0.0f);
                 if (cfg_.iterm_relax >= RELAX_RP_INC && decreasing) { /* the I-term may always shrink */ }
                 else if (cfg_.iterm_relax_type == RELAX_SETPOINT) iterm_error *= factor;
@@ -185,7 +185,7 @@ public:
                 if (d_max_percent_[a] > 1.0f) {                  // D max: more D while the gyro or the stick is moving fast
                     const float gyro_factor = fabsf(d_max_range_[a].apply(delta)) * d_max_gyro_gain_;
                     const float sp_factor = fabsf(in.feedforward[a]) * d_max_setpoint_gain_;
-                    mult += (d_max_percent_[a] - 1.0f) * fmaxf(gyro_factor, sp_factor);
+                    mult += (d_max_percent_[a] - 1.0f) * maxf(gyro_factor, sp_factor);
                     mult = d_max_lpf_[a].apply(mult);
                     if (mult > d_max_percent_[a]) mult = d_max_percent_[a];
                 }
@@ -198,13 +198,13 @@ public:
 
             // ---- anti-gravity P boost on roll / pitch, less while a turn is commanded
             if (a != YAW) {
-                const float atten = fmaxf(fabsf(sp) / 50.0f, 1.0f);
+                const float atten = maxf(fabsf(sp) * 0.02f, 1.0f);
                 p *= 1.0f + (ag_d / atten) * ag_p_gain_;
             }
 
             p_term[a] = p; d_term[a] = d; f_term[a] = f;
             const float lim = a == YAW ? (float)cfg_.pidsum_limit_yaw : (float)cfg_.pidsum_limit;
-            u[a] = clampf(p + i_term[a] + d + f, -lim, lim) / kPidMixerScaling;
+            u[a] = clampf(p + i_term[a] + d + f, -lim, lim) * kInvPidMixerScaling;
         }
     }
 
@@ -219,7 +219,7 @@ private:
         const bool past_low = throttle >= tpa_low_break_ || tpa_low_break_ <= 0.01f;
         if (past_low || tpa_low_faded_) {
             if (!cfg_.tpa_low_always && !tpa_low_faded_) tpa_low_faded_ = true;      // the low-throttle part only acts until the throttle first rises past it
-            return tpa_mult_ * fmaxf(throttle - tpa_break_, 0.0f);
+            return tpa_mult_ * maxf(throttle - tpa_break_, 0.0f);
         }
         return tpa_low_mult_ * (tpa_low_break_ - throttle);
     }

@@ -64,10 +64,10 @@ function batteryColumn() {
     big.textContent = have ? volts(b.voltage) + ' V' : '–';
     cells.textContent = have ? `${b.cells}S` : '–';
     perCell.textContent = have ? volts(b.cell) + ' V' : '–';
-    const src = { ADC: tr('chân ADC'), ESC: tr('ESC (DShot hai chiều)'), NONE: tr('không đo') }[b.source] || b.source;
-    const csrc = { ADC: tr('cảm biến dòng'), ESC: tr('ESC (telemetry DShot mở rộng)'), NONE: tr('không đo') }[b.current_source] || b.current_source || '–';
+    const src = { ADC: tr('chân ADC'), ESC: tr('ESC (DShot hai chiều)'), NONE: tr('không đo'), DRONECAN: tr('module nguồn DroneCAN') }[b.source] || b.source;
+    const csrc = { ADC: tr('cảm biến dòng'), ESC: tr('ESC (telemetry DShot mở rộng)'), NONE: tr('không đo'), DRONECAN: tr('module nguồn DroneCAN') }[b.current_source] || b.current_source || '–';
     source.textContent = tr('Nguồn đo điện áp: {src}. Nguồn đo dòng: {csrc}.', { src, csrc });
-    const hasCurrent = b.current_source === 'ADC' || b.current_source === 'ESC';
+    const hasCurrent = b.current_source === 'ADC' || b.current_source === 'ESC' || b.current_source === 'DRONECAN';
     amps.textContent = hasCurrent ? volts(b.current, 1) + ' A' : '–';
     mah.textContent = hasCurrent ? `${b.mah} mAh` : '–';
     left.textContent = have ? `${b.remaining} %` : '–';
@@ -207,7 +207,10 @@ function beeperColumn() {
       note(tr('Motor chỉ kêu khi chưa arm và sau khi disarm 1,2 giây. Lúc đang bay không có tiếng báo nào từ motor: pin yếu khi bay phải xem trên tay điều khiển hoặc gắn thêm còi.'))),
     block(tr('Còi gắn trên mạch'),
       hasBuzzer() ? null : h('p', { class: 'help', id: 'no-buzzer' }, tr('Chưa gán chân cho còi (tab Chân và cổng). Các ô dưới đây chỉ có tác dụng khi có còi.')),
-      fields('beeper', ['type', 'inverted', 'frequency', 'volume'])));
+      fields('beeper', ['type', 'inverted', 'frequency', 'volume'])),
+    store.schema.sections.find((x) => x.name === 'led') ? block(tr('Đèn LED (WS2812)'),
+      fields('led', ['count', 'brightness', 'layout']),
+      note(tr('Dải LED WS2812 / SK6812 nối vào chân LED (tab Chân, nhóm Khác). Xanh lá: sẵn sàng arm; vàng nhấp nháy: còn điều gì chặn arm; khi bay: màu theo mode (Acro trắng, Angle xanh dương, Stabilize xanh lơ, Altitude Hold tím, Position Hold xanh ngọc, GPS Rescue cam nhấp nháy); đỏ nháy nhanh: failsafe; đỏ nháy đôi: pin cạn. Gửi qua bus SPI thứ hai, nên không dùng được cùng thẻ SD kiểu SPI hoặc PMW3901. Có hiệu lực sau khi lưu và khởi động lại.'))) : null);
 }
 
 export default {

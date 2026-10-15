@@ -194,20 +194,14 @@ export const EN = {
     "Voltage reported by the ESC: ",
   "không có":
     "none",
-  "Trục":
-    "Axis",
   "Gyro thô":
     "Raw gyro",
   "Sau bộ lọc":
     "Filtered",
-  "Độ rung trong 2 giây gần nhất: thô {raw} °/s RMS (đỉnh-đỉnh {p2p}), sau lọc {filt} °/s RMS.":
-    "Vibration over the last 2 seconds: raw {raw} °/s RMS (peak to peak {p2p}), filtered {filt} °/s RMS.",
   "Độ rung (gyro)":
     "Vibration (gyro)",
   " Bật đồ thị (500 mẫu/giây)":
     " Show the chart (500 samples/s)",
-  "Chạy từng motor ở tab này và xem đường \"thô\": motor hoặc cánh nào làm gyro rung mạnh hơn hẳn các motor khác là motor cần kiểm tra (cong trục, lỏng ốc, cánh mẻ).":
-    "Run each motor on this tab and watch the \"raw\" line: a motor or propeller that shakes the gyro much more than the others is the one to check (bent shaft, loose screws, chipped propeller).",
   "Motor":
     "Motors",
   "Kiểu khung, ESC, chiều quay và thứ tự motor. Tháo cánh trước khi test.":
@@ -284,8 +278,6 @@ export const EN = {
     "CRSF / SBUS / IBUS / Spektrum. TX is only needed for telemetry.",
   "Khác":
     "Other",
-  "Firmware mới chỉ lưu chân này, chưa dùng.":
-    "The firmware only stores this pin, it does not use it yet.",
   "ADC đo pin":
     "Battery ADC",
   "chân strapping (BOOT)":
@@ -554,10 +546,6 @@ export const EN = {
     "empty",
   "Có hiệu lực sau khi lưu và khởi động lại.":
     "Takes effect after save and restart.",
-  "Tần số vòng gyro / PID":
-    "Gyro / PID loop rate",
-  "Firmware tự hạ xuống nếu chip gyro không cho đủ mẫu (IMU qua I2C tối đa 1000 Hz).":
-    "The firmware lowers it when the gyro chip cannot deliver enough samples (an IMU on I2C: at most 1000 Hz).",
   "Tần số bộ ước lượng":
     "Estimator rate",
   "Góc nghiêng tối đa cho phép arm":
@@ -1650,8 +1638,6 @@ export const EN = {
     "\"Frames skipped\": the control loop asks for frames faster than one DShot frame with its reply can pass (bidirectional DShot300 needs 182 µs, DShot600 needs 116 µs) - lower the loop rate or use a faster DShot. \"Replies missed\": the firmware did not turn the signal pin around in time.",
   "\"Thời gian từng khâu\" là trung bình của giây vừa rồi cho một chu kỳ điều khiển; cộng lại phải nhỏ hơn 1 000 000 / tần số đã đặt (250 µs ở 4000 Hz). Khâu nào lớn bất thường là chỗ cần xem: đọc IMU (dây SPI, tốc độ SPI), tính toán (bộ lọc, RPM filter), gửi motor (DShot); \"còn lại\" gồm chờ luồng cảm biến nhả khoá, ghi log và telemetry. Số lớn nhất của từng khâu nằm trong log blackbox (nhóm \"Thời gian vòng lặp\").":
     "\"Time per stage\" is the average of the last second for one control cycle; the sum has to stay below 1 000 000 / the configured rate (250 µs at 4000 Hz). A stage that is unusually large is where to look: IMU read (SPI wiring, SPI speed), computing (filters, RPM filter), motor output (DShot). \"The rest\" is waiting for the sensor thread to release the lock, logging and telemetry. The largest value of each stage is in the blackbox log (group \"Loop timing\").",
-  "\"Trực tiếp\": firmware tự điều khiển bộ RMT, có DShot hai chiều. \"ESP-IDF\": dùng driver có sẵn, chỉ một chiều; chọn khi motor không nhận lệnh với cách trực tiếp.":
-    "\"Direct\": the firmware drives the RMT unit itself, with bidirectional DShot. \"ESP-IDF\": the stock driver, one-way only; choose it when the motors do not take commands with the direct way.",
   ", ESC không trả lời: {list}":
     ", ESCs not answering: {list}",
   ", mọi ESC đều trả lời":
@@ -1664,16 +1650,12 @@ export const EN = {
     "Runaway take-off prevention",
   "Chỉ đếm lúc máy KHÔNG đi xuống theo ước lượng độ cao (mắc vào đâu đó), hoặc khi không có ước lượng độ cao. Hết thời gian thì tắt motor. Một lần hạ cánh từ trên cao không bao giờ bị cắt giữa chừng.":
     "Counted only while the craft is NOT coming down by its height estimate (caught on something), or when there is no height estimate. When the time is up the motors stop. A landing from high up is never cut short on the way.",
-  "Cách phát DShot":
-    "DShot output driver",
   "Cùng ý nghĩa với \"board alignment\" của Betaflight: mạch có target Betaflight thì chép đúng giá trị của target đó. Cách kiểm tra: hình 3D ở tab Tổng quan phải nghiêng đúng như máy trên tay.":
     "Same meaning as Betaflight's \"board alignment\": for a board with a Betaflight target, copy the value of that target. To check: the 3D view on the Overview tab must tilt exactly like the craft in your hand.",
   "DShot hai chiều: ":
     "Bidirectional DShot: ",
   "ESC phải chạy firmware có bidirectional DShot (BLHeli_32 từ 32.7, Bluejay, AM32). Dòng trạng thái dưới bảng motor cho biết từng ESC có trả lời không.":
     "The ESC must run firmware with bidirectional DShot (BLHeli_32 from 32.7, Bluejay, AM32). The status line under the motor table tells whether each ESC answers.",
-  "ESP-IDF (chỉ một chiều)":
-    "ESP-IDF (one-way only)",
   "Failsafe và an toàn":
     "Failsafe and safety",
   "Khung DShot bỏ qua trong giây vừa rồi: ":
@@ -1692,8 +1674,6 @@ export const EN = {
     "A wrong motor order, a prop on upside down, a motor turning the wrong way or a wrong IMU orientation make the PID tip the craft over instead of balancing it. Until the craft has flown normally for half a second (throttle from 20 % with a stick moved, or throttle from 40 %): when the PID pushes with all it has and the craft still turns, the motors stop after 75 ms. Same as Betaflight. Leave it on.",
   "Thời gian từng khâu":
     "Time per stage",
-  "Trực tiếp (có hai chiều)":
-    "Direct (with bidirectional)",
   "công tắc Failsafe":
     "Failsafe switch",
   "không":
@@ -2334,6 +2314,198 @@ export const EN = {
     "ESC telemetry (own wire)",
   "{ok} trả lời, {crc} hỏng CRC, {lost} ESC không trả lời":
     "{ok} answers, {crc} bad CRC, {lost} ESCs not answering",
+  "Với PWM, Oneshot, Multishot và brushed không có \"Motor idle\": ga thấp nhất khi đã arm chính là \"Xung khi arm\" (như min_throttle của Betaflight).":
+    "PWM, Oneshot, Multishot and brushed have no \"Motor idle\": the lowest armed throttle is the \"Armed pulse\" itself (like Betaflight's min_throttle).",
+  "Tần số gyro":
+    "Gyro rate",
+  "Số mẫu gyro đọc mỗi giây; bộ lọc gyro chạy ở tần số này. Firmware tự hạ xuống nếu chip gyro không cho đủ mẫu (IMU qua I2C tối đa 1000 Hz).":
+    "Gyro samples read per second; the gyro filters run at this rate. The firmware lowers it when the gyro chip cannot deliver that many samples (an IMU on I2C: 1000 Hz at most).",
+  "Chia tần số PID":
+    "PID rate divider",
+  "Phần điều khiển (tư thế, mode, PID, mixer, gửi lệnh motor) chạy mỗi n mẫu gyro: tần số PID = tần số gyro / n, như pid_process_denom của Betaflight. Ví dụ gyro 8000 Hz, chia 2 = PID 4000 Hz: bộ lọc vẫn thấy mọi mẫu mà CPU nhẹ hơn nhiều. Firmware không cho tần số PID xuống dưới 500 Hz.":
+    "The control part (attitude, modes, PID, mixer, motor commands) runs on every n-th gyro sample: PID rate = gyro rate / n, like Betaflight's pid_process_denom. Example: gyro 8000 Hz, divider 2 = PID 4000 Hz: the filters still see every sample while the CPU has much less to do. The firmware never lets the PID rate fall below 500 Hz.",
+  "Đang chạy":
+    "Running at",
+  "Vòng PID thực tế":
+    "Actual PID loop",
+  "{hz} Hz (đặt {target} Hz = gyro / {n})":
+    "{hz} Hz (set {target} Hz = gyro / {n})",
+  "IMU thứ hai":
+    "Second IMU",
+  "Chip IMU thứ hai trên cùng bus SPI với IMU đầu (chung SCK, MISO, MOSI), chỉ cần chân CS riêng. Chọn cách dùng ở tab Cảm biến (Dùng gyro nào). Để trống nếu mạch chỉ có một IMU.":
+    "A second IMU chip on the first IMU's SPI bus (shared SCK, MISO, MOSI): only its own CS pin is needed. Choose how it is used on the Sensors tab (Gyro to use). Leave empty if the board has one IMU.",
+  "IMU thứ hai dùng chung bus SPI của IMU đầu: IMU đầu cũng phải nối SPI (có chân CS).":
+    "The second IMU shares the first IMU's SPI bus: the first IMU must be on SPI as well (with a CS pin).",
+  "Dùng gyro nào":
+    "Gyro to use",
+  "Khi mạch có hai IMU (tab Chân: IMU thứ hai), giống gyro_to_use của Betaflight. IMU 1: bay bằng IMU đầu, IMU 2 dự phòng. IMU 2: bay bằng gyro của IMU 2. Cả hai: lấy trung bình hai gyro (nhiễu thấp hơn). Gia tốc kế luôn lấy từ IMU 1 (chip được hiệu chuẩn 6 mặt). Một chip ngừng trả lời giữa chuyến bay thì chip còn lại bay tiếp.":
+    "When the board has two IMUs (Pins tab: Second IMU), like Betaflight's gyro_to_use. IMU 1: fly on the first IMU, IMU 2 as a stand-by. IMU 2: fly on the gyro of IMU 2. Both: the mean of the two gyros (less noise). The accelerometer always comes from IMU 1 (the chip of the 6-face calibration). If one chip stops answering in flight, the other one flies on.",
+  "Hướng chip IMU thứ hai":
+    "Second IMU chip orientation",
+  "Như \"Hướng chip IMU trên mạch\" nhưng cho chip thứ hai (Betaflight gyro_2_sensor_align). Phần chỉnh tinh của mạch áp dụng cho cả hai chip.":
+    "Like \"IMU chip orientation on the board\" but for the second chip (Betaflight gyro_2_sensor_align). The fine board trims apply to both chips.",
+  "IMU 1 (IMU 2 dự phòng)":
+    "IMU 1 (IMU 2 stand-by)",
+  "Cả hai (trung bình)":
+    "Both (mean)",
+  "không tìm thấy lúc khởi động":
+    "not found at boot",
+  "đã ngừng trả lời":
+    "stopped answering",
+  "{state}, vòng bay dùng {src}; gyro IMU 2 {g2} (IMU 1 {g1}) °/s":
+    "{state}, the loop flies on {src}; IMU 2 gyro {g2} (IMU 1 {g1}) °/s",
+  "WiFi của máy bay (điểm phát riêng, 192.168.4.1:5760)":
+    "The craft's WiFi (its own access point, 192.168.4.1:5760)",
+  "Địa chỉ cho app":
+    "Address for the app",
+  "Sóng":
+    "Signal",
+  "Thiết bị đang nối vào":
+    "Devices connected",
+  "App đang nối qua":
+    "The app is connected via",
+  "cổng serial (USB / UART)":
+    "the serial port (USB / UART)",
+  "Có hiệu lực sau khi lưu và khởi động lại. Điểm phát riêng (AP): mạch là 192.168.4.1, tên mặc định Windburst-XXXX, mật khẩu mặc định windburst - hãy đổi mật khẩu, ai vào được mạng này cũng điều khiển được máy (kể cả thử motor). Ở app chọn cổng \"WiFi của máy bay\", hoặc nhập socket://<địa chỉ>:5760 khi máy nối vào mạng nhà bạn (STA).":
+    "Takes effect after saving and rebooting. Own access point (AP): the board is 192.168.4.1, default name Windburst-XXXX, default password windburst - change the password: whoever joins this network controls the craft (motor test included). In the app pick the port \"The craft's WiFi\", or type socket://<address>:5760 when the craft joins your home network (STA).",
+  "Trên ESP32-S3 các chân ADC2 (GPIO11 đến GPIO20) không đọc được khi WiFi bật: chân đo pin và đo dòng phải nằm ở GPIO1 đến GPIO10.":
+    "On the ESP32-S3 the ADC2 pins (GPIO11 to GPIO20) cannot be read while WiFi is on: the battery and current sensor pins must be on GPIO1 to GPIO10.",
+  "Tắt; Điểm phát riêng (AP): máy bay tự phát mạng WiFi, máy tính nối vào đó; Nối vào mạng có sẵn (STA): máy bay vào mạng WiFi nhà bạn (tên và mật khẩu bên dưới).":
+    "Off; Own access point (AP): the craft makes a WiFi network of its own, the computer joins it; Join a network (STA): the craft joins your WiFi network (name and password below).",
+  "Tên mạng (SSID)":
+    "Network name (SSID)",
+  "AP: để trống thì là Windburst-XXXX (bốn ký tự cuối của địa chỉ MAC). STA: tên mạng cần vào.":
+    "AP: empty = Windburst-XXXX (the last four characters of the MAC address). STA: the network to join.",
+  "Mật khẩu":
+    "Password",
+  "Từ 8 đến 63 ký tự (WPA2). AP: để trống thì là windburst. STA: để trống cho mạng không mật khẩu.":
+    "8 to 63 characters (WPA2). AP: empty = windburst. STA: empty for an open network.",
+  "Kênh (AP)":
+    "Channel (AP)",
+  "Cổng TCP":
+    "TCP port",
+  "Cổng app nối vào. Mặc định 5760, giống trình mô phỏng.":
+    "The port the app connects to. 5760 by default, like the simulator.",
+  "Điểm phát riêng (AP)":
+    "Own access point (AP)",
+  "Nối vào mạng có sẵn (STA)":
+    "Join a network (STA)",
+  "đang phát mạng":
+    "access point running",
+  "đang nối vào mạng…":
+    "joining the network…",
+  "đã nối vào mạng":
+    "connected to the network",
+  "không khởi động được (xem nhật ký firmware)":
+    "could not start (see the firmware log)",
+  "(chưa biết tên)":
+    "(name not known yet)",
+  "Cấp node id cho module":
+    "Hand out node ids",
+  "Cần một bộ thu phát CAN 3,3 V (SN65HVD230, TJA1051T/3...) và hai chân ở tab Chân (CAN bus). Module trên bus: GPS provider, loại la bàn, loại khí áp kế, nguồn đo điện áp / dòng chọn DRONECAN; ESC trên bus: giao thức ESC DRONECAN (tab Motor). Có hiệu lực sau khi lưu và khởi động lại.":
+    "Needs a 3.3 V CAN transceiver (SN65HVD230, TJA1051T/3...) and two pins in the Pins tab (CAN bus). Modules on the bus: set GPS provider, compass type, barometer type, voltage / current source to DRONECAN; ESCs on the bus: ESC protocol DRONECAN (Motor tab). Takes effect after saving and restarting.",
+  "Flight controller ArduPilot dùng 10.":
+    "ArduPilot flight controllers use 10.",
+  "Module DroneCAN dùng 1 Mbit/s.":
+    "DroneCAN modules use 1 Mbit/s.",
+  "Node id của mạch":
+    "This board's node id",
+  "Nối với bộ thu phát CAN 3,3 V: TX vào chân D (TXD), RX từ chân R (RXD). Bật ở tab Cảm biến (CAN bus).":
+    "To a 3.3 V CAN transceiver: TX to its D (TXD) pin, RX from its R (RXD) pin. Switched on at the Sensors tab (CAN bus).",
+  "Phần lớn module GPS / la bàn DroneCAN tự xin node id lúc khởi động (dynamic node id allocation): mạch cấp cho chúng. Tắt nếu bus đã có máy chủ cấp id khác.":
+    "Most DroneCAN GPS / compass modules ask for a node id at power-up (dynamic node id allocation): the board hands them out. Switch it off if another allocation server is on the bus.",
+  "Tắt, hoặc DroneCAN: mạch là một node DroneCAN; GPS và la bàn đặt là DRONECAN lấy số liệu từ module trên bus.":
+    "Off, or DroneCAN: the board is a DroneCAN node; a GPS and a compass set to DRONECAN take their data from the modules on the bus.",
+  "Tốc độ bus":
+    "Bus speed",
+  "bus-off (đang tự khôi phục)":
+    "bus-off (recovering by itself)",
+  "la bàn":
+    "compass",
+  "mất kết nối":
+    "offline",
+  "{state}, node {id}; {rx} khung/s nhận, {tx} gửi, {drop} bỏ; lỗi TX {tec} / RX {rec}, bus-off {off} lần; đã cấp {alloc} node id":
+    "{state}, node {id}; {rx} frames/s in, {tx} out, {drop} dropped; TX errors {tec} / RX {rec}, bus-off {off} times; {alloc} node ids handed out",
+  "chạy {s} s":
+    "up {s} s",
+  "đang dùng: {what}":
+    "in use: {what}",
+  "Ba trục cùng lúc, mỗi trục một màu. Chạy từng motor ở tab này và xem gyro thô: motor hoặc cánh nào làm gyro rung mạnh hơn hẳn các motor khác là motor cần kiểm tra (cong trục, lỏng ốc, cánh mẻ).":
+    "All three axes at once, one colour each. Run one motor at a time on this tab and watch the raw gyro: a motor or prop that shakes the gyro much more than the others is the one to check (bent shaft, loose screw, chipped prop).",
+  "Tín hiệu":
+    "Signal",
+  "thô {raw} °/s RMS, sau lọc {filt} °/s RMS":
+    "raw {raw} °/s RMS, filtered {filt} °/s RMS",
+  "Motor dừng giữa chừng":
+    "A motor that stops",
+  "Lần gần nhất: ":
+    "Last time: ",
+  "motor {n} đã dừng (máy đã disarm)":
+    "motor {n} stopped (the craft was disarmed)",
+  "chưa có lần nào":
+    "never so far",
+  "Cần tốc độ của từng motor: DShot hai chiều hoặc dây telemetry ESC. Motor không có tốc độ thì không bị xét. Có hiệu lực sau khi lưu và khởi động lại.":
+    "Needs each motor's speed: bidirectional DShot or the ESC telemetry wire. A motor without a speed is not judged. Takes effect after saving and rebooting.",
+  "một motor vừa dừng giữa lúc bay (chạm cánh, kẹt motor, mất đồng bộ) nên máy đã disarm: kiểm tra cánh và motor (gạt ARM về OFF để xoá)":
+    "a motor stopped in flight (prop strike, blocked motor, desync) and the craft was disarmed: check the props and motors (ARM switch OFF to clear)",
+  "Disarm khi một motor dừng":
+    "Disarm when a motor stops",
+  "Cánh chạm vật, motor bị kẹt hay mất đồng bộ: motor đang được ra lệnh quay mà tốc độ tụt xuống thì tắt hết motor, trước khi các motor còn lại lật máy xuống đất hoặc motor kẹt bị cháy. Mặc định tắt.":
+    "A prop strike, a blocked motor or a desync: a motor that is told to turn but slows down switches every motor off, before the others flip the craft into the ground or the blocked motor burns. Off by default.",
+  "Coi là dừng dưới":
+    "Stalled below",
+  "Hoặc tụt còn dưới":
+    "Or dropped below",
+  "phần trăm tốc độ cao nhất của motor đó kể từ lần lệnh của nó giảm gần nhất":
+    "percent of that motor's highest speed since its command last went down",
+  "Chỉ xét khi lệnh từ":
+    "Judged from a command of",
+  "Dưới mức này (ví dụ đang idle trên mặt đất) thì motor không bị xét.":
+    "Below it (idling on the ground, say) a motor is not judged.",
+  "Kéo dài":
+    "Lasting",
+  "0 = không có dải LED.":
+    "0 = no LED strip.",
+  "Chân dữ liệu (DIN) của dải LED WS2812 / SK6812 (tab Pin và còi: Đèn LED).":
+    "The data input (DIN) of a WS2812 / SK6812 LED strip (Battery and beeper tab: LED strip).",
+  "Dải LED WS2812 / SK6812 nối vào chân LED (tab Chân, nhóm Khác). Xanh lá: sẵn sàng arm; vàng nhấp nháy: còn điều gì chặn arm; khi bay: màu theo mode (Acro trắng, Angle xanh dương, Stabilize xanh lơ, Altitude Hold tím, Position Hold xanh ngọc, GPS Rescue cam nhấp nháy); đỏ nháy nhanh: failsafe; đỏ nháy đôi: pin cạn. Gửi qua bus SPI thứ hai, nên không dùng được cùng thẻ SD kiểu SPI hoặc PMW3901. Có hiệu lực sau khi lưu và khởi động lại.":
+    "A WS2812 / SK6812 strip on the LED pin (Pins tab, Other). Green: ready to arm; amber blinking: something blocks arming; flying: the mode's color (Acro white, Angle blue, Stabilize cyan, Altitude Hold purple, Position Hold teal, GPS Rescue orange flashing); fast red flash: failsafe; red double blink: battery empty. Sent through the second SPI bus, so not together with an SD card on SPI or a PMW3901. Takes effect after saving and rebooting.",
+  "Kiểu hiển thị":
+    "Layout",
+  "Mọi LED cùng màu":
+    "Every LED the same color",
+  "Một LED trắng ở 100 % ăn khoảng 60 mA.":
+    "One white LED at 100 % draws about 60 mA.",
+  "Số LED":
+    "Number of LEDs",
+  "Đèn LED (WS2812)":
+    "LED strip (WS2812)",
+  "Đèn hàng không (trái đỏ, phải xanh, đuôi chớp trắng)":
+    "Navigation lights (left red, right green, white tail strobe)",
+  "Độ sáng":
+    "Brightness",
+  "ESC DroneCAN: lệnh ga đi trên bus CAN (esc.RawCommand, 400 lần/giây), ESC index = slot motor (thứ tự motor vẫn áp dụng). Không cần chân motor; CAN bus phải bật (tab Cảm biến). Vòng quay, điện áp, dòng, nhiệt độ lấy từ esc.Status của ESC. Không có lệnh DShot (beacon, đổi chiều): chiều quay đặt trong cấu hình của ESC.":
+    "DroneCAN ESCs: the throttle goes over the CAN bus (esc.RawCommand, 400 times a second), ESC index = motor slot (the motor order still applies). No motor pins; the CAN bus must be on (Sensors tab). Speed, voltage, current and temperature come from the ESCs' esc.Status. No DShot commands (beacon, direction): set the spin direction in the ESC's own configuration.",
+  "ESC: đã gửi {n} lệnh, bỏ {drop}; nghe thấy ESC {list}":
+    "ESC: {n} commands sent, {drop} dropped; heard ESC {list}",
+  "(chưa có)":
+    "(none yet)",
+  "khí áp kế":
+    "barometer",
+  "pin":
+    "battery",
+  "Loại khí áp kế":
+    "Barometer type",
+  "Tự dò: BMP280 / BMP388 trên bus I2C. DRONECAN: áp suất từ module DroneCAN trên bus CAN (cần bật CAN bus).":
+    "Auto: a BMP280 / BMP388 on the I2C bus. DRONECAN: the pressure of a DroneCAN module on the CAN bus (the CAN bus must be on).",
+  "DroneCAN (ESC trên bus CAN)":
+    "DroneCAN (ESCs on the CAN bus)",
+  "Module nguồn DroneCAN":
+    "DroneCAN power module",
+  "module nguồn DroneCAN":
+    "DroneCAN power module",
+  "Tự dò (BMP280 / BMP388 trên I2C)":
+    "Auto-detect (BMP280 / BMP388 on I2C)",
 };
 
 // Strings that read the same in both languages (units, protocol names, terms pilots use in English).
@@ -2357,4 +2529,9 @@ export const SAME = [
   "ProShot1000",
   "Hexa H", "Y4", "V-tail quad", "A-tail quad",
   "EKF",
+  "gyro {gyro} Hz, PID {pid} Hz",
+  "IMU 2",
+  "WiFi",
+  "1 Mbit/s", "125 kbit/s", "250 kbit/s", "500 kbit/s", "CAN bus", "CAN bus (DroneCAN)", "DroneCAN", "Node {id}",
+  "rpm", "ms",
 ];

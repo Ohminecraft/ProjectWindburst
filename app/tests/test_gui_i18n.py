@@ -133,7 +133,7 @@ def test_every_state_the_firmware_can_report_has_a_text(tables):
     missing = [b for b in s.bits["arm_blocker"] if b not in tables["blockers"]]
     assert not missing, "labels.js BLOCKERS has no text for: %s" % missing
     assert set(s.bits["fs_cause"]) == set(tables["enums"]["fs_cause"])
-    for name in ("failsafe", "dshot_driver", "bidir_state", "airmode", "bb_state", "batt_state"):
+    for name in ("failsafe", "bidir_state", "airmode", "bb_state", "batt_state"):
         assert set(s.enums[name]) == set(tables["enums"][name]), "labels.js ENUM_LABELS.%s: %s vs the schema's %s" % (name, tables["enums"][name], s.enums[name])
     # the names on the Modes tab, the beeper table and the log's field groups
     assert set(s.enums["mode"]) == set(tables["modes"]), "labels.js MODES: %s vs the schema's %s" % (tables["modes"], s.enums["mode"])

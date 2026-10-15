@@ -14,7 +14,7 @@
 | 4 | EKF cho Position Hold | **xong ở 0.9.0 (chạy song song)** | `docs/EKF.md`. Lời đánh giá ở bản 0.8.8 ("không làm") là sai một nửa: EKF sửa được hướng mũi khi la bàn nhiễu, thứ log có. Chạy song song + ghi log, chỉ dùng cho Position Hold khi chọn NAV |
 | 4 | GPS Rescue đòi fix dù công tắc đang tắt | **giải thích + chữ rõ hơn** | Giống hệt Betaflight (`gps_rescue_allow_arming_without_fix`): công tắc có gán là coi như đã cài rescue. Muốn khỏi chờ: bật "Cho arm khi GPS chưa fix" (tab Vị trí); khi đó chuyến bay đó không có home. Thông báo chặn arm nay nói rõ cách này |
 | 3 | Tách tần số PID và tần số đọc gyro | chưa | khả thi (Betaflight `pid_process_denom`). Đi cùng việc đọc SPI trực tiếp thanh ghi |
-| 3 | Bỏ driver DShot ESP-IDF; ẩn motor idle với giao thức analog | chưa | khả thi, nhỏ. Đợt sau |
+| 3 | Bỏ driver DShot ESP-IDF; ẩn motor idle với giao thức analog | **xong (0.12.0)** | docs/MOTOR_OUTPUT.md |
 | 3 | Dual gyro / acc | chưa | khả thi (SPI, hai chân CS), trung bình |
 | 3 | WiFi | chưa | khả thi trên S3 (cấu hình qua WiFi khi disarm). **Cảnh báo**: radio 2,4 GHz đặt cạnh receiver ELRS 2,4 GHz làm giảm tầm; tốn ~50 kB RAM; ngắt WiFi ở core 0 |
 | 3 | DroneCAN | **không làm khi chưa có phần cứng** | ESP32-S3 có bộ TWAI (CAN 2.0), cần thêm transceiver (SN65HVD230…). Ngăn xếp DroneCAN (libcanard + DSDL) lớn; không có thiết bị CAN để thử thì viết ra là đoán mò |

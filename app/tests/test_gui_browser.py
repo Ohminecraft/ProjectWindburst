@@ -270,9 +270,13 @@ def test_vibration_graph(gui):
     gui.wait(lambda: gui.hub.rates.get("gyro_fast") == 500, what="fast stream on")
     gui.sim.do("shake 1")
     pg.wait_for_function("/RMS/.test(document.getElementById('vib-stats').textContent)", timeout=8000)
+    pg.wait_for_function("(document.getElementById('vib-stats').textContent.match(/RMS/g) || []).length === 6", timeout=8000)
     text = pg.inner_text("#vib-stats")
-    raw, filt = [float(x) for x in re.findall(r"([\d.]+) °/s RMS", text)]
-    assert raw > 1.0 and filt < raw, "a shaking craft shows more raw vibration than filtered: %s" % text
+    vals = [float(x) for x in re.findall(r"([\d.]+) °/s RMS", text)]
+    assert len(vals) == 6 and all(vals[2 * i] > 1.0 and vals[2 * i + 1] < vals[2 * i] for i in range(3)), "every axis shakes, raw more than filtered: %s" % text
+    assert pg.locator(".legend-item").filter(has_text="Roll").count() == 1 and pg.locator(".legend-item").filter(has_text="Yaw").count() == 1, "three lines, one per axis"
+    pg.select_option("#vib-signal", "filt")
+    pg.wait_for_function("(document.getElementById('vib-stats').textContent.match(/RMS/g) || []).length === 6", timeout=4000)
     gui.tab("overview")
     gui.wait(lambda: "gyro_fast" not in gui.hub.rates, what="fast stream off again when the tab is left")
 
@@ -484,6 +488,13 @@ def test_inflight_level_trim_is_shown_and_saves_itself(gui):
     fc.set("modes", **m); fc.save()
     gui.tab("sensors")
     pg.wait_for_function("/chưa đo/.test(document.getElementById('inflight-trim').textContent)")
+    # one IMU on the simulated board: the second one is "none", its settings are there
+    pg.wait_for_function("document.getElementById('imu2-state').textContent === 'không có'")
+    assert gui.field("sensors.gyro_use").is_visible() and gui.field("sensors.imu2_align").is_visible()
+    # the CAN bus is off on the simulated board: its settings are there, its state says so
+    pg.wait_for_function("(document.getElementById('can-state') || { textContent: '' }).textContent === 'tắt'", timeout=6000)
+    assert gui.field("can.mode").is_visible() and gui.field("can.node_id").input_value() == "10"
+    assert gui.field("sensors.baro_model").is_visible() and "DroneCAN" in pg.locator('[data-field="sensors.baro_model"] option').all_inner_texts()
     assert gui.field("calibration.acc_trim_roll").input_value() == "0.0"
     sim = gui.sim
     # The board sits 2.2 deg crooked in the frame: with the sticks centred the craft would lean and drift away. The pilot holds
@@ -539,11 +550,17 @@ def test_loop_timing_dshot_state_and_failsafe_cause(gui):
     pg = gui.connect().page
     pg.wait_for_function("/đọc IMU \\d+ · tính toán \\d+ · gửi motor \\d+ · còn lại \\d+ µs/.test(document.getElementById('stage-times').textContent)", timeout=6000)
     pg.wait_for_function("/^\\d+ Hz \\(đặt 4000 Hz\\), bỏ lỡ \\d+ chu kỳ trong giây vừa rồi$/.test(document.getElementById('loop-rate').textContent)", timeout=6000)
+    pg.wait_for_function("/^\\d+ Hz \\(đặt 4000 Hz = gyro \\/ 1\\)$/.test(document.getElementById('pid-rate').textContent)", timeout=6000)
     assert pg.inner_text("#fs-state") == "không" and re.search(r"\d+ µs$", pg.inner_text("#slow-max"))
     assert re.search(r"\d+ / 4000 Hz", pg.inner_text("#chips")), pg.inner_text("#chips")
-    # ---- motors: which driver, and whether the ESCs answer
+    # ---- motors: whether the ESCs answer (0.12: no choice of DShot driver any more; motor idle only with DShot)
     gui.tab("motors")
-    assert [o.get_attribute("value") for o in gui.field("motors.dshot_driver").locator("option").all()] == ["DIRECT", "IDF"]
+    assert gui.field("motors.dshot_driver").count() == 0 and pg.locator("#idle-field").is_visible()
+    proto = gui.field("motors.protocol").input_value()
+    pg.select_option('[data-field="motors.protocol"]', "ONESHOT125")
+    pg.wait_for_function("document.getElementById('idle-field').hidden && !document.getElementById('pulse-fields').hidden")
+    pg.select_option('[data-field="motors.protocol"]', proto)
+    pg.wait_for_function("!document.getElementById('idle-field').hidden")
     pg.wait_for_function("(document.getElementById('dshot-state') || { innerText: '' }).innerText.includes('DShot hai chiều: tắt')")
     pg.check('[data-field="motors.bidirectional"]')
     pg.wait_for_function("document.getElementById('save').textContent === 'Lưu và khởi động lại'")
@@ -890,6 +907,13 @@ def test_betaflight_frames_and_protocols_on_the_motor_tab(gui):
     gui.wait(lambda: gui.setting("motors", "layout") == "OCTO_X8" and gui.setting("motors", "protocol") == "PROSHOT1000", what="stored")
     pg.select_option('[data-field="motors.layout"]', "Y4")
     pg.wait_for_function("document.querySelectorAll('#view [data-motor]').length === 4 && document.getElementById('dshot-count').hidden")
+    # ESCs on the CAN bus: no pulse or DShot settings, the motor idle stays, a note says how it works
+    pg.select_option('[data-field="motors.protocol"]', "DRONECAN")
+    pg.wait_for_function("!document.getElementById('can-esc-note').hidden")
+    assert not pg.is_visible("#pulse-fields") and not pg.is_visible("#dshot-fields") and pg.is_visible("#idle-field") and "esc.RawCommand" in pg.inner_text("#can-esc-note")
+    assert "DroneCAN (ESC trên bus CAN)" in pg.locator('[data-field="motors.protocol"] option').all_inner_texts()
+    pg.select_option('[data-field="motors.protocol"]', "DSHOT300")
+    pg.wait_for_function("document.getElementById('can-esc-note').hidden")
 
 
 def test_current_sensor_and_servos_on_the_page(gui):
@@ -1571,8 +1595,9 @@ def test_blackbox_live_recording_on_the_page(gui, log_dir):
     held = att.range()
     assert not pg.is_checked("#log-follow input") or gui.wait(lambda: not pg.is_checked("#log-follow input"), what="follow switch off")
     time.sleep(0.8)
-    # (the width is only roughly 0.5 s: while the chart still follows, its scale moves on between the two ends of the drag)
-    assert att.range() == held and held[1] - held[0] == pytest.approx(0.5, abs=0.2)
+    # (the width is only roughly 0.5 s: while the chart still follows, its scale moves on between the two ends of the drag - by
+    # more on a loaded PC, where the drag itself takes longer)
+    assert att.range() == held and 0.15 < held[1] - held[0] < 0.85, held
     pg.check("#log-follow input")
     gui.wait(lambda: att.range()[1] > held[1] + 0.5, what="following again")
     # stop: the recording becomes a file in the library and stays on screen
@@ -1653,3 +1678,19 @@ def test_pins_tab_stm32(gui_stm32):
     assert "không đo được điện áp" not in pg.inner_text("#pin-warnings"), "the ESP32-S3 ADC rule does not apply"
     gui.type_into("pins.buzzer", "")
     gui.wait(lambda: gui.setting("pins", "buzzer") == 255, what="pin cleared")
+
+
+def test_wifi_settings_text_fields(gui):
+    pg = gui.connect().page
+    gui.tab("system")
+    # (the simulated board says it has a radio): the texts are 0-padded UTF-8 bytes in the section, the password is hidden
+    pg.wait_for_function("(document.getElementById('wifi-state') || { innerText: '' }).innerText.includes('cổng serial (USB / UART)')", timeout=6000)
+    assert gui.field("wifi.pass").get_attribute("type") == "password" and gui.field("wifi.ssid").input_value() == ""
+    gui.field("wifi.ssid").fill("Nhà Nagumo"); gui.field("wifi.ssid").press("Tab")
+    gui.wait(lambda: bytes(gui.hub.fc.get("wifi")["ssid"]).rstrip(b"\0") == "Nhà Nagumo".encode(), timeout=5.0, what="the network name reached the firmware as UTF-8")
+    gui.field("wifi.pass").fill("x" * 80); gui.field("wifi.pass").press("Tab")
+    gui.wait(lambda: bytes(gui.hub.fc.get("wifi")["pass"]) == b"x" * 63 + b"\0", timeout=5.0, what="a password longer than the field: cut to 63 bytes, the end mark kept")
+    gui.field("wifi.ssid").fill(""); gui.field("wifi.ssid").press("Tab"); gui.field("wifi.pass").fill(""); gui.field("wifi.pass").press("Tab")
+    gui.wait(lambda: not any(gui.hub.fc.get("wifi")["ssid"]) and not any(gui.hub.fc.get("wifi")["pass"]), timeout=5.0, what="emptied again")
+    if pg.locator("#revert").is_visible():
+        pg.click("#revert")

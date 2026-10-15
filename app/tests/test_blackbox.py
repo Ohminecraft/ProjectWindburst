@@ -156,7 +156,7 @@ def test_flight_logged_to_flash_downloaded_and_decoded(sim, fc, tmp_path):
     assert s.meta["firmware"].startswith("Windburst RX") and s.meta["to"] == "storage" and s.meta["session"] == "1" and s.rate_hz == 500 and s.schema_matches(fc.schema)
     # the settings of that flight are in the log
     stored = s.settings(fc.schema)
-    assert stored["pid"] == fc.get("pid") and stored["rates"] == fc.get("rates") and stored["blackbox"]["rate_hz"] == 500 and len(stored) == len(fc.schema.sections)
+    assert stored["pid"] == fc.get("pid") and stored["rates"] == fc.get("rates") and stored["blackbox"]["rate_hz"] == 500 and len(stored) == len(fc.schema.sections) - 1 and "wifi" not in stored     # (every section but the WiFi one: its password stays out of the log)
     # what the records say
     t = s.fast["t"]
     assert 6.0 < s.duration < 10.0 and len(t) > 0.85 * 500 * s.duration, "%.2f s, %d records" % (s.duration, len(t))

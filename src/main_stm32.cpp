@@ -49,6 +49,7 @@ static wbp::Server server(settings, &store, host, transport, wbp::ROLE_RX, WB_FW
                           wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | wbp::FEAT_STM32);
 static LinkTask link_task(server, Serial, transport);
 static app::MspLink msp_link(host, transport);
+static app::Cli term_cli(settings, server, [](const char* t, void*) { transport.write((const uint8_t*)t, strlen(t)); }, nullptr);     // '#' on the serial port: the command line (app/cli.h)
 static bb::Service blackbox(flight.blackbox, transport);
 static bb::FirmwareHeader log_header{&settings, "Windburst RX", WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH};
 static TaskHandle_t sensor_handle = nullptr;
@@ -78,7 +79,7 @@ void setup() {
     flight.begin();
 
     // 3. blackbox in bank 2
-    char line[128];
+    char line[176];                                          // (= FlightApp::kReportLen)
     blackbox.attach_store(&log_store);
     if (blackbox.log().ok())
         snprintf(line, sizeof(line), "blackbox: %s %lu kB, %d sessions, %lu kB used%s", log_store.name(), (unsigned long)(log_store.size() / 1024u), blackbox.log().sessions(),
@@ -86,7 +87,7 @@ void setup() {
     else snprintf(line, sizeof(line), "blackbox: FAILED - the log region of flash bank 2 cannot be read");
     flight.add_report(line);
     blackbox.set_header_source(&bb::FirmwareHeader::write, &log_header);
-    blackbox.set_loop(flight.core.cfg.loop_hz, flight.motors.cfg().count);
+    blackbox.set_loop(flight.core.cfg.pid_hz(), flight.motors.cfg().count, flight.core.cfg.loop_hz);   // a record per control cycle at most
     host.set_blackbox(&blackbox, &settings);
     host.set_port(&transport, &g_link_kicks);
     {   // the chip's 96-bit unique id: the MSP side's UID, and (with the clock) a boot id that differs every start
@@ -106,9 +107,9 @@ void setup() {
     if (WB_LINK_BYTES_PER_S) snprintf(line, sizeof(line), "link: %s, %lu bytes/s (the live log is slowed down to fit)", WB_LINK_KIND, (unsigned long)WB_LINK_BYTES_PER_S);
     else snprintf(line, sizeof(line), "link: %s", WB_LINK_KIND);
     flight.add_report(line);
-    snprintf(line, sizeof(line), "settings: %s (gen %lu, %lu/%lu B), loaded 0x%05lx (0x%05lx older), defaulted 0x%05lx, clamped %u",
+    snprintf(line, sizeof(line), "settings: %s (gen %lu, %lu/%lu B), loaded 0x%06lx (0x%06lx older), defaulted 0x%06lx, clamped %u",
              kv_ok ? "flash ok" : "flash FAILED", (unsigned long)kv.generation(), (unsigned long)kv.used(), (unsigned long)kv.half_size(),
-             (unsigned long)(rep.loaded_mask & 0xFFFFFu), (unsigned long)(rep.migrated_mask & 0xFFFFFu), (unsigned long)(rep.defaulted_mask & 0xFFFFFu), (unsigned)(uint16_t)rep.clamped_fields);
+             (unsigned long)(rep.loaded_mask & 0xFFFFFFu), (unsigned long)(rep.migrated_mask & 0xFFFFFFu), (unsigned long)(rep.defaulted_mask & 0xFFFFFFu), (unsigned)(uint16_t)rep.clamped_fields);
     flight.add_report(line);
     if (port::g_flash_ecc_errors) { snprintf(line, sizeof(line), "flash: %lu unreadable quad-words (ECC) skipped - a write cut by a power loss", (unsigned long)port::g_flash_ecc_errors); flight.add_report(line); }
 
@@ -121,6 +122,7 @@ void setup() {
     host.attach(&server);
     host.set_report(flight.report(), flight.report_lines());
     for (int i = 0; i < flight.report_lines(); i++) server.log(1, flight.report()[i]);
+    link_task.set_cli(&term_cli);
     link_task.start();
     vTaskStartScheduler();                                   // does not return
 }

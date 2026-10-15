@@ -114,13 +114,13 @@ public:
         }
         const float yaw_sp = sp[YAW];
         // earth referencing: an earth-frame turn rate w needs body rates  roll = w sin(pitch),  pitch = -w sin(roll)
-        const float coupling[2] = {sinf(target_[PITCH] * kDeg2Rad), -sinf(target_[ROLL] * kDeg2Rad)};
+        const float coupling[2] = {sin_approx(target_[PITCH] * kDeg2Rad), -sin_approx(target_[ROLL] * kDeg2Rad)};
         for (int a = 0; a < 2; a++) {
             float rate = (target_[a] - att[a]) * gain_ + angle_ff[a];
             rate += yaw_sp * coupling[a] * earth_;
             sp[a] = out_lpf_[a].apply(rate);
         }
-        if (earth_ > 0.0f) sp[YAW] = yaw_sp * cosf(earth_ * fmaxf(fabsf(target_[ROLL]), fabsf(target_[PITCH])) * kDeg2Rad);
+        if (earth_ > 0.0f) sp[YAW] = yaw_sp * cos_approx(earth_ * maxf(fabsf(target_[ROLL]), fabsf(target_[PITCH])) * kDeg2Rad);
     }
     float target_deg(int axis) const { return target_[axis]; }
     const AngleConfig& config() const { return cfg_; }
@@ -181,7 +181,7 @@ public:
             e[a] = sqrt_controller(err[a], cfg_.kp[a], accel[a] > 0.0f ? lim : 0.0f, dt) + rate_[a];
         }
         // ---- Euler rates -> body rates: a heading change of a tilted craft is partly roll and pitch for the airframe
-        const float sr = sinf(att[ROLL] * kDeg2Rad), cr = cosf(att[ROLL] * kDeg2Rad), sp_ = sinf(att[PITCH] * kDeg2Rad), cp = cosf(att[PITCH] * kDeg2Rad);
+        const float sr = sin_approx(att[ROLL] * kDeg2Rad), cr = cos_approx(att[ROLL] * kDeg2Rad), sp_ = sin_approx(att[PITCH] * kDeg2Rad), cp = cos_approx(att[PITCH] * kDeg2Rad);
         sp[ROLL] = e[ROLL] + e[YAW] * sp_;
         sp[PITCH] = e[PITCH] * cr - e[YAW] * cp * sr;
         sp[YAW] = e[PITCH] * sr + e[YAW] * cp * cr;

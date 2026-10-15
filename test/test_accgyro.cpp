@@ -11,6 +11,7 @@
 #include "../src/hal/acc_gyro/acc_gyro_regbus.h"
 #include "../src/hal/acc_gyro/acc_gyro_types.h"
 #include "../src/hal/acc_gyro/acc_gyro_util.h"
+#include "../src/hal/acc_gyro/imu_select.h"
 #include "../src/hal/acc_gyro/mpu6050_accgyro.h"
 #include "../src/hal/acc_gyro/mpu6500_icm2060x_accgyro.h"
 #include "../src/hal/acc_gyro/icm426xx_accgyro.h"
@@ -45,6 +46,38 @@ template <class D> static void run_driver(const char* label, Sim& sim, D& drv, f
     sim.fail = true; AgSample keep = s; AgSample s2 = keep;
     CHECK(!drv.read(s2) && memcmp(&s2, &keep, sizeof(s)) == 0, "%s read must fail cleanly on bus error and leave the sample untouched", label);
     sim.fail = false;
+}
+
+
+// Two IMUs: imusel::Selector with scripted chips (each answers its own gyro x = 1 / 2 deg/s and acc x = 0.1 / 0.2 g, or not at all)
+struct FakeChip { float id; bool ok = true; int reads = 0; bool operator()(AgSample& s) { reads++; if (!ok) return false; for (int k = 0; k < 3; k++) { s.gyro_dps[k] = id; s.acc_g[k] = id * 0.1f; } return true; } };
+static void t_imu_select() {
+    printf("[two IMUs] which chip is read, which one flies, a chip that fails\n");
+    using namespace imusel;
+    auto cycles = [](Selector& sel, FakeChip& a, FakeChip& b, int n, AgSample& out) { int got = 0; for (int i = 0; i < n; i++) got += sel.read(a, b, out); return got; };
+    { Selector sel; sel.configure(FIRST, true, true); FakeChip a{1}, b{2}; AgSample o;
+      const int got = cycles(sel, a, b, 80, o);
+      CHECK(got == 80 && a.reads == 80 && b.reads == 10 && o.gyro_dps[0] == 1.0f && o.acc_g[0] == 0.1f && sel.gyro_src() == kImu1 && sel.fallbacks() == 0, "FIRST: IMU 1 flies, IMU 2 is read every 8th cycle (%d of 80)", b.reads);
+      a.ok = false; const bool r = sel.read(a, b, o);
+      CHECK(r && o.gyro_dps[0] == 2.0f && o.acc_g[0] == 0.2f && sel.gyro_src() == kImu2 && sel.acc_src() == kImu2 && sel.fallbacks() == 1, "IMU 1 misses a sample: that cycle comes from IMU 2 (gyro and accelerometer)");
+      cycles(sel, a, b, 25, o); a.reads = 0; b.reads = 0; a.ok = true; cycles(sel, a, b, 50, o);
+      CHECK(sel.lost(0) && a.reads == 0 && b.reads == 50 && o.gyro_dps[0] == 2.0f && sel.in_use() == kImu2, "20 in a row: IMU 1 is lost and no longer read even when it would answer again - IMU 2 flies (no back and forth)"); }
+    { Selector sel; sel.configure(SECOND, true, true); FakeChip a{1}, b{2}; AgSample o; cycles(sel, a, b, 16, o);
+      CHECK(a.reads == 16 && b.reads == 16 && o.gyro_dps[0] == 2.0f && o.acc_g[0] == 0.1f && sel.gyro_src() == kImu2 && sel.acc_src() == kImu1 && sel.in_use() == kImu2, "SECOND: both read, the gyro of IMU 2, the accelerometer of IMU 1 (the calibrated one)");
+      b.ok = false; sel.read(a, b, o); CHECK(o.gyro_dps[0] == 1.0f && sel.gyro_src() == kImu1, "IMU 2 misses one: the gyro of IMU 1 in that cycle"); }
+    { Selector sel; sel.configure(BOTH, true, true); FakeChip a{1}, b{2}; AgSample o; cycles(sel, a, b, 4, o);
+      CHECK(o.gyro_dps[0] == 1.5f && o.acc_g[0] == 0.1f && sel.gyro_src() == (kImu1 | kImu2) && sel.in_use() == (kImu1 | kImu2), "BOTH: the mean of both gyros (%.2f), the accelerometer of IMU 1", o.gyro_dps[0]);
+      b.ok = false; for (int i = 0; i < 25; i++) sel.read(a, b, o);
+      CHECK(o.gyro_dps[0] == 1.0f && sel.lost(1) && sel.in_use() == kImu1, "IMU 2 dies: IMU 1 alone"); }
+    { Selector sel; sel.configure(SECOND, true, false); FakeChip a{1}, b{2}; AgSample o; cycles(sel, a, b, 8, o);
+      CHECK(b.reads == 0 && o.gyro_dps[0] == 1.0f && sel.in_use() == kImu1, "SECOND but IMU 2 was not found at boot: IMU 1 flies"); }
+    { Selector sel; sel.configure(FIRST, true, false); FakeChip a{1}, b{2}; AgSample o; a.ok = false;
+      const int got = cycles(sel, a, b, 30, o);
+      CHECK(got == 0 && sel.lost(0) && sel.in_use() == 0, "one IMU that stops answering: no samples, nothing in use");
+      a.ok = true; CHECK(sel.read(a, b, o) && !sel.lost(0) && sel.in_use() == kImu1, "it is tried again (nothing else is left) and comes back when it answers"); }
+    { Selector sel; sel.configure(BOTH, true, true); FakeChip a{1}, b{2}; AgSample o; a.ok = b.ok = false;
+      CHECK(cycles(sel, a, b, 25, o) == 0 && sel.lost(0) && sel.lost(1), "both silent: no sample (the flight loop disarms after 20)");
+      b.ok = true; CHECK(sel.read(a, b, o) && o.gyro_dps[0] == 2.0f && !sel.lost(1), "both lost: both tried again, the first to answer flies"); }
 }
 
 int main() {
@@ -158,6 +191,7 @@ int main() {
     { double s[3] = {0, 0, 0}, s2[3] = {500 * 400.0, 0, 0}; float b[3] = {9, 9, 9};
       CHECK(!accgyro::bias_from_sums(s, s2, 500, 500, b), "moving board rejected"); }
 
+    t_imu_select();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

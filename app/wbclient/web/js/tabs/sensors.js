@@ -107,21 +107,61 @@ function calibration() {
   ];
 }
 
+// the second IMU: its state, which chip(s) the loop flies on, and its gyro next to the first one's (for checking its orientation)
+function imu2Text(s) {
+  if (s.imu2 === undefined || s.imu2 === 'NONE') return tr('không có');
+  const st = ENUM_LABELS.imu2_state[s.imu2] ? tr(ENUM_LABELS.imu2_state[s.imu2]) : s.imu2;
+  if (s.imu2 !== 'OK') return st;
+  const src = (s.gyro_src || []).join(' + ') || '–';
+  const g = (v) => (v || []).map((x) => Number(x).toFixed(0)).join(' / ');
+  return tr('{state}, vòng bay dùng {src}; gyro IMU 2 {g2} (IMU 1 {g1}) °/s', { state: st, src, g2: g(s.gyro2), g1: g(s.gyro) });
+}
+
+// the CAN bus: its state, and the nodes on it (id, name, health) - the one that gives the GNSS fix / the compass marked
+function canText(c) {
+  if (!c || c.state === undefined) return '–';
+  const st = ENUM_LABELS.can_state[c.state] ? tr(ENUM_LABELS.can_state[c.state]) : c.state;
+  if (c.state !== 'RUNNING' && c.state !== 'BUS_OFF') return st;
+  let t = tr('{state}, node {id}; {rx} khung/s nhận, {tx} gửi, {drop} bỏ; lỗi TX {tec} / RX {rec}, bus-off {off} lần; đã cấp {alloc} node id', { state: st, id: c.node_id, rx: c.rx_fps, tx: c.tx_fps, drop: c.tx_dropped, tec: c.tec, rec: c.rec, off: c.bus_off, alloc: c.allocations });
+  if (c.esc_sent || c.esc_mask) {                          // ESCs on the bus (motors.protocol DRONECAN)
+    const heard = []; for (let i = 0; i < 8; i++) if (c.esc_mask & (1 << i)) heard.push(i);
+    t += '. ' + tr('ESC: đã gửi {n} lệnh, bỏ {drop}; nghe thấy ESC {list}', { n: c.esc_sent, drop: c.esc_dropped, list: heard.length ? heard.join(', ') : tr('(chưa có)') });
+  }
+  return t;
+}
+const HEALTH = ['OK', 'WARNING', 'ERROR', 'CRITICAL'];
+function paintCanNodes() {
+  const box = document.getElementById('can-nodes'); const c = store.streams.can;
+  if (!box || !c || !c.nodes) { if (box) box.replaceChildren(); return; }
+  const dec = new TextDecoder(); const rows = [];
+  for (let i = 0; i < Math.min(c.nodes, 8); i++) {
+    const raw = c.names.slice(i * 16, i * 16 + 16); const z = raw.indexOf(0); const name = dec.decode(Uint8Array.from(z < 0 ? raw : raw.slice(0, z))) || tr('(chưa biết tên)');
+    const uses = [c.gnss_node === c.node[i] ? 'GNSS' : '', c.mag_node === c.node[i] ? tr('la bàn') : '', c.baro_node === c.node[i] ? tr('khí áp kế') : '', c.batt_node === c.node[i] ? tr('pin') : ''].filter(Boolean).join(', ');
+    const health = c.health[i] === 255 ? tr('mất kết nối') : (HEALTH[c.health[i]] || String(c.health[i]));
+    const up = tr('chạy {s} s', { s: c.uptime[i] }), use = uses ? tr('đang dùng: {what}', { what: uses }) : '';
+    rows.push([tr('Node {id}', { id: c.node[i] }), [name, health, up, use].filter(Boolean).join(' · ')]);
+  }
+  box.replaceChildren(kv(rows));
+}
+
 export default {
   id: 'sensors',
   title: tr('Cảm biến'),
   lead: tr('Hiệu chuẩn, hướng lắp chip và bật tắt từng module.'),
-  streams: { calibration: 15, sensors: 10, gps: 2, status: 10 },
+  streams: { calibration: 15, sensors: 10, gps: 2, status: 10, can: 2 },
   mount(view) {
     const f = (v, d) => (v === undefined || v === null ? '–' : Number(v).toFixed(d));
     view.append(h('div', { class: 'cols' },
       h('div', {}, calibration()),
       h('div', {},
         block(tr('IMU và vòng điều khiển'),
-          fields('general', ['board_align', 'board_trim_roll', 'board_trim_pitch', 'board_trim_yaw', 'loop_hz', 'est_hz', 'max_arm_angle', 'airmode', 'airmode_start_throttle']),
+          fields('general', ['board_align', 'board_trim_roll', 'board_trim_pitch', 'board_trim_yaw', 'loop_hz', 'pid_denom', 'est_hz', 'max_arm_angle', 'airmode', 'airmode_start_throttle']),
+          fields('sensors', ['gyro_use', 'imu2_align']),
+          kv([[tr('IMU thứ hai'), h('span', { id: 'imu2-state' }, readout('sensors', (s) => imu2Text(s)))],
+            [tr('Đang chạy'), h('span', { id: 'rates-now' }, readout('status', (s) => (s.pid_target ? tr('gyro {gyro} Hz, PID {pid} Hz', { gyro: s.loop_target, pid: s.pid_target }) : '–')))]]),
           note(tr('Các mục này có hiệu lực sau khi lưu và khởi động lại.'))),
         block('Module',
-          fields('sensors', ['baro_enabled', 'range_enabled', 'range_model', 'range_l1x_mode', 'mag_enabled', 'mag_model', 'mag_align', 'mag_trim_roll', 'mag_trim_pitch', 'mag_trim_yaw', 'mag_declination', 'gps_enabled']),
+          fields('sensors', ['baro_enabled', 'baro_model', 'range_enabled', 'range_model', 'range_l1x_mode', 'mag_enabled', 'mag_model', 'mag_align', 'mag_trim_roll', 'mag_trim_pitch', 'mag_trim_yaw', 'mag_declination', 'gps_enabled']),
           note(tr('Bật hoặc tắt module cần lưu và khởi động lại. Module bật mà firmware không tìm thấy sẽ hiện "Không có" ở tab Tổng quan kèm lý do.'))),
         block('GPS',
           kv([
@@ -134,6 +174,12 @@ export default {
           h('div', { class: 'btn-row' }, cmdButton(tr('Đặt home tại đây'), 'SET_HOME', null, {
             done: () => toast(tr('Đã đặt home.'), 'ok'),
             fail: (e) => toast(e.code === 'NO_SENSOR' ? tr('GPS chưa có fix đủ tốt để đặt home.') : errorText(e), 'bad') })),
-          fields('gps', ['provider', 'baud', 'rate_hz', 'auto_baud', 'auto_config', 'min_sats', 'sbas', 'sbas_integrity', 'use_galileo', 'acquire_model', 'flight_model', 'utc_standard', 'set_home_once', 'use_3d_speed'], { baud: { choices: [9600, 19200, 38400, 57600, 115200, 230400] } })))));
+          fields('gps', ['provider', 'baud', 'rate_hz', 'auto_baud', 'auto_config', 'min_sats', 'sbas', 'sbas_integrity', 'use_galileo', 'acquire_model', 'flight_model', 'utc_standard', 'set_home_once', 'use_3d_speed'], { baud: { choices: [9600, 19200, 38400, 57600, 115200, 230400] } })),
+        store.schema.sections.find((x) => x.name === 'can') ? block(tr('CAN bus (DroneCAN)'),
+          fields('can', ['mode', 'bitrate', 'node_id', 'dna_server']),
+          h('div', { id: 'can-state' }, readout('can', (c) => canText(c))),
+          h('div', { id: 'can-nodes' }), 
+          note(tr('Cần một bộ thu phát CAN 3,3 V (SN65HVD230, TJA1051T/3...) và hai chân ở tab Chân (CAN bus). Module trên bus: GPS provider, loại la bàn, loại khí áp kế, nguồn đo điện áp / dòng chọn DRONECAN; ESC trên bus: giao thức ESC DRONECAN (tab Motor). Có hiệu lực sau khi lưu và khởi động lại.'))) : null)));
+    listen('stream:can', () => paintCanNodes());
   },
 };

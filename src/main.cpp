@@ -16,7 +16,7 @@
 #include <SPI.h>
 
 #ifndef WB_LINK_BAUD
-#define WB_LINK_BAUD 230400          // UART0 / USB-serial bridge. Ignored on USB (see WB_LINK_KIND in app/link_arduino.h).
+#define WB_LINK_BAUD 115200          // UART0 / USB-serial bridge. Ignored on USB (see WB_LINK_KIND in app/link_arduino.h).
 #endif
 #include "config/version.h"
 
@@ -30,6 +30,8 @@ void loop() { Serial.println("Windburst TX: firmware not implemented yet"); dela
 #include "app/flight_app.h"
 #include "app/flight_task.h"
 #include "app/link_arduino.h"
+#include "app/wifi_link.h"
+#include "hal/can/twai_bus.h"
 #include "blackbox/bb_store_esp.h"
 #include "blackbox/bb_card_esp.h"
 #include "blackbox/bb_header.h"
@@ -40,12 +42,27 @@ static FlightApp flight;
 static FlightTask flight_task;
 static NvsStorage nvs;
 static wbp::SettingsStore store(nvs);
-static SerialTransport transport(Serial, WB_LINK_BYTES_PER_S);
+// the app link: the serial port (USB / UART0) and, when the settings switch it on, WiFi (app/wifi_link.h); one server, its frames go
+// to the wire the app last spoke on (app/link_mux.h)
+#if WB_HAS_TWAI
+static TwaiBus can_bus;                                  // the CAN controller (section can: DroneCAN)
+#endif
+static StreamPort usb_port(Serial);
+#if WB_HAS_WIFI
+static WifiLink wifi;
+static app::LinkMux link_mux(usb_port, &wifi);
+#define WB_FEAT_WIFI wbp::FEAT_WIFI
+#else
+static app::LinkMux link_mux(usb_port, nullptr);
+#define WB_FEAT_WIFI 0u
+#endif
+static app::QueuedTransport transport(link_mux, WB_LINK_BYTES_PER_S, &LinkTask::wait_1ms, nullptr);
 static app::LinkHost host(flight.link, &LinkTask::wait_1ms, nullptr, &LinkTask::now_ms);
 static wbp::Server server(settings, &store, host, transport, wbp::ROLE_RX, WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH, "Windburst RX",
-                          wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER);
+                          wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | WB_FEAT_WIFI);
 static LinkTask link_task(server, Serial, transport);
 static app::MspLink msp_link(host, transport);           // ESC tools on the same port (ESC passthrough)
+static app::Cli term_cli(settings, server, [](const char* t, void*) { transport.write((const uint8_t*)t, strlen(t)); }, nullptr);     // '#' on the serial port: the command line (app/cli.h)
 static EspPartitionStore log_store;                      // flash region of the flight log (partition "wblog", or the stock "spiffs" one)
 static bb::Service blackbox(flight.blackbox, transport);
 static bb::FirmwareHeader log_header{&settings, "Windburst RX", WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH};
@@ -60,7 +77,7 @@ static SdCardTask sd_task(card_log);
 static constexpr uint32_t kSensorStack = 16384;
 RTC_NOINIT_ATTR static uint32_t g_boot_count;               // (link stream boot_id)
 
-static void WB_FAST sensor_entry(void*) {
+static void sensor_entry(void*) {
     for (;;) {
         if (flight_task.running()) { flight.slow_update(); vTaskDelay(1); }  // one pass per millisecond tick
         else flight.run();                                                    // no flight task: one thread does both, as on a PC
@@ -86,11 +103,15 @@ void setup() {
     flight.usb_link = true;
     flight.uart0 = &Serial0;                             // the app talks over USB: UART0 is free (an MSP optical flow sensor can have it)
 #endif
+    esp_efuse_mac_get_default(flight.chip_uid);              // (the MAC address: the chip's unique id, for DroneCAN too)
+#if WB_HAS_TWAI
+    flight.can_port = &can_bus;
+#endif
     flight.configure(settings);
     flight.begin();
 
     // 3. blackbox: find the sessions already in the log memory (a few hundred short flash reads), hand the service to the link side
-    char line[128];
+    char line[176];                                          // (= FlightApp::kReportLen)
     if (log_store.begin()) {
         blackbox.attach_store(&log_store);
         snprintf(line, sizeof(line), "blackbox: partition '%.16s' %lu kB, %d sessions, %lu kB used%s", log_store.name(), (unsigned long)(log_store.size() / 1024u), blackbox.log().sessions(),
@@ -109,7 +130,7 @@ void setup() {
     }
     blackbox.attach_card(&card_log);
     blackbox.set_header_source(&bb::FirmwareHeader::write, &log_header);
-    blackbox.set_loop(flight.core.cfg.loop_hz, flight.motors.cfg().count);
+    blackbox.set_loop(flight.core.cfg.pid_hz(), flight.motors.cfg().count, flight.core.cfg.loop_hz);   // a record per control cycle at most
     host.set_blackbox(&blackbox, &settings);
     host.set_port(&transport, &g_link_kicks);                // (the link stream: transmit queue, USB kicks)
     // A number that differs every start: esp_random() alone is only pseudo-random with the radio off, so a counter in RTC memory
@@ -136,27 +157,40 @@ void setup() {
                         : r == ESP_RST_EXT ? "reset pin" : r == ESP_RST_DEEPSLEEP ? "deep sleep" : r == ESP_RST_USB ? "USB (the port's reset line)" : r == ESP_RST_JTAG ? "JTAG" : "unknown";
         snprintf(line, sizeof(line), "reset: %s", why); flight.add_report(line);
     }
+#if WB_HAS_WIFI
+    if (settings.wifi.mode != wbp::WIFI_MODE_OFF) {          // the radio (its driver takes ~50 kB of RAM and runs on core 0, beside the link)
+        wifi.begin(settings.wifi, line, sizeof(line)); flight.add_report(line);
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+        // ADC2 (GPIO11 .. GPIO20 on the S3) belongs to the radio while it runs: a voltage / current sensor there reads nothing
+        auto adc2 = [](uint8_t p) { return p >= 11 && p <= 20; };
+        if (adc2(settings.pins.batt_adc) || adc2(settings.pins.curr_adc)) flight.add_report("wifi: WARNING - battery / current ADC on an ADC2 pin (GPIO11 .. GPIO20): unusable while WiFi is on, take GPIO1 .. GPIO10");
+#endif
+        link_task.set_net(&wifi, &link_mux);
+    }
+    host.set_net([](app::LinkHost::NetInfo& n) { n.wifi = wifi.state(); n.ip = wifi.ip(); n.rssi = wifi.rssi(); n.clients = wifi.clients(); n.via = (uint8_t)link_mux.active(); });
+#endif
     if (WB_LINK_BYTES_PER_S) snprintf(line, sizeof(line), "link: %s, %lu bytes/s (the live log is slowed down to fit)", WB_LINK_KIND, (unsigned long)WB_LINK_BYTES_PER_S);
     else snprintf(line, sizeof(line), "link: %s", WB_LINK_KIND);
     flight.add_report(line);
 
     // 5. boot report (kept for the app's REPORT command) - sent once now, BEFORE the link task exists: from here on only that task uses the server
-    // (bit = section id; the masks are cut to 20 bits so that the line provably fits its buffer)
-    static_assert(wbp::kSectionCount < 20, "a section id of 20 or more needs wider masks in the boot report");
-    snprintf(line, sizeof(line), "settings: %s, loaded 0x%05lx (0x%05lx from an older firmware), defaulted 0x%05lx, clamped %u",
-             nvs_ok ? "NVS ok" : "NVS FAILED (nothing can be saved)", (unsigned long)(rep.loaded_mask & 0xFFFFFu), (unsigned long)(rep.migrated_mask & 0xFFFFFu), (unsigned long)(rep.defaulted_mask & 0xFFFFFu), (unsigned)(uint16_t)rep.clamped_fields);
+    // (bit = section id; the masks are cut to 24 bits so that the line provably fits its buffer)
+    static_assert(wbp::kSectionCount < 24, "a section id of 24 or more needs wider masks in the boot report");
+    snprintf(line, sizeof(line), "settings: %s, loaded 0x%06lx (0x%06lx from an older firmware), defaulted 0x%06lx, clamped %u",
+             nvs_ok ? "NVS ok" : "NVS FAILED (nothing can be saved)", (unsigned long)(rep.loaded_mask & 0xFFFFFFu), (unsigned long)(rep.migrated_mask & 0xFFFFFFu), (unsigned long)(rep.defaulted_mask & 0xFFFFFFu), (unsigned)(uint16_t)rep.clamped_fields);
     flight.add_report(line);
     host.attach(&server);
     host.set_report(flight.report(), flight.report_lines());
     for (int i = 0; i < flight.report_lines(); i++) server.log(1, flight.report()[i]);
 
     // 6. app link, SD writer - then Arduino's loop task (this one) deletes itself
+    link_task.set_cli(&term_cli);                            // (not "cli": that is the ESP32 core's interrupts-off macro)
     link_task.start();
     sd_task.start();
-    if (sensor_task) vTaskDelete(nullptr);                   // (otherwise loop() below takes over)
+    vTaskDelete(nullptr);
 }
 
-void loop() { sensor_entry(nullptr); }                       // only if the sensor task could not be created
+void loop() {}
 
 #endif
 

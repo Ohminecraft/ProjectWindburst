@@ -49,7 +49,7 @@ public:
         a = af_;
         const float an = sqrtf(a.x * a.x + a.y * a.y + a.z * a.z);
         acc_weight_ = 0.0f;
-        if (at_rest && an > kRestMin && an < kRestMax) rest_g_ += (an - rest_g_) * fminf(dt / cfg.rest_tc_s, 1.0f);
+        if (at_rest && an > kRestMin && an < kRestMax) rest_g_ += (an - rest_g_) * minf(dt / cfg.rest_tc_s, 1.0f);
         float ex = 0, ey = 0, ez = 0, w = 0, kp = 0;              // the tilt error (body axes), how much it counts, its gain
         if (an > 1e-3f) {
             w = weight_of(an);
@@ -120,14 +120,14 @@ public:
     }
     WB_FAST EulerDeg euler_aero() const {
         EulerDeg e;
-        e.roll = atan2f(2 * (q0 * q1 + q2 * q3), 1 - 2 * (q1 * q1 + q2 * q2)) * kRad2Deg;
-        e.pitch = asinf(clampf(2 * (q0 * q2 - q3 * q1), -1.0f, 1.0f)) * kRad2Deg;
-        e.yaw = atan2f(2 * (q0 * q3 + q1 * q2), 1 - 2 * (q2 * q2 + q3 * q3)) * kRad2Deg;
+        e.roll = atan2_approx(2 * (q0 * q1 + q2 * q3), 1 - 2 * (q1 * q1 + q2 * q2)) * kRad2Deg;      // (every cycle: the approximations, types.h)
+        e.pitch = asin_approx(2 * (q0 * q2 - q3 * q1)) * kRad2Deg;
+        e.yaw = atan2_approx(2 * (q0 * q3 + q1 * q2), 1 - 2 * (q2 * q2 + q3 * q3)) * kRad2Deg;
         return e;
     }
-    EulerDeg euler_user() const { EulerDeg e = euler_aero(); e.pitch = -e.pitch; return e; }     // THE place the pilot convention is applied
+    WB_FAST EulerDeg euler_user() const { EulerDeg e = euler_aero(); e.pitch = -e.pitch; return e; }     // THE place the pilot convention is applied
     WB_FAST float up_cos() const { return 1 - 2 * (q1 * q1 + q2 * q2); }                                 // cos(tilt from vertical) = R[2][2]
-    WB_FAST float tilt_deg() const { return acosf(clampf(up_cos(), -1.0f, 1.0f)) * kRad2Deg; }
+    WB_FAST float tilt_deg() const { return acos_approx(up_cos()) * kRad2Deg; }
     // World-frame acceleration without gravity, m/s^2. up positive; north/east from the body specific force (g) and the attitude.
     WB_FAST void world_accel(Vec3 a, float& north, float& east, float& up) const {
         const float fx = a.x * kG0, fy = a.y * kG0, fz = a.z * kG0;

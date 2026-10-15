@@ -16,6 +16,7 @@
 #include <math.h>
 #include "sim_plant.h"
 #include "sim_imu.h"
+#include "sim_can.h"
 #include "sim_baro.h"
 #include "sim_mag.h"
 #include "sim_gps.h"
@@ -38,6 +39,20 @@ struct VirtualBoard {
 
     Plant plant;
     Sim imu{C_ICM42688P, true};
+    // a second IMU on the same SPI bus (CS kCs2), fitted when has_imu2: mounted as imu2_align says (the firmware's AccGyroAlign),
+    // with a gyro bias of its own; no accelerometer error (it is never 6-face calibrated)
+    Sim imu2{C_ICM42688P, true}; bool has_imu2 = false; uint8_t imu2_align = 0; float gyro2_bias[3] = {0, 0, 0}, gyro2_dps_err[3] = {0, 0, 0};    // gyro2_dps_err: what it reads too much (a broken chip)
+    static constexpr uint8_t kCs2 = 34;
+    // a CAN bus with a DroneCAN GPS + compass module on it (fitted when has_can_gps); the controller's pins
+    SimCanWire can_wire; SimCanPort can_port{&can_wire}; SimCanModule can_gps{&can_wire}; bool has_can_gps = false;
+    // and, when fitted, four DroneCAN ESCs (motors.protocol DRONECAN: the plant's motors follow their RawCommands) and a
+    // barometer + power module
+    SimCanEscs can_escs{&can_wire}; bool has_can_escs = false;
+    SimCanSensors can_sens{&can_wire}; bool has_can_sens = false;
+    uint8_t app_order_[8] = {0, 1, 2, 3, 4, 5, 6, 7};              // (the motor order of the firmware, for which ESC index drives which motor)
+    // the motor backend when it is the captured one (nullptr with ESCs on the CAN bus)
+    static HostMotorHw* host_hw(FlightApp& app) { return motor::is_can(app.motors.cfg().protocol) ? nullptr : static_cast<HostMotorHw*>(app.motors.hw()); }
+    static constexpr uint8_t kCanTx = 33, kCanRx = 0;
     Bmp280Sim baro;
     QmcSim mag;
     SimGps gps;
@@ -117,10 +132,11 @@ struct VirtualBoard {
     void step(FlightApp& app, uint32_t dt_us = 250) {
         g_stub_us += dt_us; steps++;
         const uint32_t now_ms = millis();
+        for (int i = 0; i < 8; i++) app_order_[i] = app.motors.cfg().order[i];
         if (now_ms != last_ms_) { last_ms_ = now_ms; every_ms(now_ms); }
         pulse_frames(); deliver_edges();
         update_sensors();
-        { HostMotorHw* esc = static_cast<HostMotorHw*>(app.motors.hw());                // bidirectional DShot: every ESC answers each frame with its motor speed
+        { HostMotorHw* esc = host_hw(app);                // bidirectional DShot: every ESC answers each frame with its motor speed
           if (esc && esc->bidir && esc_replies) for (int i = 0; i < plant.n && i < app.motors.cfg().count; i++) {
               if (esc_silent[i]) continue; const int slot = app.motors.cfg().order[i];
               // extended telemetry (once switched on by command 13): every 8th reply carries the ESC's current instead of its speed
@@ -128,7 +144,7 @@ struct VirtualBoard {
               esc->reply[slot] = edt_frame ? motor::gcr_encode((uint16_t)(0x0600 | (uint8_t)lroundf(esc_amps[i] < 0 ? 0 : esc_amps[i] > 255 ? 255 : esc_amps[i]))) : esc_gcr(motor_rpm(i), app.motors.cfg().pole_count);
               esc->has_reply[slot] = true; } }
         app.run();
-        { HostMotorHw* esc = static_cast<HostMotorHw*>(app.motors.hw());               // ESC telemetry wire: an ESC asked by the telemetry bit answers (KISS)
+        { HostMotorHw* esc = host_hw(app);               // ESC telemetry wire: an ESC asked by the telemetry bit answers (KISS)
           if (esc && esc_wire_on && esc->last.send) for (int i = 0; i < plant.n && i < app.motors.cfg().count; i++) {
               const int slot = app.motors.cfg().order[i];
               if (!esc->last.telem_request[slot] || esc_silent[i]) continue;
@@ -142,7 +158,7 @@ struct VirtualBoard {
               esc_wire.asked++; } }
         // motor outputs -> plant (DShot value 48..2047 = 0..100 %)
         float cmd[8] = {};
-        HostMotorHw* hw = static_cast<HostMotorHw*>(app.motors.hw());
+        HostMotorHw* hw = host_hw(app);
         if (hw) {                                                       // DShot commands (values 1..47) as the ESCs hear them
             uint8_t c = 0, slots = 0;
             if (hw->last.send) for (int k = 0; k < 8; k++) { const uint16_t v = hw->last.value[k]; if (v >= 1 && v <= 47) { c = (uint8_t)v; slots |= (uint8_t)(1u << k); } }
@@ -158,10 +174,13 @@ struct VirtualBoard {
             }
             last_cmd_ = c; last_slots_ = slots;
         }
-        if (hw) for (int i = 0; i < plant.n && i < app.motors.cfg().count; i++) {
-            const uint16_t v = hw->last.value[app.motors.cfg().order[i]];
-            cmd[i] = v < 48 ? 0.0f : (v - 48) / 1999.0f;
+        const bool can_escs_drive = has_can_escs && motor::is_can(app.motors.cfg().protocol);
+        if (hw || can_escs_drive) for (int i = 0; i < plant.n && i < app.motors.cfg().count; i++) {
+            const int slot = app.motors.cfg().order[i];
+            if (can_escs_drive) cmd[i] = can_escs.frac(slot, now_ms);                 // (ESC index = hardware slot)
+            else { const uint16_t v = hw->last.value[slot]; cmd[i] = v < 48 ? 0.0f : (v - 48) / 1999.0f; }
             motor_frac[i] = cmd[i];
+            if (motor_dead[i]) cmd[i] = 0.0f;                      // (a prop strike: the motor stands, whatever it is told)
         }
         plant.step(cmd, dt_us * 1e-6f);
     }
@@ -173,6 +192,7 @@ struct VirtualBoard {
         const float ab[3] = {a.x, a.y, a.z}, gb[3] = {g.x, g.y, g.z}; float ac[3], gc[3];
         mount(ab, ac); mount(gb, gc);
         for (int k = 0; k < 3; k++) { imu.ta[k] = kChip[k] * ac[k] / acc_scale[k] + acc_offset[k] + acc_noise * n(r); imu.tg[k] = kChip[k] * gc[k] + gyro_bias[k] + gyro_noise * n(r); }
+        if (has_imu2) { float c[3], d[3]; chip2(ac, c); chip2(gc, d); for (int k = 0; k < 3; k++) { imu2.ta[k] = c[k] + acc_noise * n(r); imu2.tg[k] = d[k] + gyro2_bias[k] + gyro2_dps_err[k] + gyro_noise * n(r); } }
     }
     void refresh_slow(uint32_t now_ms) {
         baro.set_env(ground_pa * pow(1.0 - plant.z / 44330.0, 5.255) + noise(baro_noise_pa), temp_c);
@@ -190,7 +210,8 @@ struct VirtualBoard {
     // ESCs with bidirectional DShot. Rotor speed ~ sqrt(thrust); `rpm_at_full` at full thrust (a 5-inch prop on a 1750 kv motor: about 24000).
     float esc_amps[8] = {}; uint8_t esc_edt_on = 0;                 // current each ESC reports (A, extended telemetry); hardware slots that switched it on
     bool esc_replies = true, esc_silent[8] = {}; float rpm_at_full = 24000.0f;      // esc_silent: that one ESC's telemetry wire is broken
-    float motor_rpm(int i) const { return rpm_at_full * sqrtf(fmaxf(plant.T[i] / (plant.Tmax * plant.gain[i]), 0.0f)); }
+    bool motor_dead[8] = {};                                        // that motor stands still (a prop strike): no thrust, 0 rpm in its replies
+    float motor_rpm(int i) const { return motor_dead[i] ? 0.0f : rpm_at_full * sqrtf(fmaxf(plant.T[i] / (plant.Tmax * plant.gain[i]), 0.0f)); }
     static uint32_t esc_gcr(float rpm, int poles) {                 // the reply a real ESC sends: the eRPM period in microseconds, 9 bits of mantissa + 3 of exponent
         const float erpm = rpm * (float)(poles / 2); if (erpm < 100.0f) return motor::gcr_encode(0x0FFF);      // standing still
         uint32_t m = (uint32_t)lroundf(60e6f / erpm); int e = 0; while (m > 0x1FF) { m >>= 1; e++; }
@@ -213,21 +234,17 @@ struct VirtualBoard {
     uint32_t cost_i2c_us = 0;                                       // ... and one read on the sensor I2C bus
     void cs(uint8_t pin, uint8_t val) {
         if (pin == kFlowCs) { pmw.cs(val == LOW); return; }
-        if (pin != kCs) return;
-        if (val == LOW) { t.active = true; t.idx = 0; g_stub_us += cost_imu_us; return; }
-        if (t.active && !t.rd && t.idx >= 2 && has_imu) { const int n = t.idx - 1; if (n == 1) imu.write(t.reg, t.w[0]); else imu.write_buf(t.reg, t.w, (size_t)n); }
-        t.active = false;
+        if (pin == kCs) imu_cs(t, imu, has_imu, val);
+        else if (pin == kCs2) imu_cs(t2, imu2, has_imu2, val);
     }
     uint8_t spi(uint8_t v) {
-        if (!t.active) return 0xFF;
-        uint8_t out = 0xFF;
-        if (t.idx == 0) { t.rd = (v & 0x80) != 0; t.reg = v & 0x7F; out = 0x00; }
-        else if (t.rd) {
-            if (t.idx == 1) { if (!has_imu || !imu.read(t.reg, t.cache, 16)) memset(t.cache, 0xFF, 16); }
-            out = (t.idx - 1 < 16) ? t.cache[t.idx - 1] : 0x00;
-        } else if (t.idx - 1 < (int)sizeof(t.w)) t.w[t.idx - 1] = v;
-        t.idx++;
-        return out;
+        if (t.active) return imu_xfer(t, imu, has_imu, v);
+        if (t2.active) return imu_xfer(t2, imu2, has_imu2, v);
+        return 0xFF;
+    }
+    // the board frame -> what the second chip reads: align_chip (firmware) maps chip -> board with a signed permutation, this is its transpose
+    void chip2(const float b[3], float c[3]) const {
+        for (int j = 0; j < 3; j++) { float e[3] = {0, 0, 0}; e[j] = 1.0f; accgyro::align_chip(e, (AccGyroAlign)imu2_align); c[j] = e[0] * b[0] + e[1] * b[1] + e[2] * b[2]; }
     }
     AgRegBus* i2c_dev(uint8_t addr) { if (addr == 0x76 && has_baro) return &baro; if (addr == 0x0D && has_mag) return &mag; return nullptr; }
     int i2c_tx(uint8_t addr, const uint8_t* d, size_t n) {
@@ -288,6 +305,7 @@ private:
         for (int k = 0; k < 3; k++) if (vib_dps[k] > 0) gb[k] += vib_dps[k] * sinf(6.2831853f * vib_hz[k] * (float)(g_stub_us % 1000000u) * 1e-6f);
         mount(ab, ac); mount(gb, gc);
         for (int k = 0; k < 3; k++) { imu.ta[k] = kChip[k] * ac[k] / acc_scale[k] + acc_offset[k] + noise(acc_noise); imu.tg[k] = kChip[k] * gc[k] + gyro_bias[k] + noise(gyro_noise); }
+        if (has_imu2) { float c[3], d[3]; chip2(ac, c); chip2(gc, d); for (int k = 0; k < 3; k++) { imu2.ta[k] = c[k] + noise(acc_noise); imu2.tg[k] = d[k] + gyro2_bias[k] + gyro2_dps_err[k] + noise(gyro_noise); } }
         baro.set_env(ground_pa * pow(1.0 - plant.z / 44330.0, 5.255) + noise(baro_noise_pa), temp_c);
         const double B[3] = {0.30, 0.0, 0.38}; double bb[3]; plant.body_from_world(B, bb);              // earth field: north + down (northern hemisphere)
         for (int k = 0; k < 3; k++) mag.field[k] = kChip[k] * bb[k] + mag_hard[k] + noise(mag_noise);   // a real compass never repeats itself exactly (the driver treats a frozen output as a fault)
@@ -307,6 +325,22 @@ private:
         { float fx, fy; flow_truth.mean(0, 1, fx, fy); pmw.integrate(fx, fy, 0.001f); }
         mtf.tick(now_ms, flow_truth);
         gps.tick(now_ms);
+        if (has_can_gps) {                                                                              // the DroneCAN module sits on the craft as well
+            dcan::Fix2& f = can_gps.fix;
+            f.lat_1e8 = (int64_t)llround(gps.truth.lat * 1e8); f.lon_1e8 = (int64_t)llround(gps.truth.lon * 1e8); f.height_msl_mm = (int32_t)lround(gps.truth.alt_m * 1000.0); f.height_ellipsoid_mm = f.height_msl_mm + 47000;
+            f.ned_velocity[0] = (float)plant.vn; f.ned_velocity[1] = (float)plant.ve; f.ned_velocity[2] = (float)-plant.vz;
+            const double B[3] = {0.30, 0.0, 0.38}; double bb[3]; plant.body_from_world(B, bb);
+            for (int k = 0; k < 3; k++) can_gps.field_frd[k] = (float)bb[k] + noise(mag_noise);
+            can_gps.step(now_ms);
+        }
+        if (has_can_escs) {                                         // the CAN ESCs report what their motors do
+            can_wire.tap = &SimCanEscs::on_frame; can_wire.tap_ctx = &can_escs;
+            float total = 0; for (int i = 0; i < 4; i++) { can_escs.rpm[i] = 0; can_escs.amps[i] = 0; }
+            for (int i = 0; i < plant.n && i < 4; i++) { const int slot = app_order_[i]; can_escs.rpm[slot] = motor_rpm(i); can_escs.amps[slot] = 25.0f * motor_frac[i]; total += can_escs.amps[slot]; }
+            can_escs.volt = (float)batt_v; can_escs.step(now_ms); can_sens.amps = total;
+        }
+        if (has_can_sens) { can_sens.pa = ground_pa * pow(1.0 - plant.z / 44330.0, 5.255) + noise(baro_noise_pa); can_sens.temp_c = temp_c; can_sens.volt = (float)batt_v; can_sens.step(now_ms); }
+        if (!has_can_gps) can_wire.to_dev.clear();                  // (nobody else reads that queue: the others listen through the tap)
         if (has_rc && tx_on && rc_link == RC_CRSF && now_ms % 7 == 0) {                                 // ~143 Hz CRSF
             send_crsf_channels(); rc_frames++;
             if (rc_frames % 10 == 0) send_crsf_link();
@@ -381,7 +415,22 @@ public:
     void send_crsf_link() { const uint8_t p[10] = {60, 62, lq, 8, 0, 4, 2, 70, 100, 6}; crsf_frame(0x14, p, 10); }
 private:
 
-    struct { bool active = false; int idx = 0; bool rd = false; uint8_t reg = 0; uint8_t cache[16]; uint8_t w[200]; } t;
+    struct Tx { bool active = false; int idx = 0; bool rd = false; uint8_t reg = 0; uint8_t cache[16]; uint8_t w[200]; } t, t2;
+    void imu_cs(Tx& x, Sim& chip, bool fitted, uint8_t val) {
+        if (val == LOW) { x.active = true; x.idx = 0; g_stub_us += cost_imu_us; return; }
+        if (x.active && !x.rd && x.idx >= 2 && fitted) { const int n = x.idx - 1; if (n == 1) chip.write(x.reg, x.w[0]); else chip.write_buf(x.reg, x.w, (size_t)n); }
+        x.active = false;
+    }
+    uint8_t imu_xfer(Tx& x, Sim& chip, bool fitted, uint8_t v) {
+        uint8_t out = 0xFF;
+        if (x.idx == 0) { x.rd = (v & 0x80) != 0; x.reg = v & 0x7F; out = 0x00; }
+        else if (x.rd) {
+            if (x.idx == 1) { if (!fitted || !chip.read(x.reg, x.cache, 16)) memset(x.cache, 0xFF, 16); }
+            out = (x.idx - 1 < 16) ? x.cache[x.idx - 1] : 0x00;
+        } else if (x.idx - 1 < (int)sizeof(x.w)) x.w[x.idx - 1] = v;
+        x.idx++;
+        return out;
+    }
     uint8_t i2c_reg_ = 0; uint32_t last_ms_ = 0xFFFFFFFFu; uint8_t last_cmd_ = 0, last_slots_ = 0, edt_run_[8] = {}, edt_last_[8] = {};
 };
 

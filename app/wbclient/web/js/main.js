@@ -62,6 +62,7 @@ let customPort = '';       // a port typed by hand: an unusual device name, or s
 let portsKey = '';
 function portLabel(p) {
   if (p.sim) return tr('Mô phỏng wb_sim (127.0.0.1:5760)');
+  if (p.wifi) return tr('WiFi của máy bay (điểm phát riêng, 192.168.4.1:5760)');
   const what = [p.description, p.chip && !String(p.description).includes(p.chip) ? p.chip : ''].filter(Boolean).join(', ');
   return p.port + (what ? ' - ' + what : '');
 }
@@ -89,14 +90,15 @@ async function refreshPorts(force, quiet) {
   portsKey = key;
   const keep = portSel.value && portSel.value !== '__custom__' ? portSel.value : saved('wb-port');
   clear(portSel);
-  if (!res.ports.length) portSel.append(h('option', { value: '' }, tr('Không thấy cổng nào')));
+  const real = res.ports.filter((p) => !p.wifi);           // (the board's WiFi access point is always listed: it is never the default)
+  if (!real.length) portSel.append(h('option', { value: '' }, tr('Không thấy cổng nào')));
   for (const p of res.ports) portSel.append(h('option', { value: p.port, 'data-likely': p.likely ? '1' : null }, portLabel(p)));
   for (const extra of [store.conn.port, customPort]) if (extra && ![...portSel.options].some((o) => o.value === extra)) portSel.append(h('option', { value: extra }, extra));
   portSel.append(h('option', { value: '__custom__' }, tr('Nhập cổng khác…')));
   const has = (v) => v && [...portSel.options].some((o) => o.value === v);
   const likely = res.ports.find((p) => p.likely);
-  const pick = has(store.conn.port) ? store.conn.port : has(keep) ? keep : likely ? likely.port : '';
-  if (pick) portSel.value = pick;
+  const pick = has(store.conn.port) ? store.conn.port : has(keep) ? keep : likely ? likely.port : real.length ? real[0].port : '';
+  portSel.value = pick;
 }
 
 async function connect() {
@@ -192,7 +194,8 @@ function paintBar() {
   chips.append(chip(tr('Pin'), st.cell_mv ? (st.cell_mv / 1000).toFixed(2) + ' V/cell' : tr('không đo'), ''));
   // below 80 % of the configured rate the firmware refuses to arm (blocker LOOP_RATE): show it before the pilot asks why
   const slow = st.loop_hz && st.loop_target && st.loop_hz < 0.8 * st.loop_target;
-  chips.append(chip(tr('Vòng lặp'), st.loop_hz ? (st.loop_target ? `${st.loop_hz} / ${st.loop_target} Hz, ${st.loop_max_us} µs` : `${st.loop_hz} Hz, ${st.loop_max_us} µs`) : tr('đang đo'), slow ? 'bad' : ''));
+  const pid = st.pid_target && st.pid_target !== st.loop_target ? ` · PID ${st.pid_hz}` : '';      // (only when the PID runs slower than the gyro)
+  chips.append(chip(tr('Vòng lặp'), st.loop_hz ? (st.loop_target ? `${st.loop_hz} / ${st.loop_target} Hz${pid}, ${st.loop_max_us} µs` : `${st.loop_hz} Hz, ${st.loop_max_us} µs`) : tr('đang đo'), slow ? 'bad' : ''));
   const dirty = st.settings_dirty.includes('DIRTY'), reboot = st.settings_dirty.includes('REBOOT_REQUIRED');
   saveBtn.hidden = !dirty && !reboot; revertBtn.hidden = !dirty;
   saveBtn.textContent = reboot ? tr('Lưu và khởi động lại') : tr('Lưu');

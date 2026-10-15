@@ -115,7 +115,7 @@ private:
 // ---------------------------------------------------------------------------------------------------------------------
 // Which reading feeds the monitor. AUTO: the ADC when a pin exists, otherwise the ESC telemetry.
 // ---------------------------------------------------------------------------------------------------------------------
-enum Source : uint8_t { SRC_AUTO, SRC_ADC, SRC_ESC, SRC_NONE };
+enum Source : uint8_t { SRC_AUTO, SRC_ADC, SRC_ESC, SRC_NONE, SRC_DRONECAN };        // == schema enum batt_source (DRONECAN appended in 0.17)
 inline Source pick_source(Source wanted, bool adc_ok) {
     if (wanted == SRC_AUTO) return adc_ok ? SRC_ADC : SRC_ESC;
     return wanted;
@@ -130,7 +130,7 @@ inline float adc_to_volts(uint32_t pin_mv, float divider) { return (float)pin_mv
 //   ESC:  the sum of the motors' currents from extended DShot telemetry (each ESC reports its own; a 4-in-1 reports per channel).
 // The current shown is low-passed at 1 Hz (Betaflight ibat_lpf_period 10); the consumption adds up the unfiltered readings.
 // ---------------------------------------------------------------------------------------------------------------------
-enum CurrentSource : uint8_t { CUR_AUTO, CUR_ADC, CUR_ESC, CUR_NONE };           // == schema enum curr_source
+enum CurrentSource : uint8_t { CUR_AUTO, CUR_ADC, CUR_ESC, CUR_NONE, CUR_DRONECAN };           // == schema enum curr_source (DRONECAN: 0.17)
 inline CurrentSource pick_current_source(CurrentSource wanted, bool adc_ok) {
     if (wanted == CUR_AUTO) return adc_ok ? CUR_ADC : CUR_ESC;
     return wanted;

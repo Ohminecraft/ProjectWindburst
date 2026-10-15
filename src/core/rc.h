@@ -56,7 +56,7 @@ struct RateProfile {
 inline float apply_actual_rate(const RateProfile& p, int axis, float s) {
     float a = fabsf(s), s5 = s * s * s * s * s;
     float e = a * (s5 * p.expo[axis] + s * (1.0f - p.expo[axis]));
-    float extra = fmaxf(0.0f, p.max_rate_dps[axis] - p.center_sens_dps[axis]);
+    float extra = maxf(0.0f, p.max_rate_dps[axis] - p.center_sens_dps[axis]);
     return s * p.center_sens_dps[axis] + extra * e;
 }
 

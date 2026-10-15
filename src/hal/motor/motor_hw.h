@@ -27,9 +27,8 @@ public:
     virtual void write(const motor::Frame& f) = 0;
     // Bidirectional DShot: true when a new ESC reply was captured for this hardware slot (20 GCR bits, or kGcrInvalid for a garbled one).
     virtual bool poll_reply(int slot, uint32_t& gcr20) { return false; }
-    virtual void set_driver(uint8_t) {}                             // DShot only: 0 = direct RMT, 1 = ESP-IDF driver (call before begin)
     virtual void set_pullup(bool) {}                                // bidirectional DShot: true = the pins' internal pull-up, false = resistors on the board (before begin)
-    virtual bool bidirectional() const { return false; }            // what the backend really does (the IDF DShot path is one-way)
+    virtual bool bidirectional() const { return false; }            // what the backend really does (the start-up check may turn it off)
     virtual motor::HwStats stats() const { return motor::HwStats(); }
     virtual bool rx_responsive(int slot) const { return false; }   // false = the ESC on this slot is not answering (no bidirectional firmware / wiring)
     virtual const char* name() const = 0;

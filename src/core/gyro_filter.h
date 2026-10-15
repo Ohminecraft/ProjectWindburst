@@ -37,14 +37,15 @@ public:
         cfg_ = c; motors_ = motors > kMaxMotors ? kMaxMotors : (motors < 0 ? 0 : motors);
         harmonics_ = c.harmonics > kRpmHarmonicsMax ? kRpmHarmonicsMax : c.harmonics;
         dt_ = 1.0f / loop_hz; max_hz_ = 0.48f * loop_hz;                     // not quite up to Nyquist
+        inv_q_ = 1.0f / (c.q > 0.0f ? c.q : 1.0f); inv_fade_ = c.fade_range_hz > 0.0f ? 1.0f / c.fade_range_hz : 0.0f;
         for (int h = 0; h < kRpmHarmonicsMax; h++) weight_[h] = clampf(c.weights[h] * 0.01f, 0.0f, 1.0f);
         for (int m = 0; m < kMaxMotors; m++) {
             freq_lpf_[m].set_cutoff(c.lpf_hz, dt_); freq_lpf_[m].reset(0.0f);
-            for (int h = 0; h < kRpmHarmonicsMax; h++) { notch_[m][h].reset(); notch_[m][h].set(fmaxf(c.min_hz * (float)(h + 1), 1.0f), dt_, c.q, 0.0f); }
+            for (int h = 0; h < kRpmHarmonicsMax; h++) { notch_[m][h].reset(); notch_[m][h].set(maxf(c.min_hz * (float)(h + 1), 1.0f), dt_, c.q, 0.0f); }
         }
         // all notches are refreshed within 1 ms, a few per cycle (Betaflight RPM_FILTER_DURATION_S)
         const float cycles_per_update = 0.001f * loop_hz;
-        per_cycle_ = (int)ceilf((float)(motors_ * harmonics_) / fmaxf(cycles_per_update, 1.0f));
+        per_cycle_ = (int)ceilf((float)(motors_ * harmonics_) / maxf(cycles_per_update, 1.0f));
         if (per_cycle_ < 1) per_cycle_ = 1;
         motor_i_ = 0; harm_i_ = 0;
     }
@@ -61,9 +62,9 @@ public:
                 const float f = clampf((float)(harm_i_ + 1) * mfreq_[motor_i_], cfg_.min_hz, max_hz_);
                 const float margin = f - cfg_.min_hz;
                 float w = 1.0f;
-                if (margin < cfg_.fade_range_hz) w = margin / cfg_.fade_range_hz;     // fade out towards min_hz
+                if (margin < cfg_.fade_range_hz) w = margin * inv_fade_;              // fade out towards min_hz
                 w *= weight_[harm_i_];
-                notch_[motor_i_][harm_i_].set(f, dt_, cfg_.q, w);
+                notch_[motor_i_][harm_i_].set_inv_q(f, dt_, inv_q_, w);
                 hz_[motor_i_][harm_i_] = f; w_[motor_i_][harm_i_] = w;
             }
             harm_i_ = (harm_i_ + 1) % harmonics_;
@@ -76,14 +77,14 @@ public:
     }
 private:
     RpmFilterConfig cfg_; int motors_ = 4, harmonics_ = 0, per_cycle_ = 1, motor_i_ = 0, harm_i_ = 0;
-    float dt_ = 0.00025f, max_hz_ = 1920.0f, weight_[kRpmHarmonicsMax] = {1, 1, 1}, mfreq_[kMaxMotors] = {}, hz_[kMaxMotors][kRpmHarmonicsMax] = {}, w_[kMaxMotors][kRpmHarmonicsMax] = {};
+    float inv_q_ = 0.2f, inv_fade_ = 0.02f, dt_ = 0.00025f, max_hz_ = 1920.0f, weight_[kRpmHarmonicsMax] = {1, 1, 1}, mfreq_[kMaxMotors] = {}, hz_[kMaxMotors][kRpmHarmonicsMax] = {}, w_[kMaxMotors][kRpmHarmonicsMax] = {};
     Pt1 freq_lpf_[kMaxMotors]; RpmNotch notch_[kMaxMotors][kRpmHarmonicsMax];
 };
 
 // Cutoff of a dynamic low-pass for a throttle 0..1 (Betaflight dynLpfCutoffFreq / dynThrottle).
 WB_FAST inline float dyn_lpf_cutoff(float throttle, float min_hz, float max_hz, uint8_t expo) {
     if (expo > 0) { const float e = expo * 0.1f, curve = throttle * (1.0f - throttle) * e + throttle; return (max_hz - min_hz) * curve + min_hz; }
-    return fmaxf(throttle * (1.0f - throttle * throttle / 3.0f) * 1.5f * max_hz, min_hz);
+    return maxf(throttle * (1.0f - throttle * throttle / 3.0f) * 1.5f * max_hz, min_hz);
 }
 
 struct GyroFilterConfig {

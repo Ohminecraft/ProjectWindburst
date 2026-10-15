@@ -52,6 +52,10 @@ public:
     void on_frame() override { x_.link_touch(now_()); }
     // the transmit queue and the USB kick counter (link_arduino.h), for the link stream; either may be null
     void set_port(const QueuedTransport* tx, const volatile uint32_t* kicks) { tx_ = tx; kicks_ = kicks; }
+    // The WiFi wire, for the link stream: fn fills it (called from the link task, like everything here)
+    struct NetInfo { uint8_t wifi = 0, clients = 0, via = 0; uint32_t ip = 0; int16_t rssi = 0; };
+    using NetInfoFn = void (*)(NetInfo&);
+    void set_net(NetInfoFn fn) { net_ = fn; }
     // a number that differs from one start to the next (esp_random() on the board): the app tells a restart by it
     void set_boot_id(uint32_t id) { boot_id_ = id; }
     void tick(uint32_t now_ms) override {
@@ -118,6 +122,7 @@ public:
         const uint32_t now = now_();
         t.up_ms = now - boot_ms_;                              // (since this object was made: the firmware's start on the board, a restart in the simulator)
         t.boot_id = boot_id_; t.link_busy = sat_u16(x_.timeouts());
+        if (net_) { NetInfo ni; net_(ni); t.wifi_state = ni.wifi; t.wifi_ip = ni.ip; t.wifi_rssi = ni.rssi; t.wifi_clients = ni.clients; t.link_via = ni.via; }
         if (srv_) { t.link_rx = srv_->frames(); t.link_bad = sat_u16(srv_->bad_frames()); t.link_dropped = srv_->dropped_streams(); }
         if (tx_) { t.link_tx_lost = sat_u16(tx_->frames_lost()); t.link_queued = sat_u16((uint32_t)tx_->queued()); }
         if (kicks_) t.link_kicks = sat_u16(*kicks_);
@@ -127,7 +132,7 @@ public:
     // what the MSP side (ESC tools) is told: from the telemetry snapshot
     void msp_info(msp::Info& in) {
         x_.snapshot(tel_);
-        in.armed = tel_.armed; in.motors = tel_.motor_count; in.cycle_us = tel_.loop_target_hz ? (uint16_t)(1000000u / tel_.loop_target_hz) : 250;
+        in.armed = tel_.armed; in.motors = tel_.motor_count; in.cycle_us = tel_.pid_target_hz ? (uint16_t)(1000000u / tel_.pid_target_hz) : 250;   // (Betaflight's cycle time is the PID loop's)
         in.batt_v = tel_.batt_v; in.amps = tel_.batt_amps; in.cells = tel_.batt_cells; in.mah = (uint16_t)(tel_.batt_mah > 65535.0f ? 65535.0f : tel_.batt_mah > 0 ? tel_.batt_mah : 0.0f);
         memcpy(in.uid, uid_, 12);
         if (settings_) {                                     // (the link task owns the settings: read here, never written)
@@ -161,6 +166,7 @@ private:
     Exchange& x_; Exchange::WaitFn wait_; void* ctx_; NowFn now_;
     wbp::Server* srv_ = nullptr; Telemetry tel_; bool changed_ = false; uint8_t saved_seq_ = 0, autosave_ = 0;
     const char* const* report_ = nullptr; int report_n_ = 0;
+    NetInfoFn net_ = nullptr;
     bb::Service* bb_ = nullptr; const wbp::Settings* settings_ = nullptr;
 };
 
@@ -184,6 +190,7 @@ public:
         return escs;
     }
     const msp::Bridge& bridge() const { return br_; }
+    bool mid_frame() const { return br_.mid_frame(); }
     uint32_t passthroughs() const { return passthroughs_; }
 private:
     LinkHost& h_; wbp::Transport& tx_; msp::Bridge br_; msp::Info info_; bool info_fresh_ = false; uint32_t passthroughs_ = 0;

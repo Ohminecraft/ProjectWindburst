@@ -16,16 +16,24 @@
 // ============================================================================
 namespace motor {
 
+// Round to the nearest integer, halves up, for values 0 .. 65535 (timer ticks, DShot values). The C library's rounding
+// function lives in flash, and the frame of every motor used to call it three times each cycle.
+WB_FAST inline float round_pos(float v) { return v > 0.0f ? (float)(uint32_t)(v + 0.5f) : 0.0f; }     // (negative and NaN: 0, as the library function gave after the cast to 16 bits - never a huge number on the way to an ESC)
+
 enum Protocol : uint8_t {
     PROTO_PWM, PROTO_ONESHOT125, PROTO_ONESHOT42, PROTO_MULTISHOT,
     PROTO_DSHOT150, PROTO_DSHOT300, PROTO_DSHOT600, PROTO_DSHOT1200,
     PROTO_PROSHOT1000, PROTO_BRUSHED,                                  // (appended in 0.8.2: the stored numbers of the others stay)
+    PROTO_DRONECAN,                                                    // (0.17) ESCs on the CAN bus: uavcan.equipment.esc.RawCommand
 };
 // is_dshot(): a digital protocol that carries DShot packets - values 48..2047, the commands (beacon, direction...), checksum.
 // DShot itself and ProShot1000 (Betaflight counts ProShot as a DShot protocol: the same 16-bit packet, sent as 4 nibble pulses).
 inline bool is_dshot(Protocol p) { return (p >= PROTO_DSHOT150 && p <= PROTO_DSHOT1200) || p == PROTO_PROSHOT1000; }
 // is_dshot_wire(): the DShot bit encoding itself - the only one with a bidirectional (inverted, ESC answers) variant
 inline bool is_dshot_wire(Protocol p) { return p >= PROTO_DSHOT150 && p <= PROTO_DSHOT1200; }
+// is_can(): no pins at all - the commands go out as DroneCAN RawCommand, 0 (stop) .. 8191 (full) per ESC index (hal/motor/can_esc.h)
+inline bool is_can(Protocol p) { return p == PROTO_DRONECAN; }
+constexpr uint16_t kCanMax = 8191;
 
 constexpr int kMaxMotors = 8;
 constexpr uint16_t kDshotMinThrottle = 48;      // 1..47 are commands
@@ -84,8 +92,8 @@ struct Sym { uint16_t dur0; uint8_t lvl0; uint16_t dur1; uint8_t lvl1; };
 // inverted (bidirectional DShot): the whole waveform is inverted, line idles high.
 WB_FAST inline void dshot_symbols(uint16_t packet, Protocol p, uint32_t tick_hz, bool inverted, Sym out[16]) {
     const float bit_ticks = (float)dshot_bit_ns(p) * 1e-9f * (float)tick_hz;
-    const uint16_t t = (uint16_t)lroundf(bit_ticks);
-    const uint16_t h0 = (uint16_t)lroundf(bit_ticks * 0.375f), h1 = (uint16_t)lroundf(bit_ticks * 0.75f);
+    const uint16_t t = (uint16_t)round_pos(bit_ticks);
+    const uint16_t h0 = (uint16_t)round_pos(bit_ticks * 0.375f), h1 = (uint16_t)round_pos(bit_ticks * 0.75f);
     for (int b = 0; b < 16; b++) {
         const bool one = (packet >> (15 - b)) & 1;
         const uint16_t hi = one ? h1 : h0;
@@ -99,10 +107,10 @@ WB_FAST inline void dshot_symbols(uint16_t packet, Protocol p, uint32_t tick_hz,
 constexpr uint32_t kProshotSlotNs = 4000, kProshotBaseNs = 1000, kProshotStepNs = 125;
 WB_FAST inline void proshot_symbols(uint16_t packet, uint32_t tick_hz, Sym out[4]) {
     const float k = 1e-9f * (float)tick_hz;
-    const uint16_t slot = (uint16_t)lroundf(kProshotSlotNs * k);
+    const uint16_t slot = (uint16_t)round_pos(kProshotSlotNs * k);
     for (int i = 0; i < 4; i++) {
         const uint32_t nib = (packet >> (12 - 4 * i)) & 0xF;
-        const uint16_t hi = (uint16_t)lroundf((float)(kProshotBaseNs + nib * kProshotStepNs) * k);
+        const uint16_t hi = (uint16_t)round_pos((float)(kProshotBaseNs + nib * kProshotStepNs) * k);
         out[i].dur0 = hi; out[i].lvl0 = 1; out[i].dur1 = (uint16_t)(slot - hi); out[i].lvl1 = 0;
     }
 }
@@ -225,7 +233,7 @@ inline float pulse_us(Protocol p, float v) {
 // Brushed motors (a MOSFET per motor, Betaflight BRUSHED): 1000..2000 on the app's scale = 0..100 % duty at pulse_hz (16 kHz)
 inline float brushed_duty(float v) { return v <= 1000.0f ? 0.0f : v >= 2000.0f ? 1.0f : (v - 1000.0f) * 0.001f; }
 inline uint16_t default_pulse_hz(Protocol p) {
-    switch (p) { case PROTO_PWM: return 400; case PROTO_ONESHOT125: return 2000; case PROTO_ONESHOT42: return 4000; case PROTO_BRUSHED: return 16000; default: return 4000; }
+    switch (p) { case PROTO_PWM: return 400; case PROTO_ONESHOT125: return 2000; case PROTO_ONESHOT42: return 4000; case PROTO_BRUSHED: return 16000; case PROTO_DRONECAN: return 400; default: return 4000; }
 }
 inline float pulse_period_min_us(Protocol p) {              // frame period must exceed the longest pulse
     switch (p) { case PROTO_PWM: return 2100; case PROTO_ONESHOT125: return 260; case PROTO_ONESHOT42: return 90; case PROTO_BRUSHED: return 0; default: return 30; }
@@ -238,7 +246,11 @@ inline float pulse_period_min_us(Protocol p) {              // frame period must
 struct Endpoints { float disarm, low, high; };
 inline Endpoints endpoints(Protocol p, const PulseEndpoints& pe, float idle_frac, float limit) {
     Endpoints e;
-    if (is_dshot(p)) {
+    if (is_can(p)) {                                        // 0 = stop; armed: never below 1 (a 0 in flight would stop the motor)
+        e.disarm = 0.0f;
+        e.low = 1.0f + idle_frac * (kCanMax - 1);
+        e.high = kCanMax - (kCanMax - e.low) * (1.0f - limit);
+    } else if (is_dshot(p)) {
         e.disarm = 0.0f;
         e.low = kDshotMinThrottle + idle_frac * kDshotRange;
         e.high = kDshotMaxThrottle - kDshotRange * (1.0f - limit);

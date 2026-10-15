@@ -84,7 +84,7 @@ public:
         if (c.count == 0 || loop_hz < kMinLoopHz) return;
         dt_ = 1.0f / loop_hz;
         const float nyquist = loop_hz * 0.5f;
-        q_ = c.q; min_hz_ = c.min_hz; max_hz_ = fmaxf(c.min_hz, c.max_hz); if (max_hz_ > nyquist) max_hz_ = nyquist;
+        q_ = c.q; min_hz_ = c.min_hz; max_hz_ = maxf(c.min_hz, c.max_hz); if (max_hz_ > nyquist) max_hz_ = nyquist;
         count_ = c.count > kDynNotchMax ? kDynNotchMax : c.count;
 
         sample_count_ = (int)(nyquist / max_hz_); if (sample_count_ < 1) sample_count_ = 1;     // 4 kHz, max 600 Hz -> 3: the SDFT sees 1333 Hz

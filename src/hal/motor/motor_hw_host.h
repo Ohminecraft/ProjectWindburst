@@ -24,12 +24,10 @@ public:
     }
     void (*on_write)() = nullptr;                                  // tests: e.g. let the output take time
     uint16_t silent[8] = {};                                       // frames in a row without a reply
-    void set_driver(uint8_t d) override { driver = d; }
     void set_pullup(bool internal) override { internal_pullup = internal; }
     bool internal_pullup = true;                                  // (tests: what the firmware asked for)
-    bool bidirectional() const override { return bidir && driver == 0; }
+    bool bidirectional() const override { return bidir; }
     motor::HwStats stats() const override { motor::HwStats s; s.frames = frames; return s; }
-    uint8_t driver = 0;
     bool poll_reply(int slot, uint32_t& gcr20) override { if (slot < 0 || slot >= 8 || !has_reply[slot]) return false; has_reply[slot] = false; gcr20 = reply[slot]; return true; }
     bool rx_responsive(int slot) const override { return bidirectional() && slot >= 0 && slot < count && silent[slot] < 20; }
     const char* name() const override { return "host"; }

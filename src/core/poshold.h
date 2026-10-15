@@ -143,8 +143,8 @@ private:
     WB_FAST void smooth_pilot(float& held, float raw, float dt) const {
         if ((held > 0.0f && raw < 0.0f) || (held < 0.0f && raw > 0.0f) || fabsf(raw) > cfg.release_snap_deg) { held = raw; return; }
         const float step = cfg.brake_rate_dps * dt;
-        if (held > 0.0f) { held -= fmaxf(held * cfg.smooth_rate * dt, step); held = fmaxf(held, raw); }
-        else { held += fmaxf(-held * cfg.smooth_rate * dt, step); held = fminf(held, raw); }
+        if (held > 0.0f) { held -= maxf(held * cfg.smooth_rate * dt, step); held = maxf(held, raw); }
+        else { held += maxf(-held * cfg.smooth_rate * dt, step); held = minf(held, raw); }
     }
     // ArduCopter update_brake_angle_from_velocity + the timing of the brake phase
     WB_FAST void update_brake(int a, float v, float dt) {
@@ -154,7 +154,7 @@ private:
         if (st_[a] != PhAxis::BRAKE) return;
         if (!brake_timing_[a]) {                                         // the lean still builds up: follow its peak. When it first comes back, the
             if (fabsf(brake_[a]) >= brake_peak_[a]) brake_peak_[a] = fabsf(brake_[a]);          // rest of the braking takes about 1.5 x the time to take the lean back
-            else { brake_left_[a] = fminf(cfg.brake_max_s, 1.5f * fabsf(brake_[a]) / cfg.brake_rate_dps); brake_timing_[a] = true; }
+            else { brake_left_[a] = minf(cfg.brake_max_s, 1.5f * fabsf(brake_[a]) / cfg.brake_rate_dps); brake_timing_[a] = true; }
         }
         if (fabsf(v) <= cfg.stopped_ms && brake_left_[a] > 0.5f) brake_left_[a] = 0.5f;      // nearly stopped: half a second more at most
         brake_left_[a] -= dt;

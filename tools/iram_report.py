@@ -28,7 +28,7 @@ funcs = {}
 for s in elf.get_section_by_name('.symtab').iter_symbols():
     if s['st_info']['type'] == 'STT_FUNC' and s['st_size']: funcs.setdefault(s['st_value'], (s.name, s['st_size']))
 def demangle(names):
-    try: out = subprocess.run([objdump.replace('objdump', 'c++filt')] + names, capture_output=True, text=True).stdout.splitlines()
+    try: out = subprocess.run([objdump.replace('objdump', 'c++filt')], input='\n'.join(names) + '\n', capture_output=True, text=True).stdout.splitlines()     # (stdin: thousands of names do not fit on a Windows command line)
     except OSError: return names
     return out if len(out) == len(names) else names
 starts = sorted(funcs)

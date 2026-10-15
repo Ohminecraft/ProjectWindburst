@@ -29,7 +29,7 @@ inline WB_FAST void accel_to_lean(float a_fwd, float a_right, float& roll_deg, f
 }
 inline WB_FAST void lean_to_accel(float roll_deg, float pitch_deg, float& a_fwd, float& a_right) {
     const float r = roll_deg * kDeg2Rad, p = pitch_deg * kDeg2Rad;
-    a_fwd = kG0 * tanf(p); a_right = kG0 * tanf(r) / fmaxf(cosf(p), 0.3f);
+    a_fwd = kG0 * tanf(p); a_right = kG0 * tanf(r) / maxf(cosf(p), 0.3f);
 }
 WB_FAST inline void ne_to_body(float n, float e, float yaw_deg, float& fwd, float& right) { const float y = yaw_deg * kDeg2Rad, c = cosf(y), s = sinf(y); fwd = n * c + e * s; right = -n * s + e * c; }
 WB_FAST inline void body_to_ne(float fwd, float right, float yaw_deg, float& n, float& e) { const float y = yaw_deg * kDeg2Rad, c = cosf(y), s = sinf(y); n = fwd * c - right * s; e = fwd * s + right * c; }
@@ -73,7 +73,7 @@ public:
             const float len = sqrtf(e[0] * e[0] + e[1] * e[1]);
             if (len > cfg.pos_err_max) { for (int a = 0; a < 2; a++) { e[a] *= cfg.pos_err_max / len; tgt_[a] = pos[a] + e[a]; } }    // the target is pulled along
             const float l2 = sqrtf(e[0] * e[0] + e[1] * e[1]);
-            if (l2 > 1e-6f) { const float v = fminf(sqrt_controller(l2, cfg.pos_p, cfg.accel_corr), cfg.vel_corr_max); corr[0] = e[0] / l2 * v; corr[1] = e[1] / l2 * v; }
+            if (l2 > 1e-6f) { const float v = minf(sqrt_controller(l2, cfg.pos_p, cfg.accel_corr), cfg.vel_corr_max); corr[0] = e[0] / l2 * v; corr[1] = e[1] / l2 * v; }
         } else { tgt_[0] = pos[0]; tgt_[1] = pos[1]; }
         pos_err_ = sqrtf((tgt_[0] - pos[0]) * (tgt_[0] - pos[0]) + (tgt_[1] - pos[1]) * (tgt_[1] - pos[1]));
         const float alpha = dt / (dt + 1.0f / (2.0f * kPi * cfg.filt_hz));

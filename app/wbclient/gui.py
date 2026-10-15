@@ -38,6 +38,7 @@ from .schema import Schema
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 SIM_URL = "socket://127.0.0.1:5760"
+WIFI_AP_URL = "socket://192.168.4.1:5760"   # the board's own access point (section wifi, mode AP): listed always, never probed - a probe would take the link from the app on it
 
 
 # USB vendors of the serial chips found on ESP32 boards: such a port is listed first and marked as the likely flight controller.
@@ -197,6 +198,7 @@ class Hub:
             out.append({"port": SIM_URL, "description": "wb_sim 127.0.0.1:5760", "manufacturer": "", "vid": None, "pid": None, "chip": "", "likely": False, "sim": True})
         except OSError:
             pass
+        out.append({"port": WIFI_AP_URL, "description": "WiFi AP 192.168.4.1:5760", "manufacturer": "", "vid": None, "pid": None, "chip": "", "likely": False, "sim": False, "wifi": True})
         return out
 
     def connect(self, port, baud=230400):

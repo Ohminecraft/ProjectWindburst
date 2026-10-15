@@ -8,22 +8,23 @@
 // so a struct is its own wire image). The Python client builds the same layouts from the same json.
 namespace wbp {
 constexpr uint8_t kProtocolVersion = 1;
-constexpr uint32_t kSchemaHash = 0xCCF703C7u;
+constexpr uint32_t kSchemaHash = 0xA457F6F5u;
 
 enum Err : uint8_t { ERR_OK, ERR_UNKNOWN, ERR_BAD_ARG, ERR_ARMED, ERR_BUSY, ERR_NOT_SUPPORTED, ERR_BAD_SECTION, ERR_SIZE_MISMATCH, ERR_STORAGE, ERR_NO_SENSOR, ERR_BAD_STATE, ERR_FAILED };
 enum Cmd : uint8_t { CMD_GYRO_CAL = 1, CMD_ACC_CAL_POINT = 2, CMD_ACC_CAL_FINISH = 3, CMD_LEVEL_TRIM = 4, CMD_MAG_CAL_START = 5, CMD_MAG_CAL_FINISH = 6, CMD_MAG_CAL_CANCEL = 7, CMD_MOTOR_TEST = 8, CMD_MOTOR_STOP = 9, CMD_MOTOR_DIRECTION = 10, CMD_MOTOR_BEACON = 11, CMD_SET_HOME = 12, CMD_ESC_TELEMETRY = 13, CMD_APPLY_SETTINGS = 14, CMD_REPORT = 15, CMD_ACC_CAL_CANCEL = 16, CMD_BEEP = 17, CMD_BLACKBOX_ERASE = 18, CMD_BLACKBOX_STREAM = 19, CMD_BLACKBOX_SESSION = 20, CMD_BLACKBOX_READ = 21 };
-enum SectionId : uint8_t { SEC_GENERAL = 1, SEC_RECEIVER = 2, SEC_MODES = 3, SEC_RATES = 4, SEC_PID = 5, SEC_MOTORS = 6, SEC_SENSORS = 7, SEC_GPS = 8, SEC_BEEPER = 9, SEC_PORTS = 10, SEC_PINS = 11, SEC_CALIBRATION = 12, SEC_BATTERY = 13, SEC_BLACKBOX = 14, SEC_FILTERS = 15, SEC_FLOW = 16, SEC_NAV = 17, SEC_SERVO = 18, SEC_ALTHOLD = 19 };
-enum StreamId : uint8_t { STR_ATTITUDE = 1, STR_RC = 2, STR_STATUS = 3, STR_MOTORS = 4, STR_SENSORS = 5, STR_GPS = 6, STR_ESTIMATE = 7, STR_GYRO_FAST = 8, STR_CALIBRATION = 9, STR_BATTERY = 10, STR_BLACKBOX = 11, STR_TUNING = 12, STR_NAV = 13, STR_LINK = 14 };
+enum SectionId : uint8_t { SEC_GENERAL = 1, SEC_RECEIVER = 2, SEC_MODES = 3, SEC_RATES = 4, SEC_PID = 5, SEC_MOTORS = 6, SEC_SENSORS = 7, SEC_GPS = 8, SEC_BEEPER = 9, SEC_PORTS = 10, SEC_PINS = 11, SEC_CALIBRATION = 12, SEC_BATTERY = 13, SEC_BLACKBOX = 14, SEC_FILTERS = 15, SEC_FLOW = 16, SEC_NAV = 17, SEC_SERVO = 18, SEC_ALTHOLD = 19, SEC_WIFI = 20, SEC_CAN = 21, SEC_LED = 22 };
+enum StreamId : uint8_t { STR_ATTITUDE = 1, STR_RC = 2, STR_STATUS = 3, STR_MOTORS = 4, STR_SENSORS = 5, STR_GPS = 6, STR_ESTIMATE = 7, STR_GYRO_FAST = 8, STR_CALIBRATION = 9, STR_BATTERY = 10, STR_BLACKBOX = 11, STR_TUNING = 12, STR_NAV = 13, STR_LINK = 14, STR_CAN = 15 };
 enum LAYOUT_E : uint8_t { LAYOUT_QUAD_X, LAYOUT_QUAD_PLUS, LAYOUT_HEX_X, LAYOUT_HEX_PLUS, LAYOUT_HEX_X_BF, LAYOUT_HEX_H, LAYOUT_Y6, LAYOUT_Y4, LAYOUT_OCTO_X8, LAYOUT_OCTO_FLAT_PLUS, LAYOUT_OCTO_FLAT_X, LAYOUT_VTAIL4, LAYOUT_ATAIL4, LAYOUT_QUAD_X_1234 };
-enum ESC_PROTOCOL_E : uint8_t { ESC_PROTOCOL_PWM, ESC_PROTOCOL_ONESHOT125, ESC_PROTOCOL_ONESHOT42, ESC_PROTOCOL_MULTISHOT, ESC_PROTOCOL_DSHOT150, ESC_PROTOCOL_DSHOT300, ESC_PROTOCOL_DSHOT600, ESC_PROTOCOL_DSHOT1200, ESC_PROTOCOL_PROSHOT1000, ESC_PROTOCOL_BRUSHED };
+enum ESC_PROTOCOL_E : uint8_t { ESC_PROTOCOL_PWM, ESC_PROTOCOL_ONESHOT125, ESC_PROTOCOL_ONESHOT42, ESC_PROTOCOL_MULTISHOT, ESC_PROTOCOL_DSHOT150, ESC_PROTOCOL_DSHOT300, ESC_PROTOCOL_DSHOT600, ESC_PROTOCOL_DSHOT1200, ESC_PROTOCOL_PROSHOT1000, ESC_PROTOCOL_BRUSHED, ESC_PROTOCOL_DRONECAN };
 enum RX_PROTOCOL_E : uint8_t { RX_PROTOCOL_CRSF, RX_PROTOCOL_SBUS, RX_PROTOCOL_IBUS, RX_PROTOCOL_SPEKTRUM, RX_PROTOCOL_NRF24, RX_PROTOCOL_PPM, RX_PROTOCOL_PWM, RX_PROTOCOL_SPEKTRUM1024 };
 enum ALIGN_E : uint8_t { ALIGN_CW0, ALIGN_CW90, ALIGN_CW180, ALIGN_CW270, ALIGN_CW0_FLIP, ALIGN_CW90_FLIP, ALIGN_CW180_FLIP, ALIGN_CW270_FLIP };
-enum GPS_PROVIDER_E : uint8_t { GPS_PROVIDER_NMEA, GPS_PROVIDER_UBLOX, GPS_PROVIDER_MSP, GPS_PROVIDER_VIRTUAL };
+enum GPS_PROVIDER_E : uint8_t { GPS_PROVIDER_NMEA, GPS_PROVIDER_UBLOX, GPS_PROVIDER_MSP, GPS_PROVIDER_VIRTUAL, GPS_PROVIDER_DRONECAN };
 enum SBAS_E : uint8_t { SBAS_AUTO, SBAS_EGNOS, SBAS_WAAS, SBAS_MSAS, SBAS_GAGAN, SBAS_NONE };
 enum GPS_MODEL_E : uint8_t { GPS_MODEL_PORTABLE, GPS_MODEL_STATIONARY, GPS_MODEL_PEDESTRIAN, GPS_MODEL_AUTOMOTIVE, GPS_MODEL_AT_SEA, GPS_MODEL_AIRBORNE_1G, GPS_MODEL_AIRBORNE_2G, GPS_MODEL_AIRBORNE_4G };
 enum UTC_E : uint8_t { UTC_AUTO, UTC_USNO, UTC_EU, UTC_SU, UTC_NTSC };
 enum RANGE_MODEL_E : uint8_t { RANGE_MODEL_AUTO, RANGE_MODEL_VL53L1X, RANGE_MODEL_VL53L0X, RANGE_MODEL_MSP };
-enum MAG_MODEL_E : uint8_t { MAG_MODEL_AUTO, MAG_MODEL_HMC5883L, MAG_MODEL_QMC5883L, MAG_MODEL_QMC5883P, MAG_MODEL_AK8963_MPU9250 };
+enum MAG_MODEL_E : uint8_t { MAG_MODEL_AUTO, MAG_MODEL_HMC5883L, MAG_MODEL_QMC5883L, MAG_MODEL_QMC5883P, MAG_MODEL_AK8963_MPU9250, MAG_MODEL_DRONECAN };
+enum BARO_MODEL_E : uint8_t { BARO_MODEL_AUTO, BARO_MODEL_DRONECAN };
 enum PORT_FUNCTION_E : uint8_t { PORT_FUNCTION_NONE, PORT_FUNCTION_SERIAL_RX, PORT_FUNCTION_GPS, PORT_FUNCTION_TELEMETRY, PORT_FUNCTION_FLOW_MSP, PORT_FUNCTION_ESC_SENSOR };
 enum MODE_E : uint8_t { MODE_ARM, MODE_ANGLE, MODE_STABILIZE, MODE_ALTHOLD, MODE_POSHOLD, MODE_FAILSAFE, MODE_BEEPER, MODE_BLACKBOX, MODE_CALIB, MODE_RESCUE };
 enum FAILSAFE_E : uint8_t { FAILSAFE_NONE, FAILSAFE_GUARD, FAILSAFE_DESCENT, FAILSAFE_LANDED };
@@ -32,7 +33,7 @@ enum GPS_STATE_E : uint8_t { GPS_STATE_UNKNOWN, GPS_STATE_INITIALIZED, GPS_STATE
 enum CAL_KIND_E : uint8_t { CAL_KIND_NONE, CAL_KIND_GYRO, CAL_KIND_ACCEL, CAL_KIND_MAG };
 enum CAL_STATE_E : uint8_t { CAL_STATE_IDLE, CAL_STATE_RUNNING, CAL_STATE_DONE, CAL_STATE_FAILED };
 enum MAG_CAL_RESULT_E : uint8_t { MAG_CAL_RESULT_OK, MAG_CAL_RESULT_TOO_FEW_SAMPLES, MAG_CAL_RESULT_POOR_COVERAGE, MAG_CAL_RESULT_SINGULAR, MAG_CAL_RESULT_NOT_ELLIPSOID, MAG_CAL_RESULT_TOO_DISTORTED, MAG_CAL_RESULT_BAD_FIELD_STRENGTH, MAG_CAL_RESULT_BAD_FIT };
-enum BATT_SOURCE_E : uint8_t { BATT_SOURCE_AUTO, BATT_SOURCE_ADC, BATT_SOURCE_ESC, BATT_SOURCE_NONE };
+enum BATT_SOURCE_E : uint8_t { BATT_SOURCE_AUTO, BATT_SOURCE_ADC, BATT_SOURCE_ESC, BATT_SOURCE_NONE, BATT_SOURCE_DRONECAN };
 enum BATT_STATE_E : uint8_t { BATT_STATE_NOT_PRESENT, BATT_STATE_OK, BATT_STATE_WARNING, BATT_STATE_CRITICAL };
 enum BUZZER_TYPE_E : uint8_t { BUZZER_TYPE_ACTIVE, BUZZER_TYPE_PASSIVE };
 enum BEEPER_COND_E : uint8_t { BEEPER_COND_GYRO_CALIBRATED, BEEPER_COND_RX_LOST, BEEPER_COND_RX_LOST_LANDING, BEEPER_COND_DISARMING, BEEPER_COND_ARMING, BEEPER_COND_ARMING_GPS_FIX, BEEPER_COND_ARMING_GPS_NO_FIX, BEEPER_COND_BAT_CRIT_LOW, BEEPER_COND_BAT_LOW, BEEPER_COND_RX_SET, BEEPER_COND_ACC_CALIBRATION, BEEPER_COND_ACC_CALIBRATION_FAIL, BEEPER_COND_READY_BEEP, BEEPER_COND_ARMED, BEEPER_COND_SYSTEM_INIT, BEEPER_COND_ARM_REFUSED, BEEPER_COND_BLACKBOX_ERASE, BEEPER_COND_USB };
@@ -49,7 +50,6 @@ enum TPA_MODE_E : uint8_t { TPA_MODE_PD, TPA_MODE_D };
 enum SLIDER_MODE_E : uint8_t { SLIDER_MODE_OFF, SLIDER_MODE_RP, SLIDER_MODE_RPY };
 enum AIRMODE_E : uint8_t { AIRMODE_OFF, AIRMODE_AUTO, AIRMODE_ALWAYS };
 enum AIR_STATE_E : uint8_t { AIR_STATE_GROUND, AIR_STATE_AIR, AIR_STATE_AIRMODE };
-enum DSHOT_DRIVER_E : uint8_t { DSHOT_DRIVER_DIRECT, DSHOT_DRIVER_IDF };
 enum BIDIR_STATE_E : uint8_t { BIDIR_STATE_OFF, BIDIR_STATE_ACTIVE, BIDIR_STATE_UNAVAILABLE };
 enum FLOW_TYPE_E : uint8_t { FLOW_TYPE_NONE, FLOW_TYPE_PMW3901, FLOW_TYPE_MSP };
 enum FLOW_ALIGN_E : uint8_t { FLOW_ALIGN_CW0, FLOW_ALIGN_CW90, FLOW_ALIGN_CW180, FLOW_ALIGN_CW270 };
@@ -60,17 +60,27 @@ enum RESCUE_FAIL_E : uint8_t { RESCUE_FAIL_NONE, RESCUE_FAIL_NO_POSITION, RESCUE
 enum RESCUE_ALT_E : uint8_t { RESCUE_ALT_MAX, RESCUE_ALT_FIXED, RESCUE_ALT_CURRENT };
 enum FS_PROCEDURE_E : uint8_t { FS_PROCEDURE_LAND, FS_PROCEDURE_RESCUE };
 enum SERVO_SOURCE_E : uint8_t { SERVO_SOURCE_OFF, SERVO_SOURCE_CH1, SERVO_SOURCE_CH2, SERVO_SOURCE_CH3, SERVO_SOURCE_CH4, SERVO_SOURCE_CH5, SERVO_SOURCE_CH6, SERVO_SOURCE_CH7, SERVO_SOURCE_CH8, SERVO_SOURCE_CH9, SERVO_SOURCE_CH10, SERVO_SOURCE_CH11, SERVO_SOURCE_CH12, SERVO_SOURCE_CH13, SERVO_SOURCE_CH14, SERVO_SOURCE_CH15, SERVO_SOURCE_CH16 };
-enum CURR_SOURCE_E : uint8_t { CURR_SOURCE_AUTO, CURR_SOURCE_ADC, CURR_SOURCE_ESC, CURR_SOURCE_NONE };
+enum CURR_SOURCE_E : uint8_t { CURR_SOURCE_AUTO, CURR_SOURCE_ADC, CURR_SOURCE_ESC, CURR_SOURCE_NONE, CURR_SOURCE_DRONECAN };
 enum PORT_ASSIGN_E : uint8_t { PORT_ASSIGN_AUTO, PORT_ASSIGN_TABLE };
 enum GPS_ALT_E : uint8_t { GPS_ALT_OFF, GPS_ALT_FALLBACK, GPS_ALT_BLEND };
 enum EKF_MODE_E : uint8_t { EKF_MODE_OFF, EKF_MODE_SHADOW, EKF_MODE_NAV };
-enum ARM_BLOCKER_B : uint32_t { ARM_BLOCKER_NO_IMU = 1u << 0, ARM_BLOCKER_GYRO_NOT_CAL = 1u << 1, ARM_BLOCKER_RX_LOST = 1u << 2, ARM_BLOCKER_THROTTLE_HIGH = 1u << 3, ARM_BLOCKER_ANGLE_TOO_HIGH = 1u << 4, ARM_BLOCKER_FAILSAFE = 1u << 5, ARM_BLOCKER_ALTHOLD_NO_BARO = 1u << 6, ARM_BLOCKER_BATT_LOW = 1u << 7, ARM_BLOCKER_ARM_SWITCH_ON = 1u << 8, ARM_BLOCKER_CONFIG_UNSAVED = 1u << 9, ARM_BLOCKER_CALIBRATING = 1u << 10, ARM_BLOCKER_POSHOLD_NO_GPS = 1u << 11, ARM_BLOCKER_MAG_NOT_CALIBRATED = 1u << 12, ARM_BLOCKER_PIN_CONFLICT = 1u << 13, ARM_BLOCKER_LOOP_RATE = 1u << 14, ARM_BLOCKER_RUNAWAY_TAKEOFF = 1u << 15, ARM_BLOCKER_RESCUE_NO_FIX = 1u << 16, ARM_BLOCKER_RESCUE_NO_COMPASS = 1u << 17 };
-enum HEALTH_B : uint32_t { HEALTH_IMU = 1u << 0, HEALTH_GYRO_CAL = 1u << 1, HEALTH_BARO = 1u << 2, HEALTH_RANGE = 1u << 3, HEALTH_GPS = 1u << 4, HEALTH_MAG_READY = 1u << 5, HEALTH_MAG_CAL = 1u << 6, HEALTH_RX = 1u << 7, HEALTH_MOTORS = 1u << 8, HEALTH_ESC_TELEMETRY = 1u << 9, HEALTH_ACC_CAL = 1u << 10, HEALTH_BATTERY = 1u << 11, HEALTH_FLOW = 1u << 12 };
+enum GYRO_USE_E : uint8_t { GYRO_USE_FIRST, GYRO_USE_SECOND, GYRO_USE_BOTH };
+enum IMU2_STATE_E : uint8_t { IMU2_STATE_NONE, IMU2_STATE_OK, IMU2_STATE_FAILED, IMU2_STATE_LOST };
+enum WIFI_MODE_E : uint8_t { WIFI_MODE_OFF, WIFI_MODE_AP, WIFI_MODE_STA };
+enum WIFI_STATE_E : uint8_t { WIFI_STATE_OFF, WIFI_STATE_AP, WIFI_STATE_CONNECTING, WIFI_STATE_CONNECTED, WIFI_STATE_FAILED };
+enum LINK_VIA_E : uint8_t { LINK_VIA_SERIAL, LINK_VIA_WIFI };
+enum CAN_MODE_E : uint8_t { CAN_MODE_OFF, CAN_MODE_DRONECAN };
+enum CAN_BITRATE_E : uint8_t { CAN_BITRATE_K125, CAN_BITRATE_K250, CAN_BITRATE_K500, CAN_BITRATE_M1 };
+enum CAN_STATE_E : uint8_t { CAN_STATE_OFF, CAN_STATE_RUNNING, CAN_STATE_BUS_OFF, CAN_STATE_FAILED };
+enum LED_LAYOUT_E : uint8_t { LED_LAYOUT_ALL, LED_LAYOUT_NAV };
+enum ARM_BLOCKER_B : uint32_t { ARM_BLOCKER_NO_IMU = 1u << 0, ARM_BLOCKER_GYRO_NOT_CAL = 1u << 1, ARM_BLOCKER_RX_LOST = 1u << 2, ARM_BLOCKER_THROTTLE_HIGH = 1u << 3, ARM_BLOCKER_ANGLE_TOO_HIGH = 1u << 4, ARM_BLOCKER_FAILSAFE = 1u << 5, ARM_BLOCKER_ALTHOLD_NO_BARO = 1u << 6, ARM_BLOCKER_BATT_LOW = 1u << 7, ARM_BLOCKER_ARM_SWITCH_ON = 1u << 8, ARM_BLOCKER_CONFIG_UNSAVED = 1u << 9, ARM_BLOCKER_CALIBRATING = 1u << 10, ARM_BLOCKER_POSHOLD_NO_GPS = 1u << 11, ARM_BLOCKER_MAG_NOT_CALIBRATED = 1u << 12, ARM_BLOCKER_PIN_CONFLICT = 1u << 13, ARM_BLOCKER_LOOP_RATE = 1u << 14, ARM_BLOCKER_RUNAWAY_TAKEOFF = 1u << 15, ARM_BLOCKER_RESCUE_NO_FIX = 1u << 16, ARM_BLOCKER_RESCUE_NO_COMPASS = 1u << 17, ARM_BLOCKER_MOTOR_STALL = 1u << 18 };
+enum HEALTH_B : uint32_t { HEALTH_IMU = 1u << 0, HEALTH_GYRO_CAL = 1u << 1, HEALTH_BARO = 1u << 2, HEALTH_RANGE = 1u << 3, HEALTH_GPS = 1u << 4, HEALTH_MAG_READY = 1u << 5, HEALTH_MAG_CAL = 1u << 6, HEALTH_RX = 1u << 7, HEALTH_MOTORS = 1u << 8, HEALTH_ESC_TELEMETRY = 1u << 9, HEALTH_ACC_CAL = 1u << 10, HEALTH_BATTERY = 1u << 11, HEALTH_FLOW = 1u << 12, HEALTH_IMU2 = 1u << 13, HEALTH_CAN = 1u << 14 };
 enum SETTINGS_FLAGS_B : uint32_t { SETTINGS_FLAGS_DIRTY = 1u << 0, SETTINGS_FLAGS_REBOOT_REQUIRED = 1u << 1 };
 enum EST_VALID_B : uint32_t { EST_VALID_ALT = 1u << 0, EST_VALID_POS = 1u << 1, EST_VALID_YAW_FROM_MAG = 1u << 2, EST_VALID_VEL = 1u << 3, EST_VALID_FLOW = 1u << 4, EST_VALID_TILT_AIDED = 1u << 5, EST_VALID_GPS_ALT = 1u << 6, EST_VALID_GPS_VZ = 1u << 7 };
 enum FS_CAUSE_B : uint32_t { FS_CAUSE_LINK = 1u << 0, FS_CAUSE_SWITCH = 1u << 1, FS_CAUSE_BATTERY = 1u << 2 };
 enum NAV_FLAGS_B : uint32_t { NAV_FLAGS_POSHOLD = 1u << 0, NAV_FLAGS_POSHOLD_UNAVAILABLE = 1u << 1, NAV_FLAGS_RESCUE = 1u << 2, NAV_FLAGS_RESCUE_AVAILABLE = 1u << 3, NAV_FLAGS_NAV_LEAN = 1u << 4, NAV_FLAGS_POSHOLD_SLOW_GPS = 1u << 5 };
 enum EKF_FLAGS_B : uint32_t { EKF_FLAGS_ALIGNED = 1u << 0, EKF_FLAGS_GPS_AIDING = 1u << 1, EKF_FLAGS_HEADING_OK = 1u << 2, EKF_FLAGS_USED_FOR_NAV = 1u << 3 };
+enum IMU_SRC_B : uint32_t { IMU_SRC_IMU1 = 1u << 0, IMU_SRC_IMU2 = 1u << 1 };
 
 struct __attribute__((packed)) S_general {
     uint16_t loop_hz;
@@ -87,8 +97,10 @@ struct __attribute__((packed)) S_general {
     uint8_t airmode;
     uint8_t airmode_start_throttle;
     uint8_t runaway_takeoff;
+    uint8_t reserved_g;
+    uint8_t pid_denom;
 };
-static_assert(sizeof(S_general) == 22, "S_general layout");
+static_assert(sizeof(S_general) == 24, "S_general layout");
 inline void defaults(S_general& s) {
     s.loop_hz = 4000;
     s.est_hz = 500;
@@ -104,6 +116,8 @@ inline void defaults(S_general& s) {
     s.airmode = 1;
     s.airmode_start_throttle = 25;
     s.runaway_takeoff = 1;
+    s.reserved_g = 0;
+    s.pid_denom = 1;
 }
 inline int validate(S_general& s) {
     int fixed = 0; (void)s;
@@ -121,6 +135,7 @@ inline int validate(S_general& s) {
     { if (s.airmode > 2) { s.airmode = 2; fixed++; } }
     { if (s.airmode_start_throttle > 100) { s.airmode_start_throttle = 100; fixed++; } }
     { if (s.runaway_takeoff > 1) { s.runaway_takeoff = 1; fixed++; } }
+    { if (s.pid_denom < 1) { s.pid_denom = 1; fixed++; } else if (s.pid_denom > 8) { s.pid_denom = 8; fixed++; } }
     return fixed;
 }
 
@@ -477,11 +492,16 @@ struct __attribute__((packed)) S_motors {
     uint8_t dyn_idle_d;
     uint16_t dyn_idle_max_inc;
     uint8_t dir_cmd_extended;
-    uint8_t dshot_driver;
+    uint8_t reserved1;
     uint8_t ext_pullup;
     uint8_t esc_sensor;
+    uint8_t stall_disarm;
+    uint16_t stall_min_rpm;
+    uint8_t stall_drop;
+    uint8_t stall_min_cmd;
+    uint16_t stall_ms;
 };
-static_assert(sizeof(S_motors) == 37, "S_motors layout");
+static_assert(sizeof(S_motors) == 44, "S_motors layout");
 inline void defaults(S_motors& s) {
     s.layout = 0;
     s.props_out = 0;
@@ -510,15 +530,20 @@ inline void defaults(S_motors& s) {
     s.dyn_idle_d = 50;
     s.dyn_idle_max_inc = 150;
     s.dir_cmd_extended = 0;
-    s.dshot_driver = 0;
+    s.reserved1 = 0;
     s.ext_pullup = 0;
     s.esc_sensor = 0;
+    s.stall_disarm = 0;
+    s.stall_min_rpm = 1500;
+    s.stall_drop = 35;
+    s.stall_min_cmd = 25;
+    s.stall_ms = 100;
 }
 inline int validate(S_motors& s) {
     int fixed = 0; (void)s;
     { if (s.layout > 13) { s.layout = 13; fixed++; } }
     { if (s.props_out > 1) { s.props_out = 1; fixed++; } }
-    { if (s.protocol > 9) { s.protocol = 9; fixed++; } }
+    { if (s.protocol > 10) { s.protocol = 10; fixed++; } }
     for (int i = 0; i < 8; i++) { if (s.order[i] > 7) { s.order[i] = 7; fixed++; } }
     { if (s.pulse_disarmed > 2000) { s.pulse_disarmed = 2000; fixed++; } }
     { if (s.pulse_armed < 800) { s.pulse_armed = 800; fixed++; } else if (s.pulse_armed > 2000) { s.pulse_armed = 2000; fixed++; } }
@@ -535,9 +560,13 @@ inline int validate(S_motors& s) {
     { if (s.dyn_idle_d > 250) { s.dyn_idle_d = 250; fixed++; } }
     { if (s.dyn_idle_max_inc < 10) { s.dyn_idle_max_inc = 10; fixed++; } else if (s.dyn_idle_max_inc > 400) { s.dyn_idle_max_inc = 400; fixed++; } }
     { if (s.dir_cmd_extended > 1) { s.dir_cmd_extended = 1; fixed++; } }
-    { if (s.dshot_driver > 1) { s.dshot_driver = 1; fixed++; } }
     { if (s.ext_pullup > 1) { s.ext_pullup = 1; fixed++; } }
     { if (s.esc_sensor > 1) { s.esc_sensor = 1; fixed++; } }
+    { if (s.stall_disarm > 1) { s.stall_disarm = 1; fixed++; } }
+    { if (s.stall_min_rpm < 300) { s.stall_min_rpm = 300; fixed++; } else if (s.stall_min_rpm > 20000) { s.stall_min_rpm = 20000; fixed++; } }
+    { if (s.stall_drop < 10) { s.stall_drop = 10; fixed++; } else if (s.stall_drop > 80) { s.stall_drop = 80; fixed++; } }
+    { if (s.stall_min_cmd < 5) { s.stall_min_cmd = 5; fixed++; } else if (s.stall_min_cmd > 80) { s.stall_min_cmd = 80; fixed++; } }
+    { if (s.stall_ms < 20) { s.stall_ms = 20; fixed++; } else if (s.stall_ms > 1000) { s.stall_ms = 1000; fixed++; } }
     return fixed;
 }
 
@@ -554,8 +583,11 @@ struct __attribute__((packed)) S_sensors {
     int16_t mag_declination;
     uint8_t range_model;
     uint8_t range_l1x_mode;
+    uint8_t gyro_use;
+    uint8_t imu2_align;
+    uint8_t baro_model;
 };
-static_assert(sizeof(S_sensors) == 16, "S_sensors layout");
+static_assert(sizeof(S_sensors) == 19, "S_sensors layout");
 inline void defaults(S_sensors& s) {
     s.baro_enabled = 1;
     s.mag_enabled = 0;
@@ -569,6 +601,9 @@ inline void defaults(S_sensors& s) {
     s.mag_declination = 0;
     s.range_model = 0;
     s.range_l1x_mode = 2;
+    s.gyro_use = 0;
+    s.imu2_align = 0;
+    s.baro_model = 0;
 }
 inline int validate(S_sensors& s) {
     int fixed = 0; (void)s;
@@ -576,7 +611,7 @@ inline int validate(S_sensors& s) {
     { if (s.mag_enabled > 1) { s.mag_enabled = 1; fixed++; } }
     { if (s.range_enabled > 1) { s.range_enabled = 1; fixed++; } }
     { if (s.gps_enabled > 1) { s.gps_enabled = 1; fixed++; } }
-    { if (s.mag_model > 4) { s.mag_model = 4; fixed++; } }
+    { if (s.mag_model > 5) { s.mag_model = 5; fixed++; } }
     { if (s.mag_align > 7) { s.mag_align = 7; fixed++; } }
     { if (s.mag_trim_roll < -1800) { s.mag_trim_roll = -1800; fixed++; } else if (s.mag_trim_roll > 1800) { s.mag_trim_roll = 1800; fixed++; } }
     { if (s.mag_trim_pitch < -1800) { s.mag_trim_pitch = -1800; fixed++; } else if (s.mag_trim_pitch > 1800) { s.mag_trim_pitch = 1800; fixed++; } }
@@ -584,6 +619,9 @@ inline int validate(S_sensors& s) {
     { if (s.mag_declination < -1800) { s.mag_declination = -1800; fixed++; } else if (s.mag_declination > 1800) { s.mag_declination = 1800; fixed++; } }
     { if (s.range_model > 3) { s.range_model = 3; fixed++; } }
     { if (s.range_l1x_mode > 2) { s.range_l1x_mode = 2; fixed++; } }
+    { if (s.gyro_use > 2) { s.gyro_use = 2; fixed++; } }
+    { if (s.imu2_align > 7) { s.imu2_align = 7; fixed++; } }
+    { if (s.baro_model > 1) { s.baro_model = 1; fixed++; } }
     return fixed;
 }
 
@@ -622,7 +660,7 @@ inline void defaults(S_gps& s) {
 }
 inline int validate(S_gps& s) {
     int fixed = 0; (void)s;
-    { if (s.provider > 3) { s.provider = 3; fixed++; } }
+    { if (s.provider > 4) { s.provider = 4; fixed++; } }
     { if (s.baud < 9600u) { s.baud = 9600u; fixed++; } else if (s.baud > 230400u) { s.baud = 230400u; fixed++; } }
     { if (s.rate_hz < 1) { s.rate_hz = 1; fixed++; } else if (s.rate_hz > 25) { s.rate_hz = 25; fixed++; } }
     { if (s.auto_baud > 1) { s.auto_baud = 1; fixed++; } }
@@ -722,8 +760,11 @@ struct __attribute__((packed)) S_pins {
     uint8_t curr_adc;
     uint8_t rx_pwm[8];
     uint8_t esc_tlm;
+    uint8_t imu2_cs;
+    uint8_t can_tx;
+    uint8_t can_rx;
 };
-static_assert(sizeof(S_pins) == 47, "S_pins layout");
+static_assert(sizeof(S_pins) == 50, "S_pins layout");
 inline void defaults(S_pins& s) {
     s.imu_cs = 255;
     s.imu_miso = 255;
@@ -772,6 +813,9 @@ inline void defaults(S_pins& s) {
     s.rx_pwm[6] = 255;
     s.rx_pwm[7] = 255;
     s.esc_tlm = 255;
+    s.imu2_cs = 255;
+    s.can_tx = 255;
+    s.can_rx = 255;
 }
 inline int validate(S_pins& s) {
     int fixed = 0; (void)s;
@@ -867,7 +911,7 @@ inline void defaults(S_battery& s) {
 }
 inline int validate(S_battery& s) {
     int fixed = 0; (void)s;
-    { if (s.source > 3) { s.source = 3; fixed++; } }
+    { if (s.source > 4) { s.source = 4; fixed++; } }
     { if (s.cells > 8) { s.cells = 8; fixed++; } }
     { if (s.cell_max_mv < 3500) { s.cell_max_mv = 3500; fixed++; } else if (s.cell_max_mv > 4500) { s.cell_max_mv = 4500; fixed++; } }
     { if (s.cell_warning_mv < 2500) { s.cell_warning_mv = 2500; fixed++; } else if (s.cell_warning_mv > 4300) { s.cell_warning_mv = 4300; fixed++; } }
@@ -876,7 +920,7 @@ inline int validate(S_battery& s) {
     { if (s.critical_delay > 100) { s.critical_delay = 100; fixed++; } }
     { if (s.land_on_critical > 1) { s.land_on_critical = 1; fixed++; } }
     { if (s.divider < 100) { s.divider = 100; fixed++; } else if (s.divider > 10000) { s.divider = 10000; fixed++; } }
-    { if (s.current_source > 3) { s.current_source = 3; fixed++; } }
+    { if (s.current_source > 4) { s.current_source = 4; fixed++; } }
     { if (s.current_scale < -16000) { s.current_scale = -16000; fixed++; } else if (s.current_scale > 16000) { s.current_scale = 16000; fixed++; } }
     { if (s.current_offset < -16000) { s.current_offset = -16000; fixed++; } else if (s.current_offset > 16000) { s.current_offset = 16000; fixed++; } }
     { if (s.capacity_mah > 30000) { s.capacity_mah = 30000; fixed++; } }
@@ -1205,6 +1249,164 @@ inline int validate(S_althold& s) {
     return fixed;
 }
 
+struct __attribute__((packed)) S_wifi {
+    uint8_t mode;
+    uint8_t channel;
+    uint16_t port;
+    uint8_t ssid[32];
+    uint8_t pass[64];
+};
+static_assert(sizeof(S_wifi) == 100, "S_wifi layout");
+inline void defaults(S_wifi& s) {
+    s.mode = 0;
+    s.channel = 6;
+    s.port = 5760;
+    s.ssid[0] = 0;
+    s.ssid[1] = 0;
+    s.ssid[2] = 0;
+    s.ssid[3] = 0;
+    s.ssid[4] = 0;
+    s.ssid[5] = 0;
+    s.ssid[6] = 0;
+    s.ssid[7] = 0;
+    s.ssid[8] = 0;
+    s.ssid[9] = 0;
+    s.ssid[10] = 0;
+    s.ssid[11] = 0;
+    s.ssid[12] = 0;
+    s.ssid[13] = 0;
+    s.ssid[14] = 0;
+    s.ssid[15] = 0;
+    s.ssid[16] = 0;
+    s.ssid[17] = 0;
+    s.ssid[18] = 0;
+    s.ssid[19] = 0;
+    s.ssid[20] = 0;
+    s.ssid[21] = 0;
+    s.ssid[22] = 0;
+    s.ssid[23] = 0;
+    s.ssid[24] = 0;
+    s.ssid[25] = 0;
+    s.ssid[26] = 0;
+    s.ssid[27] = 0;
+    s.ssid[28] = 0;
+    s.ssid[29] = 0;
+    s.ssid[30] = 0;
+    s.ssid[31] = 0;
+    s.pass[0] = 0;
+    s.pass[1] = 0;
+    s.pass[2] = 0;
+    s.pass[3] = 0;
+    s.pass[4] = 0;
+    s.pass[5] = 0;
+    s.pass[6] = 0;
+    s.pass[7] = 0;
+    s.pass[8] = 0;
+    s.pass[9] = 0;
+    s.pass[10] = 0;
+    s.pass[11] = 0;
+    s.pass[12] = 0;
+    s.pass[13] = 0;
+    s.pass[14] = 0;
+    s.pass[15] = 0;
+    s.pass[16] = 0;
+    s.pass[17] = 0;
+    s.pass[18] = 0;
+    s.pass[19] = 0;
+    s.pass[20] = 0;
+    s.pass[21] = 0;
+    s.pass[22] = 0;
+    s.pass[23] = 0;
+    s.pass[24] = 0;
+    s.pass[25] = 0;
+    s.pass[26] = 0;
+    s.pass[27] = 0;
+    s.pass[28] = 0;
+    s.pass[29] = 0;
+    s.pass[30] = 0;
+    s.pass[31] = 0;
+    s.pass[32] = 0;
+    s.pass[33] = 0;
+    s.pass[34] = 0;
+    s.pass[35] = 0;
+    s.pass[36] = 0;
+    s.pass[37] = 0;
+    s.pass[38] = 0;
+    s.pass[39] = 0;
+    s.pass[40] = 0;
+    s.pass[41] = 0;
+    s.pass[42] = 0;
+    s.pass[43] = 0;
+    s.pass[44] = 0;
+    s.pass[45] = 0;
+    s.pass[46] = 0;
+    s.pass[47] = 0;
+    s.pass[48] = 0;
+    s.pass[49] = 0;
+    s.pass[50] = 0;
+    s.pass[51] = 0;
+    s.pass[52] = 0;
+    s.pass[53] = 0;
+    s.pass[54] = 0;
+    s.pass[55] = 0;
+    s.pass[56] = 0;
+    s.pass[57] = 0;
+    s.pass[58] = 0;
+    s.pass[59] = 0;
+    s.pass[60] = 0;
+    s.pass[61] = 0;
+    s.pass[62] = 0;
+    s.pass[63] = 0;
+}
+inline int validate(S_wifi& s) {
+    int fixed = 0; (void)s;
+    { if (s.mode > 2) { s.mode = 2; fixed++; } }
+    { if (s.channel < 1) { s.channel = 1; fixed++; } else if (s.channel > 13) { s.channel = 13; fixed++; } }
+    { if (s.port < 1) { s.port = 1; fixed++; } }
+    return fixed;
+}
+
+struct __attribute__((packed)) S_can {
+    uint8_t mode;
+    uint8_t bitrate;
+    uint8_t node_id;
+    uint8_t dna_server;
+};
+static_assert(sizeof(S_can) == 4, "S_can layout");
+inline void defaults(S_can& s) {
+    s.mode = 0;
+    s.bitrate = 3;
+    s.node_id = 10;
+    s.dna_server = 1;
+}
+inline int validate(S_can& s) {
+    int fixed = 0; (void)s;
+    { if (s.mode > 1) { s.mode = 1; fixed++; } }
+    { if (s.bitrate > 3) { s.bitrate = 3; fixed++; } }
+    { if (s.node_id < 1) { s.node_id = 1; fixed++; } else if (s.node_id > 125) { s.node_id = 125; fixed++; } }
+    { if (s.dna_server > 1) { s.dna_server = 1; fixed++; } }
+    return fixed;
+}
+
+struct __attribute__((packed)) S_led {
+    uint8_t count;
+    uint8_t brightness;
+    uint8_t layout;
+};
+static_assert(sizeof(S_led) == 3, "S_led layout");
+inline void defaults(S_led& s) {
+    s.count = 0;
+    s.brightness = 30;
+    s.layout = 0;
+}
+inline int validate(S_led& s) {
+    int fixed = 0; (void)s;
+    { if (s.count > 32) { s.count = 32; fixed++; } }
+    { if (s.brightness < 5) { s.brightness = 5; fixed++; } else if (s.brightness > 100) { s.brightness = 100; fixed++; } }
+    { if (s.layout > 1) { s.layout = 1; fixed++; } }
+    return fixed;
+}
+
 struct Settings {
     S_general general;
     S_receiver receiver;
@@ -1225,14 +1427,17 @@ struct Settings {
     S_nav nav;
     S_servo servo;
     S_althold althold;
+    S_wifi wifi;
+    S_can can;
+    S_led led;
 };
-inline void defaults(Settings& s) { defaults(s.general); defaults(s.receiver); defaults(s.modes); defaults(s.rates); defaults(s.pid); defaults(s.motors); defaults(s.sensors); defaults(s.gps); defaults(s.beeper); defaults(s.ports); defaults(s.pins); defaults(s.calibration); defaults(s.battery); defaults(s.blackbox); defaults(s.filters); defaults(s.flow); defaults(s.nav); defaults(s.servo); defaults(s.althold); }
+inline void defaults(Settings& s) { defaults(s.general); defaults(s.receiver); defaults(s.modes); defaults(s.rates); defaults(s.pid); defaults(s.motors); defaults(s.sensors); defaults(s.gps); defaults(s.beeper); defaults(s.ports); defaults(s.pins); defaults(s.calibration); defaults(s.battery); defaults(s.blackbox); defaults(s.filters); defaults(s.flow); defaults(s.nav); defaults(s.servo); defaults(s.althold); defaults(s.wifi); defaults(s.can); defaults(s.led); }
 
-// live: applied to the running firmware without a reboot. compat / compat2 / compat3: sizes of this section in older firmwares whose layout was the same
+// live: applied to the running firmware without a reboot. compat .. compat4: sizes of this section in older firmwares whose layout was the same
 // up to that size (fields were only appended or cut at the end since): such a stored record is still loaded. 0 = none.
-struct SectionInfo { uint8_t id; const char* name; uint16_t size; bool live; uint16_t compat, compat2, compat3; };
-constexpr int kSectionCount = 19;
-constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 22, false, 23, 0, 0}, {SEC_RECEIVER, "receiver", 12, false, 9, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0}, {SEC_PID, "pid", 75, true, 0, 0, 0}, {SEC_MOTORS, "motors", 37, false, 36, 35, 34}, {SEC_SENSORS, "sensors", 16, false, 0, 0, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0}, {SEC_PINS, "pins", 47, false, 46, 37, 33}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0}, {SEC_NAV, "nav", 31, true, 30, 29, 27}, {SEC_SERVO, "servo", 26, true, 0, 0, 0}, {SEC_ALTHOLD, "althold", 6, true, 0, 0, 0}};
+struct SectionInfo { uint8_t id; const char* name; uint16_t size; bool live; uint16_t compat, compat2, compat3, compat4; };
+constexpr int kSectionCount = 22;
+constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 24, false, 22, 23, 0, 0}, {SEC_RECEIVER, "receiver", 12, false, 9, 0, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0, 0}, {SEC_PID, "pid", 75, true, 0, 0, 0, 0}, {SEC_MOTORS, "motors", 44, false, 37, 36, 35, 34}, {SEC_SENSORS, "sensors", 19, false, 18, 16, 0, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0, 0}, {SEC_PINS, "pins", 50, false, 48, 47, 46, 37}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0, 0}, {SEC_NAV, "nav", 31, true, 30, 29, 27, 0}, {SEC_SERVO, "servo", 26, true, 0, 0, 0, 0}, {SEC_ALTHOLD, "althold", 6, true, 0, 0, 0, 0}, {SEC_WIFI, "wifi", 100, false, 0, 0, 0, 0}, {SEC_CAN, "can", 4, false, 0, 0, 0, 0}, {SEC_LED, "led", 3, false, 0, 0, 0, 0}};
 inline const SectionInfo* find_section(uint8_t id) { for (const auto& s : kSections) if (s.id == id) return &s; return nullptr; }
 // pointer to / size of a section inside a Settings object (nullptr if unknown)
 inline uint8_t* section_ptr(Settings& st, uint8_t id) { switch (id) {
@@ -1255,6 +1460,9 @@ inline uint8_t* section_ptr(Settings& st, uint8_t id) { switch (id) {
     case SEC_NAV: return (uint8_t*)&st.nav;
     case SEC_SERVO: return (uint8_t*)&st.servo;
     case SEC_ALTHOLD: return (uint8_t*)&st.althold;
+    case SEC_WIFI: return (uint8_t*)&st.wifi;
+    case SEC_CAN: return (uint8_t*)&st.can;
+    case SEC_LED: return (uint8_t*)&st.led;
     default: return nullptr; } }
 inline int validate_section(Settings& st, uint8_t id) { switch (id) {
     case SEC_GENERAL: return validate(st.general);
@@ -1276,6 +1484,9 @@ inline int validate_section(Settings& st, uint8_t id) { switch (id) {
     case SEC_NAV: return validate(st.nav);
     case SEC_SERVO: return validate(st.servo);
     case SEC_ALTHOLD: return validate(st.althold);
+    case SEC_WIFI: return validate(st.wifi);
+    case SEC_CAN: return validate(st.can);
+    case SEC_LED: return validate(st.led);
     default: return -1; } }
 inline bool defaults_section(Settings& st, uint8_t id) { switch (id) {
     case SEC_GENERAL: defaults(st.general); return true;
@@ -1297,6 +1508,9 @@ inline bool defaults_section(Settings& st, uint8_t id) { switch (id) {
     case SEC_NAV: defaults(st.nav); return true;
     case SEC_SERVO: defaults(st.servo); return true;
     case SEC_ALTHOLD: defaults(st.althold); return true;
+    case SEC_WIFI: defaults(st.wifi); return true;
+    case SEC_CAN: defaults(st.can); return true;
+    case SEC_LED: defaults(st.led); return true;
     default: return false; } }
 
 // ---- telemetry streams ----
@@ -1345,8 +1559,10 @@ struct __attribute__((packed)) T_status {
     uint16_t overruns;
     uint16_t loop_target;
     uint8_t fs_cause;
+    uint16_t pid_hz;
+    uint16_t pid_target;
 };
-static_assert(sizeof(T_status) == 49, "T_status layout");
+static_assert(sizeof(T_status) == 53, "T_status layout");
 struct __attribute__((packed)) T_motors {
     uint16_t cmd[8];
     uint16_t rpm[8];
@@ -1365,8 +1581,9 @@ struct __attribute__((packed)) T_motors {
     uint16_t tlm_frames;
     uint16_t tlm_crc;
     uint16_t tlm_timeouts;
+    uint8_t stall_motor;
 };
-static_assert(sizeof(T_motors) == 92, "T_motors layout");
+static_assert(sizeof(T_motors) == 93, "T_motors layout");
 struct __attribute__((packed)) T_sensors {
     int16_t gyro[3];
     int16_t acc[3];
@@ -1375,8 +1592,11 @@ struct __attribute__((packed)) T_sensors {
     uint32_t baro_pa;
     int16_t temp;
     int16_t range;
+    int16_t gyro2[3];
+    uint8_t imu2;
+    uint8_t gyro_src;
 };
-static_assert(sizeof(T_sensors) == 28, "T_sensors layout");
+static_assert(sizeof(T_sensors) == 36, "T_sensors layout");
 struct __attribute__((packed)) T_gps {
     uint8_t fix;
     uint8_t sats;
@@ -1508,8 +1728,39 @@ struct __attribute__((packed)) T_link {
     uint16_t link_gap_ms;
     uint16_t slow_gap_ms;
     uint16_t queued;
+    uint8_t wifi;
+    uint32_t wifi_ip;
+    int16_t wifi_rssi;
+    uint8_t wifi_clients;
+    uint8_t via;
 };
-static_assert(sizeof(T_link) == 32, "T_link layout");
+static_assert(sizeof(T_link) == 41, "T_link layout");
+struct __attribute__((packed)) T_can {
+    uint8_t state;
+    uint8_t node_id;
+    uint16_t rx_fps;
+    uint16_t tx_fps;
+    uint16_t tx_dropped;
+    uint16_t crc_errors;
+    uint16_t bus_off;
+    uint8_t tec;
+    uint8_t rec;
+    uint8_t allocations;
+    uint8_t gnss_node;
+    uint8_t mag_node;
+    uint8_t nodes;
+    uint8_t node[8];
+    uint8_t health[8];
+    uint8_t mode[8];
+    uint32_t uptime[8];
+    uint8_t names[128];
+    uint8_t baro_node;
+    uint8_t batt_node;
+    uint8_t esc_mask;
+    uint32_t esc_sent;
+    uint16_t esc_dropped;
+};
+static_assert(sizeof(T_can) == 211, "T_can layout");
 // ---- commands ----
 struct CommandInfo { uint8_t id; const char* name; uint8_t arg_bytes; bool armed_ok; uint8_t writes_section; };   // writes_section: section the command changes in RAM (0 = none)
 constexpr int kCommandCount = 21;
@@ -1534,6 +1785,7 @@ constexpr float sensors_mag = 0.001f;
 constexpr float sensors_baro_alt = 0.01f;
 constexpr float sensors_temp = 0.01f;
 constexpr float sensors_range = 0.001f;
+constexpr float sensors_gyro2 = 0.1f;
 constexpr float gps_lat = 1e-07f;
 constexpr float gps_lon = 1e-07f;
 constexpr float gps_alt = 0.01f;
@@ -1577,7 +1829,7 @@ constexpr float nav_return_alt = 0.1f;
 constexpr float link_uptime = 0.001f;
 } // namespace scale
 struct StreamInfo { uint8_t id; const char* name; uint16_t size; uint16_t default_rate; uint16_t max_rate; };
-constexpr int kStreamCount = 14;
-constexpr StreamInfo kStreams[kStreamCount] = {{STR_ATTITUDE, "attitude", 18, 50, 200}, {STR_RC, "rc", 42, 20, 100}, {STR_STATUS, "status", 49, 10, 50}, {STR_MOTORS, "motors", 92, 20, 100}, {STR_SENSORS, "sensors", 28, 50, 200}, {STR_GPS, "gps", 32, 5, 25}, {STR_ESTIMATE, "estimate", 32, 20, 100}, {STR_GYRO_FAST, "gyro_fast", 12, 0, 1000}, {STR_CALIBRATION, "calibration", 11, 10, 20}, {STR_BATTERY, "battery", 19, 2, 20}, {STR_BLACKBOX, "blackbox", 34, 2, 10}, {STR_TUNING, "tuning", 53, 0, 50}, {STR_NAV, "nav", 28, 10, 50}, {STR_LINK, "link", 32, 1, 10}};
+constexpr int kStreamCount = 15;
+constexpr StreamInfo kStreams[kStreamCount] = {{STR_ATTITUDE, "attitude", 18, 50, 200}, {STR_RC, "rc", 42, 20, 100}, {STR_STATUS, "status", 53, 10, 50}, {STR_MOTORS, "motors", 93, 20, 100}, {STR_SENSORS, "sensors", 36, 50, 200}, {STR_GPS, "gps", 32, 5, 25}, {STR_ESTIMATE, "estimate", 32, 20, 100}, {STR_GYRO_FAST, "gyro_fast", 12, 0, 1000}, {STR_CALIBRATION, "calibration", 11, 10, 20}, {STR_BATTERY, "battery", 19, 2, 20}, {STR_BLACKBOX, "blackbox", 34, 2, 10}, {STR_TUNING, "tuning", 53, 0, 50}, {STR_NAV, "nav", 28, 10, 50}, {STR_LINK, "link", 41, 1, 10}, {STR_CAN, "can", 211, 2, 10}};
 inline const StreamInfo* find_stream(uint8_t id) { for (const auto& s : kStreams) if (s.id == id) return &s; return nullptr; }
 } // namespace wbp

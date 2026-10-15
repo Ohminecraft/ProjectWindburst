@@ -45,6 +45,7 @@ struct Frame { uint8_t version = 1; uint16_t cmd = 0; uint16_t len = 0; uint8_t 
 // One byte at a time; true when a whole frame with a good checksum is in `f`. A request longer than the buffer is dropped.
 class Parser {
 public:
+    bool mid_frame() const { return st_ != IDLE; }
     bool feed(uint8_t c, Frame& f) {
         switch (st_) {
         case IDLE: if (c == '$') st_ = HDR; break;
@@ -123,6 +124,7 @@ constexpr uint8_t kBfArmFlagsCount = 30;             // ARMING_DISABLE_FLAGS_COU
 
 class Bridge {
 public:
+    bool mid_frame() const { return parser_.mid_frame(); }
     enum Result : uint8_t { NONE, REPLY, PASSTHROUGH };
     // One byte from the link. REPLY: out / out_n hold the answer. PASSTHROUGH: the PC tool asks for the 4-way interface - the caller
     // asks the flight side to let go of the motors and calls passthrough_reply() with the number of ESCs (0 = refused).

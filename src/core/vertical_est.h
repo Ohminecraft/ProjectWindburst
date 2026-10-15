@@ -145,7 +145,7 @@ public:
     // GPS height (m above home) as THE height: a craft with nothing else
     bool update_gps(float alt_m, float sigma = 1.0f) {
         gps_seen_age_ = 0.0f;
-        const float s = fmaxf(sigma, cfg.gps_sigma_min);
+        const float s = maxf(sigma, cfg.gps_sigma_min);
         if (scalar(alt_m, 1, 0, s)) { gps_rejects_ = 0; gps_age_ = 0.0f; return true; }
         if (++gps_rejects_ >= cfg.gps_reref_after) { set_z(alt_m, s); gps_rejects_ = 0; gps_age_ = 0.0f; gps_resets_++; return true; }
         return false;
@@ -164,13 +164,13 @@ public:
         if (!fuse) { const float k = since < 1e8f ? since / (cfg.gps_ref_track_tau_s + since) : 1.0f; gps_ref_ += (d - gps_ref_) * k; return false; }
         // (a jump is judged in metres, not in sigmas: the sigma of a blending GPS is made large on purpose, to slow it down)
         const float y = alt_m - gps_ref_ - x[0];
-        if (fabsf(y) <= cfg.gps_jump_m && scalar(alt_m - gps_ref_, 1, 0, fmaxf(sigma, cfg.gps_sigma_min))) { gps_rejects_ = 0; gps_age_ = 0.0f; return true; }
+        if (fabsf(y) <= cfg.gps_jump_m && scalar(alt_m - gps_ref_, 1, 0, maxf(sigma, cfg.gps_sigma_min))) { gps_rejects_ = 0; gps_age_ = 0.0f; return true; }
         if (++gps_rejects_ >= cfg.gps_reref_after) { restart_gps_ref(); gps_resets_++; }
         return false;
     }
     // GPS vertical velocity (m/s, up positive), already brought forward by the GPS latency
     bool update_gps_vel(float vz_up, float sigma) {
-        const bool ok = scalar(vz_up, 0, 0, fmaxf(sigma, cfg.gps_vel_sigma_min), 1);
+        const bool ok = scalar(vz_up, 0, 0, maxf(sigma, cfg.gps_vel_sigma_min), 1);
         if (ok) gps_vel_age_ = 0.0f;
         return ok;
     }
@@ -185,7 +185,7 @@ public:
     }
     float baro_offset() const { return x[3]; }
     float accel_bias() const { return x[2]; }
-    float z_sigma() const { return sqrtf(fmaxf(P[0][0], 0)); }
+    float z_sigma() const { return sqrtf(maxf(P[0][0], 0)); }
     float range_anchor() const { return anchor_; }           // level of the ground under the craft, relative to where z = 0 would read 0
     uint32_t range_reanchors() const { return reanchors_; }
 private:

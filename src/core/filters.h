@@ -48,7 +48,7 @@ struct Pt3 {
 struct SvfLowpass {
     float f = 0.0f, a1 = 1.0f, a2 = 0.0f, ic1 = 0.0f, ic2 = 0.0f; bool init = false;
     WB_FAST void set(float hz, float dt) {
-        f = tanf(kPi * hz * dt);
+        f = tan_approx(kPi * hz * dt);
         const float inv = 1.0f / (1.0f + f * (f + 1.41421356237f));          // 1 / Q = sqrt(2)
         a1 = inv; a2 = f * inv;
     }
@@ -65,7 +65,7 @@ struct SvfLowpass {
 struct SvfNotch {
     float a1 = 1.0f, a2q = 0.0f, fq = 0.0f, ic1q = 0.0f, ic2 = 0.0f; bool init = false;
     WB_FAST void set(float hz, float dt, float q) {
-        const float f = tanf(kPi * hz * dt), iq = 1.0f / q, inv = 1.0f / (1.0f + f * (f + iq));
+        const float f = tan_approx(kPi * hz * dt), iq = 1.0f / q, inv = 1.0f / (1.0f + f * (f + iq));
         a1 = inv; a2q = f * inv * iq; fq = f * q;
     }
     WB_FAST float apply(float x) {
@@ -84,9 +84,9 @@ inline float notch_q(float center_hz, float cutoff_hz) { return center_hz * cuto
 // The weight fades the notch out near its minimum frequency instead of switching it.
 struct RpmNotch {
     float f = 0.0f, a1 = 1.0f, a2 = 0.0f, wq = 0.0f, ic1[3] = {0, 0, 0}, ic2[3] = {0, 0, 0};
-    WB_FAST void set(float hz, float dt, float q, float weight) {
-        f = tanf(kPi * hz * dt);
-        const float iq = 1.0f / q;
+    WB_FAST void set(float hz, float dt, float q, float weight) { set_inv_q(hz, dt, 1.0f / q, weight); }
+    WB_FAST void set_inv_q(float hz, float dt, float iq, float weight) {      // (iq = 1 / q: the RPM filter moves a few notches every cycle and keeps it)
+        f = tan_approx(kPi * hz * dt);
         a1 = 1.0f / (1.0f + f * (f + iq)); a2 = f * a1; wq = iq * weight;
     }
     void apply(float v[3]) {

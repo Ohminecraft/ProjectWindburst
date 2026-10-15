@@ -37,7 +37,6 @@ struct MotorConfig {
     PulseEndpoints pulse;                           // PWM/Oneshot/Multishot: not armed / armed / max throttle
     uint16_t pulse_hz = 0;                          // 0 = protocol default
     bool bidirectional = false;                     // bidirectional DShot (eRPM telemetry)
-    uint8_t dshot_driver = 0;                       // 0 = direct RMT (needed for bidirectional), 1 = ESP-IDF RMT driver (one-way)
     bool ext_pullup = false;                        // bidirectional DShot: pull-up resistors on the board, the pins' own pull-up stays off
     uint8_t pole_count = 14;                        // motor poles (magnets), for eRPM -> rpm
     bool edt = false;                               // extended telemetry (voltage/current/temperature) decoding
@@ -171,7 +170,7 @@ public:
         for (int i = 0; i < cfg.count; i++) {
             float v = e.disarm;
             if (testing && test_frac_[i] > 0.0f) { v = to_value(test_frac_[i], e); out_frac_[i] = test_frac_[i]; }
-            out.value[cfg.order[i]] = (uint16_t)lroundf(v);
+            out.value[cfg.order[i]] = (uint16_t)round_pos(v);
         }
         ask_telemetry(out);
         if (!testing) test_stop();
@@ -186,6 +185,15 @@ public:
         Slot& s = tel_[logical];
         s.temp = temp_c; s.volt = volt; s.volt_ms = now_ms; s.amps = amps; s.amps_ms = now_ms; s.amps_seen = true;
         if (!cfg.bidirectional) { s.rpm = erpm * 2.0f / (cfg.pole_count ? cfg.pole_count : 14); s.rpm_ms = now_ms; s.rpm_seen = true; }
+    }
+
+    // ---------------------------------------------------------------- ESCs on the CAN bus (esc.Status, index = hardware slot)
+    void feed_can(int slot, float temp_c, float volt, float amps, int32_t rpm, uint32_t now_ms) {
+        const int m = logical_of(slot);
+        if (m < 0) return;
+        Slot& s = tel_[m];
+        s.temp = (uint8_t)(temp_c < 0 ? 0 : temp_c > 255 ? 255 : temp_c); s.volt = volt; s.volt_ms = now_ms; s.amps = amps; s.amps_ms = now_ms; s.amps_seen = true;
+        s.rpm = (float)(rpm < 0 ? -rpm : rpm); s.rpm_ms = now_ms; s.rpm_seen = true;
     }
 
     // ---------------------------------------------------------------- telemetry in
@@ -233,8 +241,14 @@ public:
         return false;
     }
     // for the gyro RPM filter (logical order, every motor of the layout); zeros when not valid -> filter bypasses those notches
-    WB_FAST void rpm_array(float out[kMaxMotors], uint32_t now_ms) const {
-        for (int i = 0; i < kMaxMotors; i++) out[i] = (i < cfg.count) ? telemetry(i, now_ms).rpm : 0.0f;
+    // every motor's speed (0 without telemetry); returns a bit per motor whose speed is known (bidirectional DShot or the wire)
+    WB_FAST uint8_t rpm_array(float out[kMaxMotors], uint32_t now_ms) const {
+        uint8_t mask = 0;
+        for (int i = 0; i < kMaxMotors; i++) {
+            if (i >= cfg.count) { out[i] = 0.0f; continue; }
+            const MotorTelemetry t = telemetry(i, now_ms); out[i] = t.rpm; if (t.rpm_valid) mask |= (uint8_t)(1u << i);
+        }
+        return mask;
     }
     // ESC-reported total current (A): the sum over the motors whose current came in within the last second. false: none did.
     bool esc_current(uint32_t now_ms, float& amps) const {
@@ -269,9 +283,10 @@ private:
         f = f < 0 ? 0 : (f > 1 ? 1 : f);
         float v;
         if (is_dshot(cfg.protocol)) v = kDshotMinThrottle + f * kDshotRange;
+        else if (is_can(cfg.protocol)) v = 1.0f + f * (kCanMax - 1);
         else v = cfg.pulse.armed + f * (cfg.pulse.max - cfg.pulse.armed);
         v = v < e.low ? e.low : (v > e.high ? e.high : v);        // armed motors never fall below idle, never exceed the limit
-        return (float)lroundf(v);
+        return round_pos(v);
     }
     WB_FAST void ask_telemetry(Frame& out) {
         const int8_t m = tlm_ask_;

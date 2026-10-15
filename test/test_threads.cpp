@@ -76,7 +76,7 @@ int main() {
     bb::Service blackbox(app.blackbox, tx);                           // the flight log: recorded by the flight task, written by the link task
     bb::FirmwareHeader bb_header{&settings, "threads", 0, 7, 0};
     blackbox.attach_store(&logmem); blackbox.set_header_source(&bb::FirmwareHeader::write, &bb_header);
-    blackbox.set_loop(app.core.cfg.loop_hz, app.motors.cfg().count);
+    blackbox.set_loop(app.core.cfg.pid_hz(), app.motors.cfg().count, app.core.cfg.loop_hz);   // a record per control cycle at most
     host.set_blackbox(&blackbox, &settings);
     host.attach(&server); host.set_report(app.report(), app.report_lines());
     StdSync sync; app.set_sync(&sync); g_sync = &sync; g_stub_io_hook = &io_hook;

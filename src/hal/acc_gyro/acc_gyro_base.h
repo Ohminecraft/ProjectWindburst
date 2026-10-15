@@ -62,6 +62,24 @@ public:
             config.ioSdiGpio = pins[2];
             config.ioSckGpio = pins[3];
             if (!spi_.SPIInit(config)) { fail_ = "SPI bus init failed"; return false; }
+            if (!detect_spi()) return false;
+        }
+        return finish_init(cfg);
+    }
+
+    // A second IMU on the SPI bus of `host` (already started by its IMUInit), with its own chip-select pin.
+    bool IMUInitShared(IMUAccGyro& host, uint8_t cs, const AgInitConfig& cfg) {
+        destroy();
+        imu_detected = NONE; fail_ = "";
+        if (cs == GPIO_UNUSED) { fail_ = "no chip-select pin"; return false; }
+        if (!host.drv_ || !host.proxy_.is_spi()) { fail_ = "the first IMU is not on SPI (a second IMU shares its SPI bus)"; return false; }
+        if (!spi_.SPIInitShared(host.spi_, cs)) { fail_ = "chip-select pin unusable (or the first IMU's)"; return false; }
+        if (!detect_spi()) return false;
+        return finish_init(cfg);
+    }
+
+private:
+    bool detect_spi() {
             proxy_.set(&spi_bus_);
             for (int attempt = 0; attempt < 3 && imu_detected == NONE; attempt++) {
                 delay(5);
@@ -75,12 +93,15 @@ public:
                 imu_detected = accgyro::classify_spi(d2[1], r00, r72, r75);
             }
             if (imu_detected == NONE) { fail_ = "no known IMU answered on SPI (check CS/MISO/MOSI/SCK pins and power)"; return false; }
-        }
-
+            return true;
+    }
+    bool finish_init(const AgInitConfig& cfg) {
         if (!create_driver()) { fail_ = "unsupported device"; return false; }
         if (!drv_->init(cfg)) { fail_ = "WHO_AM_I / init failed after detection"; destroy(); return false; }
         return sanity_check();
     }
+
+public:
 
     // Optional runtime pin override (instead of hardware_config.h), e.g. pins loaded from settings. Call before IMUInit().
     void setI2cPins(uint8_t sda, uint8_t scl) { pins_i2c_[0] = sda; pins_i2c_[1] = scl; pins_i2c_set_ = true; }

@@ -12,10 +12,12 @@
 #include "bmp280_baro.h"
 #include "bmp388_baro.h"
 #include "baro_altitude.h"
+#include "external_baro.h"
 #include "../../config/hardware_config.h"
 
 // ============================================================================
-// BaroSensor: detect -> init -> update.  Supports BMP280 / BME280 and BMP388 / BMP390 on I2C (0x76, 0x77) or SPI.
+// BaroSensor: detect -> init -> update.  Supports BMP280 / BME280 and BMP388 / BMP390 on I2C (0x76, 0x77) or SPI,
+// or a DroneCAN module (setModel(DRONECAN): the samples come through pushExternal(), from the CAN node).
 //
 //   BaroSensor baro;
 //   baro.IMUInit-style:  if (!baro.BaroInit(false)) Serial.println(baro.failReason());
@@ -29,6 +31,10 @@ class BaroSensor {
 public:
     void attachI2C(I2CBus& shared) { shared_i2c_ = &shared; }
     void setEnabled(bool on) { enabled_ = on; }                      // app switch "barometer on/off"
+    enum class Model : uint8_t { AUTO = 0, DRONECAN = 1 };           // == the schema's enum baro_model
+    void setModel(Model m) { model_ = m; }
+    Model model() const { return model_; }
+    void pushExternal(float pa, float temp_c, uint32_t now_us) { if (drv_ == &can_) can_.push(pa, temp_c, now_us); }
     void setI2cPins(uint8_t sda, uint8_t scl) { pins_i2c_[0] = sda; pins_i2c_[1] = scl; pins_i2c_set_ = true; }
     void setSpiPins(uint8_t cs, uint8_t miso, uint8_t mosi, uint8_t sck) { pins_spi_[0] = cs; pins_spi_[1] = miso; pins_spi_[2] = mosi; pins_spi_[3] = sck; pins_spi_set_ = true; }
 
@@ -36,6 +42,7 @@ public:
     bool BaroInit(bool use_spi, const BaroInitConfig& cfg) {
         drv_ = nullptr; detected_ = NONE_; fail_ = ""; alt_.reset();
         if (!enabled_) { fail_ = "barometer disabled"; return false; }
+        if (model_ == Model::DRONECAN) { can_.init(cfg); drv_ = &can_; return true; }
         if (!use_spi) {
             I2CBus* bus = shared_i2c_;
             if (!bus) {
@@ -108,6 +115,8 @@ private:
     AgBusProxy proxy_;
     Bmp280Baro d280_{proxy_};
     Bmp388Baro d388_{proxy_};
+    ExternalBaro can_{"DroneCAN"};
+    Model model_ = Model::AUTO;
     BaroDriver* drv_ = nullptr;
     BaroAltitude alt_;
     BaroSample raw_;

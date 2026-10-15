@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0xCCF703C7",
+ "hash": "0xA457F6F5",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -28,7 +28,8 @@
    "DSHOT600",
    "DSHOT1200",
    "PROSHOT1000",
-   "BRUSHED"
+   "BRUSHED",
+   "DRONECAN"
   ],
   "rx_protocol": [
    "CRSF",
@@ -54,7 +55,8 @@
    "NMEA",
    "UBLOX",
    "MSP",
-   "VIRTUAL"
+   "VIRTUAL",
+   "DRONECAN"
   ],
   "sbas": [
    "AUTO",
@@ -92,7 +94,12 @@
    "HMC5883L",
    "QMC5883L",
    "QMC5883P",
-   "AK8963_MPU9250"
+   "AK8963_MPU9250",
+   "DRONECAN"
+  ],
+  "baro_model": [
+   "AUTO",
+   "DRONECAN"
   ],
   "port_function": [
    "NONE",
@@ -162,7 +169,8 @@
    "AUTO",
    "ADC",
    "ESC",
-   "NONE"
+   "NONE",
+   "DRONECAN"
   ],
   "batt_state": [
    "NOT_PRESENT",
@@ -277,10 +285,6 @@
    "AIR",
    "AIRMODE"
   ],
-  "dshot_driver": [
-   "DIRECT",
-   "IDF"
-  ],
   "bidir_state": [
    "OFF",
    "ACTIVE",
@@ -365,7 +369,8 @@
    "AUTO",
    "ADC",
    "ESC",
-   "NONE"
+   "NONE",
+   "DRONECAN"
   ],
   "port_assign": [
    "AUTO",
@@ -379,6 +384,53 @@
   "ekf_mode": [
    "OFF",
    "SHADOW",
+   "NAV"
+  ],
+  "gyro_use": [
+   "FIRST",
+   "SECOND",
+   "BOTH"
+  ],
+  "imu2_state": [
+   "NONE",
+   "OK",
+   "FAILED",
+   "LOST"
+  ],
+  "wifi_mode": [
+   "OFF",
+   "AP",
+   "STA"
+  ],
+  "wifi_state": [
+   "OFF",
+   "AP",
+   "CONNECTING",
+   "CONNECTED",
+   "FAILED"
+  ],
+  "link_via": [
+   "SERIAL",
+   "WIFI"
+  ],
+  "can_mode": [
+   "OFF",
+   "DRONECAN"
+  ],
+  "can_bitrate": [
+   "K125",
+   "K250",
+   "K500",
+   "M1"
+  ],
+  "can_state": [
+   "OFF",
+   "RUNNING",
+   "BUS_OFF",
+   "FAILED"
+  ],
+  "led_layout": [
+   "ALL",
    "NAV"
   ]
  },
@@ -401,7 +453,8 @@
    "LOOP_RATE",
    "RUNAWAY_TAKEOFF",
    "RESCUE_NO_FIX",
-   "RESCUE_NO_COMPASS"
+   "RESCUE_NO_COMPASS",
+   "MOTOR_STALL"
   ],
   "health": [
    "IMU",
@@ -416,7 +469,9 @@
    "ESC_TELEMETRY",
    "ACC_CAL",
    "BATTERY",
-   "FLOW"
+   "FLOW",
+   "IMU2",
+   "CAN"
   ],
   "settings_flags": [
    "DIRTY",
@@ -450,6 +505,10 @@
    "GPS_AIDING",
    "HEADING_OK",
    "USED_FOR_NAV"
+  ],
+  "imu_src": [
+   "IMU1",
+   "IMU2"
   ]
  },
  "sections": [
@@ -464,7 +523,7 @@
      "d": 4000,
      "min": 500,
      "max": 8000,
-     "desc": "gyro / PID loop frequency (Hz)"
+     "desc": "gyro sample rate = the rate of the gyro filters (Hz)"
     },
     {
      "n": "est_hz",
@@ -563,10 +622,27 @@
      "t": "bool",
      "d": 1,
      "desc": "runaway take-off prevention (Betaflight): until a normal flight has been seen, a PID sum at its limit while the craft turns disarms it after 75 ms - what a wrong motor order, a wrong prop direction or a reversed gyro axis do on the first take-off"
+    },
+    {
+     "n": "reserved_g",
+     "t": "u8",
+     "d": 0,
+     "desc": "unused: keeps byte 22 of older firmwares (their general section had 23 bytes) away from pid_denom"
+    },
+    {
+     "n": "pid_denom",
+     "t": "u8",
+     "d": 1,
+     "min": 1,
+     "max": 8,
+     "desc": "the control part (attitude, modes, PID, mixer, motor output) runs on every n-th gyro sample: control rate = loop_hz / pid_denom (Betaflight pid_process_denom)"
     }
    ],
    "live": false,
-   "compat": 23
+   "compat": [
+    22,
+    23
+   ]
   },
   {
    "id": 2,
@@ -1336,11 +1412,10 @@
      "desc": "use DShot commands 20/21 (AM32) instead of 7/8 for spin direction"
     },
     {
-     "n": "dshot_driver",
+     "n": "reserved1",
      "t": "u8",
      "d": 0,
-     "enum": "dshot_driver",
-     "desc": "how DShot frames reach the pins: DIRECT = written straight into the RMT peripheral (needed for bidirectional DShot, a few microseconds per cycle); IDF = through the ESP-IDF driver, one way only (fallback)"
+     "desc": "unused (was dshot_driver until 0.11: the ESP-IDF RMT path was removed in 0.12, DShot always goes straight into the RMT peripheral); kept so that the fields after it stay where they were"
     },
     {
      "n": "ext_pullup",
@@ -1353,10 +1428,49 @@
      "t": "bool",
      "d": 0,
      "desc": "ESC telemetry on its own wire (KISS protocol: BLHeli_32, AM32, KISS ESCs): the ESCs' telemetry pads joined to one UART RX (pins.esc_tlm). DShot only: the firmware asks one ESC at a time with the telemetry bit"
+    },
+    {
+     "n": "stall_disarm",
+     "t": "bool",
+     "d": 0,
+     "desc": "disarm when a motor stops (prop strike, blocked motor, desync): needs its speed - bidirectional DShot or the ESC telemetry wire"
+    },
+    {
+     "n": "stall_min_rpm",
+     "t": "u16",
+     "d": 1500,
+     "min": 300,
+     "max": 20000,
+     "desc": "a motor commanded above stall_min_cmd turning slower than this is stalled (rpm)"
+    },
+    {
+     "n": "stall_drop",
+     "t": "u8",
+     "d": 35,
+     "min": 10,
+     "max": 80,
+     "desc": "... or slower than this % of its speed since its command last fell"
+    },
+    {
+     "n": "stall_min_cmd",
+     "t": "u8",
+     "d": 25,
+     "min": 5,
+     "max": 80,
+     "desc": "only judged at or above this command (% of the range)"
+    },
+    {
+     "n": "stall_ms",
+     "t": "u16",
+     "d": 100,
+     "min": 20,
+     "max": 1000,
+     "desc": "for this long"
     }
    ],
    "live": false,
    "compat": [
+    37,
     36,
     35,
     34
@@ -1445,9 +1559,34 @@
      "min": 0,
      "max": 2,
      "desc": "0 short, 1 medium, 2 long"
+    },
+    {
+     "n": "gyro_use",
+     "t": "u8",
+     "d": 0,
+     "enum": "gyro_use",
+     "desc": "two IMUs (Betaflight gyro_to_use): FIRST = IMU 1 (IMU 2 stand-by), SECOND = the gyro of IMU 2, BOTH = the mean of both gyros; the accelerometer is IMU 1's (IMU 2's only when IMU 1 is lost)"
+    },
+    {
+     "n": "imu2_align",
+     "t": "u8",
+     "d": 0,
+     "enum": "align",
+     "desc": "how the second IMU chip sits on the board (Betaflight gyro_2_sensor_align); the board trims apply to both"
+    },
+    {
+     "n": "baro_model",
+     "t": "u8",
+     "d": 0,
+     "enum": "baro_model",
+     "desc": "AUTO = a BMP280 / BMP388 on the sensor bus; DRONECAN = the pressure of a DroneCAN module (needs can.mode DRONECAN)"
     }
    ],
-   "live": false
+   "live": false,
+   "compat": [
+    18,
+    16
+   ]
   },
   {
    "id": 8,
@@ -1811,13 +1950,32 @@
      "t": "u8",
      "d": 255,
      "desc": "ESC telemetry wire (motors.esc_sensor): the RX pin of the UART it is on"
+    },
+    {
+     "n": "imu2_cs",
+     "t": "u8",
+     "d": 255,
+     "desc": "chip select of a second IMU on the first IMU's SPI bus (same SCK / MISO / MOSI)"
+    },
+    {
+     "n": "can_tx",
+     "t": "u8",
+     "d": 255,
+     "desc": "CAN bus: to the TX (D) input of the CAN transceiver"
+    },
+    {
+     "n": "can_rx",
+     "t": "u8",
+     "d": 255,
+     "desc": "CAN bus: from the RX (R) output of the CAN transceiver"
     }
    ],
    "live": false,
    "compat": [
+    48,
+    47,
     46,
-    37,
-    33
+    37
    ]
   },
   {
@@ -2717,6 +2875,121 @@
      "desc": "fastest descent the stick asks for (m/s)"
     }
    ]
+  },
+  {
+   "id": 20,
+   "name": "wifi",
+   "desc": "The app link over WiFi (ESP32 only): an access point of its own or a WiFi network to join; WBP over TCP. Kept out of the flight log (password).",
+   "live": false,
+   "fields": [
+    {
+     "n": "mode",
+     "t": "u8",
+     "d": 0,
+     "enum": "wifi_mode",
+     "desc": "OFF; AP = its own network (192.168.4.1); STA = join the network ssid / pass"
+    },
+    {
+     "n": "channel",
+     "t": "u8",
+     "d": 6,
+     "min": 1,
+     "max": 13,
+     "desc": "AP: the WiFi channel"
+    },
+    {
+     "n": "port",
+     "t": "u16",
+     "d": 5760,
+     "min": 1,
+     "max": 65535,
+     "desc": "TCP port of the app link"
+    },
+    {
+     "n": "ssid",
+     "t": "u8",
+     "count": 32,
+     "d": 0,
+     "text": true,
+     "desc": "network name, UTF-8, 0-padded. AP: empty = Windburst-XXXX (the end of the chip's MAC address)"
+    },
+    {
+     "n": "pass",
+     "t": "u8",
+     "count": 64,
+     "d": 0,
+     "text": true,
+     "secret": true,
+     "desc": "password, 8 .. 63 characters (WPA2). AP: empty = windburst; STA: empty = an open network"
+    }
+   ]
+  },
+  {
+   "id": 21,
+   "name": "can",
+   "desc": "CAN bus (ESP32 TWAI controller + an external transceiver): DroneCAN GPS / compass modules",
+   "live": false,
+   "fields": [
+    {
+     "n": "mode",
+     "t": "u8",
+     "d": 0,
+     "enum": "can_mode",
+     "desc": "OFF, or DRONECAN: the flight controller is a DroneCAN node (gps.provider, sensors.mag_model, sensors.baro_model, battery.source / current_source DRONECAN take their data from it; motors.protocol DRONECAN drives the ESCs over it)"
+    },
+    {
+     "n": "bitrate",
+     "t": "u8",
+     "d": 3,
+     "enum": "can_bitrate",
+     "desc": "bus speed; DroneCAN modules use 1 Mbit/s"
+    },
+    {
+     "n": "node_id",
+     "t": "u8",
+     "d": 10,
+     "min": 1,
+     "max": 125,
+     "desc": "this node's id (ArduPilot flight controllers use 10)"
+    },
+    {
+     "n": "dna_server",
+     "t": "bool",
+     "d": 1,
+     "desc": "hand out node ids to modules that ask for one (dynamic node id allocation)"
+    }
+   ]
+  },
+  {
+   "id": 22,
+   "name": "led",
+   "desc": "WS2812 / SK6812 LED strip on pins.led (sent through the second SPI bus): the craft's state in colors",
+   "live": false,
+   "fields": [
+    {
+     "n": "count",
+     "t": "u8",
+     "d": 0,
+     "min": 0,
+     "max": 32,
+     "desc": "LEDs on the strip (0 = no strip)"
+    },
+    {
+     "n": "brightness",
+     "t": "u8",
+     "d": 30,
+     "min": 5,
+     "max": 100,
+     "desc": "% (a WS2812 takes up to 60 mA at full white)"
+    },
+    {
+     "n": "layout",
+     "t": "u8",
+     "d": 0,
+     "enum": "led_layout",
+     "desc": "ALL: every LED the same; NAV: armed, first half red (left), second half green (right), the last a white strobe, the mode in the middle"
+    }
+   ]
   }
  ],
  "streams": [
@@ -2936,6 +3209,16 @@
      "t": "u8",
      "bits": "fs_cause",
      "desc": "why the failsafe is active: LINK = receiver lost, SWITCH = the failsafe switch, BATTERY = pack at its minimum (forced landing, the pilot keeps steering)"
+    },
+    {
+     "n": "pid_hz",
+     "t": "u16",
+     "desc": "control cycles (PID + mixer) really executed in the last second"
+    },
+    {
+     "n": "pid_target",
+     "t": "u16",
+     "desc": "the control rate asked for (loop_target / pid_denom)"
     }
    ]
   },
@@ -3040,6 +3323,11 @@
      "n": "tlm_timeouts",
      "t": "u16",
      "desc": "... ESCs that did not answer within 100 ms, in the last second"
+    },
+    {
+     "n": "stall_motor",
+     "t": "u8",
+     "desc": "the motor (1..8) the stall guard last saw stop, 0 = none since boot"
     }
    ]
   },
@@ -3087,6 +3375,24 @@
      "n": "range",
      "t": "i16",
      "scale": 0.001
+    },
+    {
+     "n": "gyro2",
+     "t": "i16",
+     "count": 3,
+     "scale": 0.1,
+     "desc": "IMU 2's gyro (board frame, pilot convention like gyro), the last sample read"
+    },
+    {
+     "n": "imu2",
+     "t": "u8",
+     "enum": "imu2_state"
+    },
+    {
+     "n": "gyro_src",
+     "t": "u8",
+     "bits": "imu_src",
+     "desc": "where the gyro of the control loop comes from"
     }
    ]
   },
@@ -3720,6 +4026,156 @@
      "n": "queued",
      "t": "u16",
      "desc": "bytes waiting in the transmit queue right now"
+    },
+    {
+     "n": "wifi",
+     "t": "u8",
+     "enum": "wifi_state"
+    },
+    {
+     "n": "wifi_ip",
+     "t": "u32",
+     "desc": "IPv4 address, first byte = lowest byte (192.168.4.1 = 0x0104A8C0); 0 = none"
+    },
+    {
+     "n": "wifi_rssi",
+     "t": "i16",
+     "desc": "STA: signal of the network joined (dBm)"
+    },
+    {
+     "n": "wifi_clients",
+     "t": "u8",
+     "desc": "AP: stations joined"
+    },
+    {
+     "n": "via",
+     "t": "u8",
+     "enum": "link_via",
+     "desc": "where the app talking now is connected"
+    }
+   ]
+  },
+  {
+   "id": 15,
+   "name": "can",
+   "rate": 2,
+   "max": 10,
+   "desc": "the CAN bus and the DroneCAN nodes on it",
+   "fields": [
+    {
+     "n": "state",
+     "t": "u8",
+     "enum": "can_state"
+    },
+    {
+     "n": "node_id",
+     "t": "u8"
+    },
+    {
+     "n": "rx_fps",
+     "t": "u16",
+     "desc": "frames received in the last second"
+    },
+    {
+     "n": "tx_fps",
+     "t": "u16"
+    },
+    {
+     "n": "tx_dropped",
+     "t": "u16",
+     "desc": "frames the transmit queue did not take, last second"
+    },
+    {
+     "n": "crc_errors",
+     "t": "u16",
+     "desc": "damaged multi-frame transfers since boot"
+    },
+    {
+     "n": "bus_off",
+     "t": "u16",
+     "desc": "times the controller went bus-off since boot (recovered by itself)"
+    },
+    {
+     "n": "tec",
+     "t": "u8",
+     "desc": "transmit error counter"
+    },
+    {
+     "n": "rec",
+     "t": "u8",
+     "desc": "receive error counter"
+    },
+    {
+     "n": "allocations",
+     "t": "u8",
+     "desc": "node ids handed out since boot"
+    },
+    {
+     "n": "gnss_node",
+     "t": "u8",
+     "desc": "the node whose GNSS fix is used (0 = none)"
+    },
+    {
+     "n": "mag_node",
+     "t": "u8"
+    },
+    {
+     "n": "nodes",
+     "t": "u8"
+    },
+    {
+     "n": "node",
+     "t": "u8",
+     "count": 8,
+     "desc": "their ids"
+    },
+    {
+     "n": "health",
+     "t": "u8",
+     "count": 8,
+     "desc": "0 OK, 1 WARNING, 2 ERROR, 3 CRITICAL; 255 = offline"
+    },
+    {
+     "n": "mode",
+     "t": "u8",
+     "count": 8,
+     "desc": "0 OPERATIONAL, 1 INITIALIZATION, 2 MAINTENANCE, 3 SOFTWARE_UPDATE, 7 OFFLINE"
+    },
+    {
+     "n": "uptime",
+     "t": "u32",
+     "count": 8,
+     "desc": "s"
+    },
+    {
+     "n": "names",
+     "t": "u8",
+     "count": 128,
+     "text": true,
+     "desc": "their names, 16 bytes each (0-padded, cut)"
+    },
+    {
+     "n": "baro_node",
+     "t": "u8"
+    },
+    {
+     "n": "batt_node",
+     "t": "u8"
+    },
+    {
+     "n": "esc_mask",
+     "t": "u8",
+     "desc": "a bit per ESC index heard from (esc.Status) within the last second"
+    },
+    {
+     "n": "esc_sent",
+     "t": "u32",
+     "desc": "esc.RawCommand transfers sent"
+    },
+    {
+     "n": "esc_dropped",
+     "t": "u16",
+     "desc": "esc.RawCommand transfers the transmit queue refused"
     }
    ]
   }

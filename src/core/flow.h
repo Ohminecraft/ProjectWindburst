@@ -86,7 +86,7 @@ inline WB_FAST FlowVelocity flow_velocity(const FlowConfig& c, const FlowSample&
     o.forward = range * (fy - gyro_y);
     o.right = -range * (fx - gyro_x);
     const float qn = clampf((float)(s.quality - c.quality_min) / (float)(100 - c.quality_min > 1 ? 100 - c.quality_min : 1), 0.05f, 1.0f);
-    o.sigma = fmaxf(c.noise_rad * range, 0.10f) / sqrtf(qn);
+    o.sigma = maxf(c.noise_rad * range, 0.10f) / sqrtf(qn);
     o.valid = true;
     return o;
 }

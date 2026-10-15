@@ -25,6 +25,54 @@ static void t_filters() {
     // (the filters, the gyro chain and the PID have their own file: test_control.cpp)
 }
 
+static void t_fast_math() {
+    printf("[fast trigonometry] the approximations the control cycle uses instead of the C library\n");
+    double es = 0, ec = 0, ea = 0, eac = 0, eas = 0;
+    for (float x = -7.0f; x < 7.0f; x += 1e-4f) { es = fmax(es, fabs(sin_approx(x) - sin((double)x))); ec = fmax(ec, fabs(cos_approx(x) - cos((double)x))); }
+    for (float a = -3.14159f; a < 3.14159f; a += 1e-4f) for (float r : {0.01f, 1.0f, 300.0f}) { const float y = sinf(a) * r, x = cosf(a) * r; ea = fmax(ea, fabs(atan2_approx(y, x) - atan2((double)y, (double)x))); }
+    for (float x = -1.0f; x <= 1.0f; x += 1e-5f) { eac = fmax(eac, fabs(acos_approx(x) - acos((double)x))); eas = fmax(eas, fabs(asin_approx(x) - asin((double)x))); }
+    CHECK(es < 2e-6 && ec < 2e-6, "sin / cos over +-7 rad: largest error %.1e / %.1e", es, ec);
+    CHECK(ea < 1e-6 && eas < 1e-6, "atan2 all around (three radii), asin over -1 .. 1: %.1e / %.1e rad", ea, eas);
+    CHECK(eac < 7e-5, "acos: %.1e rad (%.4f deg)", eac, eac * 57.29578);
+    CHECK(fabsf(atan2_approx(0.0f, 0.0f)) < 1e-6f && atan2_approx(0.0f, -1.0f) > 3.14f && fabsf(atan2_approx(1.0f, 0.0f) - 1.5707963f) < 1e-6f && acos_approx(1.5f) == 0.0f && asin_approx(-2.0f) < -1.5707f,
+          "the corners: atan2(0, 0) = 0, atan2(0, -1) = pi, atan2(1, 0) = pi/2, out-of-range acos / asin clamped");
+    CHECK(sin_approx(1e9f) == 0.0f && sin_approx(NAN) == 0.0f, "nonsense in: 0 out, no endless loop");
+    // tan for the filter coefficients: the largest argument a filter gets is pi * 0.48 (0.48 of the sampling rate)
+    double et = 0, et_low = 0;
+    for (float x = 0.001f; x < kPi * 0.48f; x += 1e-4f) { const double e = fabs(tan_approx(x) / tan((double)x) - 1.0); et = fmax(et, e); if (x < kPi * 0.25f) et_low = fmax(et_low, e); }
+    CHECK(et < 4e-5 && et_low < 5e-6, "tan_approx up to 0.48 of the sampling rate: relative error %.1e (below 0.25: %.1e)", et, et_low);
+}
+
+static void t_minmax() {
+    printf("[maxf / minf] the same answers as fmaxf / fminf, NaN included\n");
+    const float v[] = {-3.5f, -0.0f, 0.0f, 1.0f, 2.5f, 1e30f, -1e30f, INFINITY, -INFINITY, NAN};
+    bool same = true;
+    for (float a : v) for (float b : v) {
+        const float m = maxf(a, b), mr = fmaxf(a, b), n = minf(a, b), nr = fminf(a, b);
+        same &= (m == mr || (m != m && mr != mr)) && (n == nr || (n != n && nr != nr));
+    }
+    CHECK(same, "100 combinations of ordinary numbers, zeros, infinities and NaN agree with the C library");
+}
+
+static void t_stall_guard() {
+    printf("[stall guard] the rules\n");
+    StallGuard g; g.cfg.enabled = true; const float dt = 0.001f;
+    float cmd[4] = {0.5f, 0.5f, 0.5f, 0.5f}, rpm[4] = {12000, 12000, 12000, 12000};
+    StallGuard::Input in; in.armed = true; in.motors = 4; in.command = cmd; in.rpm = rpm; in.valid_mask = 0x0F;
+    auto run = [&](float s) { int m = 0; for (int i = 0; i < (int)(s / dt + 0.5f) && !m; i++) m = g.update(in, dt); return m; };
+    CHECK(run(1.0f) == 0, "four motors turning: nothing");
+    rpm[1] = 0; CHECK(run(0.05f) == 0, "50 ms without speed: still nothing (a glitch)");
+    rpm[1] = 12000; run(0.2f); rpm[1] = 0; const int m = run(0.2f); CHECK(m == 2 && g.last() == 2, "motor 2 at 0 rpm for 100 ms: tripped (motor %d)", m);
+    rpm[1] = 12000; run(0.5f);
+    rpm[2] = 3500; CHECK(run(0.3f) == 3, "motor 3 drops from 12000 to 3500 rpm at the same command (above min_rpm): tripped");
+    rpm[2] = 12000; run(0.5f); cmd[0] = 0.3f; rpm[0] = 3500; CHECK(run(0.5f) == 0, "a motor asked to slow down to 60 %%: its new speed is no drop");
+    cmd[0] = 0.5f; rpm[0] = 12000; run(0.2f);
+    cmd[3] = 0.1f; rpm[3] = 0; CHECK(run(0.5f) == 0, "a motor at idle (below min_command) is not judged");
+    cmd[3] = 0.5f; rpm[3] = 0; in.valid_mask = 0x07; CHECK(run(0.5f) == 0, "a motor without speed telemetry is not judged");
+    in.valid_mask = 0x0F; in.armed = false; CHECK(run(0.5f) == 0, "disarmed: nothing");
+    g.cfg.enabled = false; in.armed = true; CHECK(run(0.5f) == 0, "switched off: nothing");
+}
+
 static void t_ahrs() {
     printf("[ahrs] sign convention + estimation\n");
     const float s20 = sinf(20 * kDeg2Rad), c20 = cosf(20 * kDeg2Rad);
@@ -798,6 +846,9 @@ static void t_althold_edges() {
 }
 
 int main() {
+    t_stall_guard();
+    t_fast_math();
+    t_minmax();
     t_filters(); t_ahrs(); t_ahrs_trust(); t_vertical(); t_vertical_gps(); t_horizontal(); t_rc(); t_mixer(); t_layouts(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

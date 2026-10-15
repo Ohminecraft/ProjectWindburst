@@ -1,7 +1,8 @@
 // System: failsafe limits, backup / restore, defaults, firmware log.
 import { store, loadSettings } from '../store.js';
 import { api } from '../api.js';
-import { h, block, fields, listen, toast, showError, kv } from '../ui.js';
+import { h, block, fields, listen, toast, showError, kv, note } from '../ui.js';
+import { ENUM_LABELS } from '../labels.js';
 import { tr } from '../i18n.js';
 
 export default {
@@ -66,14 +67,32 @@ export default {
         [tr('Cổng USB bị kẹt phải kích lại'), String(l.kicks)],
         [tr('Byte đang chờ gửi'), String(l.queued)],
       ]));
+      paintWifi(l);
     };
+    // ---- WiFi (a board with a radio: feature WIFI)
+    const hasWifi = (info.features || []).includes('WIFI') && !!store.schema.sections.find((s) => s.name === 'wifi');
+    const wifiState = h('div', { id: 'wifi-state' });
+    const ip4 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255].join('.');
+    function paintWifi(l) {
+      if (!hasWifi || !l || l.wifi === undefined) return;
+      const st = ENUM_LABELS.wifi_state[l.wifi] ? tr(ENUM_LABELS.wifi_state[l.wifi]) : l.wifi;
+      const rows = [[tr('Trạng thái'), st]];
+      if (l.wifi_ip) rows.push([tr('Địa chỉ cho app'), `socket://${ip4(l.wifi_ip)}:${(store.settings.wifi || {}).port || 5760}`]);
+      if (l.wifi === 'CONNECTED') rows.push([tr('Sóng'), `${l.wifi_rssi} dBm`]);
+      if (l.wifi === 'AP') rows.push([tr('Thiết bị đang nối vào'), String(l.wifi_clients)]);
+      rows.push([tr('App đang nối qua'), l.via === 'WIFI' ? 'WiFi' : tr('cổng serial (USB / UART)')]);
+      wifiState.replaceChildren(kv(rows));
+    }
     listen('stream:link', paintLink); paintLink();
 
     view.append(h('div', { class: 'cols' },
       h('div', {},
         block(tr('Failsafe và an toàn'), fields('general', ['fs_guard_ms', 'fs_recover_ms', 'fs_max_descent_s', 'fs_fallback_throttle', 'runaway_takeoff']),
           h('p', { class: 'help' }, tr('Mất sóng quá thời gian chờ thì máy tự cân bằng và hạ xuống; chạm đất thì tắt motor. Sóng trở lại và giữ ổn định thì bạn lấy lại quyền điều khiển; công tắc Failsafe thì hết ngay khi tắt công tắc.')),
-          h('p', { class: 'help' }, tr('Pin dưới mức tối thiểu cũng làm máy tự hạ xuống (tab Pin và còi), nhưng roll, pitch và yaw vẫn theo cần của bạn để chọn chỗ đáp; lần hạ cánh này không huỷ được. Đang đứng trên mặt đất mà mất sóng thì motor tắt luôn.')))),
+          h('p', { class: 'help' }, tr('Pin dưới mức tối thiểu cũng làm máy tự hạ xuống (tab Pin và còi), nhưng roll, pitch và yaw vẫn theo cần của bạn để chọn chỗ đáp; lần hạ cánh này không huỷ được. Đang đứng trên mặt đất mà mất sóng thì motor tắt luôn.'))),
+        hasWifi ? block('WiFi', fields('wifi', ['mode', 'ssid', 'pass', 'channel', 'port']), wifiState,
+          note(tr('Có hiệu lực sau khi lưu và khởi động lại. Điểm phát riêng (AP): mạch là 192.168.4.1, tên mặc định Windburst-XXXX, mật khẩu mặc định windburst - hãy đổi mật khẩu, ai vào được mạng này cũng điều khiển được máy (kể cả thử motor). Ở app chọn cổng "WiFi của máy bay", hoặc nhập socket://<địa chỉ>:5760 khi máy nối vào mạng nhà bạn (STA).')),
+          h('p', { class: 'help' }, tr('Trên ESP32-S3 các chân ADC2 (GPIO11 đến GPIO20) không đọc được khi WiFi bật: chân đo pin và đo dòng phải nằm ở GPIO1 đến GPIO10.'))) : null),
       h('div', {},
         block('Firmware', kv([
           [tr('Tên'), info.name || '–'], [tr('Phiên bản'), info.version || '–'], [tr('Giao thức'), String(info.protocol || '–')],
