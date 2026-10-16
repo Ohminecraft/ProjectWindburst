@@ -84,6 +84,9 @@ public:
 
     bool data_ready() override { uint8_t v; return bus_.read_u8(MPU_INT_STATUS, v) && (v & 0x01); }
     float gyro_rate_hz() const override { return gyro_hz_; }
+    uint32_t max_spi_read_hz() const override {                            // MPU6500 / 9250: 20 MHz for the sensor registers; ICM-20601 / 20602: 10 MHz
+        return v_ == Variant::MPU6500 || v_ == Variant::MPU9250 ? 20000000u : 10000000u;
+    }
     float acc_rate_hz() const override { return 1000.0f; }
 
 private:

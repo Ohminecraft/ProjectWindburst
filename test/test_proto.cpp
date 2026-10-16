@@ -62,7 +62,7 @@ static void t_schema() {
     CHECK(s.filters.gyro_lpf1_dyn_min_hz == 250 && s.filters.gyro_lpf1_dyn_max_hz == 500 && s.filters.gyro_lpf2_hz == 500 && s.filters.dterm_lpf1_dyn_min_hz == 75 && s.filters.dterm_lpf2_hz == 150 && s.filters.dyn_notch_count == 3 &&
           s.filters.rpm_harmonics == 3 && s.filters.yaw_lowpass_hz == 100 && s.filters.slider_gyro == 1 && s.filters.slider_dterm_mult == 100, "filter defaults = Betaflight's");
     CHECK(s.beeper.conditions == 0x1FFFFu && s.general.fs_guard_ms == 500 && s.general.airmode_start_throttle == 25 && s.receiver.rc_smoothing == 1 && s.receiver.rc_smoothing_factor == 30, "u32 default, general, receiver");
-    size_t total = 0; for (const SectionInfo& si : kSections) total += si.size; CHECK(kSectionCount == 22 && total == sizeof(Settings), "section table covers the Settings struct exactly (%zu vs %zu)", total, sizeof(Settings));
+    size_t total = 0; for (const SectionInfo& si : kSections) total += si.size; CHECK(kSectionCount == 23 && total == sizeof(Settings), "section table covers the Settings struct exactly (%zu vs %zu)", total, sizeof(Settings));
     CHECK(find_section(SEC_PID)->size == sizeof(S_pid) && find_section(99) == nullptr, "lookup");
     S_general g; defaults(g); g.loop_hz = 60000; g.max_arm_angle = 0; g.board_align = 99; g.airmode = 7; g.board_trim_yaw = -9999;
     Settings t; defaults(t); t.general = g; const int fixed = validate_section(t, SEC_GENERAL);
@@ -150,6 +150,15 @@ static void t_store() {
         CHECK(g11.pins.imu2_cs == 34 && g11.pins.can_tx == 255 && g11.pins.can_rx == 255 && (r11.migrated_mask & (1u << SEC_PINS)), "the pin map of 0.14 (48 bytes): kept, the CAN pins unset"); }
       { S_wifi w; defaults(w); CHECK(sizeof(S_wifi) == 100 && w.mode == WIFI_MODE_OFF && w.port == 5760 && w.channel == 6 && w.ssid[0] == 0 && w.pass[63] == 0 && !find_section(SEC_WIFI)->live, "wifi: off by default, port 5760, channel 6, empty texts, needs a reboot");
         w.channel = 14; w.mode = 9; validate(w); CHECK(w.channel == 13 && w.mode == WIFI_MODE_STA, "a channel past 13 is clamped (an unknown mode: the last one, as every enum)"); }
+      { S_telemetry t; defaults(t);
+        CHECK(sizeof(S_telemetry) == 14 && t.protocol == TELEMETRY_PROTOCOL_NONE && t.baud == 57600 && t.tx_pin == 255 && t.rx_pin == 255 && t.sysid == 1 && t.wifi == 1 && t.rate_attitude == 10
+              && t.rate_position == 5 && t.rate_hud == 4 && t.rate_status == 2 && t.rate_rc == 2 && !find_section(SEC_TELEMETRY)->live,
+              "telemetry (0.19): off, 57600 baud, no pins, system id 1, WiFi too, 10 / 5 / 4 / 2 / 2 per second, needs a reboot");
+        t.rate_attitude = 200; t.sysid = 0; t.baud = 300; t.protocol = 9; validate(t);
+        CHECK(t.rate_attitude == 50 && t.sysid == 1 && t.baud == 9600 && t.protocol == TELEMETRY_PROTOCOL_MAVLINK, "out of range: clamped (ATTITUDE 50 per second at most, system id 1, 9600 baud)");
+        MemStorage m18; SettingsStore s18(m18); Settings o; defaults(o); o.gps.baud = 57600; s18.save(o); m18.kv.erase("wbs23");      // what 0.18 left in the flash: no telemetry record
+        Settings n; const auto r18 = s18.load(n);
+        CHECK(n.telemetry.protocol == TELEMETRY_PROTOCOL_NONE && n.gps.baud == 57600 && r18.defaulted_mask == (1u << SEC_TELEMETRY), "settings of 0.18: kept, telemetry at its defaults (off)"); }
       // the motors section of firmware 0.5 (34 bytes, before the DShot driver choice was added)
       S_motors om; defaults(om); om.pole_count = 12; om.protocol = ESC_PROTOCOL_DSHOT600; om.bidirectional = 1; om.reserved1 = 1;
       old_record(ms, "wbs06", &om, 34); Settings got2; const auto r6 = so.load(got2);

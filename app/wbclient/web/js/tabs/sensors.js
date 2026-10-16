@@ -54,6 +54,8 @@ function calibration() {
   });
   const magCancel = cmdButton(tr('Hủy'), 'MAG_CAL_CANCEL', null, { class: 'quiet', done: () => { magRefused = false; magState.textContent = ''; } });
   magStart.id = 'mag-start'; magFinish.id = 'mag-finish';
+  const magAuto = cmdButton(tr('Tự hiệu chuẩn (xoay tay)'), 'MAG_AUTOCAL', null, { done: () => { magPts.length = 0; magRefused = false; } });
+  magAuto.id = 'mag-auto';
 
   const paint = () => {
     const c = cal(), st = store.streams.status, s = store.settings.calibration || {};
@@ -72,6 +74,12 @@ function calibration() {
     } else accState.textContent = '';
     accStored.textContent = s.acc_valid ? tr('Đang dùng hiệu chuẩn: offset {offset} g, scale {scale}.', { offset: s.acc_offset.map((x) => x.toFixed(3)).join(', '), scale: s.acc_scale.map((x) => x.toFixed(3)).join(', ') }) : tr('Chưa có hiệu chuẩn accelerometer (đang dùng số đo thô của chip).');
     // compass
+    if (c.kind === 'MAG_AUTO') {                       // the automatic one: it ends by itself and saves itself
+      if (c.state === 'RUNNING' && c.raw && (!magPts.length || magPts[magPts.length - 1].some((v, i) => Math.abs(v - c.raw[i]) > 0.01))) { magPts.push([...c.raw]); if (magPts.length > 1500) magPts.shift(); cloud.paint(); }
+      const why = ENUM_LABELS.mag_cal_result[c.result] ? tr(ENUM_LABELS.mag_cal_result[c.result]) : (c.result || '');
+      magState.textContent = c.state === 'RUNNING' ? (c.progress ? tr('Đang xoay: {n} %. Cứ xoay tiếp theo mọi hướng, firmware tự dừng khi đủ.', { n: c.progress }) : tr('Đang chờ: nhấc máy lên và xoay theo mọi hướng (bắt đầu trong 15 giây).'))
+        : c.state === 'DONE' ? tr('Xong: la bàn đã hiệu chuẩn và đã tự lưu vào flash.') : c.state === 'FAILED' ? tr('Không được: {why}.', { why }) : '';
+    }
     if (c.kind === 'MAG' && c.state === 'RUNNING') {
       if (c.raw && (!magPts.length || magPts[magPts.length - 1].some((v, i) => Math.abs(v - c.raw[i]) > 0.01))) { magPts.push([...c.raw]); if (magPts.length > 1500) magPts.shift(); cloud.paint(); }
       if (!magRefused) magState.textContent = tr('Đang thu mẫu ({n} % độ phủ): xoay máy chậm quanh mọi trục, như vẽ số 8.', { n: c.progress });
@@ -103,6 +111,9 @@ function calibration() {
       h('p', { class: 'help' }, tr('Làm ngoài trời hoặc xa kim loại và dây nguồn. Bấm "Bắt đầu", xoay máy chậm theo mọi hướng cho các chấm phủ kín hai vòng tròn, rồi bấm "Tính và áp dụng".')),
       cloud, magState,
       h('div', { class: 'btn-row' }, magStart, magFinish, magCancel),
+      h('h3', {}, tr('Tự hiệu chuẩn')),
+      h('p', { class: 'help' }, tr('Như Betaflight 4.5: bấm nút (hoặc ở ngoài sân, khi disarm: ga lên hết, cần pitch kéo về, roll và yaw ở giữa, giữ 1 giây), rồi nhấc máy lên xoay theo mọi hướng. Firmware tự dừng khi đủ (thường 5 – 15 giây), kêu 3 tiếng và tự lưu vào flash. Chỉ đổi offset (hard iron); ma trận soft iron của lần hiệu chuẩn đầy đủ vẫn giữ.')),
+      h('div', { class: 'btn-row' }, magAuto),
       magStored),
   ];
 }

@@ -421,6 +421,27 @@ def test_compass_calibration(sim, fc):
     assert "MAG_CAL" in st["health"] and "MAG_NOT_CALIBRATED" not in st["blockers"]
 
 
+def test_automatic_compass_calibration(sim, fc):
+    sim.do("magerr 0.10 0.06 -0.04")
+    fc.set("sensors", mag_enabled=True)
+    fc.save(); fc.reboot(); sim.sleep(1.5)
+    fc.subscribe("calibration", 20); fc.subscribe("status", 10)
+    fc.command("MAG_AUTOCAL")
+    c = fc.wait_stream("calibration")
+    assert c["kind"] == "MAG_AUTO" and c["state"] == "RUNNING" and "CALIBRATING" in fc.wait_stream("status")["blockers"]
+    grips = [(1.2, 0.9, 1.7), (-1.4, 1.1, 0.6), (0.8, -1.6, -1.0), (1.5, 0.4, -1.3)]
+    for i in range(16):                                        # turned by hand, a new grip every 1.5 s, until it is done
+        sim.do("tumble %g %g %g" % grips[i % 4]); sim.sleep(1.5)
+        if fc.wait_stream("calibration")["state"] != "RUNNING":
+            break
+    sim.do("tumble off"); sim.sleep(0.5)
+    c = fc.wait_stream("calibration")
+    assert c["state"] == "DONE" and c["result"] == "OK" and c["progress"] == 100
+    cal = fc.get("calibration")
+    assert cal["mag_valid"] is True and cal["mag_offset"] == pytest.approx([0.10, 0.06, -0.04], abs=0.02)
+    sim.sleep(0.5); assert "DIRTY" not in fc.wait_stream("status")["settings_dirty"], "saved to flash by the firmware itself"
+
+
 def test_line_noise_and_a_stalled_app(sim, fc):
     # garbage and half a frame on the wire (a second program poking the port, a glitching cable)
     raw = fc._ser

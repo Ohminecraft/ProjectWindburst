@@ -2506,6 +2506,22 @@ export const EN = {
     "DroneCAN power module",
   "Tự dò (BMP280 / BMP388 trên I2C)":
     "Auto-detect (BMP280 / BMP388 on I2C)",
+  "máy không được xoay trong 15 giây":
+    "the craft was not turned within 15 s",
+  "Tự hiệu chuẩn (xoay tay)":
+    "Auto-calibrate (turn by hand)",
+  "Đang xoay: {n} %. Cứ xoay tiếp theo mọi hướng, firmware tự dừng khi đủ.":
+    "Turning: {n} %. Keep turning it in every direction; the firmware stops by itself when it has enough.",
+  "Đang chờ: nhấc máy lên và xoay theo mọi hướng (bắt đầu trong 15 giây).":
+    "Waiting: pick the craft up and turn it in every direction (start within 15 seconds).",
+  "Xong: la bàn đã hiệu chuẩn và đã tự lưu vào flash.":
+    "Done: the compass is calibrated and saved to flash.",
+  "Không được: {why}.":
+    "Failed: {why}.",
+  "Tự hiệu chuẩn":
+    "Automatic calibration",
+  "Như Betaflight 4.5: bấm nút (hoặc ở ngoài sân, khi disarm: ga lên hết, cần pitch kéo về, roll và yaw ở giữa, giữ 1 giây), rồi nhấc máy lên xoay theo mọi hướng. Firmware tự dừng khi đủ (thường 5 – 15 giây), kêu 3 tiếng và tự lưu vào flash. Chỉ đổi offset (hard iron); ma trận soft iron của lần hiệu chuẩn đầy đủ vẫn giữ.":
+    "Like Betaflight 4.5: press the button (or in the field, disarmed: throttle full up, pitch stick back, roll and yaw centred, hold 1 second), then pick the craft up and turn it in every direction. The firmware stops by itself when it has enough (usually 5 to 15 seconds), beeps 3 times and saves to flash. Only the offset (hard iron) changes; the soft-iron matrix of a full calibration is kept.",
 };
 
 // Strings that read the same in both languages (units, protocol names, terms pilots use in English).

@@ -63,6 +63,14 @@ static void t_loop() {
     { // a denominator that would take the control rate under 500 Hz is lowered
       auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.general.loop_hz = 2000; s.general.pid_denom = 8; });
       CHECK(r->app().core.cfg.pid_denom == 4 && has_line(*r, ", gyro 2000 Hz, control 500 Hz (1/4)"), "gyro 2 kHz with 1/8 asked: 1/4 (500 Hz) - the lowest control rate"); }
+    { // 6000 Hz asked of an ICM-42688-P (it runs at 8000 then): the loop takes every second sample instead of three in four at uneven times
+      auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.general.loop_hz = 6000; });
+      CHECK(r->app().core.cfg.loop_hz == 4000.0f && r->app().period_us() == 250 && has_line(*r, "gyro 4000 Hz (setting 6000 Hz: the chip delivers 8000 Hz), control 4000 Hz (1/1)"),
+            "6 kHz on an 8 kHz chip: 4 kHz, and the boot report says why");
+      r->run(2.5); T_status st; CHECK(status_now(*r, st) && st.loop_hz == 4000 && st.loop_target == 4000 && st.overruns == 0, "status: %u of %u Hz", st.loop_hz, st.loop_target); }
+    { // the SPI read clock of the chip (ICM-42688-P: 24 MHz allowed, 20 MHz used) - in the report after the chip's name, so that "imu: SPI ICM42688P" stays as it was
+      auto r = fresh(); CHECK(has_line(*r, "imu: SPI ICM42688P (20 MHz), gyro 4000 Hz, control 4000 Hz (1/1)") && r->app().imu.spiClockHz() == 20000000u && !r->app().imu.spiDirect(),
+                              "boot report: the IMU's SPI read clock (no direct register path on a PC)"); }
     { auto r = fresh(); r->run(2.5); T_status st; CHECK(status_now(*r, st) && st.pid_hz == 4000 && st.pid_target == 4000, "default (1/1): the control rate is the gyro's (%u Hz)", st.pid_hz); }
     { // one IMU sample = one burst on the SPI bus (not 15 single-byte transfers)
       auto r = fresh(); r->run(2.0); const uint32_t b0 = g_stub_spi_bursts, n0 = r->app().loops(); r->run(1.0);
@@ -507,6 +515,45 @@ static void t_mag_cal() {
     { auto n = fresh(); n->run(1.0); CHECK(n->command(CMD_MAG_CAL_START).err == ERR_NO_SENSOR, "no compass => NO_SENSOR"); }
 }
 
+// The automatic compass calibration (hal/mag/mag_autocal.h): started from the sticks (or the app), the craft turned by hand,
+// it ends by itself and the offset goes to the flash without the app.
+static void tumble(Rig& r, double seconds) {                       // somebody turns the craft about all its axes, changing grip every 1.5 s
+    Plant& p = r.board.plant; p.held = true; static const float W[4][3] = {{1.2f, 0.9f, 1.7f}, {-1.4f, 1.1f, 0.6f}, {0.8f, -1.6f, -1.0f}, {1.5f, 0.4f, -1.3f}};
+    for (double t = 0; t < seconds; t += 0.05) { const int k = (int)(millis() / 1500) % 4; for (int i = 0; i < 3; i++) p.w[i] = W[k][i]; p.z = 0.3f; r.run(0.05); }
+    p.held = false; r.board.rest(0, 0);
+}
+static void t_mag_autocal() {
+    printf("[compass] automatic calibration: stick command, turned by hand, saved by itself\n");
+    g_stub_us = 0; g_stub_delay_advances = true;
+    Rig r; r.provision();
+    { wbp::Settings s; wbp::SettingsStore st(r.flash); st.load(s); s.sensors.mag_enabled = 1; st.save(s); }
+    r.board.mag_hard[0] = 0.12; r.board.mag_hard[1] = -0.08; r.board.mag_hard[2] = 0.05;
+    r.boot(); r.run(3.0); r.stream(STR_CALIBRATION, 20);
+    CHECK(!(r.tel().health & HEALTH_MAG_CAL), "not calibrated at first");
+    VirtualBoard& b = r.board; const uint32_t writes0 = (uint32_t)r.flash.writes;
+    b.rc[2] = 2000; b.rc[1] = 1000; r.run(0.6);
+    T_calibration c{}; r.latest(STR_CALIBRATION, c); CHECK(c.kind != CAL_KIND_MAG_AUTO, "half a second of the sticks: nothing yet");
+    r.run(0.6); b.rc[2] = 1000; b.rc[1] = 1500; r.run(0.3); r.latest(STR_CALIBRATION, c);
+    CHECK(c.kind == CAL_KIND_MAG_AUTO && c.state == CAL_STATE_RUNNING && c.progress == 0 && (r.tel().blockers & ARM_BLOCKER_CALIBRATING), "throttle high + pitch back for 1 s: the automatic calibration waits for the craft to move; arming is blocked");
+    tumble(r, 3.0); r.latest(STR_CALIBRATION, c);
+    CHECK(c.state == CAL_STATE_RUNNING && c.progress > 20 && c.progress < 100, "being turned: %u %%", c.progress);
+    for (int i = 0; i < 30 && c.state == CAL_STATE_RUNNING; i++) { tumble(r, 0.5); r.latest(STR_CALIBRATION, c); }
+    r.run(1.0); r.latest(STR_CALIBRATION, c);
+    S_calibration cal; r.get_section(SEC_CALIBRATION, &cal, sizeof(cal));
+    CHECK(c.state == CAL_STATE_DONE && c.result == MAG_CAL_RESULT_OK && c.progress == 100, "it ended by itself: DONE, OK");
+    CHECK(cal.mag_valid == 1 && fabs(cal.mag_offset[0] - 0.12) < 0.02 && fabs(cal.mag_offset[1] + 0.08) < 0.02 && fabs(cal.mag_offset[2] - 0.05) < 0.02, "hard iron found: %.3f %.3f %.3f (true 0.12 -0.08 0.05)", cal.mag_offset[0], cal.mag_offset[1], cal.mag_offset[2]);
+    CHECK((uint32_t)r.flash.writes > writes0 && (r.tel().health & HEALTH_MAG_CAL) && !(r.tel().blockers & ARM_BLOCKER_CALIBRATING), "written to flash by itself, in use, arming free again");
+    { wbp::Settings s; wbp::SettingsStore st(r.flash); st.load(s); CHECK(s.calibration.mag_valid == 1 && fabs(s.calibration.mag_offset[0] - 0.12) < 0.02, "the flash holds it"); }
+    b.plant.set_tilt(0, 0, 135); b.plant.ground = true; r.run(8.0);
+    CHECK(r.tel().yaw_from_mag && fabsf(r.tel().yaw - 135.0f) < 4.0f, "heading from the new calibration: %.1f (true 135)", r.tel().yaw);
+    // from the app; nobody turns it
+    CHECK(r.command(CMD_MAG_AUTOCAL).err == ERR_OK, "MAG_AUTOCAL from the app"); r.run(16.0); r.latest(STR_CALIBRATION, c);
+    CHECK(c.kind == CAL_KIND_MAG_AUTO && c.state == CAL_STATE_FAILED && c.result == MAG_CAL_RESULT_NO_MOTION && (r.tel().health & HEALTH_MAG_CAL), "not turned within 15 s: FAILED (NO_MOTION), the old calibration stays");
+    CHECK(r.command(CMD_MAG_AUTOCAL).err == ERR_OK && r.command(CMD_MAG_CAL_CANCEL).err == ERR_OK, "start + cancel"); r.run(0.2);
+    CHECK(!(r.tel().blockers & ARM_BLOCKER_CALIBRATING), "cancelled: arming free");
+    { auto n = fresh(); n->run(1.0); CHECK(n->command(CMD_MAG_AUTOCAL).err == ERR_NO_SENSOR, "no compass: NO_SENSOR"); }
+}
+
 static void t_misc() {
     printf("[misc] report, set home, clock wrap, idle re-sync of a broken frame\n");
     { // the control loop runs at the configured rate whatever the rate loop() is called at (here: 20 kHz)
@@ -935,7 +982,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.17.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.18.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -2119,6 +2166,89 @@ static void t_ekf() {
       CHECK(r->tel().ekf_flags == 0 && r->tel().ekf_us == 0, "nav.ekf = OFF: not run at all"); }
 }
 
+// MAVLink telemetry (section telemetry, src/telemetry/): the frames a radio on a UART TX of the virtual board gets, read back with
+// mav::Parser and compared with the plant.
+struct MavSeen { int count[256] = {}; std::vector<mav::Parser::Frame> f; std::vector<std::pair<uint8_t, std::string>> texts; uint32_t bad = 0, good = 0; };
+static MavSeen mav_read(const std::vector<uint8_t>& bytes) {
+    MavSeen m; mav::Parser p;
+    for (uint8_t c : bytes) if (p.feed(c)) {
+        const mav::Parser::Frame& f = p.frame(); m.count[f.msgid & 0xFF]++; m.f.push_back(f);
+        if (f.msgid == mav::MSG_STATUSTEXT) { char t[51] = {}; memcpy(t, f.payload + 1, 50); m.texts.push_back({f.payload[0], t}); }
+    }
+    m.bad = p.bad(); m.good = p.good(); return m;
+}
+static const mav::Parser::Frame* mav_last(const MavSeen& m, uint32_t id) { for (auto it = m.f.rbegin(); it != m.f.rend(); ++it) if (it->msgid == id) return &*it; return nullptr; }
+static int mav_text(const MavSeen& m, const char* needle) { for (auto& t : m.texts) if (t.second.find(needle) != std::string::npos) return t.first; return -1; }     // its severity, -1 = not sent
+static float mav_f(const mav::Parser::Frame* f, int off) { return f ? mav::Parser::get<float>(*f, off) : -999.0f; }
+
+static void t_mavlink() {
+    printf("[mavlink] telemetry on a UART: rates, values from the plant, texts, room on the UART, WiFi, no UART\n");
+    using P = mav::Parser;
+    const uint8_t tx = 43;
+    auto tlm = [&](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.telemetry.protocol = TELEMETRY_PROTOCOL_MAVLINK; s.telemetry.tx_pin = tx; Serial0.dev = &b.tlm_wire; };
+    {   auto r = nav_rig(tlm); VirtualBoard& b = r->board;
+        CHECK(has_line(*r, "telemetry: MAVLink 2, system id 1, UART0 TX GPIO43, 57600 baud") && b.tlm_wire.baud == 57600, "boot report: UART0 (GPS and receiver have the others, the app is on USB), 57600 baud");
+        b.plant.set_tilt(8, 4, 135); r->run(6.0);
+        const MavSeen boot = mav_read(b.tlm_wire.sent); b.tlm_wire.sent.clear();                // (every write is whole frames: a clean cut)
+        CHECK(boot.bad == 0 && boot.good > 100, "6 s after the boot: %u frames, none damaged", boot.good);
+        CHECK(mav_text(boot, "imu: SPI ICM42688P") == mav::MAV_SEVERITY_INFO && mav_text(boot, "range: FAILED") == mav::MAV_SEVERITY_ERROR, "the boot report as STATUSTEXT (a FAILED line as an error)");
+        CHECK(mav_text(boot, "Arming blocked:") == mav::MAV_SEVERITY_WARNING || mav_text(boot, "Ready to arm") == mav::MAV_SEVERITY_INFO, "and whether it can arm");
+        r->run(5.0); const MavSeen m = mav_read(b.tlm_wire.sent);
+        CHECK(m.count[mav::MSG_HEARTBEAT] >= 4 && m.count[mav::MSG_HEARTBEAT] <= 6 && m.count[mav::MSG_ATTITUDE] >= 48 && m.count[mav::MSG_ATTITUDE] <= 52 && m.count[mav::MSG_GLOBAL_POSITION_INT] >= 24
+              && m.count[mav::MSG_GLOBAL_POSITION_INT] <= 26 && m.count[mav::MSG_GPS_RAW_INT] >= 24 && m.count[mav::MSG_VFR_HUD] >= 19 && m.count[mav::MSG_VFR_HUD] <= 21
+              && m.count[mav::MSG_SYS_STATUS] >= 9 && m.count[mav::MSG_SYS_STATUS] <= 11 && m.count[mav::MSG_RC_CHANNELS] >= 9 && m.count[mav::MSG_RC_CHANNELS] <= 11,
+              "5 s at the default rates: HEARTBEAT %d, ATTITUDE %d, POSITION %d, GPS_RAW %d, HUD %d, SYS_STATUS %d, RC %d", m.count[mav::MSG_HEARTBEAT], m.count[mav::MSG_ATTITUDE],
+              m.count[mav::MSG_GLOBAL_POSITION_INT], m.count[mav::MSG_GPS_RAW_INT], m.count[mav::MSG_VFR_HUD], m.count[mav::MSG_SYS_STATUS], m.count[mav::MSG_RC_CHANNELS]);
+        const P::Frame* att = mav_last(m, mav::MSG_ATTITUDE); const float d = 57.29578f;
+        CHECK(att && fabsf(mav_f(att, 4) * d - 8.0f) < 1.5f && fabsf(mav_f(att, 8) * d + 4.0f) < 1.5f && fabsf(mav_f(att, 12) * d - 135.0f) < 3.0f,
+              "ATTITUDE from the plant (right wing 8 deg down, nose 4 deg down, heading 135): roll %.1f, pitch %.1f (nose down = negative), yaw %.1f deg", mav_f(att, 4) * d, mav_f(att, 8) * d, mav_f(att, 12) * d);
+        const P::Frame* gp = mav_last(m, mav::MSG_GLOBAL_POSITION_INT); const P::Frame* raw = mav_last(m, mav::MSG_GPS_RAW_INT);
+        CHECK(gp && P::get<int32_t>(*gp, 4) == r->tel().lat && P::get<int32_t>(*gp, 8) == r->tel().lon && abs((int)P::get<uint16_t>(*gp, 26) - 13500) < 300,
+              "GLOBAL_POSITION_INT: the GPS position (%d, %d), heading %u cdeg", P::get<int32_t>(*gp, 4), P::get<int32_t>(*gp, 8), gp ? P::get<uint16_t>(*gp, 26) : 0);
+        CHECK(raw && raw->payload[28] == mav::GPS_FIX_3D && raw->payload[29] == r->tel().gps_sats && r->tel().gps_sats > 0, "GPS_RAW_INT: 3D fix, %u satellites", raw ? raw->payload[29] : 0);
+        const P::Frame* hb = mav_last(m, mav::MSG_HEARTBEAT);
+        CHECK(hb && hb->payload[4] == mav::MAV_TYPE_QUADROTOR && !(hb->payload[6] & mav::MAV_MODE_FLAG_SAFETY_ARMED) && hb->payload[7] == mav::MAV_STATE_STANDBY && hb->sysid == 1 && hb->compid == 1,
+              "HEARTBEAT: a quadrotor, disarmed, STANDBY, system 1 component 1");
+        const P::Frame* rc = mav_last(m, mav::MSG_RC_CHANNELS);
+        CHECK(rc && P::get<uint16_t>(*rc, 4) == r->tel().rc[0] && P::get<uint16_t>(*rc, 4 + 2 * 15) == r->tel().rc[15] && rc->payload[40] == 16, "RC_CHANNELS: the receiver's 16 channels");
+        // armed in Angle + Altitude Hold
+        b.plant.set_tilt(0, 0, 135); r->run(2.0); b.tlm_wire.sent.clear();
+        nav_takeoff(*r, 2.0); const MavSeen fly = mav_read(b.tlm_wire.sent); hb = mav_last(fly, mav::MSG_HEARTBEAT); const P::Frame* hud = mav_last(fly, mav::MSG_VFR_HUD); gp = mav_last(fly, mav::MSG_GLOBAL_POSITION_INT);
+        CHECK(r->tel().armed && hb && (hb->payload[6] & mav::MAV_MODE_FLAG_SAFETY_ARMED) && P::get<uint32_t>(*hb, 0) == mav::COPTER_ALT_HOLD && hb->payload[7] == mav::MAV_STATE_ACTIVE,
+              "armed in Altitude Hold: HEARTBEAT armed, ALT_HOLD, ACTIVE");
+        CHECK(mav_text(fly, "Armed") == mav::MAV_SEVERITY_NOTICE, "STATUSTEXT 'Armed'");
+        CHECK(gp && hud && fabsf(P::get<int32_t>(*gp, 16) * 0.001f - r->board.plant.z) < 0.6f && P::get<uint16_t>(*hud, 18) > 20 && P::get<uint16_t>(*hud, 18) < 80,
+              "in the air: relative height %.2f m (the plant %.2f), throttle %u %%", gp ? P::get<int32_t>(*gp, 16) * 0.001f : 0.0f, r->board.plant.z, hud ? P::get<uint16_t>(*hud, 18) : 0); }
+    {   // a slow radio: the UART takes 64 bytes at a time (the board's buffer is 1 kB; a frame is 60 bytes at most) - nothing is cut, the
+        // sensor thread never waits for it
+        auto r = nav_rig(tlm); Serial0.tx_room = 64; r->board.tlm_wire.sent.clear(); r->board.tlm_wire.max_write = 0; r->run(4.0);
+        const MavSeen m = mav_read(r->board.tlm_wire.sent);
+        CHECK(r->board.tlm_wire.max_write <= 64 && m.bad == 0 && m.count[mav::MSG_ATTITUDE] >= 38 && m.count[mav::MSG_HEARTBEAT] >= 3,
+              "64 bytes of room: writes of %d bytes at most, %u whole frames (ATTITUDE %d)", (int)r->board.tlm_wire.max_write, m.good, m.count[mav::MSG_ATTITUDE]);
+        r->run(1.1); CHECK(r->tel().slow_gap_ms < 5, "the sensor thread keeps its pace (%u ms at most between passes)", r->tel().slow_gap_ms); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { tlm(s, b); s.telemetry.sysid = 7; s.telemetry.rate_attitude = 0; s.telemetry.rate_rc = 20; s.telemetry.baud = 115200; s.motors.layout = LAYOUT_HEX_X; });
+        r->run(3.0); const MavSeen m = mav_read(r->board.tlm_wire.sent); const P::Frame* hb = mav_last(m, mav::MSG_HEARTBEAT);
+        CHECK(r->board.tlm_wire.baud == 115200 && m.count[mav::MSG_ATTITUDE] == 0 && m.count[mav::MSG_RC_CHANNELS] >= 58 && hb && hb->sysid == 7 && hb->payload[4] == mav::MAV_TYPE_HEXAROTOR,
+              "the settings: 115200 baud, system id 7, ATTITUDE off, RC_CHANNELS at 20 Hz (%d in 3 s), a hexa", m.count[mav::MSG_RC_CHANNELS]); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { tlm(s, b); s.ports.assign = PORT_ASSIGN_TABLE; s.ports.function[0] = PORT_FUNCTION_NONE; s.ports.function[1] = PORT_FUNCTION_GPS; s.ports.function[2] = PORT_FUNCTION_SERIAL_RX; });
+        r->run(1.0); CHECK(has_line(*r, "telemetry: FAILED - no UART has the function TELEMETRY") && r->board.tlm_wire.sent.empty(), "port table without TELEMETRY: says so, nothing sent"); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { tlm(s, b); s.ports.assign = PORT_ASSIGN_TABLE; s.ports.function[0] = PORT_FUNCTION_TELEMETRY; s.ports.function[1] = PORT_FUNCTION_GPS; s.ports.function[2] = PORT_FUNCTION_SERIAL_RX; });
+        r->run(1.0); CHECK(has_line(*r, "telemetry: MAVLink 2, system id 1, UART0 TX GPIO43") && !r->board.tlm_wire.sent.empty(), "port table: the UART with the function TELEMETRY"); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { tlm(s, b); s.telemetry.tx_pin = 255; });
+        CHECK(has_line(*r, "telemetry: FAILED - no TX pin (telemetry.tx_pin) and no WiFi"), "no pin and no WiFi: says why"); }
+    {   // WiFi only: the frames go to the ring the link task sends as UDP
+        auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { tlm(s, b); s.telemetry.tx_pin = 255; s.wifi.mode = WIFI_MODE_AP; });
+        std::vector<uint8_t> udp; uint8_t dg[1460]; size_t n; int datagrams = 0;
+        for (int i = 0; i < 40; i++) { r->run(0.05); while ((n = r->app().mav_net.pop(dg, sizeof(dg))) > 0) { udp.insert(udp.end(), dg, dg + n); datagrams++; } }     // (as the link task: emptied all the time)
+        const MavSeen m = mav_read(udp);
+        CHECK(has_line(*r, "telemetry: MAVLink 2, system id 1, WiFi UDP 14550") && m.bad == 0 && m.count[mav::MSG_HEARTBEAT] >= 1 && m.count[mav::MSG_ATTITUDE] >= 15 && r->board.tlm_wire.sent.empty(),
+              "WiFi only: %u frames in %d datagrams for the link task, nothing on the UART", m.good, datagrams); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { tlm(s, b); s.pins.buzzer = tx; });
+        CHECK(has_line(*r, "pins: FAILED - GPIO43 is set for both") && r->app().status.pin_conflict, "its pin is checked against the others (buzzer on the same pin)"); }
+    {   auto r = nav_rig([&](wbp::Settings&, VirtualBoard& b) { Serial0.dev = &b.tlm_wire; }); r->run(2.0);
+        CHECK(!has_line(*r, "telemetry:") && r->board.tlm_wire.sent.empty() && Serial0.baud == 0, "protocol NONE (the default): no UART taken, nothing sent"); }
+}
+
 // ESC telemetry on its own wire (hal/motor/esc_sensor.h): KISS frames on a UART RX, one ESC asked at a time
 static void t_esc_wire() {
     printf("[esc telemetry wire] KISS answers on a UART, asked with the DShot telemetry bit, one ESC at a time\n");
@@ -2340,6 +2470,8 @@ int main() {
         if (!strcmp(only, "stall")) t_stall();
         if (!strcmp(only, "led")) t_led();
         if (!strcmp(only, "dronecan2")) t_dronecan2();
+        if (!strcmp(only, "magauto")) t_mag_autocal();
+        if (!strcmp(only, "mavlink")) t_mavlink();
         printf("%d checks, %d failed (only '%s')\n", g_pass + g_fail, g_fail, only); return 1;
     }
     t_boot();
@@ -2379,6 +2511,8 @@ int main() {
     t_stall();
     t_led();
     t_dronecan2();
+    t_mag_autocal();
+    t_mavlink();
     t_esc_passthrough();
     t_ekf();
     t_gps_alt();

@@ -166,6 +166,7 @@ void setup() {
         if (adc2(settings.pins.batt_adc) || adc2(settings.pins.curr_adc)) flight.add_report("wifi: WARNING - battery / current ADC on an ADC2 pin (GPIO11 .. GPIO20): unusable while WiFi is on, take GPIO1 .. GPIO10");
 #endif
         link_task.set_net(&wifi, &link_mux);
+        link_task.set_mav(&flight.mav_net);                  // MAVLink telemetry as UDP broadcasts (filled only when telemetry.wifi is on)
     }
     host.set_net([](app::LinkHost::NetInfo& n) { n.wifi = wifi.state(); n.ip = wifi.ip(); n.rssi = wifi.rssi(); n.clients = wifi.clients(); n.via = (uint8_t)link_mux.active(); });
 #endif
@@ -187,10 +188,10 @@ void setup() {
     link_task.set_cli(&term_cli);                            // (not "cli": that is the ESP32 core's interrupts-off macro)
     link_task.start();
     sd_task.start();
-    vTaskDelete(nullptr);
+    if (sensor_task) vTaskDelete(nullptr);                   // (otherwise loop() below takes over)
 }
 
-void loop() {}
+void loop() { sensor_entry(nullptr); }                       // only if the sensor task could not be created
 
 #endif
 

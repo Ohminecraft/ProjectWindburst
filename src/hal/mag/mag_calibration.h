@@ -32,7 +32,7 @@ struct MagCal {
     }
 };
 
-enum class MagCalResult : uint8_t { OK, TOO_FEW_SAMPLES, POOR_COVERAGE, SINGULAR, NOT_ELLIPSOID, TOO_DISTORTED, BAD_FIELD_STRENGTH, BAD_FIT };
+enum class MagCalResult : uint8_t { OK, TOO_FEW_SAMPLES, POOR_COVERAGE, SINGULAR, NOT_ELLIPSOID, TOO_DISTORTED, BAD_FIELD_STRENGTH, BAD_FIT, NO_MOTION };   // == schema enum mag_cal_result (NO_MOTION: 0.18, the automatic one)
 
 class MagCalibrator {
 public:
@@ -133,7 +133,7 @@ public:
         return MagCalResult::OK;
     }
     static const char* result_name(MagCalResult r) {
-        static const char* n[] = {"ok", "too few samples", "turn the craft through more orientations", "singular data", "data is not an ellipsoid", "sensor too distorted (metal / magnets nearby?)", "field strength implausible", "poor fit"};
+        static const char* n[] = {"ok", "too few samples", "turn the craft through more orientations", "singular data", "data is not an ellipsoid", "sensor too distorted (metal / magnets nearby?)", "field strength implausible", "poor fit", "the craft was not turned"};
         return n[(int)r];
     }
 

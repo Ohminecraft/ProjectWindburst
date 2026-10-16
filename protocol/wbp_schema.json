@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0xA457F6F5",
+ "hash": "0xA8C528D6",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -147,7 +147,8 @@
    "NONE",
    "GYRO",
    "ACCEL",
-   "MAG"
+   "MAG",
+   "MAG_AUTO"
   ],
   "cal_state": [
    "IDLE",
@@ -163,7 +164,8 @@
    "NOT_ELLIPSOID",
    "TOO_DISTORTED",
    "BAD_FIELD_STRENGTH",
-   "BAD_FIT"
+   "BAD_FIT",
+   "NO_MOTION"
   ],
   "batt_source": [
    "AUTO",
@@ -375,6 +377,10 @@
   "port_assign": [
    "AUTO",
    "TABLE"
+  ],
+  "telemetry_protocol": [
+   "NONE",
+   "MAVLINK"
   ],
   "gps_alt": [
    "OFF",
@@ -1752,7 +1758,7 @@
       0
      ],
      "enum": "port_function",
-     "desc": "TABLE: what each UART (0, 1, 2) serves; TELEMETRY is not used; UART0 only when the app link is on native USB"
+     "desc": "TABLE: what each UART (0, 1, 2) serves; TELEMETRY = MAVLink (section telemetry); UART0 only when the app link is on native USB"
     },
     {
      "n": "baud",
@@ -2990,6 +2996,95 @@
      "desc": "ALL: every LED the same; NAV: armed, first half red (left), second half green (right), the last a white strobe, the mode in the middle"
     }
    ]
+  },
+  {
+   "id": 23,
+   "name": "telemetry",
+   "desc": "Telemetry to a ground station (Mission Planner, QGroundControl, a radio with a MAVLink backpack): MAVLink 2, send only, on a UART (TX pin; AUTO = the UART left after GPS, receiver, flow sensor and ESC wire, TABLE = the UART with the function TELEMETRY) and / or over WiFi (UDP 14550)",
+   "live": false,
+   "fields": [
+    {
+     "n": "protocol",
+     "t": "u8",
+     "d": 0,
+     "enum": "telemetry_protocol",
+     "desc": "NONE = off; MAVLINK = MAVLink 2 telemetry"
+    },
+    {
+     "n": "baud",
+     "t": "u32",
+     "d": 57600,
+     "min": 9600,
+     "max": 2000000,
+     "desc": "UART speed (57600 for most 433 / 915 MHz telemetry radios, 115200 or more for an ELRS backpack / a wire)"
+    },
+    {
+     "n": "tx_pin",
+     "t": "u8",
+     "d": 255,
+     "desc": "UART TX of the telemetry: to the RX of the radio (255 = no wire, WiFi only)"
+    },
+    {
+     "n": "rx_pin",
+     "t": "u8",
+     "d": 255,
+     "desc": "UART RX (from the radio's TX); not read yet. Needed on an STM32 to start the UART"
+    },
+    {
+     "n": "sysid",
+     "t": "u8",
+     "d": 1,
+     "min": 1,
+     "max": 255,
+     "desc": "MAVLink system id of this craft (two crafts on one ground station need different ids)"
+    },
+    {
+     "n": "wifi",
+     "t": "bool",
+     "d": 1,
+     "desc": "also send over WiFi (UDP broadcast to port 14550) while wifi.mode is on"
+    },
+    {
+     "n": "rate_attitude",
+     "t": "u8",
+     "d": 10,
+     "min": 0,
+     "max": 50,
+     "desc": "ATTITUDE per second (0 = off)"
+    },
+    {
+     "n": "rate_position",
+     "t": "u8",
+     "d": 5,
+     "min": 0,
+     "max": 20,
+     "desc": "GLOBAL_POSITION_INT and GPS_RAW_INT per second (0 = off)"
+    },
+    {
+     "n": "rate_hud",
+     "t": "u8",
+     "d": 4,
+     "min": 0,
+     "max": 20,
+     "desc": "VFR_HUD per second (0 = off)"
+    },
+    {
+     "n": "rate_status",
+     "t": "u8",
+     "d": 2,
+     "min": 0,
+     "max": 10,
+     "desc": "SYS_STATUS and BATTERY_STATUS per second (0 = off)"
+    },
+    {
+     "n": "rate_rc",
+     "t": "u8",
+     "d": 2,
+     "min": 0,
+     "max": 20,
+     "desc": "RC_CHANNELS per second (0 = off)"
+    }
+   ]
   }
  ],
  "streams": [
@@ -3626,6 +3721,12 @@
      "n": "inflight_trim",
      "t": "u8",
      "desc": "in-flight level trim (mode CALIB): 0 = idle, 1..99 = % of the measurement while the switch is on, 100 = measured, applied at the next disarm"
+    },
+    {
+     "n": "result",
+     "t": "u8",
+     "enum": "mag_cal_result",
+     "desc": "the last compass calibration result (MAG / MAG_AUTO): why it failed, or OK"
     }
    ]
   },
@@ -4384,6 +4485,12 @@
     }
    ],
    "desc": "start sending `length` bytes of the log memory from `offset` as BB_BLOB frames [offset u32][data]; length 0 cancels. Refused while armed, logging or erasing"
+  },
+  {
+   "id": 22,
+   "name": "MAG_AUTOCAL",
+   "args": [],
+   "desc": "the automatic compass calibration (Betaflight 4.5 style): turn the craft around by hand within 15 s; it ends by itself (progress, state and result in the calibration stream) and the new hard-iron offset is applied and saved to flash by the firmware. Stick command: throttle high, pitch back, roll and yaw centred, 1 s, disarmed"
   }
  ],
  "errors": [

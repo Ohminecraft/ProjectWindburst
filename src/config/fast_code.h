@@ -23,13 +23,25 @@
 // A marked function only helps if what it calls is in RAM as well: small helpers are inlined by the compiler, the larger ones
 // carry the mark themselves. Library code (libm, the SPI driver of the Arduino core) stays in flash.
 // ============================================================================
-#if (defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)) && !defined(WB_FAST_CODE)
+#if (defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_STM32)) && !defined(WB_FAST_CODE)
 #define WB_FAST_CODE 1
 #endif
 
-#if (defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)) && WB_FAST_CODE
+#if defined(ARDUINO_ARCH_ESP32) && WB_FAST_CODE
 #include <esp_attr.h>
 #define WB_FAST IRAM_ATTR
 #else
 #define WB_FAST
 #endif
+
+#if defined(ARDUINO_ARCH_STM32) && WB_FAST_CODE
+#if defined(ITCM_RAM_OPTIMISATION) && !defined(DEBUG)
+#define WB_FAST                   __attribute__((section(".tcm_code"))) __attribute__((optimize(ITCM_RAM_OPTIMISATION)))
+#else
+#define WB_FAST                   __attribute__((section(".tcm_code")))
+#endif
+// If a particular target is short of ITCM RAM, defining WB_FAST_PREF in the target.h file will
+// cause functions decorated WB_FAST_PREF to *not* go into ITCM RAM but if WB_FAST_PREF is not
+// defined for the target, WB_FAST_PREF will become an alias to WB_FAST (in the common post
+// header file), and functions decorated with WB_FAST_PREF *will* go into ITCM RAM. (betaflight)
+#endif // defined(ARDUINO_ARCH_STM32) && WB_FAST_CODE

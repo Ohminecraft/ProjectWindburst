@@ -26,9 +26,13 @@
 #include "../hal/beeper/beeper_base.h"
 #include "../core/flight_core.h"
 #include "../core/inflight_trim.h"
+#include "../hal/mag/mag_autocal.h"
+#include "stick_commands.h"
 #include "../core/ekf.h"
 #include "../proto/settings_apply.h"
 #include "telemetry.h"
+#include "../telemetry/mavlink_telemetry.h"
+#include "../proto/wbp_fields.h"
 #include "exchange.h"
 #include "sync.h"
 #include "link_host.h"
@@ -88,6 +92,7 @@ public:
     bb::Recorder blackbox;                                // the flight-loop end of the flight log (the rest is bb::Service in the link task)
     I2CBus sensorBus{I2C_DEVICE_0};
     app::Exchange link;                                   // the only object shared with the link task
+    mav::Ring mav_net;                                    // MAVLink frames for the WiFi side (the link task sends them as UDP): sensor thread -> link task
     fc::InflightTrim inflight_trim;
     bool use_external_rc = false;                         // true: channels come from set_rc() (tests / a radio module) instead of `rc`
     bool usb_link = false;                                // the app link is the chip's own USB (GPIO19 / 20): set before begin(), for the pin check
@@ -148,8 +153,9 @@ public:
         status.imu = imu.IMUInit(imu_spi, ic);
 
         // ---- loop rate: never faster than the gyro delivers new samples; an I2C IMU cannot be read faster than ~1 kHz
+        // and a divisor of it (app::loop_rate_for: 6000 Hz on a chip at 8000 becomes 4000)
         float hz = s.general.loop_hz;
-        if (status.imu && imu.gyroRateHz() > 0 && hz > imu.gyroRateHz()) hz = imu.gyroRateHz();
+        if (status.imu && imu.gyroRateHz() > 0) hz = app::loop_rate_for(hz, imu.gyroRateHz());
         // ---- a second IMU: on the first one's SPI bus, its own chip select
         const uint8_t cs2 = s.pins.imu2_cs; imu2_cfg_ = cs2 != GPIO_UNUSED;
         if (imu2_cfg_) {
@@ -171,7 +177,11 @@ public:
         pub_div_ = (uint16_t)(hz / 1000.0f + 0.5f); if (pub_div_ < 1) pub_div_ = 1;
         cal_samples_ = hz > 8000.0f ? 8000 : (uint16_t)hz;                         // ~1 s of samples
         if (status.imu) { apply_alignment(); start_gyro_cal(); cal_kind_ = wbp::CAL_KIND_GYRO; }
-        say(status.imu, "imu", imu.name(), imu.failReason(), "%s %s, gyro %.0f Hz, control %.0f Hz (1/%d)", imu_spi ? "SPI" : "I2C", imu.name(), (double)hz, (double)pid_hz, core.cfg.pid_denom);
+        {   char clk_txt[32] = "", rate_txt[64] = "";       // (SPI: the read clock, and "direct" when it is read past the Arduino library - bus_spi.h)
+            if (imu_spi && status.imu) snprintf(clk_txt, sizeof(clk_txt), " (%.0f MHz%s)", (double)(imu.spiClockHz() / 1e6f), imu.spiDirect() ? " direct" : "");
+            if (status.imu && (uint32_t)(hz + 0.5f) != (uint32_t)s.general.loop_hz)
+                snprintf(rate_txt, sizeof(rate_txt), " (setting %u Hz: the chip delivers %.0f Hz)", (unsigned)s.general.loop_hz, (double)imu.gyroRateHz());
+            say(status.imu, "imu", imu.name(), imu.failReason(), "%s %s%s, gyro %.0f Hz%s, control %.0f Hz (1/%d)", imu_spi ? "SPI" : "I2C", imu.name(), clk_txt, (double)hz, rate_txt, (double)pid_hz, core.cfg.pid_denom); }
 
         // ---- shared sensor I2C bus: barometer, lidar, compass
         if (bus[0] != GPIO_UNUSED && bus[1] != GPIO_UNUSED) {
@@ -266,7 +276,7 @@ public:
 
         // ---- ESC telemetry on its own wire (hal/motor/esc_sensor.h): a UART RX at 115200, on the UART that is left (AUTO) or the
         //      one with the function ESC_SENSOR (TABLE)
-        esc_uart_ = nullptr;
+        esc_uart_ = nullptr; int esc_u = -1;
         if (s.motors.esc_sensor) {
             const int u = port_table ? plan.esc : app::esc_uart(status.gps, status.rx && !use_external_rc && rc.onUart(), uart0 != nullptr, flow_u);
             char pb[8];
@@ -274,7 +284,37 @@ public:
             else if (s.pins.esc_tlm == 255) say(false, "esc tlm", "", "no pin for the ESC telemetry wire (Pins tab: ESC telemetry)", "");
             else if (u < 0) say(false, "esc tlm", "", port_table ? "no UART has the function ESC_SENSOR in the serial ports table" : "no UART left for the ESC telemetry wire (GPS, receiver and flow sensor have them)", "");
             else if (!port::uart_begin(*uarts[u], escs::kBaud, SERIAL_8N1, s.pins.esc_tlm, 255, false, 256)) say(false, "esc tlm", "", "the UART did not start on that pin", "");
-            else { esc_uart_ = uarts[u]; say(true, "esc tlm", "", "", "KISS telemetry on %s RX %s, 115200 baud (the first request after 5 s)", uname[u], pin_str(s.pins.esc_tlm, pb)); }
+            else { esc_uart_ = uarts[u]; esc_u = u; say(true, "esc tlm", "", "", "KISS telemetry on %s RX %s, 115200 baud (the first request after 5 s)", uname[u], pin_str(s.pins.esc_tlm, pb)); }
+        }
+
+        // ---- MAVLink telemetry (section telemetry, telemetry/mavlink_telemetry.h): a UART TX (AUTO: the UART left; TABLE: the one with
+        //      the function TELEMETRY) and / or WiFi (the link task sends the frames as UDP broadcasts to port 14550)
+        mav_uart_ = nullptr; mav_on_ = mav_wifi_ = false; mav_report_i_ = 0; mav_blk_sent_ = kMavNeverSent; mav_blk_ms_ = 0; mav_armed_ = false;
+        if (s.telemetry.protocol == wbp::TELEMETRY_PROTOCOL_MAVLINK) {
+            const wbp::S_telemetry& tc = s.telemetry;
+            mav::Rates mr; mr.attitude = tc.rate_attitude; mr.position = tc.rate_position; mr.hud = tc.rate_hud; mr.status = tc.rate_status; mr.rc = tc.rate_rc;
+            mav_.configure(mr, tc.sysid);
+            const int nm = fc::mixer_motor_count((fc::Layout)s.motors.layout);
+            mav_type_ = nm == 6 ? mav::MAV_TYPE_HEXAROTOR : nm == 8 ? mav::MAV_TYPE_OCTOROTOR : nm == 4 ? mav::MAV_TYPE_QUADROTOR : mav::MAV_TYPE_GENERIC;
+            mav_wifi_ = !WB_PLATFORM_STM32 && tc.wifi && s.wifi.mode != wbp::WIFI_MODE_OFF;
+            const char* why = nullptr; int u = -1; char wire[64] = "";
+            if (tc.tx_pin != 255) {
+                u = port_table ? plan.tlm : app::telemetry_uart(status.gps, status.rx && !use_external_rc && rc.onUart(), uart0 != nullptr, flow_u, esc_u);
+                if (u < 0) why = port_table ? "no UART has the function TELEMETRY in the serial ports table" : "no UART left (GPS, receiver, flow sensor and ESC wire have them)";
+                else {
+#if !WB_PLATFORM_STM32
+                    uarts[u]->setTxBufferSize(1024);                 // (frames wait there, the sensor thread never does: poll() only fills the room it has)
+#endif
+                    if (!port::uart_begin(*uarts[u], tc.baud, SERIAL_8N1, tc.rx_pin, tc.tx_pin, false, 256)) why = WB_PLATFORM_STM32 ? "the UART did not start on those pins (an STM32 needs telemetry.rx_pin as well)" : "the UART did not start on that pin";
+                    else { mav_uart_ = uarts[u]; char pb[8]; snprintf(wire, sizeof(wire), "%s TX %s, %lu baud", uname[u], pin_str(tc.tx_pin, pb), (unsigned long)tc.baud); }
+                }
+            } else if (!mav_wifi_) why = "no TX pin (telemetry.tx_pin) and no WiFi (telemetry.wifi with wifi.mode on)";
+            mav_on_ = mav_uart_ || mav_wifi_;
+            if (!mav_on_) say(false, "telemetry", "", why, "");
+            else {
+                say(true, "telemetry", "", "", "MAVLink 2, system id %u, %s%s%s", (unsigned)tc.sysid, wire, *wire && mav_wifi_ ? " + " : "", mav_wifi_ ? "WiFi UDP 14550" : "");
+                if (why) { char line[kReportLen]; snprintf(line, sizeof(line), "telemetry: WARNING - no UART: %s", why); add_report(line); }
+            }
         }
 
         // ---- core + motors
@@ -382,14 +422,15 @@ public:
     WB_FAST bool flight_cycle(uint32_t now_us) { sync_->lock(); const bool ok = fast_cycle(now_us, micros()); sync_->unlock(); return ok; }
 
     // ~1 kHz, the sensor thread.
-    void slow_update() {
+    WB_FAST void slow_update() {
         const uint32_t now_us = micros(), now_ms = millis();
         // how regularly this thread gets the CPU: it runs the app's requests, so a long pause here is a firmware that "does not answer"
         if (slow_seen_) { const uint32_t gap = now_ms - slow_last_ms_; if (gap > slow_gap_cur_) slow_gap_cur_ = gap; }
         slow_seen_ = true; slow_last_ms_ = now_ms;
         // ---- A. device I/O, no lock: nothing here is shared with the flight task except the three values copied first
-        bool armed, esc_a_ok; float up_cos, esc_v, esc_a;
-        { app::Guard g(*sync_); armed = last_out_.armed; up_cos = core.ahrs().up_cos(); esc_v = motors.manager().esc_voltage(now_ms); esc_a_ok = motors.manager().esc_current(now_ms, esc_a); }
+        bool armed, esc_a_ok; float up_cos, esc_v, esc_a, gyro_rate;
+        { app::Guard g(*sync_); armed = last_out_.armed; up_cos = core.ahrs().up_cos(); esc_v = motors.manager().esc_voltage(now_ms); esc_a_ok = motors.manager().esc_current(now_ms, esc_a);
+          const float* gw = last_out_.gyro_f_dps; gyro_rate = sqrtf(gw[0] * gw[0] + gw[1] * gw[1] + gw[2] * gw[2]); }
 
         bool rc_new = false;
         if (!use_external_rc) rc_new = rc.update(now_us, now_ms);
@@ -420,6 +461,7 @@ public:
         case 1: range_new = sonar.update(now_us, now_ms, up_cos, armed); break;
         default: mag_new = mag.update(now_us, now_ms); break;
         }
+        if (mag_auto_.active()) { if (mag_new) mag_auto_.feed(mag.rawGauss(), gyro_rate, now_ms); else mag_auto_.tick(now_ms); }     // (this thread's alone)
         const uint32_t io_us = micros() - now_us;
         // (the EKF's measurements wait here for its next step: this thread only)
         if (ekf_mode_) {
@@ -456,6 +498,8 @@ public:
             if (esc_ask >= 0) motors.manager().request_telemetry(esc_ask);       // (the bit goes out with the next control cycle's frame)
             if (blackbox.take_erase_done()) beep_event(beep::BLACKBOX_ERASE);
             update_inflight_trim(now_ms);
+            update_stick_commands(now_ms, now_armed);
+            update_mag_autocal();
             update_beeper(now_ms, now_armed);
             // extended DShot telemetry: an ESC sends voltage / current / temperature only after it was asked (command 13). Asked when the
             // ESCs start answering (power-up, or the battery plugged in after USB), asked again after they all went silent. Never armed.
@@ -487,6 +531,7 @@ public:
         {
             app::Guard g(*sync_);
             if (rc.telemetryPossible() && rc_link_) tlm_n_ = crsf_tlm_.next(now_us, crsf_in(), tlm_buf_);     // (only while the receiver is there to take it)
+            if (mav_on_) { mav_st_ = mav_in(now_ms); mav_blk_ = tel_.blockers; }
             if ((uint32_t)(now_ms - bb_slow_ms_) >= 1000u / bb::kSlowHz) { bb_slow_ms_ = now_ms; blackbox.log_slow(now_us, tel_); }
         }
         if (ekf_due_) { ekf_due_ = false; ekf_step(now_ms); }  // (outside the lock: the EKF is this thread's alone, ~30 - 60 us)
@@ -498,6 +543,7 @@ public:
         }
         servos.update(servo_rc_, servo_have_rc_);              // (outside the lock: it writes the PWM peripheral; the channels were copied under it)
         if (tlm_n_) { rc.sendTelemetry(tlm_buf_, tlm_n_); tlm_n_ = 0; }                  // (outside the lock: a UART write)
+        if (mav_on_) mav_send(now_ms);                                                     // (outside the lock: the state was copied under it)
         if (restart) {
             delay(20);
 #if WB_PLATFORM_STM32
@@ -560,17 +606,21 @@ public:
             return set_level_from_attitude(e.roll, e.pitch) ? wbp::ERR_OK : wbp::ERR_FAILED;                 // more than 20 degrees: that is a board alignment, not a trim
         }
 
+        case wbp::CMD_MAG_AUTOCAL:
+            return start_mag_autocal(now_ms) ? wbp::ERR_OK : (status.mag ? wbp::ERR_BUSY : wbp::ERR_NO_SENSOR);
         case wbp::CMD_MAG_CAL_START:
             if (!status.mag) return wbp::ERR_NO_SENSOR;
+            mag_auto_.cancel();
             mag.startCalibration(); cal_kind_ = wbp::CAL_KIND_MAG; mag_cal_state_ = CalState::RUNNING; return wbp::ERR_OK;
         case wbp::CMD_MAG_CAL_FINISH: {
             if (!mag.calibrating()) return wbp::ERR_BAD_STATE;
             const MagCalResult res = mag.finishCalibration();
+            mag_result_ = (uint8_t)res;
             if (res != MagCalResult::OK) { beep_event(beep::ACC_CALIBRATION_FAIL); return app::Reply(wbp::ERR_FAILED, (uint8_t)res); }   // keeps collecting: rotate more, then finish again
             wbp::from_magcal(mag.calibration(), s.calibration); mag_cal_state_ = CalState::DONE;
             beep_event(beep::GYRO_CALIBRATED);                                                                // Betaflight reuses the 3 beeps for "compass calibrated"
             return app::Reply(wbp::ERR_OK, (uint8_t)res); }
-        case wbp::CMD_MAG_CAL_CANCEL: mag.cancelCalibration(); mag_cal_state_ = CalState::IDLE; if (cal_kind_ == wbp::CAL_KIND_MAG) cal_kind_ = wbp::CAL_KIND_NONE; return wbp::ERR_OK;
+        case wbp::CMD_MAG_CAL_CANCEL: mag.cancelCalibration(); mag_auto_.cancel(); mag_cal_state_ = CalState::IDLE; if (cal_kind_ == wbp::CAL_KIND_MAG || cal_kind_ == wbp::CAL_KIND_MAG_AUTO) cal_kind_ = wbp::CAL_KIND_NONE; return wbp::ERR_OK;
 
         case wbp::CMD_MOTOR_TEST: {
             if (!status.motors) return wbp::ERR_NO_SENSOR;
@@ -757,6 +807,33 @@ private:
     }
     // In-flight level trim (mode CALIB, core/inflight_trim.h). The result is applied after the disarm and written to flash by the
     // link task (Telemetry::fw_saved_*): the pilot is in the field, there is no app to press Save.
+    // Stick commands while disarmed (app/stick_commands.h): the gyro calibration, the automatic compass calibration.
+    void update_stick_commands(uint32_t now_ms, bool armed) {
+        const wbp::S_receiver& rx = s_->receiver; auto ch = [this](uint8_t i) { return i < 16 ? rc_[i] : (uint16_t)1500; };
+        switch (sticks_.update(ch(rx.ch_roll), ch(rx.ch_pitch), ch(rx.ch_yaw), ch(rx.ch_throttle), armed, rc_link_ && rc_seq_ != 0, now_ms)) {
+        case app::StickCommands::GYRO_CAL: if (status.imu) { start_gyro_cal(); cal_kind_ = wbp::CAL_KIND_GYRO; } break;
+        case app::StickCommands::MAG_CAL: if (!start_mag_autocal(now_ms)) beep_event(beep::ACC_CALIBRATION_FAIL); break;
+        default: break;
+        }
+    }
+    // The automatic compass calibration (hal/mag/mag_autocal.h): started by the app or the sticks, disarmed, ends by itself.
+    bool start_mag_autocal(uint32_t now_ms) {
+        if (!status.mag || last_out_.armed || mag.calibrating()) return false;
+        mag_auto_.start(now_ms, mag.calibration()); cal_kind_ = wbp::CAL_KIND_MAG_AUTO; mag_result_ = 0;
+        beep_event(beep::ACC_CALIBRATION);
+        return true;
+    }
+    // Its end: the new offset applied at once and written to flash by the link task (the pilot is in the field: no Save button).
+    void update_mag_autocal() {
+        switch (mag_auto_.take_finished()) {
+        case MagAutoCal::DONE:
+            mag.setCalibration(mag_auto_.calibration()); wbp::from_magcal(mag_auto_.calibration(), s_->calibration); wbp::validate(s_->calibration);
+            mag_result_ = (uint8_t)MagCalResult::OK; tel_.fw_saved_section = wbp::SEC_CALIBRATION; tel_.fw_saved_seq++; beep_event(beep::GYRO_CALIBRATED);
+            break;
+        case MagAutoCal::FAILED: mag_result_ = (uint8_t)mag_auto_.result(); beep_event(beep::ACC_CALIBRATION_FAIL); break;
+        default: break;
+        }
+    }
     void update_inflight_trim(uint32_t now_ms) {
         const float dt = (uint32_t)(now_ms - trim_ms_) * 0.001f; trim_ms_ = now_ms;
         if (!status.imu || dt <= 0.0f || dt > 0.1f) return;
@@ -843,7 +920,7 @@ private:
     }
 
     // anything the app is doing with the craft right now: arming is refused meanwhile
-    bool busy_other(uint32_t now_ms) const { return acc_session_ || mag.calibrating() || (int32_t)(test_until_ms_ - now_ms) > 0 || reboot_pending_ || blackbox.busy(); }
+    bool busy_other(uint32_t now_ms) const { return acc_session_ || mag.calibrating() || mag_auto_.active() || (int32_t)(test_until_ms_ - now_ms) > 0 || reboot_pending_ || blackbox.busy(); }
     fc::Health health(uint32_t now_ms) {
         fc::Health h;
         h.imu_ok = imu_sel_.in_use() != 0; h.gyro_calibrated = gyro_calibrated();      // (`calibrating` is filled in by the flight loop, see fill_fast)
@@ -906,6 +983,7 @@ private:
         if (s.flow.type == FlowSensor::PMW3901) { add(s.pins.flow_cs, "flow_cs"); add(s.pins.flow_sck, "flow_sck"); add(s.pins.flow_miso, "flow_miso"); add(s.pins.flow_mosi, "flow_mosi"); }
         if (s.flow.type == FlowSensor::MSP) { add(s.pins.flow_rx, "flow_rx"); add(s.pins.flow_tx, "flow_tx"); }
         if (s.motors.esc_sensor) add(s.pins.esc_tlm, "esc_tlm");
+        if (s.telemetry.protocol == wbp::TELEMETRY_PROTOCOL_MAVLINK) { add(s.telemetry.tx_pin, "telemetry_tx"); add(s.telemetry.rx_pin, "telemetry_rx"); }
         if (s.led.count) add(s.pins.led, "led");
         if (s.blackbox.device == bb::DEV_SDCARD) { hw.getSdCardPins(p); if (s.blackbox.sd_mode == wbp::SD_MODE_SPI) add(p[0], "sd_cs"); add(p[1], "sd_clk"); add(p[2], "sd_cmd"); add(p[3], "sd_d0"); }
         const pins::Conflict c = pins::find_conflict(use, n);
@@ -931,6 +1009,60 @@ private:
         c.rescue = (t.modes >> fc::M_RESCUE) & 1u; c.poshold = (t.modes >> fc::M_POSHOLD) & 1u; c.althold = (t.modes >> fc::M_ALTHOLD) & 1u;
         c.angle = (t.modes >> fc::M_ANGLE) & 1u; c.stabilize = (t.modes >> fc::M_STABILIZE) & 1u;
         return c;
+    }
+
+    // ---- MAVLink telemetry (telemetry/mavlink_telemetry.h): the state in MAVLink's units and conventions (called with the lock held)
+    mav::State mav_in(uint32_t now_ms) const {
+        const app::Telemetry& t = tel_; mav::State m; const float d2r = 0.017453292519943295f;
+        m.time_ms = now_ms; m.vehicle_type = mav_type_;
+        m.armed = t.armed; m.failsafe = t.failsafe != 0; m.calibrating = busy_other_ || gyro_cal_state() == CalState::RUNNING;
+        m.angle = (t.modes >> fc::M_ANGLE) & 1u; m.stabilize = (t.modes >> fc::M_STABILIZE) & 1u; m.althold = (t.modes >> fc::M_ALTHOLD) & 1u;
+        m.poshold = (t.modes >> fc::M_POSHOLD) & 1u; m.rescue = (t.modes >> fc::M_RESCUE) & 1u;
+        // pilot convention (pitch nose up negative) -> MAVLink (FRD: pitch nose up positive); yaw -180 .. 180
+        m.roll = t.roll * d2r; m.pitch = -t.pitch * d2r; m.yaw = t.yaw * d2r;
+        m.p = t.gyro_f[0] * d2r; m.q = -t.gyro_f[1] * d2r; m.r = t.gyro_f[2] * d2r;
+        m.have_gps = status.gps; m.gps_fix = t.gps_fix; m.sats = t.gps_sats; m.lat = t.lat; m.lon = t.lon; m.alt_msl_mm = t.alt_cm * 10;
+        m.hdop_x100 = t.hdop; m.gs_cms = t.gs_cms; m.cog_cdeg = (uint16_t)(t.course_ddeg * 10u); m.hacc_mm = t.hacc_mm;
+        m.alt_valid = t.alt_valid; m.rel_alt_m = t.z; m.climb_ms = t.vz; m.vel_valid = t.vel_valid; m.vn = t.vel_n; m.ve = t.vel_e;
+        m.heading_deg = app::heading360(t.yaw); m.throttle = t.throttle;
+        uint32_t pr = 0, hl = 0;                          // MAV_SYS_STATUS_SENSOR: fitted (= enabled), and healthy when its health bits are all set
+        const struct { bool on; uint16_t need; uint32_t bits; } sm[] = {
+            {status.imu, wbp::HEALTH_IMU, mav::SENSOR_GYRO | mav::SENSOR_ACCEL}, {status.imu, wbp::HEALTH_IMU | wbp::HEALTH_GYRO_CAL, mav::SENSOR_AHRS},
+            {status.mag, wbp::HEALTH_MAG_READY, mav::SENSOR_MAG}, {status.baro, wbp::HEALTH_BARO, mav::SENSOR_BARO}, {status.gps, wbp::HEALTH_GPS, mav::SENSOR_GPS},
+            {status.flow, wbp::HEALTH_FLOW, mav::SENSOR_FLOW}, {status.range, wbp::HEALTH_RANGE, mav::SENSOR_LASER}, {status.rx || use_external_rc, wbp::HEALTH_RX, mav::SENSOR_RC},
+            {status.motors, wbp::HEALTH_MOTORS, mav::SENSOR_MOTORS}, {status.battery, wbp::HEALTH_BATTERY, mav::SENSOR_BATTERY}};
+        for (const auto& x : sm) if (x.on) { pr |= x.bits; if ((t.health & x.need) == x.need) hl |= x.bits; }
+        m.sensors_present = m.sensors_enabled = pr; m.sensors_health = hl; m.load_pct = t.cpu_pct;
+        m.batt_present = status.battery && t.batt_v > 0.5f; m.volts = t.batt_v; m.cells = t.batt_cells; m.remaining = m.batt_present ? (int8_t)(t.batt_remaining > 100 ? 100 : t.batt_remaining) : -1;
+        m.have_current = t.curr_source == batt::CUR_ADC || t.curr_source == batt::CUR_ESC || t.curr_source == batt::CUR_DRONECAN; m.amps = t.batt_amps; m.mah = t.batt_mah;
+        m.rc_errors = t.rc_bad; m.rc_link = t.rc_link; for (int i = 0; i < 16; i++) m.rc[i] = t.rc[i]; m.rssi_pct = t.rssi;
+        return m;
+    }
+    // Texts for the ground station: the boot report (one line whenever the queue is empty), why the craft cannot arm (when it changes,
+    // at most every 2 s, and again every 10 s), armed / disarmed. Then the frames that are due and fit the UART's room.
+    void mav_send(uint32_t now_ms) {
+        if (mav_.queued_texts() == 0 && mav_report_i_ < n_report_) {
+            const char* l = report_ptr_[mav_report_i_++];
+            mav_.text(strstr(l, "FAILED") ? mav::MAV_SEVERITY_ERROR : strstr(l, "WARNING") ? mav::MAV_SEVERITY_WARNING : mav::MAV_SEVERITY_INFO, l);
+        }
+        if (mav_st_.armed != mav_armed_) { mav_armed_ = mav_st_.armed; mav_.text(mav::MAV_SEVERITY_NOTICE, mav_armed_ ? "Armed" : "Disarmed"); mav_blk_sent_ = kMavNeverSent; mav_blk_ms_ = now_ms; }
+        const uint32_t blk = mav_st_.armed ? 0u : mav_blk_;
+        const uint32_t since = now_ms - mav_blk_ms_;
+        if ((blk != mav_blk_sent_ && since >= 2000u) || (blk && since >= 10000u)) {
+            char line[mav::Scheduler::kTextLen + 1]; size_t n = 0;
+            if (!blk) n = (size_t)snprintf(line, sizeof(line), "Ready to arm");
+            else {
+                n = (size_t)snprintf(line, sizeof(line), "Arming blocked:");
+                for (int b = 0; b < 32 && n < sizeof(line) - 1; b++) if ((blk >> b) & 1u) n += (size_t)snprintf(line + n, sizeof(line) - n, " %s", b < (int)(sizeof(wbp::kB_arm_blocker) / sizeof(wbp::kB_arm_blocker[0])) ? wbp::kB_arm_blocker[b] : "?");
+            }
+            (void)n; mav_.text(blk ? mav::MAV_SEVERITY_WARNING : mav::MAV_SEVERITY_INFO, line); mav_blk_sent_ = blk; mav_blk_ms_ = now_ms;
+        }
+        size_t room = sizeof(mav_buf_);
+        if (mav_uart_) { const size_t r = port::uart_room(*mav_uart_); if (r < room) room = r; }
+        const size_t n = mav_.poll(now_ms, mav_st_, mav_buf_, room);
+        if (!n) return;
+        if (mav_uart_) mav_uart_->write(mav_buf_, n);
+        if (mav_wifi_) for (size_t i = 0; i + mav::kHeaderLen + 2 <= n;) { const size_t l = mav::kHeaderLen + mav_buf_[i + 1] + 2u; mav_net.push(mav_buf_ + i, l); i += l; }
     }
 
     fc::GpsMeas gps_meas() {
@@ -1074,12 +1206,16 @@ private:
         tel_.course_ddeg = g.course_ddeg; tel_.hdop = g.hdop; tel_.hacc_mm = g.h_acc_mm; tel_.home_dist_m = gnss.home().distance_to_home_m();
         tel_.home_dir_ddeg = gnss.home().direction_to_home_ddeg(); tel_.gps_state = (uint8_t)gnss.state(); tel_.gps_baud = gnss.baud(); tel_.gps_rate_hz = gnss.rateHz();
         // calibration progress
-        tel_.cal_kind = cal_kind_; tel_.cal_mask = acc_cal_.mask();
+        tel_.cal_kind = cal_kind_; tel_.cal_mask = acc_cal_.mask(); tel_.cal_result = mag_result_;
         const float* raw = imu.rawAcc();
         switch (cal_kind_) {
         case wbp::CAL_KIND_GYRO: tel_.cal_state = (uint8_t)gyro_cal_state(); tel_.cal_progress = gyro_cal_progress(); raw = tel_.gyro_raw; break;
         case wbp::CAL_KIND_ACCEL: tel_.cal_state = (uint8_t)(acc_done_ && !acc_session_ ? CalState::DONE : acc_cal_.state()); tel_.cal_progress = acc_cal_.progress(); break;
         case wbp::CAL_KIND_MAG: tel_.cal_state = (uint8_t)mag_cal_state_; tel_.cal_progress = (uint8_t)(mag.calibrationProgress() * 100.0f + 0.5f); raw = mag.rawGauss(); break;
+        case wbp::CAL_KIND_MAG_AUTO: {
+            const MagAutoCal::State a = mag_auto_.state();
+            tel_.cal_state = (uint8_t)(a == MagAutoCal::DONE ? CalState::DONE : a == MagAutoCal::FAILED ? CalState::FAILED : a == MagAutoCal::IDLE ? CalState::IDLE : CalState::RUNNING);
+            tel_.cal_progress = mag_auto_.progress(); raw = mag.rawGauss(); break; }
         default: tel_.cal_state = 0; tel_.cal_progress = 0; break;
         }
         for (int i = 0; i < 3; i++) tel_.cal_raw[i] = raw[i];
@@ -1100,10 +1236,14 @@ private:
 
     wbp::Settings* s_ = nullptr;
     app::Telemetry tel_;
-    AccCalibrator acc_cal_; bool acc_session_ = false, acc_done_ = false; CalState mag_cal_state_ = CalState::IDLE; uint8_t cal_kind_ = 0; uint16_t cal_samples_ = 1000;
+    AccCalibrator acc_cal_; bool acc_session_ = false, acc_done_ = false; CalState mag_cal_state_ = CalState::IDLE; uint8_t cal_kind_ = 0, mag_result_ = 0;
+    MagAutoCal mag_auto_; app::StickCommands sticks_; uint16_t cal_samples_ = 1000;
     uint16_t rc_[16] = {1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
     uint32_t rc_seq_ = 0;
     bool rc_link_ = false, was_armed_ = false, reboot_pending_ = false, land_on_critical_ = true, acc_was_running_ = false; uint16_t capacity_mah_ = 0; bool edt_wanted_ = false, edt_asked_ = false;
+    mav::Scheduler mav_; mav::State mav_st_; port::SerialPort* mav_uart_ = nullptr; bool mav_on_ = false, mav_wifi_ = false, mav_armed_ = false; uint8_t mav_type_ = mav::MAV_TYPE_QUADROTOR;
+    static constexpr uint32_t kMavNeverSent = 0xFFFFFFFFu;     // (mav_blk_sent_ before the first text: 'Ready to arm' is news as well)
+    uint8_t mav_buf_[512] = {}; int mav_report_i_ = 0; uint32_t mav_blk_ = 0, mav_blk_sent_ = kMavNeverSent, mav_blk_ms_ = 0;
     crsf::Scheduler crsf_tlm_; uint8_t tlm_buf_[crsf::kMaxFrame] = {}; size_t tlm_n_ = 0;
     beep::Conditions beep_cond_; uint32_t beacons_ = 0, start_us_ = 0, gap_max_ = 0, cycle_gap_ = 0, bb_slow_ms_ = 0;
     uint32_t last_us_ = 0, next_us_ = 0, slow_us_ = 0, period_us_ = 250, stat_ms_ = 0, test_until_ms_ = 0, reboot_at_ms_ = 0, imu_errors_ = 0, imu_fail_streak_ = 0, slot_ = 0, loops_ = 0, loops_mark_ = 0;
@@ -1133,7 +1273,7 @@ private:
         app::LedInput in; const fc::CoreOutput& o = last_out_;
         in.armed = o.armed; in.ready = o.arm_blockers == 0; in.failsafe = o.failsafe != fc::FsStage::NONE;
         in.batt_warning = batt_state_ == wbp::BATT_STATE_WARNING; in.batt_critical = batt_state_ == wbp::BATT_STATE_CRITICAL;
-        in.calibrating = gyro_cal_state() == CalState::RUNNING || acc_cal_.running() || mag.calibrating();
+        in.calibrating = gyro_cal_state() == CalState::RUNNING || acc_cal_.running() || mag.calibrating() || mag_auto_.active();
         in.stall = (o.arm_blockers & (fc::AB_MOTOR_STALL | fc::AB_RUNAWAY_TAKEOFF)) != 0;
         in.mode = o.rescue_active ? app::LedInput::RESCUE : o.poshold_active ? app::LedInput::POSHOLD : o.althold_active ? app::LedInput::ALTHOLD
                 : ((o.modes >> fc::M_ANGLE) & 1u) ? app::LedInput::ANGLE : ((o.modes >> fc::M_STABILIZE) & 1u) ? app::LedInput::STABILIZE : app::LedInput::ACRO;

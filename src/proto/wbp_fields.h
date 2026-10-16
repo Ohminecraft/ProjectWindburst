@@ -22,9 +22,9 @@ static const char* const kE_mode[] = {"ARM", "ANGLE", "STABILIZE", "ALTHOLD", "P
 static const char* const kE_failsafe[] = {"NONE", "GUARD", "DESCENT", "LANDED"};
 static const char* const kE_ah_state[] = {"STOPPED", "LANDED_IDLE", "LANDED_PRE_TAKEOFF", "TAKEOFF", "FLYING"};
 static const char* const kE_gps_state[] = {"UNKNOWN", "INITIALIZED", "DETECT_BAUD", "CHANGE_BAUD", "CONFIGURE", "RECEIVING_DATA", "LOST_COMMUNICATION"};
-static const char* const kE_cal_kind[] = {"NONE", "GYRO", "ACCEL", "MAG"};
+static const char* const kE_cal_kind[] = {"NONE", "GYRO", "ACCEL", "MAG", "MAG_AUTO"};
 static const char* const kE_cal_state[] = {"IDLE", "RUNNING", "DONE", "FAILED"};
-static const char* const kE_mag_cal_result[] = {"OK", "TOO_FEW_SAMPLES", "POOR_COVERAGE", "SINGULAR", "NOT_ELLIPSOID", "TOO_DISTORTED", "BAD_FIELD_STRENGTH", "BAD_FIT"};
+static const char* const kE_mag_cal_result[] = {"OK", "TOO_FEW_SAMPLES", "POOR_COVERAGE", "SINGULAR", "NOT_ELLIPSOID", "TOO_DISTORTED", "BAD_FIELD_STRENGTH", "BAD_FIT", "NO_MOTION"};
 static const char* const kE_batt_source[] = {"AUTO", "ADC", "ESC", "NONE", "DRONECAN"};
 static const char* const kE_batt_state[] = {"NOT_PRESENT", "OK", "WARNING", "CRITICAL"};
 static const char* const kE_buzzer_type[] = {"ACTIVE", "PASSIVE"};
@@ -54,6 +54,7 @@ static const char* const kE_fs_procedure[] = {"LAND", "RESCUE"};
 static const char* const kE_servo_source[] = {"OFF", "CH1", "CH2", "CH3", "CH4", "CH5", "CH6", "CH7", "CH8", "CH9", "CH10", "CH11", "CH12", "CH13", "CH14", "CH15", "CH16"};
 static const char* const kE_curr_source[] = {"AUTO", "ADC", "ESC", "NONE", "DRONECAN"};
 static const char* const kE_port_assign[] = {"AUTO", "TABLE"};
+static const char* const kE_telemetry_protocol[] = {"NONE", "MAVLINK"};
 static const char* const kE_gps_alt[] = {"OFF", "FALLBACK", "BLEND"};
 static const char* const kE_ekf_mode[] = {"OFF", "SHADOW", "NAV"};
 static const char* const kE_gyro_use[] = {"FIRST", "SECOND", "BOTH"};
@@ -73,7 +74,7 @@ static const char* const kB_fs_cause[] = {"LINK", "SWITCH", "BATTERY"};
 static const char* const kB_nav_flags[] = {"POSHOLD", "POSHOLD_UNAVAILABLE", "RESCUE", "RESCUE_AVAILABLE", "NAV_LEAN", "POSHOLD_SLOW_GPS"};
 static const char* const kB_ekf_flags[] = {"ALIGNED", "GPS_AIDING", "HEADING_OK", "USED_FOR_NAV"};
 static const char* const kB_imu_src[] = {"IMU1", "IMU2"};
-constexpr int kFieldCount = 304;
+constexpr int kFieldCount = 315;
 static const FieldInfo kFields[kFieldCount] = {
     {SEC_GENERAL, "loop_hz", 0, FT_U16, 1, FF_RANGE, 1.0f, 500.0f, 8000.0f, nullptr, 0},
     {SEC_GENERAL, "est_hz", 2, FT_U16, 1, FF_RANGE, 1.0f, 100.0f, 1000.0f, nullptr, 0},
@@ -379,5 +380,16 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_LED, "count", 0, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 32.0f, nullptr, 0},
     {SEC_LED, "brightness", 1, FT_U8, 1, FF_RANGE, 1.0f, 5.0f, 100.0f, nullptr, 0},
     {SEC_LED, "layout", 2, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_led_layout, 2},
+    {SEC_TELEMETRY, "protocol", 0, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_telemetry_protocol, 2},
+    {SEC_TELEMETRY, "baud", 1, FT_U32, 1, FF_RANGE, 1.0f, 9600.0f, 2000000.0f, nullptr, 0},
+    {SEC_TELEMETRY, "tx_pin", 5, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_TELEMETRY, "rx_pin", 6, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_TELEMETRY, "sysid", 7, FT_U8, 1, FF_RANGE, 1.0f, 1.0f, 255.0f, nullptr, 0},
+    {SEC_TELEMETRY, "wifi", 8, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_TELEMETRY, "rate_attitude", 9, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 50.0f, nullptr, 0},
+    {SEC_TELEMETRY, "rate_position", 10, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 20.0f, nullptr, 0},
+    {SEC_TELEMETRY, "rate_hud", 11, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 20.0f, nullptr, 0},
+    {SEC_TELEMETRY, "rate_status", 12, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 10.0f, nullptr, 0},
+    {SEC_TELEMETRY, "rate_rc", 13, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 20.0f, nullptr, 0},
 };
 } // namespace wbp

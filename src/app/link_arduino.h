@@ -12,6 +12,7 @@
 #include "link_host.h"
 #include "tx_queue.h"
 #include "link_mux.h"
+#include "../telemetry/mavlink.h"
 #include "cli.h"
 #include "../hal/motor/esc4way.h"
 #if WB_PLATFORM_ESP32
@@ -180,6 +181,8 @@ public:
     void set_net(app::NetWire* net, app::LinkMux* mux) { net_ = net; mux_ = mux; }
     // The command line (cli.h): a terminal on the serial port sends '#' between two frames.
     void set_cli(app::Cli* cli) { cli_ = cli; }
+    // MAVLink telemetry over WiFi: the frames the sensor thread put into the ring go out as UDP broadcasts (set only when it is on)
+    void set_mav(mav::Ring* ring) { mav_ = ring; }
 
     // stack: the server keeps two ~520 byte frame buffers on the stack while answering, a log download another ~1 kB, and the
     // SD card's file system (FatFs with long file names on the stack) about 2 kB below that when a file is opened / listed / read
@@ -217,6 +220,7 @@ private:
                 m = net_->read(buf, (int)sizeof(buf));
                 if (m > 0) { if (mux_ && mux_->heard(app::LinkMux::WIFI_WIRE)) server_.on_idle(); server_.on_bytes(buf, (size_t)m); last_rx = now; }
             }
+            if (net_ && mav_) { uint8_t dg[1024]; size_t k; while ((k = mav_->pop(dg, sizeof(dg))) > 0) net_->datagram(dg, k); }     // (whole frames per datagram)
             if (n > 0 || m > 0) {}
             else if ((uint32_t)(now - last_rx) > 20u) { server_.on_idle(); last_rx = now; }   // a half-received frame is given up after 20 ms of silence
             if (!cli_ || !cli_->active()) server_.tick(now);     // (no stream frames into a terminal)
@@ -238,5 +242,5 @@ private:
     }
     wbp::Server& server_; Stream& port_; app::QueuedTransport& tx_; TaskHandle_t handle_ = nullptr;
     app::MspLink* msp_ = nullptr; EscPinsFn pins_ = nullptr;
-    app::NetWire* net_ = nullptr; app::LinkMux* mux_ = nullptr; app::Cli* cli_ = nullptr;
+    app::NetWire* net_ = nullptr; app::LinkMux* mux_ = nullptr; app::Cli* cli_ = nullptr; mav::Ring* mav_ = nullptr;
 };

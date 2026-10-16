@@ -81,9 +81,6 @@ inline bool dshot_packet_valid(uint16_t pkt, bool bidirectional) {
 WB_FAST inline uint32_t dshot_bit_ns(Protocol p) {
     switch (p) { case PROTO_DSHOT150: return 6667; case PROTO_DSHOT300: return 3333; case PROTO_DSHOT600: return 1667; case PROTO_PROSHOT1000: return 1000; default: return 833; }
 }   // (ProShot: 4 nibbles of 4 us = 16 us a frame, the same as 16 "bits" of 1 us)
-inline uint32_t dshot_kbps(Protocol p) {
-    switch (p) { case PROTO_DSHOT150: return 150; case PROTO_DSHOT300: return 300; case PROTO_DSHOT600: return 600; case PROTO_PROSHOT1000: return 1000; default: return 1200; }
-}
 
 // One RMT-style symbol: level0 for dur0 ticks, then level1 for dur1 ticks.
 struct Sym { uint16_t dur0; uint8_t lvl0; uint16_t dur1; uint8_t lvl1; };
@@ -129,17 +126,17 @@ inline uint32_t reply_bit_ns(Protocol p) { return (uint32_t)(dshot_bit_ns(p) * 4
 
 // 20 GCR bits (first transmitted bit = MSB) -> 12-bit value. kGcrInvalid on any bad group / checksum.
 WB_FAST inline uint32_t gcr_decode(uint32_t v20) {
-    static const uint8_t dec[32] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, 9,10,11,0xFF,13,14,15,
-                                    0xFF,0xFF, 2, 3,0xFF, 5, 6, 7,0xFF, 0, 8, 1,0xFF, 4,12,0xFF};
+    #define iv 0xFFFFFFFF
+    static const uint32_t dec[32] = {iv, iv, iv, iv, iv, iv, iv, iv, iv, 9, 10, 11, iv, 13, 14, 15,
+                                    iv, iv, 2, 3, iv, 5, 6, 7, iv, 0, 8, 1, iv, 4, 12, iv};
     v20 &= 0xFFFFF;
-    uint32_t out = 0;
-    for (int g = 0; g < 4; g++) {
-        const uint8_t n = dec[(v20 >> (5 * g)) & 0x1F];
-        if (n == 0xFF) return kGcrInvalid;
-        out |= (uint32_t)n << (4 * g);
-    }
+    uint32_t out = dec[v20 & 0x1F];
+    out |= dec[(v20 >> 5) & 0x1F] << 4;
+    out |= dec[(v20 >> 10) & 0x1F] << 8;
+    out |= dec[(v20 >> 15) & 0x1F] << 12;
+
     uint32_t c = out; c ^= c >> 8; c ^= c >> 4;
-    if ((c & 0xF) != 0xF) return kGcrInvalid;            // checksum: XOR of nibbles must be 0xF (inverted CRC)
+    if ((c & 0xF) != 0xF || out > 0xFFFF) return kGcrInvalid;            // checksum: XOR of nibbles must be 0xF (inverted CRC)
     return out >> 4;
 }
 // inverse, used by tests and by the ESC simulator

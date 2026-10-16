@@ -11,8 +11,6 @@
 #include "motor_hw.h"
 #include "dshot_direct.h"
 
-#if CONFIG_IDF_TARGET_ESP32S3
-#define WB_DSHOT_DIRECT 1
 #include "driver/gptimer.h"
 #include "driver/gpio.h"
 #include "esp_private/rmt.h"            // rmt_get_channel_id()
@@ -29,9 +27,6 @@
 // The RMT symbol memory (8 channels x 48 words on the ESP32-S3: transmitters 0..3, receivers 4..7). The address comes from the
 // SDK's linker script; the SDK only declares it in a private header, so it is declared here under our own name.
 extern "C" { extern volatile uint32_t wb_rmt_mem[] __asm__("RMTMEM"); }
-#else
-#define WB_DSHOT_DIRECT 0
-#endif
 
 // ============================================================================
 // DShot150/300/600/1200 and ProShot1000 on the ESP32-S3 RMT peripheral. The channels are created with the ESP-IDF driver (clock,
@@ -46,7 +41,6 @@ extern "C" { extern volatile uint32_t wb_rmt_mem[] __asm__("RMTMEM"); }
 // NOT yet confirmed on hardware: the DIRECT path, and with it bidirectional DShot.
 // ============================================================================
 
-#if WB_DSHOT_DIRECT
 // The hardware side of motor::DshotDirect on the ESP32-S3.
 class RmtDirectPort {
 public:
@@ -214,7 +208,6 @@ private:
     int count_ = 0; bool bidir_ = false, pullup_ = true; uint32_t tick_hz_ = 80000000;
     const char* fail_step_ = ""; esp_err_t fail_err_ = ESP_OK;
 };
-#endif // WB_DSHOT_DIRECT
 
 class DshotHw : public MotorHw {
 public:
@@ -230,18 +223,12 @@ public:
     WB_FAST bool bidirectional() const override { return bidir_; }
     motor::HwStats stats() const override {
         motor::HwStats s;
-#if WB_DSHOT_DIRECT
         const auto& d = direct_.stats();
         s.frames = d.frames; s.skipped = d.skipped; s.late_switch = d.late_switch; s.replies = d.replies; s.garbled = d.garbled;
-#endif
         return s;
     }
     bool rx_responsive(int slot) const override {
-#if WB_DSHOT_DIRECT
         return direct_.responsive(slot);
-#else
-        (void)slot; return false;
-#endif
     }
 
     bool begin(const uint8_t* pins, int count, motor::Protocol proto, uint16_t, bool bidirectional) override {
@@ -249,7 +236,6 @@ public:
         if (!motor::is_dshot(proto) || count < 1 || count > kMaxCh) return false;
         proto_ = proto; count_ = count; wanted_bidir_ = bidirectional;
         note_[0] = 0;
-#if WB_DSHOT_DIRECT
         bidir_ = bidirectional && motor::is_dshot_wire(proto);
         if (bidir_) {
             // bidirectional: set up, then prove on the board that every pin carries the frames and is heard by its receiver.
@@ -272,42 +258,28 @@ public:
         snprintf(note_, sizeof(note_), "%s failed (%s)", port_.failStep(), esp_err_to_name(port_.failErr()));
         port_.end();
         return false;
-#else
-        snprintf(note_, sizeof(note_), "not on this chip yet: the RMT direct path is written for the ESP32-S3");
-        (void)pins; return false;
-#endif
     }
 
     WB_FAST void write(const motor::Frame& f) override {
         if (!f.send) return;
-#if WB_DSHOT_DIRECT
         direct_.send(f.value, f.telem_request);
-#endif
     }
 
     WB_FAST bool poll_reply(int slot, uint32_t& gcr20) override {
-#if WB_DSHOT_DIRECT
         if (bidir_) return direct_.take_reply(slot, gcr20);
-#endif
         (void)slot; (void)gcr20; return false;
     }
 
 private:
     static constexpr int kMaxCh = 4;                                     // ESP32-S3: 4 RMT transmitters
 
-#if WB_DSHOT_DIRECT
     static void IRAM_ATTR on_alarm(void* self) { ((DshotHw*)self)->direct_.on_alarm(); }
-#endif
     void end() {
-#if WB_DSHOT_DIRECT
         port_.end();
-#endif
     }
 
-#if WB_DSHOT_DIRECT
     RmtDirectPort port_;
     motor::DshotDirect<RmtDirectPort> direct_;
-#endif
     motor::Protocol proto_ = motor::PROTO_DSHOT300;
     char note_[100] = {}; mutable char name_[140] = {};
     int count_ = 0; bool bidir_ = false, wanted_bidir_ = false, pullup_ = true;

@@ -22,6 +22,7 @@ struct NetWire : RawPort {
     virtual void poll(uint32_t now_ms) = 0;                  // every pass of the link task: accept a client, follow the radio
     virtual int read(uint8_t* buf, int cap) = 0;             // bytes from the client; 0 = none (or no client)
     virtual bool take_dropped() = 0;                         // the client went away since the last call
+    virtual void datagram(const uint8_t*, size_t) {}          // MAVLink telemetry: one UDP broadcast to the ground stations (port 14550)
 };
 
 class LinkMux : public RawPort {

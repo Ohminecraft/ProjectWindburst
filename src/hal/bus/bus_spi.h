@@ -9,6 +9,26 @@
 #include <SPI.h>
 #include "../../port/gpio.h"
 
+// WB_SPI_DIRECT: the IMU's burst read goes straight to the SPI controller's registers instead of through the Arduino SPI library
+// (ESP32-S3 only). The library takes two mutexes and sets the clock up again for every transfer, and sets the chip-select pin
+// with digitalWrite - all of it code in flash: about two thirds of the 37 us an IMU read took at 6 kHz on the first board that
+// measured it (0.17). Only the IMU uses that SPI host (SPI_DEVICE_0: the barometer, the flow sensor, the LED strip and the SD
+// card are on SPI_DEVICE_1), and only the flight task reads it, so no lock is missed. IMUAccGyro switches it on after the chip
+// is set up and checks the readings with it; when they are not plausible it goes back to the library.
+//   Off for a comparison:   build_flags = ... -DWB_SPI_DIRECT=0
+#if !defined(WB_SPI_DIRECT)
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && !WB_PLATFORM_STM32
+#define WB_SPI_DIRECT 1
+#else
+#define WB_SPI_DIRECT 0
+#endif
+#endif
+#if WB_SPI_DIRECT
+#include "soc/spi_struct.h"
+#include "soc/gpio_struct.h"
+#include "hal/gpio_ll.h"
+#endif
+
 struct SPIBus_config_t
 {
     uint8_t ioSckGpio;
@@ -52,10 +72,27 @@ public:
     }
 #else
     SPIBus(SPIBus_device_e port = SPI_DEVICE_0)
-        : _spi((int)port)
+        : _host(port), _spi((int)port)
     {
     }
 #endif
+
+    // The clock of the burst reads (SPIReadRegisterMask with a buffer): the chip's limit, set once the chip is known. Writes and
+    // single-register reads keep the slow clock.
+    void setFastClock(uint32_t hz) { _config.bus_clock_fast_hz = hz; _fastSettings = SPISettings(hz, MSBFIRST, SPI_MODE3); }
+    uint32_t fastClock() const { return _config.bus_clock_fast_hz; }
+    // The burst reads past the Arduino library (WB_SPI_DIRECT). false: not on this chip / this bus, it stays off.
+    bool setDirect(bool on)
+    {
+#if WB_SPI_DIRECT
+        _direct = on && _initialized && _host == SPI_DEVICE_0;
+        _programmed = false;
+        return _direct;
+#else
+        (void)on; return false;
+#endif
+    }
+    bool direct() const { return _direct; }
 
     bool SPIInit(const SPIBus_config_t& config)
     {
@@ -101,6 +138,7 @@ public:
         _config = host._config;
         _config.ioCsGpio = csGpio;
         _bus = host._bus;
+        _host = host._host;
         _cs = port::apin(csGpio);
         pinMode(_cs, OUTPUT);
         digitalWrite(_cs, HIGH);
@@ -362,6 +400,9 @@ public:
         if (!_initialized || buffer == nullptr || length == 0) {
             return false;
         }
+#if WB_SPI_DIRECT
+        if (_direct && length <= kBurstMax) return direct_read(reg, buffer, length);
+#endif
 
         _bus->beginTransaction(_fastSettings);
 
@@ -399,6 +440,45 @@ public:
 
 private:
     static constexpr size_t kBurstMax = 31;   // address + data fit the SPI hardware buffer (64 bytes) with room to spare
+
+#if WB_SPI_DIRECT
+    // One full-duplex transfer of address + data, as the library's spiTransferBytesNL does it on the S3 (the controller was left
+    // full-duplex, MSB first, by SPIClass::begin), with the chip select set straight in the GPIO registers.
+    WB_FAST bool direct_read(uint8_t reg, uint8_t* buffer, size_t length)
+    {
+        spi_dev_t* d = &GPSPI2;                                  // SPI_DEVICE_0 = FSPI = SPI2 on the S3
+        // clock and mode: set through the library once, and again whenever someone else's transfer changed them (the slow
+        // writes, the second IMU with another clock)
+        if (!_programmed || d->clock.val != _clock_reg) {
+            _bus->beginTransaction(_fastSettings); _bus->endTransaction();
+            _clock_reg = d->clock.val; _programmed = true;
+        }
+        const uint32_t n = (uint32_t)length + 1, words = (n + 3) >> 2;
+        uint32_t w[(kBurstMax + 1 + 3) / 4] = {};
+        w[0] = (uint32_t)(reg | 0x80);                           // the first byte out is the low byte of the first word
+        gpio_ll_set_level(&GPIO, _cs, 0);
+        d->ms_dlen.ms_data_bitlen = n * 8 - 1;
+        for (uint32_t i = 0; i < words; i++) d->data_buf[i] = w[i];
+        bool ok = true;
+        d->cmd.update = 1;
+        for (uint32_t k = 0; d->cmd.update; k++) if (k > kSpinMax) { ok = false; break; }
+        if (ok) {
+            d->cmd.usr = 1;
+            for (uint32_t k = 0; d->cmd.usr; k++) if (k > kSpinMax) { ok = false; break; }   // (32 bytes at 8 MHz: 32 us)
+        }
+        if (ok) for (uint32_t i = 0; i < words; i++) w[i] = d->data_buf[i];
+        gpio_ll_set_level(&GPIO, _cs, 1);
+        if (!ok) { _programmed = false; return false; }          // a controller that never finishes: one failed read (the loop skips the sample)
+        const uint8_t* rx = (const uint8_t*)w;
+        for (size_t i = 0; i < length; i++) buffer[i] = rx[i + 1];
+        return true;
+    }
+    static constexpr uint32_t kSpinMax = 20000;                  // register polls, ~1 ms: far beyond any transfer
+    uint32_t _clock_reg = 0;
+    bool _programmed = false;
+#endif
+    bool _direct = false;
+    SPIBus_device_e _host = SPI_DEVICE_0;
 
     SPIClass _spi;
     SPIClass* _bus = &_spi;    // the bus the transfers go through: our own, or the host's (SPIInitShared)

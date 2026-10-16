@@ -68,6 +68,7 @@ public:
 
     bool data_ready() override { uint8_t v; return rd(STATUS, &v, 1) && (v & 0x40); }   // drdy_gyr
     float gyro_rate_hz() const override { return gyro_hz_; }
+    uint32_t max_spi_read_hz() const override { return 10000000; }         // datasheet: 10 MHz
     float acc_rate_hz() const override { return 800.0f; }
 
 private:
@@ -91,7 +92,7 @@ private:
         return false;
     }
     void wake_spi() { if (bus_.is_spi()) { uint8_t d; bus_.read_u8(CHIP_ID, d); } }   // CS edge switches the chip into SPI mode
-    bool rd(uint8_t reg, uint8_t* buf, size_t len) {
+    WB_FAST bool rd(uint8_t reg, uint8_t* buf, size_t len) {
         if (!bus_.is_spi()) return bus_.read(reg, buf, len);
         uint8_t tmp[16];                                         // len <= 12 here; 1 dummy byte first
         if (len + 1 > sizeof(tmp) || !bus_.read(reg, tmp, len + 1)) return false;

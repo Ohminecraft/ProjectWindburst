@@ -393,7 +393,7 @@ export const ENUM_LABELS = {
   mag_cal_result: {
     OK: 'thành công', TOO_FEW_SAMPLES: 'quá ít mẫu, xoay máy lâu hơn', POOR_COVERAGE: 'chưa xoay đủ mọi hướng', SINGULAR: 'dữ liệu không đủ để tính',
     NOT_ELLIPSOID: 'dữ liệu không ra hình ellipsoid (có nhiễu từ mạnh?)', TOO_DISTORTED: 'từ trường bị méo quá nhiều (để xa kim loại, dây nguồn)',
-    BAD_FIELD_STRENGTH: 'cường độ từ trường không hợp lý', BAD_FIT: 'khớp kém, làm lại',
+    BAD_FIELD_STRENGTH: 'cường độ từ trường không hợp lý', BAD_FIT: 'khớp kém, làm lại', NO_MOTION: 'máy không được xoay trong 15 giây',
   },
 };
 

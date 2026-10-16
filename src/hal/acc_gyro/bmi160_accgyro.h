@@ -69,6 +69,7 @@ public:
 
     bool data_ready() override { uint8_t v; return bus_.read_u8(STATUS, v) && (v & 0x40); }   // drdy_gyr
     float gyro_rate_hz() const override { return gyro_hz_; }
+    uint32_t max_spi_read_hz() const override { return 10000000; }         // datasheet: 10 MHz
     float acc_rate_hz() const override { return 800.0f; }
 
 private:

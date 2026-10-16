@@ -6,6 +6,7 @@
 #include "../config/fast_code.h"
 
 #include <stdint.h>
+#include <math.h>
 
 // ============================================================================
 // The lock between the two threads of FlightApp.
@@ -115,6 +116,17 @@ template <class P> struct TickLoop {
     }
 };
 
+// The loop rate for a gyro that has a new sample gyro_hz times a second: every n-th of its samples, at most 10 % faster than the
+// setting asks. A rate in between - 6000 Hz from a chip at 8000 (0.17 on the first board) - reads three samples in four, a
+// quarter of them twice as old as the others, while the filters and the PID take them as evenly spaced: what moves at the
+// difference frequency is folded into the loop. Betaflight offers only the divisors of the chip's rate for the same reason.
+inline float loop_rate_for(float want_hz, float gyro_hz) {
+    if (!(gyro_hz > 0.0f) || !(want_hz > 0.0f)) return want_hz;
+    int n = (int)ceilf(gyro_hz / (want_hz * 1.1f) - 1e-4f);
+    if (n < 1) n = 1;
+    return gyro_hz / (float)n;
+}
+
 // Which UART an optical-flow sensor that talks over one (MSP) gets: 1, 2, 0 - or -1 when none is left. UART1 belongs to the GPS
 // and UART2 to a serial receiver when those are in use; UART0 is free only when the app's link is on USB.
 inline int flow_uart(bool gps_on_uart1, bool receiver_on_uart2, bool uart0_free) {
@@ -134,13 +146,26 @@ inline int esc_uart(bool gps_on_uart1, bool receiver_on_uart2, bool uart0_free, 
     }
     return -1;
 }
+// AUTO: the MAVLink telemetry (section telemetry) gets the UART that is left after the GPS, the receiver, an MSP flow sensor and the
+// ESC telemetry wire (-1 = none of them is left).
+inline int telemetry_uart(bool gps_on_uart1, bool receiver_on_uart2, bool uart0_free, int flow_uart, int esc_uart) {
+    const int order[3] = {1, 2, 0};
+    for (int u : order) {
+        if (u == flow_uart || u == esc_uart) continue;
+        if (u == 1 && gps_on_uart1) continue;
+        if (u == 2 && receiver_on_uart2) continue;
+        if (u == 0 && !uart0_free) continue;
+        return u;
+    }
+    return -1;
+}
 // Which UART (0..2, -1 = none) serves the GPS, the serial receiver and an MSP flow sensor.
 //   AUTO:  GPS on UART1, receiver on UART2 (fixed, as before); the flow sensor gets what is left (flow_uart(), decided after the
 //          other two have started - pass gps_on / rx_on then).
 //   TABLE: the ports section's function per UART (port_function: NONE, SERIAL_RX, GPS, TELEMETRY = unused, FLOW_MSP).
 //          UART0 only when the app link does not use it (native USB). A device with no UART in the table gets a reason.
 enum PortFn : uint8_t { PF_NONE, PF_SERIAL_RX, PF_GPS, PF_TELEMETRY, PF_FLOW_MSP, PF_ESC_SENSOR };     // == schema enum port_function
-struct UartPlan { int gps = -1, rx = -1, flow = -1, esc = -1; const char* why = ""; };
+struct UartPlan { int gps = -1, rx = -1, flow = -1, esc = -1, tlm = -1; const char* why = ""; };      // tlm: TABLE only (AUTO: telemetry_uart)
 inline UartPlan plan_uarts(bool table, const uint8_t fn[3], bool want_gps, bool want_rx, bool want_flow, bool uart0_free, bool gps_on, bool rx_on) {
     UartPlan p;
     if (!table) {
@@ -150,9 +175,9 @@ inline UartPlan plan_uarts(bool table, const uint8_t fn[3], bool want_gps, bool 
     }
     bool uart0_wanted = false;
     for (int u = 0; u < 3; u++) {
-        if (fn[u] != PF_GPS && fn[u] != PF_SERIAL_RX && fn[u] != PF_FLOW_MSP && fn[u] != PF_ESC_SENSOR) continue;
+        if (fn[u] != PF_GPS && fn[u] != PF_SERIAL_RX && fn[u] != PF_FLOW_MSP && fn[u] != PF_ESC_SENSOR && fn[u] != PF_TELEMETRY) continue;
         if (u == 0 && !uart0_free) { uart0_wanted = true; continue; }
-        int& slot = fn[u] == PF_GPS ? p.gps : fn[u] == PF_SERIAL_RX ? p.rx : fn[u] == PF_FLOW_MSP ? p.flow : p.esc;
+        int& slot = fn[u] == PF_GPS ? p.gps : fn[u] == PF_SERIAL_RX ? p.rx : fn[u] == PF_FLOW_MSP ? p.flow : fn[u] == PF_TELEMETRY ? p.tlm : p.esc;
         if (slot < 0) slot = u;
     }
     if (!want_gps) p.gps = -1;

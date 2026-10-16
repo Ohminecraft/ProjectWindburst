@@ -70,7 +70,7 @@ struct Telemetry {
     // ---- a section the firmware changed by itself and wants written to flash (in-flight level trim): the link task saves it when seq changes
     uint8_t fw_saved_seq = 0, fw_saved_section = 0; uint8_t trim_progress = 0;      // trim_progress: % of the in-flight level trim measurement
     // ---- calibration in progress
-    uint8_t cal_kind = 0, cal_progress = 0, cal_state = 0, cal_mask = 0; float cal_raw[3] = {};
+    uint8_t cal_kind = 0, cal_progress = 0, cal_state = 0, cal_mask = 0, cal_result = 0; float cal_raw[3] = {};
 };
 
 // value / scale, rounded, saturated to the integer type; NaN and infinities become 0 (a broken sensor never produces garbage on the wire)
@@ -173,7 +173,7 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
         T_gyro_fast o; for (int i = 0; i < 3; i++) { o.raw[i] = s16(t.gyro_raw[i], scale::gyro_fast_raw); o.filt[i] = s16(t.gyro_f[i], scale::gyro_fast_filt); }
         memcpy(out, &o, sizeof(o)); break; }
     case STR_CALIBRATION: {
-        T_calibration o; o.kind = t.cal_kind; o.progress = t.cal_progress; o.state = t.cal_state; o.mask = t.cal_mask; o.inflight_trim = t.trim_progress;
+        T_calibration o; o.kind = t.cal_kind; o.progress = t.cal_progress; o.state = t.cal_state; o.mask = t.cal_mask; o.inflight_trim = t.trim_progress; o.result = t.cal_result;
         for (int i = 0; i < 3; i++) o.raw[i] = s16(t.cal_raw[i], scale::calibration_raw);
         memcpy(out, &o, sizeof(o)); break; }
     case STR_BATTERY: {

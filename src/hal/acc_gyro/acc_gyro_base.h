@@ -24,6 +24,12 @@
 
 #include "../../config/hardware_config.h"
 
+// Upper limit of the IMU's SPI read clock, whatever the chip allows (drivers: max_spi_read_hz). For long wires or a doubtful board:
+//   build_flags = ... -DWB_IMU_SPI_MAX_HZ=8000000          (8 MHz: what every earlier version used)
+#ifndef WB_IMU_SPI_MAX_HZ
+#define WB_IMU_SPI_MAX_HZ 20000000
+#endif
+
 // ---------------------------------------------------------------------------------------------------------------------
 // IMUAccGyro: detect -> init -> read. Output is in the BOARD frame (FRD), physical units (g, deg/s), gyro bias removed.
 // ---------------------------------------------------------------------------------------------------------------------
@@ -98,7 +104,20 @@ private:
     bool finish_init(const AgInitConfig& cfg) {
         if (!create_driver()) { fail_ = "unsupported device"; return false; }
         if (!drv_->init(cfg)) { fail_ = "WHO_AM_I / init failed after detection"; destroy(); return false; }
-        return sanity_check();
+        if (!proxy_.is_spi()) return sanity_check();
+        // SPI: the sensor data is read at the chip's own limit and past the Arduino library (bus_spi.h, WB_SPI_DIRECT). Each step
+        // back - the library, then the old 8 MHz - is taken only when the readings with the faster one are not plausible
+        // (long wires, a chip that does not keep its datasheet, the direct path not working on this board).
+        const uint32_t lim = drv_->max_spi_read_hz() < (uint32_t)WB_IMU_SPI_MAX_HZ ? drv_->max_spi_read_hz() : (uint32_t)WB_IMU_SPI_MAX_HZ;
+        const uint32_t safe = lim < kSafeSpiHz ? lim : kSafeSpiHz;
+        const struct { uint32_t hz; bool direct; } steps[3] = {{lim, true}, {lim, false}, {safe, false}};
+        for (const auto& st : steps) {
+            spi_.setFastClock(st.hz);
+            if (spi_.setDirect(st.direct) != st.direct) continue;          // (no direct path on this chip: the next step is the same clock without it)
+            if (sanity_check(false)) return true;
+        }
+        destroy();
+        return false;
     }
 
 public:
@@ -180,11 +199,15 @@ public:
     const char* name() const { return drv_ ? drv_->name() : "none"; }
     IMUAccGyroDevice detected() const { return imu_detected; }
     float gyroRateHz() const { return drv_ ? drv_->gyro_rate_hz() : 0.0f; }
+    // SPI: the clock the sensor data is read with, and whether past the Arduino library (0 / false on I2C)
+    uint32_t spiClockHz() const { return drv_ && proxy_.is_spi() ? spi_.fastClock() : 0; }
+    bool spiDirect() const { return drv_ && proxy_.is_spi() && spi_.direct(); }
     const char* failReason() const { return fail_; }
 
 private:
     // A live chip on a still board reads |acc| ~ 1 g. Catches wrong scale, wrong endianness, dead/floating bus.
-    bool sanity_check() {
+    // last = false: the caller tries again another way, the driver is kept.
+    bool sanity_check(bool last = true) {
         float nmin = 1e9f, nmax = 0; int good = 0;
         for (int i = 0; i < 20; i++) {
             AgSample s;
@@ -196,8 +219,9 @@ private:
             }
             ag_delay_us(2000);
         }
-        if (good < 10) { fail_ = "IMU detected but reads keep failing"; destroy(); return false; }
-        if (nmin < 0.6f || nmax > 1.6f) { fail_ = "IMU accel magnitude is not ~1 g (board moving, or wrong scale)"; destroy(); return false; }
+        if (good < 10) { fail_ = "IMU detected but reads keep failing"; if (last) destroy(); return false; }
+        if (nmin < 0.6f || nmax > 1.6f) { fail_ = "IMU accel magnitude is not ~1 g (board moving, or wrong scale)"; if (last) destroy(); return false; }
+        fail_ = "";
         return true;
     }
 
@@ -221,6 +245,8 @@ private:
         return true;
     }
     void destroy() { drv_ = nullptr; }
+
+    static constexpr uint32_t kSafeSpiHz = 8000000;             // the read clock every earlier version used
 
     // One instance of every driver (a few dozen bytes each, no heap, no placement new); drv_ points at the detected one.
     AgBusProxy proxy_;

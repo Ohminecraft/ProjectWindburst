@@ -10,6 +10,7 @@
 #include "../src/hal/mag/qmc5883_mag.h"
 #include "../src/hal/mag/ak8963_mpu9250_mag.h"
 #include "../src/hal/mag/mag_base.h"
+#include "../src/hal/mag/mag_autocal.h"
 #include "../src/core/ahrs.h"
 
 // ---- Arduino stubs: I2C routed to the simulated chip at one address (same scheme as test_baro) ----
@@ -261,8 +262,89 @@ static void t_manager() {
     CHECK(!m.readyForFusion(ms + 1000), "sensor lost: compass drops out");
 }
 
+// The automatic calibration: a craft turned by hand (a tumbling direction, gyro ~120 deg/s), the samples of a compass with a
+// hard-iron offset (and, the second time, the soft-iron matrix of an earlier full calibration in place).
+struct Tumble {
+    double q[4] = {1, 0, 0, 0}; double w[3]; uint32_t ms = 0;
+    explicit Tumble(double wx = 1.2, double wy = 0.9, double wz = 1.7) { w[0] = wx; w[1] = wy; w[2] = wz; }
+    // the earth field (0.3 N, 0.38 down) in the body frame after dt of turning
+    void step(double dt, double b[3]) {
+        const double h = 0.5 * dt, dq[4] = {-h * (q[1] * w[0] + q[2] * w[1] + q[3] * w[2]), h * (q[0] * w[0] + q[2] * w[2] - q[3] * w[1]), h * (q[0] * w[1] - q[1] * w[2] + q[3] * w[0]), h * (q[0] * w[2] + q[1] * w[1] - q[2] * w[0])};
+        double n = 0; for (int k = 0; k < 4; k++) { q[k] += dq[k]; n += q[k] * q[k]; } n = sqrt(n); for (int k = 0; k < 4; k++) q[k] /= n;
+        const double E[3] = {0.30, 0.0, 0.38}, a = q[0], x = q[1], y = q[2], z = q[3];
+        const double R[3][3] = {{1 - 2 * (y * y + z * z), 2 * (x * y + a * z), 2 * (x * z - a * y)}, {2 * (x * y - a * z), 1 - 2 * (x * x + z * z), 2 * (y * z + a * x)}, {2 * (x * z + a * y), 2 * (y * z - a * x), 1 - 2 * (x * x + y * y)}};
+        for (int i = 0; i < 3; i++) b[i] = R[i][0] * E[0] + R[i][1] * E[1] + R[i][2] * E[2];
+        ms += (uint32_t)lround(dt * 1000.0);
+        if (ms % 1500 < (uint32_t)lround(dt * 1000.0)) { const double t = w[0]; w[0] = w[1]; w[1] = -w[2]; w[2] = t; }      // the hand changes its grip
+    }
+    double rate_dps() const { return sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]) * 57.2958; }
+};
+static void t_autocal() {
+    printf("[auto calibration] turned by hand, ends by itself; keeps the soft-iron matrix\n");
+    const float off[3] = {0.12f, -0.08f, 0.05f};
+    {   MagAutoCal a; MagCal none; a.start(0, none); Tumble t; double b[3]; uint32_t ms = 0;
+        for (int i = 0; i < 3000 && a.active(); i++) {                  // 2 s still on the bench first, then turned: 100 Hz compass
+            ms += 10; float raw[3]; double rate = 0;
+            if (ms > 2000) { t.step(0.01, b); rate = t.rate_dps(); } else { b[0] = 0.30; b[1] = 0; b[2] = 0.38; }
+            for (int k = 0; k < 3; k++) raw[k] = (float)(b[k] + off[k] + gauss(0.002));
+            a.feed(raw, (float)rate, ms);
+        }
+        const MagCal& c = a.calibration();
+        CHECK(a.state() == MagAutoCal::DONE && a.result() == MagCalResult::OK && a.take_finished() == MagAutoCal::DONE && a.take_finished() == MagAutoCal::IDLE, "done by itself after %.1f s of turning", (ms - 2000) / 1000.0);
+        CHECK(ms < 2000 + 15000, "well inside the 30 s window (%u ms)", ms);
+        CHECK(near_(c.offset[0], 0.12, 0.01) && near_(c.offset[1], -0.08, 0.01) && near_(c.offset[2], 0.05, 0.01) && near_(c.radius, sqrt(0.3 * 0.3 + 0.38 * 0.38), 0.01) && c.m[0][0] == 1 && c.m[0][1] == 0,
+              "offset %.3f %.3f %.3f (true 0.12 -0.08 0.05), field %.3f G, matrix identity", c.offset[0], c.offset[1], c.offset[2], c.radius);
+        CHECK(a.progress() == 100, "progress 100 %% at the end"); }
+    {   // an earlier full calibration with a soft-iron matrix: the chip sees M^-1 * field + offset; the matrix stays, the offset is renewed
+        MagCal prev; prev.valid = true; prev.radius = 0.48f; const float M[3][3] = {{1.10f, 0.05f, 0.0f}, {0.05f, 0.92f, 0.02f}, {0.0f, 0.02f, 1.0f}};
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) prev.m[i][j] = M[i][j];
+        double Mi[3][3]; { const double d = M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1]) - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
+          Mi[0][0] = (M[1][1] * M[2][2] - M[1][2] * M[2][1]) / d; Mi[0][1] = (M[0][2] * M[2][1] - M[0][1] * M[2][2]) / d; Mi[0][2] = (M[0][1] * M[1][2] - M[0][2] * M[1][1]) / d;
+          Mi[1][0] = (M[1][2] * M[2][0] - M[1][0] * M[2][2]) / d; Mi[1][1] = (M[0][0] * M[2][2] - M[0][2] * M[2][0]) / d; Mi[1][2] = (M[0][2] * M[1][0] - M[0][0] * M[1][2]) / d;
+          Mi[2][0] = (M[1][0] * M[2][1] - M[1][1] * M[2][0]) / d; Mi[2][1] = (M[0][1] * M[2][0] - M[0][0] * M[2][1]) / d; Mi[2][2] = (M[0][0] * M[1][1] - M[0][1] * M[1][0]) / d; }
+        MagAutoCal a; a.start(0, prev); Tumble t(1.5, -1.0, 1.2); double b[3]; uint32_t ms = 0;
+        for (int i = 0; i < 4000 && a.active(); i++) { ms += 10; t.step(0.01, b); float raw[3]; for (int k = 0; k < 3; k++) raw[k] = (float)(Mi[k][0] * b[0] + Mi[k][1] * b[1] + Mi[k][2] * b[2] + off[k] + gauss(0.002)); a.feed(raw, (float)t.rate_dps(), ms); }
+        const MagCal& c = a.calibration();
+        float fixed[3]; const float raw0[3] = {(float)(Mi[0][0] * 0.3 + Mi[0][2] * 0.38 + off[0]), (float)(Mi[1][0] * 0.3 + Mi[1][2] * 0.38 + off[1]), (float)(Mi[2][0] * 0.3 + Mi[2][2] * 0.38 + off[2])}; c.apply(raw0, fixed);
+        CHECK(a.state() == MagAutoCal::DONE && near_(c.offset[0], 0.12, 0.01) && near_(c.offset[1], -0.08, 0.01) && near_(c.offset[2], 0.05, 0.01) && c.m[0][0] == 1.10f && c.m[1][2] == 0.02f,
+              "soft iron in place: offset %.3f %.3f %.3f in raw space, the matrix kept", c.offset[0], c.offset[1], c.offset[2]);
+        CHECK(near_(fixed[0], 0.30, 0.01) && near_(fixed[1], 0.0, 0.01) && near_(fixed[2], 0.38, 0.01), "the result applied gives the earth field back (%.3f %.3f %.3f)", fixed[0], fixed[1], fixed[2]); }
+    {   MagAutoCal a; MagCal none; a.start(0, none); const float raw[3] = {0.42f, -0.08f, 0.43f}; uint32_t ms = 0;
+        for (int i = 0; i < 1700 && a.active(); i++) { ms += 10; a.feed(raw, 2.0f, ms); }
+        CHECK(a.state() == MagAutoCal::FAILED && a.result() == MagCalResult::NO_MOTION && ms >= 15000 && ms <= 15020, "nobody turns it: NO_MOTION after 15 s (%u ms)", ms); }
+    {   MagAutoCal a; MagCal none; a.start(0, none); uint32_t ms = 0; double yaw = 0;                       // only turned flat, about yaw
+        for (int i = 0; i < 4000 && a.active(); i++) { ms += 10; yaw += 0.02; const float raw[3] = {(float)(0.3 * cos(yaw) + off[0]), (float)(-0.3 * sin(yaw) + off[1]), (float)(0.38 + off[2])}; a.feed(raw, 115.0f, ms); }
+        CHECK(a.state() == MagAutoCal::FAILED && a.result() == MagCalResult::POOR_COVERAGE && ms >= 30000, "turned flat only (one axis): POOR_COVERAGE when the 30 s are up (%u ms, %d bins)", ms, a.bins()); }
+    {   MagAutoCal a; MagCal none; a.start(0, none); Tumble t; double b[3]; uint32_t ms = 0;               // a field 4x too strong (a magnet next to it)
+        for (int i = 0; i < 4000 && a.active(); i++) { ms += 10; t.step(0.01, b); float raw[3]; for (int k = 0; k < 3; k++) raw[k] = (float)(4.0 * b[k] + off[k]); a.feed(raw, (float)t.rate_dps(), ms); }
+        CHECK(a.state() == MagAutoCal::FAILED && a.result() == MagCalResult::BAD_FIELD_STRENGTH, "a field of %.1f G: BAD_FIELD_STRENGTH (state %d result %d)", 4.0 * 0.4833, (int)a.state(), (int)a.result()); }
+    {   MagAutoCal a; MagCal none; a.start(0, none); Tumble t; double b[3]; uint32_t ms = 0;               // the compass stops answering half way
+        for (int i = 0; i < 200; i++) { ms += 10; t.step(0.01, b); float raw[3]; for (int k = 0; k < 3; k++) raw[k] = (float)(b[k] + off[k]); a.feed(raw, (float)t.rate_dps(), ms); }
+        for (int i = 0; i < 3000 && a.active(); i++) { ms += 10; a.tick(ms); }
+        CHECK(a.state() == MagAutoCal::FAILED && a.result() == MagCalResult::TOO_FEW_SAMPLES, "the compass goes quiet: the window still ends (%u ms)", ms); }
+    {   // turned, then put down on a bench where a tool lies next to it and is moved about (the field it reads wanders while the
+        // craft is still), then turned again: what it read while still must not count
+        MagAutoCal a; MagCal none; a.start(0, none); Tumble t; double b[3]; uint32_t ms = 0;
+        for (int i = 0; i < 150; i++) { ms += 10; t.step(0.01, b); float raw[3]; for (int k = 0; k < 3; k++) raw[k] = (float)(b[k] + off[k]); a.feed(raw, (float)t.rate_dps(), ms); }
+        for (int i = 0; i < 600; i++) { ms += 10; const double ph = i * 0.02; float raw[3]; for (int k = 0; k < 3; k++) raw[k] = (float)(b[k] + off[k] + 0.25 * sin(ph + k)); a.feed(raw, 1.0f, ms); }
+        for (int i = 0; i < 3000 && a.active(); i++) { ms += 10; t.step(0.01, b); float raw[3]; for (int k = 0; k < 3; k++) raw[k] = (float)(b[k] + off[k]); a.feed(raw, (float)t.rate_dps(), ms); }
+        const MagCal& c = a.calibration();
+        CHECK(a.state() == MagAutoCal::DONE && near_(c.offset[0], 0.12, 0.01) && near_(c.offset[1], -0.08, 0.01) && near_(c.offset[2], 0.05, 0.01), "readings while it lies still (a tool moved next to it) are left out: %.3f %.3f %.3f", c.offset[0], c.offset[1], c.offset[2]); }
+    {   // a noisy compass (0.02 G) and low thresholds (15 samples, 8 bins, 0.5 s): the settle rule alone has to wait for a good estimate
+        MagAutoCal a; a.cfg.min_samples = 15; a.cfg.min_bins = 8; a.cfg.min_motion_ms = 500; MagCal none; a.start(0, none); Tumble t; double b[3]; uint32_t ms = 0, first_enough = 0;
+        for (int i = 0; i < 4000 && a.active(); i++) { ms += 10; t.step(0.01, b); float raw[3]; for (int k = 0; k < 3; k++) raw[k] = (float)(b[k] + off[k] + gauss(0.02)); a.feed(raw, (float)t.rate_dps(), ms);
+            if (!first_enough && a.samples() >= a.cfg.min_samples && a.bins() >= a.cfg.min_bins && ms >= a.cfg.min_motion_ms) first_enough = ms; }
+        const MagCal& c = a.calibration();
+        CHECK(a.state() == MagAutoCal::DONE && ms >= first_enough + a.cfg.settle_ms && near_(c.offset[0], 0.12, 0.02) && near_(c.offset[1], -0.08, 0.02) && near_(c.offset[2], 0.05, 0.02),
+              "noisy compass: done %u ms after it first had enough (it waits for a settled estimate), offset %.3f %.3f %.3f", ms - first_enough, c.offset[0], c.offset[1], c.offset[2]); }
+    {   MagAutoCal a; MagCal none; a.start(0, none); Tumble t; double b[3]; uint32_t ms = 0;               // far too noisy (15 % of the field)
+        for (int i = 0; i < 4000 && a.active(); i++) { ms += 10; t.step(0.01, b); float raw[3]; for (int k = 0; k < 3; k++) raw[k] = (float)(b[k] + off[k] + gauss(0.07)); a.feed(raw, (float)t.rate_dps(), ms); }
+        CHECK(a.state() == MagAutoCal::FAILED && a.result() == MagCalResult::BAD_FIT, "noise of 15 %% of the field: BAD_FIT (result %d)", (int)a.result()); }
+    {   MagAutoCal a; MagCal none; a.start(0, none); a.cancel(); CHECK(!a.active() && a.take_finished() == MagAutoCal::IDLE, "cancel: nothing to report"); }
+}
+
 int main() {
     t_manager();
-    t_hmc(); t_qmc(); t_ak(); t_calibration(); t_processor(); t_heading();
+    t_hmc(); t_qmc(); t_ak(); t_calibration(); t_processor(); t_heading(); t_autocal();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

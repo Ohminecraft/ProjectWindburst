@@ -18,6 +18,7 @@
 //   uart_begin(...)        pins, baud, frame format, inverted lines (SBUS)
 //   uart_set_baud(...)     another baud on the same pins (GPS auto baud)
 //   uart_read(...)         up to n bytes that are already there, never waits
+//   uart_room(...)         bytes a write() takes now without waiting (telemetry fills no more than that)
 //
 // STM32 notes (STM32duino 3.0):
 //   * the receive buffer is SERIAL_RX_BUFFER_SIZE for every port (platformio.ini sets 1024: 24 ms of CRSF at 420 kbaud);
@@ -37,6 +38,7 @@ inline bool uart_begin(SerialPort& u, uint32_t baud, uint32_t config, uint8_t rx
 }
 inline void uart_set_baud(SerialPort& u, uint32_t baud) { u.flush(); u.updateBaudRate(baud); }
 inline size_t uart_read(SerialPort& u, uint8_t* buf, size_t n) { return u.read(buf, n); }
+inline size_t uart_room(SerialPort& u) { const int r = u.availableForWrite(); return r > 0 ? (size_t)r : 0u; }
 inline const char* uart_name(SerialPort&) { return ""; }
 
 #else
@@ -148,6 +150,7 @@ inline size_t uart_read(SerialPort& u, uint8_t* buf, size_t n) {
     while (k < n) { const int c = u.read(); if (c < 0) break; buf[k++] = (uint8_t)c; }
     return k;
 }
+inline size_t uart_room(SerialPort& u) { if (!u.started) return 0; const int r = u.availableForWrite(); return r > 0 ? (size_t)r : 0u; }
 #endif
 
 } // namespace port

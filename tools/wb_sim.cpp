@@ -27,6 +27,7 @@
 //   sdcard put <number> <bytes>  a file wb_<number>.wblog of that size that is already on the card (the card lives in RAM: empty at every start)
 //   carry <z> <vn> <ve>          somebody holds the craft level, z m above the floor, and walks at vn / ve m/s (north / east)     carry off   puts it down
 //   wind <n> <e>                 the air moves at this speed (m/s towards north / east)
+//   tumble <wx> <wy> <wz>        somebody holds the craft up and turns it at these body rates (rad/s); tumble off puts it down level
 //   linkpause <s>                the link stops sending its streams for s (simulated) seconds but still answers requests
 //   flow quality <0..255>        what the MSP flow sensor reports about the surface      flow dark 0|1   the PMW3901 sees nothing
 //   flow plug 0|1                pull / push the plug of the MSP sensor                  flow mount <deg> <mirror 0|1> <scale>   how the sensor sits on the craft
@@ -166,6 +167,12 @@ static std::string control(Rig& r, const std::string& line, bool& quit) {
         if (sscanf(line.c_str(), "%*s %lf %lf %lf", &a, &b, &c) == 3 && a >= 0.05 && a <= 50 && fabs(b) <= 20 && fabs(c) <= 20) { p.held = true; p.set_tilt(0, 0, p.yaw_deg()); p.w[0] = p.w[1] = p.w[2] = 0; p.z = (float)a; p.hold_vn = (float)b; p.hold_ve = (float)c; return "ok"; }
         if (sscanf(line.c_str(), "%*s %15s", word) == 1 && !strcmp(word, "off")) { const float yaw = p.yaw_deg(); p.held = false; p.hold_vn = p.hold_ve = 0; p.vn = p.ve = 0; r.board.rest(0, 0); p.set_tilt(0, 0, yaw); return "ok"; }
         return "err carry <z> <vn> <ve> | carry off";
+    }
+    if (!strcmp(cmd, "tumble")) {
+        Plant& p = r.board.plant;
+        if (sscanf(line.c_str(), "%*s %lf %lf %lf", &a, &b, &c) == 3 && fabs(a) <= 10 && fabs(b) <= 10 && fabs(c) <= 10) { p.held = true; p.hold_vn = p.hold_ve = 0; p.z = 0.3f; p.w[0] = (float)a; p.w[1] = (float)b; p.w[2] = (float)c; return "ok"; }
+        if (sscanf(line.c_str(), "%*s %15s", word) == 1 && !strcmp(word, "off")) { p.held = false; r.board.rest(0, 0); return "ok"; }
+        return "err tumble <wx> <wy> <wz> | tumble off";
     }
     if (!strcmp(cmd, "wind") && sscanf(line.c_str(), "%*s %lf %lf", &a, &b) == 2 && fabs(a) <= 30 && fabs(b) <= 30) { r.board.plant.wind_n = (float)a; r.board.plant.wind_e = (float)b; return "ok"; }
     if (!strcmp(cmd, "flow") && sscanf(line.c_str(), "%*s %15s", word) == 1) {

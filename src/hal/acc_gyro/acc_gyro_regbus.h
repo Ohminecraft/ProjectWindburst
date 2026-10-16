@@ -38,6 +38,9 @@ public:
     virtual bool data_ready() { return true; }
     virtual float gyro_rate_hz() const = 0;   // actual configured gyro ODR
     virtual float acc_rate_hz() const = 0;
+    // The fastest SPI clock the chip's datasheet allows for reading the sensor data (register writes stay slow). The ESP32 makes
+    // its clock by dividing 80 MHz: 20 MHz and 10 MHz come out exactly.
+    virtual uint32_t max_spi_read_hz() const { return 8000000; }
 
     static int16_t be16(const uint8_t* p) { return (int16_t)((p[0] << 8) | p[1]); }
     static int16_t le16(const uint8_t* p) { return (int16_t)((p[1] << 8) | p[0]); }

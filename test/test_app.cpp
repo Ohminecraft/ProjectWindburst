@@ -16,6 +16,7 @@
 #include "../src/app/tx_queue.h"
 #include "../src/app/link_mux.h"
 #include "../src/hal/led/ws2812.h"
+#include "../src/app/stick_commands.h"
 #include "../src/proto/settings_apply.h"
 #include "../src/config/hardware_config.h"
 #include "../src/config/pin_check.h"
@@ -506,6 +507,21 @@ static void t_pins_load() {
 }
 
 // ---- which UART serves the GPS, the serial receiver, an MSP flow sensor
+static void t_loop_rate() {
+    printf("[loop rate] a divisor of the gyro's sample rate, at most 10 %% above the setting\n");
+    using app::loop_rate_for;
+    struct Row { float want, gyro, expect; const char* why; };
+    const Row rows[] = {
+        {4000, 4000, 4000, "the chip's rate: unchanged"}, {8000, 8000, 8000, "8 kHz on an 8 kHz chip"},
+        {6000, 8000, 4000, "6 kHz from an 8 kHz chip: every second sample (the first board, 0.17)"},
+        {3000, 3200, 3200, "BMI270 at 3.2 kHz, 3 kHz asked: the chip's rate (7 % more)"},
+        {2000, 8000, 2000, "every fourth"}, {500, 1000, 500, "every second"}, {9000, 8000, 8000, "faster than the chip: the chip's rate"},
+        {2000, 2666.67f, 1333.33f, "MPU6500 at 8 kHz / 3: never 33 % more than asked"},
+    };
+    for (const Row& r : rows) { const float h = loop_rate_for(r.want, r.gyro); CHECK(fabsf(h - r.expect) < 0.5f, "%.0f Hz asked, gyro %.0f Hz -> %.0f Hz: %s", r.want, r.gyro, h, r.why); }
+    CHECK(loop_rate_for(4000, 0) == 4000 && loop_rate_for(0, 8000) == 0, "no gyro rate known (or nonsense asked): the setting as it is");
+}
+
 static void t_uart_plan() {
     printf("[uart plan] AUTO and the function table\n");
     using namespace app;
@@ -525,7 +541,11 @@ static void t_uart_plan() {
     const uint8_t t2[3] = {PF_NONE, PF_GPS, PF_GPS};
     { UartPlan p = plan_uarts(true, t2, true, true, false, true, false, false); CHECK(p.gps == 1 && p.rx == -1, "TABLE: GPS twice: the first UART; no receiver in the table: none"); }
     const uint8_t t3[3] = {PF_TELEMETRY, PF_TELEMETRY, PF_SERIAL_RX};
-    { UartPlan p = plan_uarts(true, t3, true, true, false, true, false, false); CHECK(p.gps == -1 && p.rx == 2 && !*p.why, "TABLE: TELEMETRY is not a device (unused)"); }
+    { UartPlan p = plan_uarts(true, t3, true, true, false, true, false, false); CHECK(p.gps == -1 && p.rx == 2 && p.tlm == 0 && !*p.why, "TABLE: TELEMETRY twice: the first UART (MAVLink)"); }
+    { UartPlan p = plan_uarts(true, t3, true, true, false, false, false, false); CHECK(p.tlm == 1 && *p.why, "TABLE: TELEMETRY on UART0 while the app uses it: the next one, and why"); }
+    CHECK(telemetry_uart(true, true, false, -1, -1) == -1 && telemetry_uart(true, true, true, -1, -1) == 0 && telemetry_uart(false, true, false, -1, -1) == 1
+          && telemetry_uart(true, false, true, -1, 2) == 0 && telemetry_uart(false, false, true, 1, 2) == 0 && telemetry_uart(false, false, false, 1, 2) == -1,
+          "AUTO: telemetry gets what GPS, receiver, flow sensor and ESC wire left, UART1, 2, then 0 (app on USB)");
 }
 
 
@@ -572,10 +592,28 @@ static void t_led() {
       CHECK(led::encode(k, 3, b, 40) == 0, "a buffer too small: nothing"); }
 }
 
+static void t_sticks() {
+    printf("[stick commands] gyro and compass calibration from the sticks, disarmed\n");
+    using app::StickCommands; StickCommands sc; uint32_t ms = 0; StickCommands::Cmd got = StickCommands::NONE; uint32_t at = 0;
+    auto hold = [&](uint16_t r, uint16_t p, uint16_t y, uint16_t t, bool armed, bool link, uint32_t dur) { got = StickCommands::NONE; for (uint32_t e = ms + dur; ms < e; ms += 7) { const auto c = sc.update(r, p, y, t, armed, link, ms); if (c) { got = c; at = ms; } } };
+    hold(1500, 1500, 1500, 1000, false, true, 500);
+    hold(1500, 1000, 1500, 2000, false, true, 1500); const uint32_t start = ms - 1500;
+    CHECK(got == StickCommands::MAG_CAL && at - start >= 990 && at - start < 1020, "throttle high + pitch back, 1 s: MAG_CAL (after %u ms)", at - start);
+    hold(1500, 1000, 1500, 2000, false, true, 3000); CHECK(got == StickCommands::NONE, "held on: fires once");
+    hold(1500, 1500, 1500, 1000, false, true, 200); hold(1500, 1000, 1000, 1000, false, true, 1200); CHECK(got == StickCommands::GYRO_CAL, "throttle low + yaw left + pitch back: GYRO_CAL");
+    hold(1500, 1500, 1500, 1000, false, true, 200); hold(1500, 1000, 1500, 2000, false, true, 900); hold(1500, 1500, 1500, 2000, false, true, 300); hold(1500, 1000, 1500, 2000, false, true, 900);
+    CHECK(got == StickCommands::NONE, "let go before the second is up: nothing (the hold starts again)");
+    hold(1500, 1500, 1500, 1000, false, true, 200); hold(1500, 1000, 1500, 2000, true, true, 2000); CHECK(got == StickCommands::NONE, "armed: never");
+    hold(1500, 1500, 1500, 1000, false, true, 200); hold(1500, 1000, 1500, 2000, false, false, 2000); CHECK(got == StickCommands::NONE, "the link lost (failsafe values): never");
+    hold(1500, 1500, 1500, 1000, false, true, 200); hold(1800, 1000, 1500, 2000, false, true, 2000); CHECK(got == StickCommands::NONE, "roll not centred: no command");
+    CHECK(StickCommands::pattern(1500, 1000, 1500, 1950) == StickCommands::MAG_CAL && StickCommands::pattern(1500, 1150, 1500, 1950) == StickCommands::NONE && StickCommands::pattern(1500, 1000, 1000, 1950) == StickCommands::NONE,
+          "thresholds: pitch under 1100, throttle over 1900, yaw centred for the compass");
+}
+
 int main() {
-    t_pack();
+    t_pack(); t_sticks();
     t_sync();
-    t_tx_queue(); t_gate(); t_host(); t_exchange(); t_acc(); t_level(); t_settings(); t_hwconfig(); t_pins_load(); t_uart_plan(); t_link_mux(); t_led();
+    t_tx_queue(); t_gate(); t_host(); t_exchange(); t_acc(); t_level(); t_settings(); t_hwconfig(); t_pins_load(); t_loop_rate(); t_uart_plan(); t_link_mux(); t_led();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

@@ -791,6 +791,22 @@ def test_compass_calibration_flow(gui):
     assert cal["mag_valid"] is True and cal["mag_offset"] == pytest.approx([0.12, -0.08, 0.05], abs=0.02)
     gui.sim.do("pose 0 0 0")
     pg.wait_for_function("!/la bàn chưa hiệu chuẩn/.test(document.getElementById('ready').textContent)", timeout=8000)
+    # the automatic one: the button, then the craft turned by hand; it ends and saves by itself
+    gui.sim.do("magerr 0.02 0.11 -0.06")
+    pg.click("#mag-auto")
+    pg.wait_for_function("/Đang chờ/.test(document.getElementById('mag-state').textContent)")
+    for i in range(16):
+        gui.sim.do("tumble %g %g %g" % [(1.2, 0.9, 1.7), (-1.4, 1.1, 0.6), (0.8, -1.6, -1.0), (1.5, 0.4, -1.3)][i % 4])
+        gui.sim.sleep(1.5)
+        if "Xong" in pg.inner_text("#mag-state"):
+            break
+    gui.sim.do("tumble off")
+    pg.wait_for_function("/^Xong: la bàn đã hiệu chuẩn và đã tự lưu/.test(document.getElementById('mag-state').textContent)", timeout=8000)
+    assert gui.hub.fc.get("calibration")["mag_offset"] == pytest.approx([0.02, 0.11, -0.06], abs=0.02)
+    pg.click("#mag-auto")
+    pg.wait_for_function("/Đang chờ/.test(document.getElementById('mag-state').textContent)")
+    gui.sim.sleep(16)
+    pg.wait_for_function("/^Không được: máy không được xoay trong 15 giây/.test(document.getElementById('mag-state').textContent)", timeout=8000)
 
 
 # ---------------------------------------------------------------------------------------------------------------------

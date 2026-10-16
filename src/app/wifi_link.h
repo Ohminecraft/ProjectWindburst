@@ -98,6 +98,20 @@ public:
         return 0;
     }
 
+    // MAVLink telemetry: a UDP broadcast to port 14550 on the network the board is in (AP: its own; STA: the router's), where
+    // Mission Planner and QGroundControl listen. Never waits: a datagram the stack cannot take now is dropped.
+    void datagram(const uint8_t* d, size_t n) override {
+        if (state_ != wbp::WIFI_STATE_AP && state_ != wbp::WIFI_STATE_CONNECTED) return;
+        if (udp_ < 0) {
+            udp_ = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (udp_ < 0) return;
+            int one = 1; lwip_setsockopt(udp_, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one)); nonblocking(udp_);
+        }
+        const IPAddress bc = mode_ == wbp::WIFI_MODE_AP ? WiFi.softAPBroadcastIP() : WiFi.broadcastIP();
+        sockaddr_in a = {}; a.sin_family = AF_INET; a.sin_port = htons(14550); a.sin_addr.s_addr = (uint32_t)bc;
+        if (lwip_sendto(udp_, d, n, 0, (sockaddr*)&a, sizeof(a)) > 0) datagrams_++;
+    }
+    uint32_t datagrams() const { return datagrams_; }
     uint8_t state() const { return state_; }
     uint32_t ip() const { return ip_; }                    // lowest byte first, as lwIP keeps it (192.168.4.1 = 0x0104A8C0)
     int16_t rssi() const { return rssi_; }
@@ -118,7 +132,7 @@ private:
     void drop() { if (client_ >= 0) { lwip_close(client_); client_ = -1; dropped_ = true; } }
 
     uint8_t mode_ = 0, state_ = 0, clients_ = 0; uint16_t port_ = 5760;
-    int listen_ = -1, client_ = -1; bool dropped_ = false;
+    int listen_ = -1, client_ = -1, udp_ = -1; bool dropped_ = false; uint32_t datagrams_ = 0;
     uint32_t ip_ = 0, sta_ms_ = 0, listen_ms_ = 0, accepted_ = 0; int16_t rssi_ = 0;
 };
 #else

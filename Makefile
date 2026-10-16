@@ -8,7 +8,7 @@ STUB = -DARDUINO=1 -Itest/arduino_stub
 # `make apptest`   : the Python client against the simulator (needs python3, pyserial, pytest)
 # `make proto`     : regenerate src/proto/wbp_schema.h after editing protocol/wbp_schema.json
 # `make mutate`    : mutation test of the protocol / link / receiver / calibration / app glue (deliberate bugs; every one must be caught - takes hours, see docs/HANDOFF.md). GUI: python3 tools/mutate_gui.py
-test: build/test_core build/test_ekf build/test_control build/test_nav build/test_flight build/test_accgyro build/test_manager build/test_motor build/test_baro build/test_range build/test_flowsensor build/test_gps build/test_mag build/test_dshot build/test_esc4way build/test_port build/test_proto build/test_rx build/test_power build/test_blackbox build/test_app build/test_fw build/test_threads
+test: build/test_core build/test_ekf build/test_control build/test_nav build/test_flight build/test_accgyro build/test_manager build/test_motor build/test_baro build/test_range build/test_flowsensor build/test_gps build/test_mag build/test_dshot build/test_esc4way build/test_port build/test_proto build/test_cli build/test_can build/test_mavlink build/test_rx build/test_power build/test_blackbox build/test_app build/test_fw build/test_threads
 	./build/test_core
 	./build/test_ekf
 	./build/test_control
@@ -26,6 +26,9 @@ test: build/test_core build/test_ekf build/test_control build/test_nav build/tes
 	./build/test_esc4way
 	./build/test_port
 	./build/test_proto
+	./build/test_cli
+	./build/test_can
+	./build/test_mavlink
 	./build/test_rx
 	./build/test_power
 	./build/test_blackbox
@@ -47,6 +50,7 @@ FLAGS_test_flowsensor = $(STUB)
 FLAGS_test_gps = $(STUB)
 FLAGS_test_mag = $(STUB)
 FLAGS_test_proto = -Wno-sign-compare
+FLAGS_test_cli = -Wno-sign-compare
 FLAGS_test_blackbox = -pthread
 FLAGS_test_app = -pthread
 # firmware-in-the-loop: the real FlightApp + drivers + core + WBP server on a virtual board (chip simulators + plant)

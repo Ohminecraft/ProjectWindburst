@@ -113,6 +113,8 @@ public:
     uint32_t single_reads = 0, block_reads = 0;                   // (tests: how the firmware reads)
     size_t write(const uint8_t* d, size_t n) { stub_io(); if (dev && started) dev->dev_write(d, n); return n; }
     size_t write(uint8_t c) { return write(&c, 1); }
+    int tx_room = 1024;                                           // (tests: what availableForWrite() says - a slow UART is a small number)
+    int availableForWrite() { return started ? tx_room : 0; }
 private:
     bool have_ = false; uint8_t peek_ = 0;
 };

@@ -29,8 +29,41 @@ Khi disarm, chu kỳ dừng sau phần RC; khi arm còn chạy Altitude Hold / �
 
 **Chưa đo trên mạch.** Cần số: tab Tổng quan, "Thời gian từng khâu" và "Vòng PID thực tế" khi disarm / arm Acro / Angle / Stabilize, với `pid_denom` 1 và 2.
 
+## Đo trên mạch lần đầu (0.17, Acro, đặt 6000 Hz)
+| | |
+|---|---|
+| một chu kỳ | trung bình 131 µs, dài nhất 449 µs |
+| chu kỳ chạy thật | 5566 Hz trên 6000 (mất 437 chu kỳ mỗi giây) |
+| từng khâu | đọc IMU 37 · tính toán 66 · gửi motor 26 · còn lại 10 µs |
+| Angle / Stabilize | ít hơn Acro khoảng 100 / 200 Hz |
+
+Hai nguyên nhân:
+1. **Hết thời gian.** Chu kỳ 6000 Hz dài 167 µs, mà task bay phải chừa cho luồng cảm biến ¼ thời gian của mỗi chu kỳ (`app::TickBudget`): 131 µs × 1,25 = 164 µs, gần sát giới hạn, nên mỗi chu kỳ dài (bộ ước lượng, dài nhất 449 µs) đều làm mất tick.
+2. **6000 không chia hết tốc độ của chip.** Chip ICM / MPU khi được yêu cầu 6000 Hz sẽ chạy 8000 Hz; vòng 6000 Hz đọc 3 trong 4 mẫu, ở những khoảng cách không đều (một phần tư số mẫu cũ gấp đôi những mẫu khác), trong khi bộ lọc và PID coi chúng là đều nhau.
+
+## Tần số vòng lặp chia hết tốc độ của chip (0.18, sau lần đo)
+`app::loop_rate_for` (`src/app/sync.h`): vòng lặp lấy **mỗi mẫu thứ n** của chip, nhanh hơn setting tối đa 10 %. Ví dụ:
+
+| setting | chip | vòng lặp |
+|---|---|---|
+| 6000 | 8000 (ICM, MPU) | **4000** |
+| 3000 | 3200 (BMI270) | 3200 |
+| 4000 / 8000 | 4000 / 8000 | không đổi |
+
+Báo cáo khởi động ghi lý do: `imu: SPI ICM42688P (20 MHz direct), gyro 4000 Hz (setting 6000 Hz: the chip delivers 8000 Hz), control 4000 Hz (1/1)`. Muốn nhanh hơn 4000 Hz: đặt 8000 với `pid_denom` 2.
+
+## Đọc IMU nhanh hơn (0.18, sau lần đo)
+37 µs cho 13 – 15 byte là quá nhiều: ở 8 MHz dây chỉ mất khoảng 15 µs, phần còn lại là thư viện SPI của Arduino (hai mutex, đặt lại clock mỗi lần, `digitalWrite` cho chân CS - tất cả nằm trong flash).
+- **Clock theo chip** (`AccGyroDriver::max_spi_read_hz`): ICM-426xx / 456xx, MPU6000 / 6500 / 9250: 20 MHz; ICM-20601 / 20602, BMI160 / 270: 10 MHz. Trước đây mọi chip đều 8 MHz. Ghi thanh ghi vẫn dùng clock chậm.
+- **Đọc thẳng thanh ghi SPI** (`SPIBus::direct_read`, chỉ ESP32-S3): ghi `data_buf`, `cmd.update`, `cmd.usr` như thư viện làm, CS bằng `GPIO.out_w1ts/w1tc`; nằm trong IRAM. Chỉ IMU dùng SPI_DEVICE_0 và chỉ task bay đọc nó, nên không cần khoá. Khi clock trên thanh ghi bị người khác đổi (ghi chậm, IMU thứ hai), nó tự đặt lại qua thư viện. Bộ điều khiển không xong trong ~1 ms: một lần đọc lỗi (vòng lặp bỏ mẫu đó), không treo.
+- **Tự lùi khi số đọc vô lý** (`IMUAccGyro::finish_init`): thử clock của chip + đọc trực tiếp; nếu 20 mẫu đầu không ra ~1 g thì thử clock đó qua thư viện; rồi 8 MHz qua thư viện. Báo cáo khởi động cho biết kết quả: `(20 MHz direct)`, `(20 MHz)` hoặc `(8 MHz)`.
+- Tắt để so sánh: `-DWB_SPI_DIRECT=0` (về thư viện), `-DWB_IMU_SPI_MAX_HZ=8000000` (về 8 MHz, ví dụ khi dây dài).
+
+**Chưa đo trên mạch.** Cần xem lại "Thời gian từng khâu" (đọc IMU) và dòng `imu:` của báo cáo khởi động.
+
 ## Kiểm thử
 - `test_flight` nhóm `pid_denom`: chu kỳ nào là chu kỳ điều khiển, motor giữ lệnh, gyro lọc mới ở mọi mẫu, ước lượng giữ 500 Hz, Angle / Acro 5 inch / Stabilize / tư thế qua cú lật với chia 1, 2, 4.
 - `test_fw` nhóm `loop`: báo cáo khởi động, `status.pid_hz` / `pid_target`, 2000 lệnh motor mỗi giây ở 4000 / 2, hạ `pid_denom` khi dưới 500 Hz, cơ sở thời gian của log.
 - `test_proto`: bố cục và nạp section `general` cũ. `test_core` nhóm fast trigonometry.
 - Mutant: `python3 tools/mutate.py denom`, `python3 tools/mutate.py fastmath`.
+- `test_app` nhóm `loop rate`: bảng `loop_rate_for`. `test_fw` nhóm `loop`: 6000 Hz trên chip 8000 Hz chạy 4000 Hz và báo cáo nói lý do; clock SPI của IMU trong báo cáo (trên PC không có đường đọc trực tiếp).
