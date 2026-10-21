@@ -81,6 +81,9 @@ inline bool dshot_packet_valid(uint16_t pkt, bool bidirectional) {
 WB_FAST inline uint32_t dshot_bit_ns(Protocol p) {
     switch (p) { case PROTO_DSHOT150: return 6667; case PROTO_DSHOT300: return 3333; case PROTO_DSHOT600: return 1667; case PROTO_PROSHOT1000: return 1000; default: return 833; }
 }   // (ProShot: 4 nibbles of 4 us = 16 us a frame, the same as 16 "bits" of 1 us)
+inline uint32_t dshot_kbps(Protocol p) {
+    switch (p) { case PROTO_DSHOT150: return 150; case PROTO_DSHOT300: return 300; case PROTO_DSHOT600: return 600; case PROTO_PROSHOT1000: return 1000; default: return 1200; }
+}
 
 // One RMT-style symbol: level0 for dur0 ticks, then level1 for dur1 ticks.
 struct Sym { uint16_t dur0; uint8_t lvl0; uint16_t dur1; uint8_t lvl1; };
@@ -186,6 +189,36 @@ WB_FAST inline uint32_t runs_to_gcr(const Run* runs, int n, uint32_t bit) {
     return levels_to_gcr(lv);
 }
 
+// A whole capture window -> 20 GCR bits, the way Betaflight decodes it (drivers/dshot_bitbang_decode.c, pwm_output_dshot_shared.c):
+// the receiver may hold more than the reply, so first find the start bit (the first LOW run at least half a reply bit long;
+// before it: the idle line, a glitch, the edge of the pin changing hands), then the runs must add up to 18..21 bits. Only a HIGH
+// run may go past bit 21: that is the idle line after a reply that ends high. A LOW run past bit 21 is not a reply (Betaflight:
+// bits != 21 => invalid). `err` says why a capture was rejected - it tells a timing problem (no start bit) from a noisy line.
+enum ReplyError : uint8_t { RE_OK, RE_NO_START, RE_BITS };
+struct ReplyDecode { uint32_t gcr = kGcrInvalid; ReplyError err = RE_NO_START; };
+WB_FAST inline ReplyDecode reply_from_runs(const Run* runs, int n, uint32_t bit) {
+    ReplyDecode r;
+    if (bit == 0) return r;
+    int i = 0;
+    while (i < n && (runs[i].level != 0 || runs[i].dur < bit / 2)) i++;
+    if (i >= n) return r;
+    r.err = RE_BITS;
+    uint8_t lv[21]; int pos = 0;
+    for (; i < n && pos < 21; i++) {
+        int bits = (int)((runs[i].dur + bit / 2) / bit);
+        if (bits < 1) return r;
+        if (pos + bits > 21) {
+            if (runs[i].level == 0) return r;
+            bits = 21 - pos;
+        }
+        for (int k = 0; k < bits; k++) lv[pos++] = runs[i].level;
+    }
+    if (pos < 18) return r;
+    while (pos < 21) lv[pos++] = 1;
+    r.gcr = levels_to_gcr(lv); r.err = RE_OK;
+    return r;
+}
+
 // 12-bit reply value -> telemetry (drivers/dshot.c). eRPM frame: eeemmmmmmmmm = period in us.
 enum TelemType : uint8_t { TT_NONE, TT_ERPM, TT_TEMP, TT_VOLT, TT_CURRENT, TT_DEBUG1, TT_DEBUG2, TT_DEBUG3, TT_STATE };
 struct Telem { TelemType type = TT_NONE; uint32_t value = 0; };    // value: ERPM => eRPM/100 ; TEMP => degC ; VOLT => 0.25 V ; CURRENT => A
@@ -241,6 +274,7 @@ inline float pulse_period_min_us(Protocol p) {              // frame period must
 // idle_frac = motor idle (0..1 of range), limit = motor output limit (0..1).
 // ---------------------------------------------------------------------------------------------------------------------
 struct Endpoints { float disarm, low, high; };
+constexpr float kMinCommandUs = 1000.0f;                    // Betaflight motorConfig.mincommand
 inline Endpoints endpoints(Protocol p, const PulseEndpoints& pe, float idle_frac, float limit) {
     Endpoints e;
     if (is_can(p)) {                                        // 0 = stop; armed: never below 1 (a 0 in flight would stop the motor)
@@ -252,7 +286,10 @@ inline Endpoints endpoints(Protocol p, const PulseEndpoints& pe, float idle_frac
         e.low = kDshotMinThrottle + idle_frac * kDshotRange;
         e.high = kDshotMaxThrottle - kDshotRange * (1.0f - limit);
     } else {
-        e.disarm = pe.disarmed;
+        // disarmed: pulses of pulse_disarmed, 0 = Betaflight's mincommand (1000 us, or the armed minimum when that is lower). Never
+        // "no pulse": an ESC arms only after it has seen its zero throttle (AM32: zero_input_count), and one that first sees a high
+        // throttle - a motor test - starts its throttle calibration instead (AM32 above 1500 us, BLHeli at full throttle).
+        e.disarm = pe.disarmed > 0 ? pe.disarmed : (pe.armed < kMinCommandUs ? pe.armed : kMinCommandUs);
         e.low = pe.armed + idle_frac * (pe.max - pe.armed);
         e.high = pe.max - (pe.max - e.low) * (1.0f - limit);
     }

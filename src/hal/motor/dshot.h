@@ -45,6 +45,10 @@ extern "C" { extern volatile uint32_t wb_rmt_mem[] __asm__("RMTMEM"); }
 class RmtDirectPort {
 public:
     static constexpr int kMaxCh = 4;
+    // where a receive channel's memory block and signal sit in the group: the S3 has 4 transmit-only channels and then 4
+    // receive-only ones (receive channel r = block r + 4); the plain ESP32's 8 channels each do both (r = block r). (ESP-IDF
+    // rmt_private.h, RMT_RX_CHANNEL_OFFSET_IN_GROUP)
+    static constexpr int kRxOffset = SOC_RMT_CHANNELS_PER_GROUP - SOC_RMT_RX_CANDIDATES_PER_GROUP;
     typedef void (*AlarmFn)(void*);
 
     bool begin(const uint8_t* pins, int count, bool bidir, motor::Protocol proto, AlarmFn fn, void* arg, bool pullup = true) {
@@ -80,24 +84,20 @@ public:
         a.alarm_count = us; a.flags.auto_reload_on_alarm = false;        // one shot: the hardware disarms it when it fires
         gptimer_set_alarm_action(timer_, &a);
     }
-    // The pin changes hands the way esp-fc does it (EscDriverEsp32: enableTx / enableRx), the bidirectional DShot driver known to
-    // work on the ESP32-S3: every switch routes the pad through the GPIO matrix again. Talking: input path off, the transmitter's
-    // signal connected, output on. Listening: output off, input path on, the receiver's signal connected. (Before 0.8.2 both
-    // signals stayed connected and only the output enable was switched: on the board the ESC then took no frame at all.)
-    // The output enable is the GPIO_ENABLE bit (OEN_SEL = 1), so gpio_ll_output_disable() really lets go of the line.
+    // Talking: the transmitter's signal routed to the pad again (as esp-fc EscDriverEsp32::enableTx does), output on. Listening:
+    // output off. The output enable is the GPIO_ENABLE bit (OEN_SEL = 1), so gpio_ll_output_disable() really lets go of the line.
+    // The input path is NOT switched (0.18.2): listen() turns it on once and it stays on, so the receiver never sees the 0 -> 1
+    // step of an input being switched on (an ESP32 pad reads back the level it drives; the receiver is stopped while we talk).
+    // (Before 0.8.2 the transmitter's signal was routed once and only the output enable was switched: on the board the ESC then
+    // took no frame at all - the routing per switch stays.)
     WB_FAST void drive(int c) {
         if (!bidir_) { gpio_ll_output_enable(&GPIO, pin_[c]); return; }          // one-way: as in 0.6 - 0.8.1, the path known to spin motors
-        PIN_INPUT_DISABLE(iomux_[c]);
         esp_rom_gpio_connect_out_signal(pin_[c], tx_sig_[c], false, false);
         gpio_ll_set_output_enable_ctrl(&GPIO, pin_[c], false, false);
         gpio_ll_output_enable(&GPIO, pin_[c]);
     }
-    WB_FAST void release(int c) {
-        gpio_ll_output_disable(&GPIO, pin_[c]);
-        PIN_INPUT_ENABLE(iomux_[c]);
-        esp_rom_gpio_connect_in_signal(pin_[c], rx_sig_[c], false);
-    }
-    // start-up check only: also listen while driving (an ESP32 pad reads back the level it drives)
+    WB_FAST void release(int c) { gpio_ll_output_disable(&GPIO, pin_[c]); }
+    // the receiver hears the pin from now on, also while we drive it
     void listen(int c) { PIN_INPUT_ENABLE(iomux_[c]); esp_rom_gpio_connect_in_signal(pin_[c], rx_sig_[c], false); }
     WB_FAST void tx_load(int c, const uint32_t* w, int n) {
         volatile uint32_t* m = wb_rmt_mem + tx_id_[c] * SOC_RMT_MEM_WORDS_PER_CHANNEL;
@@ -117,7 +117,7 @@ public:
         if (n < 0) n = 0;
         if (n > max) n = max;
         rmt_ll_rx_set_mem_owner(&RMT, id, RMT_LL_MEM_OWNER_SW);
-        const volatile uint32_t* m = wb_rmt_mem + (id + SOC_RMT_TX_CANDIDATES_PER_GROUP) * SOC_RMT_MEM_WORDS_PER_CHANNEL;
+        const volatile uint32_t* m = wb_rmt_mem + (id + kRxOffset) * SOC_RMT_MEM_WORDS_PER_CHANNEL;
         for (int i = 0; i < n; i++) w[i] = m[i];
         rmt_ll_rx_set_mem_owner(&RMT, id, RMT_LL_MEM_OWNER_HW);
         return n;
@@ -166,11 +166,13 @@ private:
             // cached in RAM: the flash tables cannot be read from the timer interrupt while the flash is busy
             iomux_[c] = GPIO_PIN_MUX_REG[pin_[c]];
             tx_sig_[c] = (uint16_t)rmt_periph_signals.groups[0].channels[t].tx_sig;
-            rx_sig_[c] = bidir_ ? (uint16_t)rmt_periph_signals.groups[0].channels[rx_id_[c] + SOC_RMT_TX_CANDIDATES_PER_GROUP].rx_sig : 0;
+            rx_sig_[c] = bidir_ ? (uint16_t)rmt_periph_signals.groups[0].channels[rx_id_[c] + kRxOffset].rx_sig : 0;
             rmt_ll_enable_interrupt(&RMT, RMT_LL_EVENT_TX_MASK(t) | RMT_LL_EVENT_TX_ERROR(t), false);
             rmt_ll_tx_enable_loop(&RMT, t, false);
             rmt_ll_tx_fix_idle_level(&RMT, t, bidir_ ? 1 : 0, true);
-            RMT.chnconf0[t].conf_update_chn = 1;                           // idle level valid before the first frame
+#if !defined(CONFIG_IDF_TARGET_ESP32)
+            RMT.chnconf0[t].conf_update_chn = 1;                           // idle level valid before the first frame (the plain ESP32 takes it at once)
+#endif
             if (bidir_) {
                 const int r = rx_id_[c];
                 rmt_ll_enable_interrupt(&RMT, RMT_LL_EVENT_RX_MASK(r) | RMT_LL_EVENT_RX_ERROR(r), false);
@@ -225,6 +227,7 @@ public:
         motor::HwStats s;
         const auto& d = direct_.stats();
         s.frames = d.frames; s.skipped = d.skipped; s.late_switch = d.late_switch; s.replies = d.replies; s.garbled = d.garbled;
+        s.no_start = d.no_start; s.bad_bits = d.bad_bits;
         return s;
     }
     bool rx_responsive(int slot) const override {

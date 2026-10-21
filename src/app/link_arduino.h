@@ -3,6 +3,7 @@
  */
 
 #pragma once
+#include "../config/ram_profile.h"
 
 #include <Arduino.h>
 #include "../port/platform.h"
@@ -21,6 +22,11 @@
 #include <esp_rom_gpio.h>
 #include <soc/gpio_sig_map.h>
 #include <esp_timer.h>
+#if defined(WB_USB_OTG) && WB_USB_OTG
+#include "USB.h"
+#include "USBCDC.h"
+#include "esp32-hal-tinyusb.h"                   // (tusb.h: TinyUsbPort below)
+#endif
 #endif
 
 // ============================================================================
@@ -44,6 +50,10 @@
 #define WB_LINK_KIND "UART"
 #define WB_LINK_BYTES_PER_S (WB_LINK_BAUD / 10u)
 #endif
+#elif defined(WB_USB_OTG) && WB_USB_OTG
+#define WB_LINK_KIND "native USB (TinyUSB)"     // the link is main.cpp usb_cdc; the USB stack is started in setup(), under its name
+#define WB_LINK_BYTES_PER_S 60000u
+#define WB_LINK_NO_TX_BUFFER 1
 #elif defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
 #if defined(ARDUINO_USB_MODE) && ARDUINO_USB_MODE
 #define WB_LINK_KIND "USB Serial/JTAG"
@@ -83,6 +93,22 @@ public:
 private:
     Stream& s_; app::StallKick kick_;
 };
+
+#if defined(WB_USB_OTG) && WB_USB_OTG
+// Native USB (TinyUSB): USBCDC::write() / availableForWrite() send nothing while the computer has DTR off - and the app opens the
+// port with DTR and RTS off (they reset an ESP32 on its other USB ports). TinyUSB itself sends without DTR: its FIFO is written
+// directly, never more than it has room for (without DTR the FIFO would overwrite the oldest bytes). Not mounted: no room.
+class TinyUsbPort : public app::RawPort {
+public:
+    size_t room() override { return tud_ready() ? (size_t)tud_cdc_n_write_available(0) : 0; }
+    size_t put(const uint8_t* d, size_t n) override {
+        const size_t r = room(); if (n > r) n = r;
+        if (!n) return 0;
+        const uint32_t k = tud_cdc_n_write(0, d, (uint32_t)n); tud_cdc_n_write_flush(0);
+        return k;
+    }
+};
+#endif
 
 class SerialTransport : public app::QueuedTransport {
 public:
@@ -183,10 +209,13 @@ public:
     void set_cli(app::Cli* cli) { cli_ = cli; }
     // MAVLink telemetry over WiFi: the frames the sensor thread put into the ring go out as UDP broadcasts (set only when it is on)
     void set_mav(mav::Ring* ring) { mav_ = ring; }
+    // ESC passthrough: what the session did is written here (memory a software restart leaves alone: main.cpp reads it at the next
+    // boot and puts it into the boot report)
+    void set_trace(esc4way::Trace* t) { trace_ = t; }
 
     // stack: the server keeps two ~520 byte frame buffers on the stack while answering, a log download another ~1 kB, and the
     // SD card's file system (FatFs with long file names on the stack) about 2 kB below that when a file is opened / listed / read
-    bool start(int core = 0, int priority = (int)port::kPrioLink) { return port::task_create(&LinkTask::entry, "wb_link", 14000, this, (UBaseType_t)priority, &handle_, core); }
+    bool start(int core = 0, int priority = (int)port::kPrioLink) { return port::task_create(&LinkTask::entry, "wb_link", WB_LOW_RAM ? 6144 : 14000, this, (UBaseType_t)priority, &handle_, core); }
 
     static void wait_1ms(void*) { vTaskDelay(1); }           // app::Exchange::WaitFn
     static uint32_t now_ms() { return millis(); }
@@ -236,11 +265,12 @@ private:
         if (p.n > (int)escs) p.n = escs;
         EspEscPort port(port_, tx_, p); port.begin();
         esc4way::Interface<EspEscPort> itf(port, p.n); itf.begin();
+        if (trace_) { trace_->start(); itf.set_trace(trace_); }
         itf.run();
         port.host_flush(); vTaskDelay(50);
         port::restart();
     }
     wbp::Server& server_; Stream& port_; app::QueuedTransport& tx_; TaskHandle_t handle_ = nullptr;
     app::MspLink* msp_ = nullptr; EscPinsFn pins_ = nullptr;
-    app::NetWire* net_ = nullptr; app::LinkMux* mux_ = nullptr; app::Cli* cli_ = nullptr; mav::Ring* mav_ = nullptr;
+    app::NetWire* net_ = nullptr; app::LinkMux* mux_ = nullptr; app::Cli* cli_ = nullptr; mav::Ring* mav_ = nullptr; esc4way::Trace* trace_ = nullptr;
 };

@@ -2,6 +2,7 @@
 import { store, setFields } from '../store.js';
 import { h, block, fields, form, row, listen, note, readout } from '../ui.js';
 import { tr } from '../i18n.js';
+import { stickPreview } from '../gfx/stickpreview.js';
 
 function bars() {
   const box = h('div', { class: 'chans', id: 'chans' });
@@ -72,10 +73,11 @@ export default {
             h('span', {}, tr('Lỗi đường truyền UART: '), readout('rc', (r) => String(r.uart_line)))),
           h('p', { class: 'help' }, tr('Tốc độ khung thấp hơn tốc độ gói của receiver (ELRS: 150, 250, 500 Hz…): "Khung hỏng" tăng = byte bị mất hoặc sai. "Tràn bộ đệm" tăng = firmware đọc UART không kịp. "Lỗi đường truyền" tăng = nhiễu trên dây, sai baud hoặc sai đảo mức. Cả ba bằng 0 mà tốc độ vẫn thấp = receiver gửi ít khung hơn (xem tốc độ gói ở tay phát).')),
           bars(),
-          h('p', { class: 'help' }, tr('Thang 900 đến 2100 µs, vạch giữa là 1500. Cần ga thấp nhất phải về gần 1000.')))),
+          h('p', { class: 'help' }, tr('Thang 900 đến 2100 µs, vạch giữa là 1500. Cần ga thấp nhất phải về gần 1000.'))),
+        block(tr('Máy bay theo cần'), stickPreview('ANGLE'))),
       h('div', {},
         block(tr('Giao thức'),
-          fields('receiver', ['protocol', 'rx_timeout_ms', 'deadband']),
+          fields('receiver', ['protocol', 'rx_timeout_ms', 'deadband', 'telemetry']),
           note(tr('CRSF dùng cho mọi receiver ELRS và Crossfire nối qua UART. Chân UART của receiver đặt ở tab Chân và cổng. Có chân TX (nối vào RX của receiver) thì firmware gửi telemetry CRSF về tay phát: pin, dòng, mAh, tư thế, chế độ bay, GPS, vario. Đổi giao thức cần lưu và khởi động lại.')),
           protoHelp()),
         block(tr('RC smoothing'), fields('receiver', ['rc_smoothing', 'rc_smoothing_factor', 'rc_smoothing_throttle']),

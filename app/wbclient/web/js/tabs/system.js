@@ -71,6 +71,10 @@ export default {
     };
     // ---- WiFi (a board with a radio: feature WIFI)
     const hasWifi = (info.features || []).includes('WIFI') && !!store.schema.sections.find((s) => s.name === 'wifi');
+    // ---- the board's name on USB (feature USB_NAME: builds whose USB stack is the firmware's own)
+    const hasUsbName = (info.features || []).includes('USB_NAME') && !!store.schema.sectionByName.general.fields.find((x) => x.n === 'usb_name');
+    const usbDefault = 'Windburst ' + ((info.features || []).includes('STM32') ? 'STM32' : 'ESP32-S3');
+    const usbNow = () => { const l = (store.conn.report || []).find((x) => x.startsWith("usb: '")); return l ? l.slice(6, l.indexOf("'", 6)) : ''; };
     const wifiState = h('div', { id: 'wifi-state' });
     const ip4 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255].join('.');
     function paintWifi(l) {
@@ -90,6 +94,9 @@ export default {
         block(tr('Failsafe và an toàn'), fields('general', ['fs_guard_ms', 'fs_recover_ms', 'fs_max_descent_s', 'fs_fallback_throttle', 'runaway_takeoff']),
           h('p', { class: 'help' }, tr('Mất sóng quá thời gian chờ thì máy tự cân bằng và hạ xuống; chạm đất thì tắt motor. Sóng trở lại và giữ ổn định thì bạn lấy lại quyền điều khiển; công tắc Failsafe thì hết ngay khi tắt công tắc.')),
           h('p', { class: 'help' }, tr('Pin dưới mức tối thiểu cũng làm máy tự hạ xuống (tab Pin và còi), nhưng roll, pitch và yaw vẫn theo cần của bạn để chọn chỗ đáp; lần hạ cánh này không huỷ được. Đang đứng trên mặt đất mà mất sóng thì motor tắt luôn.'))),
+        hasUsbName ? block(tr('Tên USB'), fields('general', ['usb_name'], { usb_name: { placeholder: usbDefault, ascii: true } }),
+          h('p', { class: 'help', id: 'usb-name-now' }, tr('Tên đang dùng: {name}', { name: usbNow() || '–' })),
+          note(tr('Tên máy tính thấy khi cắm USB (Linux / macOS: tên cổng; Windows: thuộc tính thiết bị, "Bus reported device description"). Để trống = tên mặc định. Chỉ chữ, số và ký hiệu ASCII, tối đa 31 ký tự. Có hiệu lực sau khi lưu và khởi động lại.'))) : null,
         hasWifi ? block('WiFi', fields('wifi', ['mode', 'ssid', 'pass', 'channel', 'port']), wifiState,
           note(tr('Có hiệu lực sau khi lưu và khởi động lại. Điểm phát riêng (AP): mạch là 192.168.4.1, tên mặc định Windburst-XXXX, mật khẩu mặc định windburst - hãy đổi mật khẩu, ai vào được mạng này cũng điều khiển được máy (kể cả thử motor). Ở app chọn cổng "WiFi của máy bay", hoặc nhập socket://<địa chỉ>:5760 khi máy nối vào mạng nhà bạn (STA).')),
           h('p', { class: 'help' }, tr('Trên ESP32-S3 các chân ADC2 (GPIO11 đến GPIO20) không đọc được khi WiFi bật: chân đo pin và đo dòng phải nằm ở GPIO1 đến GPIO10.'))) : null),

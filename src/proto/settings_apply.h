@@ -30,6 +30,7 @@ WB_SAME(GPS_STATE_CONFIGURE, gps::ST_CONFIGURE); WB_SAME(GPS_STATE_RECEIVING_DAT
 WB_SAME(MODE_ARM, fc::M_ARM); WB_SAME(MODE_ANGLE, fc::M_ANGLE); WB_SAME(MODE_STABILIZE, fc::M_STABILIZE); WB_SAME(MODE_ALTHOLD, fc::M_ALTHOLD); WB_SAME(MODE_POSHOLD, fc::M_POSHOLD);
 WB_SAME(MODE_FAILSAFE, fc::M_FAILSAFE_SW); WB_SAME(MODE_BEEPER, fc::M_BEEPER); WB_SAME(MODE_BLACKBOX, fc::M_BLACKBOX);
 WB_SAME(MODE_CALIB, fc::M_CALIB); WB_SAME(MODE_RESCUE, fc::M_RESCUE);
+WB_SAME(MODE_ACRO_TRAINER, fc::M_ACRO_TRAINER); WB_SAME(MODE_AIRMODE, fc::M_AIRMODE); WB_SAME(MODE_ANTI_GRAVITY, fc::M_ANTI_GRAVITY); WB_SAME(MODE_BLACKBOX_ERASE, fc::M_BLACKBOX_ERASE); WB_SAME(MODE_BLACKBOX_ERASE + 1, fc::M_COUNT);
 WB_SAME(LPF_TYPE_PT1, fc::LPF_PT1); WB_SAME(LPF_TYPE_BIQUAD, fc::LPF_BIQUAD); WB_SAME(LPF_TYPE_PT2, fc::LPF_PT2); WB_SAME(LPF_TYPE_PT3, fc::LPF_PT3);
 WB_SAME(ITERM_RELAX_OFF, fc::RELAX_OFF); WB_SAME(ITERM_RELAX_RP, fc::RELAX_RP); WB_SAME(ITERM_RELAX_RPY, fc::RELAX_RPY); WB_SAME(ITERM_RELAX_RP_INC, fc::RELAX_RP_INC); WB_SAME(ITERM_RELAX_RPY_INC, fc::RELAX_RPY_INC);
 WB_SAME(ITERM_RELAX_TYPE_GYRO, fc::RELAX_GYRO); WB_SAME(ITERM_RELAX_TYPE_SETPOINT, fc::RELAX_SETPOINT); WB_SAME(TPA_MODE_PD, fc::TPA_PD); WB_SAME(TPA_MODE_D, fc::TPA_D);
@@ -97,6 +98,7 @@ inline void apply_pid(const Settings& s, fc::CoreConfig& c) {
     const S_pid& p = s.pid;
     for (int a = 0; a < 3; a++) { c.pid.p[a] = p.p[a]; c.pid.i[a] = p.i[a]; c.pid.d[a] = p.d[a]; c.pid.d_max[a] = p.d_max[a]; c.pid.f[a] = p.f[a]; c.stab.kp[a] = p.stab_p[a]; }
     c.pid.iterm_relax = p.iterm_relax; c.pid.iterm_relax_type = p.iterm_relax_type; c.pid.iterm_relax_cutoff = p.iterm_relax_cutoff; c.pid.iterm_windup = p.iterm_windup;
+    c.trainer.angle_limit_deg = p.acro_trainer_angle_limit; c.trainer.lookahead_s = p.acro_trainer_lookahead_ms * 0.001f; c.trainer.gain = p.acro_trainer_gain * 0.1f;
     c.pid.anti_gravity = p.anti_gravity != 0; c.pid.anti_gravity_gain = p.anti_gravity_gain; c.pid.anti_gravity_p_gain = p.anti_gravity_p_gain; c.pid.anti_gravity_cutoff_hz = p.anti_gravity_cutoff;
     c.pid.d_max_gain = p.d_max_gain; c.pid.d_max_advance = p.d_max_advance;
     c.pid.tpa_mode = p.tpa_mode; c.pid.tpa_rate = p.tpa_rate; c.pid.tpa_breakpoint = p.tpa_breakpoint * 0.01f;
@@ -159,6 +161,7 @@ inline void apply_core(const Settings& s, fc::CoreConfig& c, fc::RcInterpreter& 
     c.fs.fallback_throttle_scale = s.general.fs_fallback_throttle * 0.01f; c.runaway.enabled = s.general.runaway_takeoff != 0;
     c.stall.enabled = s.motors.stall_disarm != 0; c.stall.min_rpm = s.motors.stall_min_rpm; c.stall.drop_ratio = s.motors.stall_drop * 0.01f;
     c.stall.min_command = s.motors.stall_min_cmd * 0.01f; c.stall.delay_s = s.motors.stall_ms * 0.001f;
+    c.stick_arm = s.general.stick_arm != 0;
     c.airmode = s.general.airmode; c.airmode_threshold = s.general.airmode_start_throttle * 0.01f;
     c.mixer.layout = (fc::Layout)s.motors.layout; c.mixer.props_out = s.motors.props_out != 0;
     c.use_mag = s.sensors.mag_enabled != 0; c.declination_deg = s.sensors.mag_declination * 0.1f;

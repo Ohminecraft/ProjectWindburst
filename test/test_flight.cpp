@@ -5,6 +5,7 @@
 #include <string.h>
 #include <random>
 #include <string>
+#include <memory>
 #include "sim_plant.h"
 #include "../src/core/flight_core.h"
 #include "../src/core/simplified_tuning.h"
@@ -18,7 +19,7 @@ static std::mt19937 rng(99); static std::normal_distribution<float> g_norm(0, 1)
 // it see stays what it was.
 struct KeepNoise { std::mt19937 e = rng; std::normal_distribution<float> d = g_norm; ~KeepNoise() { rng = e; g_norm = d; } };
 
-struct Pilot { float roll = 0, pitch = 0, yaw = 0, thr = 0; bool arm = false; int mode = 0; bool althold = false, fs_sw = false, link = true, poshold = false, rescue = false; };
+struct Pilot { float roll = 0, pitch = 0, yaw = 0, thr = 0; bool arm = false; int mode = 0; bool althold = false, fs_sw = false, link = true, poshold = false, rescue = false; uint16_t aux7 = 1000; };      // aux7: free for a test's own switch
 
 // Pilot::thr is the throttle the pilot ASKS FOR in the direct-throttle modes (0 = stick at the bottom, below min_check) and the
 // stick's POSITION in Altitude Hold (0.5 = hold).
@@ -56,7 +57,7 @@ struct Rig {
         FastInput in; in.dt = dt; in.limits = lim; in.rc_link = p.link; h.baro_ok = baro; in.health = h;
         uint16_t ch[16]; for (int i = 0; i < 16; i++) ch[i] = 1500;
         ch[0] = (uint16_t)(1500 + 500 * p.roll); ch[1] = (uint16_t)(1500 + 500 * p.pitch); ch[2] = p.althold ? (uint16_t)(1000 + 1000 * p.thr) : throttle_us(p.thr); ch[3] = (uint16_t)(1500 + 500 * p.yaw);
-        ch[4] = p.arm ? 2000 : 1000; ch[5] = p.mode == 1 ? 1500 : 1000; ch[6] = p.mode == 2 ? 1500 : 1000; ch[7] = p.althold ? 1500 : 1000; ch[8] = p.fs_sw ? 1500 : 1000; ch[9] = p.poshold ? 1500 : 1000; ch[10] = p.rescue ? 1500 : 1000;
+        ch[4] = p.arm ? 2000 : 1000; ch[5] = p.mode == 1 ? 1500 : 1000; ch[6] = p.mode == 2 ? 1500 : 1000; ch[7] = p.althold ? 1500 : 1000; ch[8] = p.fs_sw ? 1500 : 1000; ch[9] = p.poshold ? 1500 : 1000; ch[10] = p.rescue ? 1500 : 1000; ch[11] = p.aux7;
         const int steps = (int)(dur / dt + 0.5f);          // (+0.5: 0.001 / 0.00025 is 3.9999 in float)
         for (int i = 0; i < steps;) {
             const uint32_t prev = us; us += 250u * (uint32_t)waited; i += waited; in.dt = dt * (float)waited; in.now_ms = us / 1000;      // the time since the previous cycle
@@ -115,6 +116,43 @@ static void t_arming() {
     { Rig r; Pilot p; p.althold = true; r.run(0.3f, p); p.arm = true; r.run(0.1f, p); CHECK(!r.out.armed && (r.out.arm_blockers & AB_ALTHOLD_NO_BARO), "AltHold switch on without a barometer: refused (spec: warn immediately)"); }
     { Rig r(0, true); r.h.mag_calibrated = false; Pilot p; r.run(0.3f, p); p.arm = true; r.run(0.1f, p); CHECK(!r.out.armed && (r.out.arm_blockers & AB_MAG_NOT_CALIBRATED), "compass enabled but not calibrated: refused"); }
     { Rig r; r.h.imu_ok = false; Pilot p; r.run(0.3f, p); p.arm = true; r.run(0.1f, p); CHECK(!r.out.armed && (r.out.arm_blockers & AB_NO_IMU), "IMU not healthy: refused"); }
+}
+
+// 0.24: arming with the sticks (general.stick_arm)
+static void t_stick_arm() {
+    printf("[stick arming] throttle and pitch down, yaw and roll to opposite sides\n");
+    const float k = 0.8f;
+    CHECK(StickArm::gesture(1, -1, -1, true, k) && StickArm::gesture(-1, -1, 1, true, k), "yaw left + roll right, or yaw right + roll left (throttle low, pitch back)");
+    CHECK(!StickArm::gesture(1, -1, 1, true, k) && !StickArm::gesture(-1, -1, -1, true, k), "both to the same side: no");
+    CHECK(!StickArm::gesture(1, -1, -1, false, k) && !StickArm::gesture(1, 0, -1, true, k) && !StickArm::gesture(1, 1, -1, true, k) && !StickArm::gesture(0.7f, -1, -1, true, k), "throttle up, pitch centred or forward, a stick not far enough (0.7): no");
+    // a rig whose mode table has no ARM switch (keep_switch: it has one, on aux 1 of Rig = ch5)
+    auto rig = [](bool keep_switch) { Rig* r = new Rig(); ModeMap m; if (keep_switch) m.add(M_ARM, 0, 1700, 2100); m.add(M_ANGLE, 1, 1300, 1700);
+        r->core.rc.modes = m; r->core.cfg.stick_arm = true; r->core.configure(); return std::unique_ptr<Rig>(r); };
+    Pilot g; g.thr = 0; g.pitch = -1; g.yaw = -1; g.roll = 1;        // the gesture
+    {   auto r = rig(false); Pilot p; r->run(0.3f, p);
+        r->run(0.5f, g); CHECK(!r->out.armed, "gesture held 0.5 s: not yet");
+        r->run(0.6f, g); CHECK(r->out.armed, "held 1 s: armed");
+        r->run(0.5f, g); CHECK(r->out.armed, "still held: stays armed (it takes a release before the next gesture)");
+        r->run(0.3f, p); CHECK(r->out.armed && r->out.ground_idle, "sticks released: armed, motors at idle on the ground");
+        r->run(0.5f, g); CHECK(r->out.armed, "the gesture on the ground 0.5 s: still armed");
+        r->run(0.6f, g); CHECK(!r->out.armed && r->out.motor[0] == 0, "1 s: disarmed");
+        r->run(1.5f, g); CHECK(!r->out.armed, "held on: stays disarmed");
+        r->run(0.2f, p); Pilot y = g; y.roll = -1; y.yaw = 1; r->run(1.1f, y); CHECK(r->out.armed, "the other way round (yaw right + roll left): armed"); }
+    {   auto r = rig(false); r->run(2.0f, g); CHECK(!r->out.armed, "the gesture held from power-up: nothing (it must be released first)"); }
+    {   auto r = rig(false); Pilot p; r->run(0.3f, p); r->run(1.1f, g); Pilot f = p; f.thr = 0.47f; r->run(1.0f, f);
+        CHECK(r->out.armed && r->out.airborne, "armed, taken off");
+        r->run(1.3f, g); CHECK(r->out.armed, "the gesture held 1.3 s in the air (throttle cut, sticks out): it is not a disarm"); }
+    {   auto r = rig(false); r->h.gyro_calibrated = false; Pilot p; r->run(0.3f, p); r->run(1.2f, g);
+        CHECK(!r->out.armed && r->out.arm_refused == 1 && (r->out.arm_blockers & AB_GYRO_NOT_CAL), "a blocker: the gesture is refused (counted)");
+        r->h.gyro_calibrated = true; r->run(1.2f, g); CHECK(!r->out.armed, "the blocker gone, the gesture still held: no arming by itself");
+        r->run(0.2f, p); CHECK(!(r->out.arm_blockers & AB_ARM_SWITCH_ON), "released: no 'arm switch on' blocker left behind");
+        r->run(1.1f, g); CHECK(r->out.armed, "a new gesture: armed"); }
+    {   auto r = rig(true); Pilot p; r->run(0.3f, p); r->run(1.2f, g); CHECK(!r->out.armed, "with an ARM switch assigned and off: the gesture does nothing");
+        p.arm = true; r->run(0.3f, p); CHECK(!r->out.armed, "switch on alone: not armed");
+        g.arm = true; r->run(1.1f, g); CHECK(r->out.armed, "switch on + the gesture: armed");
+        p.thr = 0.3f; r->run(0.3f, p); p.arm = false; r->run(0.05f, p); CHECK(!r->out.armed, "switch off: disarmed at once (a kill switch)");
+        p.arm = true; p.thr = 0; r->run(0.3f, p); CHECK(!r->out.armed, "switch on again: no arming without the gesture"); g.arm = false; }
+    {   Rig r; Pilot p; r.run(0.3f, p); r.run(1.2f, g); CHECK(!r.out.armed, "stick_arm off (default): the gesture does nothing"); }
 }
 
 // tilt Betaflight's Angle mode commands for a stick position: the rate curve (centre sensitivity, max rate, expo) shapes it too
@@ -961,8 +999,49 @@ static void t_gps_rescue() {
       CHECK(!n.out.armed && (n.out.arm_blockers & AB_RESCUE_NO_COMPASS) && !(n.out.arm_blockers & AB_RESCUE_NO_FIX), "a rescue is set up but the compass is switched off: no arming (it could never fly home)"); }
 }
 
+// 0.23: the switches ACRO_TRAINER, AIRMODE, ANTI_GRAVITY (on aux 8 here)
+static void t_switch_modes() {
+    printf("[switch modes] acro trainer, airmode and anti-gravity on a switch\n");
+    auto all_idle = [](const Rig& r) { bool ok = true; for (int i = 0; i < 4; i++) ok &= r.out.motor[i] == r.lim.idle; return ok; };
+    // ---- acro trainer: full roll stick in Acro, the craft leans to the limit (20 deg) and stays there instead of flipping
+    {   auto lean = [](bool trainer, int axis, float& peak, float& end, bool& active) {
+            Rig r; r.core.rc.modes.add(M_ACRO_TRAINER, 7, 1700, 2100); r.core.configure(); arm(r, 0); Pilot p = armed_pilot(0); r.run(0.6f, p);
+            p.aux7 = trainer ? 2000 : 1000; (axis == ROLL ? p.roll : p.pitch) = 1.0f; peak = 0; active = false;
+            for (int i = 0; i < 30; i++) { r.run(0.05f, p); const float a = axis == ROLL ? r.out.est.att.roll : r.out.est.att.pitch; peak = fmaxf(peak, fabsf(a)); active |= r.out.trainer_active; }
+            end = axis == ROLL ? r.out.est.att.roll : r.out.est.att.pitch; };
+        float pk, end, pk0, end0; bool on, on0;
+        lean(true, ROLL, pk, end, on); lean(false, ROLL, pk0, end0, on0);
+        CHECK(on && !on0 && pk < 40.0f && end > 14.0f && end < 24.0f && pk0 > 90.0f, "roll stick held right for 1.5 s: %.1f deg at the end, %.1f at most - full stick (670 deg/s) overshoots a little (without the trainer: %.0f deg - it rolls over)", end, pk, pk0);
+        lean(true, PITCH, pk, end, on);
+        CHECK(on && pk < 40.0f && end > 14.0f && end < 24.0f, "pitch the same: %.1f deg at the end, %.1f at most", end, pk);
+        Rig r; r.core.rc.modes.add(M_ACRO_TRAINER, 7, 1700, 2100); r.core.configure(); arm(r, 0); Pilot p = armed_pilot(0); r.run(0.6f, p); p.aux7 = 2000; p.roll = 1.0f; r.run(1.0f, p);
+        p.roll = -0.4f; r.run(0.4f, p); CHECK(r.out.est.att.roll < 10.0f, "the stick reversed: the craft rolls back at once (%.1f deg)", r.out.est.att.roll);
+        Rig a; a.core.rc.modes.add(M_ACRO_TRAINER, 7, 1700, 2100); a.core.configure(); arm(a, 1); p = armed_pilot(1); p.aux7 = 2000; p.roll = 1.0f; a.run(0.5f, p);
+        CHECK(!a.out.trainer_active, "in Angle the trainer does nothing (Angle has its own limit)");
+        // switched off while it held the craft at the limit, flown back level, switched on again: it starts from nothing
+        Rig z; z.core.rc.modes.add(M_ACRO_TRAINER, 7, 1700, 2100); z.core.configure(); arm(z, 0); p = armed_pilot(0); z.run(0.6f, p); p.aux7 = 2000; p.roll = 1.0f; z.run(1.0f, p);
+        p.aux7 = 1000; p.roll = -0.2f; for (int i = 0; i < 400 && z.out.est.att.roll > 1.0f; i++) z.run(0.005f, p);
+        p.roll = 0; z.run(0.2f, p); const float lvl = z.out.est.att.roll; p.aux7 = 2000; p.roll = 0.03f; z.run(0.3f, p);
+        CHECK(fabsf(lvl) < 4.0f && fabsf(z.out.est.att.roll - lvl) < 6.0f, "switched on again near level with a touch of right stick: not pulled to the old limit (%.1f -> %.1f deg)", lvl, z.out.est.att.roll);
+        Rig k; k.core.cfg.trainer.angle_limit_deg = 45; k.core.rc.modes.add(M_ACRO_TRAINER, 7, 1700, 2100); k.core.configure(); arm(k, 0); p = armed_pilot(0); k.run(0.6f, p); p.aux7 = 2000; p.roll = 1.0f; k.run(1.5f, p);
+        CHECK(k.out.est.att.roll > 38.0f && k.out.est.att.roll < 52.0f, "acro_trainer_angle_limit 45: %.1f deg", k.out.est.att.roll); }
+    // ---- airmode on a switch: off = the stick at the bottom idles the motors, on = the kind general.airmode sets
+    {   auto chop = [&](uint8_t setting, bool sw, bool& air) { Rig r; r.core.cfg.airmode = setting; r.core.rc.modes.add(M_AIRMODE, 7, 1700, 2100); r.core.configure(); arm(r, 0);
+            Pilot p = armed_pilot(0); p.aux7 = sw ? 2000 : 1000; r.run(0.5f, p); p.thr = 0; p.roll = 0.3f; r.run(0.3f, p); air = r.out.airmode_active; return all_idle(r); };
+        bool a1, a2, a3; const bool i1 = chop(AM_AUTO, false, a1), i2 = chop(AM_AUTO, true, a2), i3 = chop(AM_OFF, true, a3);
+        CHECK(i1 && !a1, "AIRMODE switch off: throttle chopped in the air = motors at idle (general.airmode AUTO is overruled)");
+        CHECK(!i2 && a2, "switch on: airmode as general.airmode says (AUTO)");
+        CHECK(!i3 && a3, "switch on with general.airmode OFF: airmode AUTO"); }
+    // ---- anti-gravity on a switch
+    {   auto punch = [](bool setting, int sw) { Rig r; r.core.cfg.pid.anti_gravity = setting; if (sw >= 0) r.core.rc.modes.add(M_ANTI_GRAVITY, 7, 1700, 2100); r.core.configure(); arm(r, 0);
+            Pilot p = armed_pilot(0); p.aux7 = sw > 0 ? 2000 : 1000; r.run(0.6f, p); p.thr = 0.1f; float pk = 0; for (int i = 0; i < 20; i++) { r.run(0.005f, p); pk = fmaxf(pk, r.core.pid().anti_gravity()); } return pk; };
+        const float none_on = punch(true, -1), sw_off = punch(true, 0), sw_on = punch(false, 1), none_off = punch(false, -1);
+        CHECK(none_on > 5.0f && none_off == 0.0f, "no switch: pid.anti_gravity decides (%.1f / %.1f)", none_on, none_off);
+        CHECK(sw_off == 0.0f && sw_on > 5.0f, "ANTI_GRAVITY switch: off = none although the setting is on, on = boost although it is off (%.1f)", sw_on); }
+}
+
 int main() {
     t_arming(); t_attitude_modes(); t_rate_loop(); t_filters_in_the_loop(); t_throttle_boost(); t_level_modes(); t_mode_details(); t_airmode(); t_compass(); t_althold(); t_failsafe(); t_uneven_cycles(); t_pid_denom(); t_stall(); t_runaway(); t_motor_layer(); t_estimator_in_flight();
-    t_position_hold(); t_gps_rescue();
+    t_position_hold(); t_gps_rescue(); t_switch_modes(); t_stick_arm();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

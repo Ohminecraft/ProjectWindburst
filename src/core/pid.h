@@ -209,7 +209,10 @@ public:
     }
 
     float tpa_factor() const { return tpa_factor_; }
-    float anti_gravity() const { return cfg_.anti_gravity ? ag_throttle_d_ * cfg_.anti_gravity_gain : 0.0f; }
+    float anti_gravity() const { return (ag_switch_ < 0 ? cfg_.anti_gravity : ag_switch_ > 0) ? ag_throttle_d_ * cfg_.anti_gravity_gain : 0.0f; }
+    // The ANTI_GRAVITY switch (rc.h): -1 = no switch assigned (cfg.anti_gravity decides), 0 = off, 1 = on.
+    void set_anti_gravity_switch(int8_t s) { ag_switch_ = s; }
+    WB_FAST void reset_i(int axis) { i_term[axis] = 0.0f; }
     float dterm_lpf1_cutoff_hz() const { return d_lpf1_[0].active() ? dterm_lpf1_now_ : 0.0f; }
     const PidConfig& config() const { return cfg_; }
 
@@ -228,7 +231,7 @@ private:
     float kp_[3] = {}, ki_[3] = {}, kd_[3] = {}, kf_[3] = {}, d_max_percent_[3] = {1, 1, 1};
     float iterm_limit_ = 400.0f, iterm_limit_yaw_ = 320.0f, ag_p_gain_ = 0.0f, d_max_gyro_gain_ = 0.0f, d_max_setpoint_gain_ = 0.0f;
     float tpa_break_ = 0.35f, tpa_mult_ = 0.0f, tpa_low_break_ = 0.05f, tpa_low_mult_ = 0.0f, tpa_factor_ = 1.0f; bool tpa_low_faded_ = false;
-    float prev_throttle_ = 0.0f, ag_throttle_d_ = 0.0f; bool have_throttle_ = false;
+    float prev_throttle_ = 0.0f, ag_throttle_d_ = 0.0f; bool have_throttle_ = false; int8_t ag_switch_ = -1;
     float prev_d_gyro_[3] = {}; bool have_prev_[3] = {};
     bool dterm_dynamic_ = true; float dterm_lpf1_now_ = 0.0f, dyn_wait_ = 0.0f; int dyn_quantized_ = -1;
     StaticNotch d_notch_[3]; Lowpass d_lpf1_[3], d_lpf2_[3]; Pt1 relax_lpf_[3], yaw_lpf_; Pt2 d_max_range_[3], d_max_lpf_[3], ag_lpf_;

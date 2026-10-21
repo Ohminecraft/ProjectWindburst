@@ -40,7 +40,7 @@ struct MotorConfig {
     bool ext_pullup = false;                        // bidirectional DShot: pull-up resistors on the board, the pins' own pull-up stays off
     uint8_t pole_count = 14;                        // motor poles (magnets), for eRPM -> rpm
     bool edt = false;                               // extended telemetry (voltage/current/temperature) decoding
-    bool dir_cmd_extended = false;                  // false: 7/8 (BLHeli_S/32, Bluejay)  true: 20/21 (extended, AM32)
+    bool dir_cmd_extended = false;                  // (not used since 0.18.1: request_direction() always sends 7 / 8 + save)
     float idle = 0.055f;                            // motor idle, fraction of range (BF motor_idle 550 = 5.5 %)
     float output_limit = 1.0f;
     DynIdleConfig dyn;
@@ -111,12 +111,23 @@ public:
         return true;
     }
     void fix_order() { if (!order_valid()) for (int i = 0; i < kMaxMotors; i++) cfg.order[i] = (uint8_t)i; }
+    // A new motor order while running (disarmed; the motor wizard): taken only when it is a permutation of the motors. When the order really
+    // changes, a test or a command in progress is dropped: it was aimed at the old order.
+    bool set_order(const uint8_t order[kMaxMotors]) {
+        const MotorConfig old = cfg;
+        for (int i = 0; i < kMaxMotors; i++) cfg.order[i] = order[i];
+        if (!order_valid()) { cfg = old; return false; }
+        if (memcmp(old.order, cfg.order, sizeof(cfg.order)) != 0) { test_stop(); cmd_active_ = false; q_head_ = q_tail_ = 0; }
+        return true;
+    }
 
     // ---------------------------------------------------------------- DShot commands (disarmed only)
+    // The spin direction an ESC keeps: DShot 7 / 8, then 12 (save) - BLHeli_S, Bluejay, BLHeli_32 and AM32 all store it. Never 20 / 21
+    // (dir_cmd_extended, no longer used): those turn the motor relative to the STORED direction and are not saved (AM32: `forward`
+    // only) - the craft forgot it at the next ESC restart, which a flight controller reboot causes (0.18 on the board, AM32).
     bool request_direction(int logical, bool reversed) {
         if (!is_dshot(cfg.protocol) || logical < 0 || logical >= cfg.count) return false;
-        const uint8_t cmd = cfg.dir_cmd_extended ? (reversed ? CMD_SPIN_DIRECTION_REVERSED : CMD_SPIN_DIRECTION_NORMAL)
-                                                 : (reversed ? CMD_SPIN_DIRECTION_2 : CMD_SPIN_DIRECTION_1);
+        const uint8_t cmd = reversed ? CMD_SPIN_DIRECTION_2 : CMD_SPIN_DIRECTION_1;
         return push(cfg.order[logical], cmd) && push(cfg.order[logical], CMD_SAVE_SETTINGS);
     }
     bool apply_directions() { bool ok = is_dshot(cfg.protocol); for (int i = 0; i < cfg.count && ok; i++) ok = request_direction(i, cfg.reversed[i]); return ok; }
@@ -204,6 +215,7 @@ public:
         Slot& s = tel_[m];
         s.total++;
         uint32_t v12 = gcr20 == kGcrInvalid ? kGcrInvalid : gcr_decode(gcr20);
+        if (gcr20 != kGcrInvalid && v12 == kGcrInvalid) crc_bad_++;         // clean bits, wrong checksum
         Telem t;
         if (v12 != kGcrInvalid) t = telem_decode((uint16_t)v12, cfg.edt);
         if (v12 == kGcrInvalid || t.value == kTelemInvalid) s.invalid++;
@@ -272,6 +284,9 @@ public:
         return cfg.idle + dyn_inc_ * (cfg.output_limit - cfg.idle);
     }
     float dyn_idle_increase() const { return dyn_inc_; }
+    uint32_t reply_crc_errors() const { return crc_bad_; }                  // bidirectional DShot: replies with a bad checksum since start
+    // bit i = logical motor i has a fresh rpm (what the rpm filter and dynamic idle use)
+    uint8_t rpm_valid_mask(uint32_t now_ms) const { uint8_t m = 0; for (int i = 0; i < cfg.count && i < 8; i++) if (telemetry(i, now_ms).rpm_valid) m |= (uint8_t)(1u << i); return m; }
     uint16_t pulse_hz() const { return cfg.pulse_hz ? cfg.pulse_hz : default_pulse_hz(cfg.protocol); }
 
 private:
@@ -327,6 +342,7 @@ private:
     DynamicIdle dyn_; float dyn_inc_ = 0;
     QCmd q_[kQ]; uint8_t q_head_ = 0, q_tail_ = 0;
     int8_t tlm_ask_ = -1;
+    uint32_t crc_bad_ = 0;
     bool cmd_active_ = false; QCmd cur_{0, 0}; uint8_t phase_ = 0, sent_ = 0, repeats_ = 0; uint32_t t_phase_ = 0, next_due_ = 0, post_ = 0;
     float test_frac_[kMaxMotors] = {}; uint32_t test_until_us_ = 0; float out_frac_[kMaxMotors] = {};
 };

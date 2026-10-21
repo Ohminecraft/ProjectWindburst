@@ -83,6 +83,8 @@ export default {
           h('p', { class: 'help' }, tr('Feedforward lấy tốc độ gạt cần đẩy thẳng ra motor, nên máy quay cùng lúc với cần thay vì chờ sai lệch lớn lên. Tắt hẳn: đặt cột Feedforward trong bảng về 0.'))),
         block(tr('I-term relax'), fields('pid', ['iterm_relax', 'iterm_relax_type', 'iterm_relax_cutoff', 'iterm_windup'])),
         block(tr('Anti Gravity'), fields('pid', ['anti_gravity', 'anti_gravity_gain', 'anti_gravity_p_gain', 'anti_gravity_cutoff'])),
+        store.schema.sectionByName.pid.fields.some((f) => f.n === 'acro_trainer_gain') ? block(tr('Acro trainer'), fields('pid', ['acro_trainer_angle_limit', 'acro_trainer_lookahead_ms', 'acro_trainer_gain']),
+          h('p', { class: 'help' }, tr('Bật bằng công tắc ACRO TRAINER (tab Mode), chỉ có tác dụng trong Acro. Nhìn trước: máy quay càng nhanh thì càng phanh sớm để không vượt góc; gạt hết cần có thể vượt vài độ rồi kéo về.'))) : null,
         block(tr('Dynamic Damping (D Max)'), fields('pid', ['d_max_gain', 'd_max_advance'])),
         block(tr('TPA và ga'), fields('pid', ['tpa_mode', 'tpa_rate', 'tpa_breakpoint', 'tpa_low_rate', 'tpa_low_breakpoint', 'tpa_low_always', 'throttle_boost', 'throttle_boost_cutoff']),
           note(tr('Giới hạn công suất motor và dynamic idle (cần DShot hai chiều) ở tab Motor.'))),

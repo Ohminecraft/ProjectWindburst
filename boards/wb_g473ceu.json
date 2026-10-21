@@ -1,0 +1,34 @@
+{
+  "build": {
+    "core": "stm32",
+    "cpu": "cortex-m4",
+    "extra_flags": "-DSTM32G4 -DSTM32G4xx -DSTM32G473xx",
+    "f_cpu": "170000000L",
+    "mcu": "stm32g473ceu6",
+    "product_line": "STM32G473xx",
+    "variant": "STM32G4xx/G473C(B-C-E)U_G474C(B-C-E)U_G483CEU_G484CEU",
+    "arduino": {
+      "board": "GENERIC_G473CEUX"
+    }
+  },
+  "debug": {
+    "jlink_device": "STM32G473CE",
+    "openocd_target": "stm32g4x"
+  },
+  "frameworks": [
+    "arduino"
+  ],
+  "name": "STM32G473CEU (128k RAM, 512k Flash) - Windburst",
+  "upload": {
+    "maximum_ram_size": 131072,
+    "maximum_size": 524288,
+    "protocol": "stlink",
+    "protocols": [
+      "stlink",
+      "jlink",
+      "dfu"
+    ]
+  },
+  "url": "https://www.st.com/",
+  "vendor": "Generic"
+}

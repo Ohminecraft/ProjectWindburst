@@ -4,6 +4,7 @@ import { h, block, fields, row, form, listen, control, canvas, token } from '../
 import { AXES } from '../labels.js';
 import { actualRate, stick, throttleCurve, throttle01 } from '../gfx/fwmath.js';
 import { tr } from '../i18n.js';
+import { stickPreview } from '../gfx/stickpreview.js';
 
 const SERIES = ['--series-1', '--series-2', '--series-3'];
 
@@ -114,7 +115,8 @@ export default {
       h('div', {},
         block(tr('Rate (kiểu Actual)'),
           axisTable('rates', [['center_sens', tr('Độ nhạy giữa (°/s)')], ['max_rate', tr('Tốc độ tối đa (°/s)')], ['expo', 'Expo (%)']]),
-          rateChart())),
+          rateChart()),
+        block(tr('Máy bay theo cần'), stickPreview('ACRO'))),
       h('div', {},
         block(tr('Ga'), fields('rates', ['throttle_mid', 'throttle_expo', 'throttle_limit']), throttleChart(),
           h('p', { class: 'help' }, tr('Đường cong ga chỉ dùng khi bay ga tay. Altitude Hold dùng thẳng vị trí cần ga, theo mục bên dưới.'))),

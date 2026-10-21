@@ -8,5 +8,5 @@
 compile_commands.json
 external_source
 app/wbclient/__pycache__
+app/tests/__pycache__
 build
-dshot

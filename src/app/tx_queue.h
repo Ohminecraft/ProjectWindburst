@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "../proto/wbp_server.h"
+#include "../config/ram_profile.h"
 
 // ============================================================================
 // The transmit side of the app link, the same for every kind of serial port.
@@ -45,7 +46,7 @@ struct StallKick {
 
 class QueuedTransport : public wbp::Transport {
 public:
-    static constexpr size_t kSize = 8192;                    // > 8 download frames of 492 bytes, or 0.35 s of a 230400 baud link
+    static constexpr size_t kSize = WB_LOW_RAM ? 2048 : 8192;  // > 8 download frames of 492 bytes, or 0.35 s of a 230400 baud link (low-RAM chips: 4 frames, config/ram_profile.h)
     static constexpr int kWaitMs = 200;                      // how long a frame that must not be lost (a reply) waits for room
     using WaitFn = void (*)(void*);                          // sleep about 1 ms
 

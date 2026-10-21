@@ -321,8 +321,8 @@ struct Bench {
     Recorder rec; FakeTx tx; MemFlash mem; Service svc; wbp::Settings settings; FirmwareHeader hdr;
     Inputs in; uint32_t us = 0; uint32_t cycles = 0; float gyro[3] = {0, 0, 0}, zero[4] = {0, 0, 0, 0}, motor[8] = {0.1f, 0.2f, 0.3f, 0.4f}; app::Telemetry tel;
     int max_writes_per_poll = 0; bool flight_loop = true;
-    explicit Bench(uint32_t bytes = 512 * 1024) : mem(bytes), svc(rec, tx), hdr{&settings, "Test FW", 1, 2, 3} {
-        wbp::defaults(settings);
+    explicit Bench(uint32_t bytes = 512 * 1024, bool erase_switch_on = false) : mem(bytes), svc(rec, tx), hdr{&settings, "Test FW", 1, 2, 3} {
+        wbp::defaults(settings); in.erase_switch = erase_switch_on;
         svc.attach_store(&mem); svc.set_header_source(&FirmwareHeader::write, &hdr); svc.set_loop(4000.0f, 4);
         Config c; c.device = DEV_FLASH; c.trigger = TRIG_ARMED; c.rate_hz = 500; c.groups = (1u << G_GYRO) | (1u << G_MOTORS) | (1u << G_TIMING); svc.set_config(c);
         in.now_ms = 5000; us = 5000000;
@@ -508,6 +508,21 @@ static void t_service() {
       b.ms(20);
       CHECK(b.svc.state() == ST_IDLE && !b.rec.busy() && b.rec.take_erase_done() && b.svc.log().sessions() == 0 && b.svc.log().used() == 0, "erased: idle, empty, 'done' posted for the beeper");
       b.in.armed = true; b.ms(500); CHECK(b.svc.state() == ST_LOGGING && b.mem.bad_writes == 0, "logging works again"); }
+    { // the BLACKBOX_ERASE switch (0.23)
+      Bench b(512 * 1024, true); b.in.armed = true; b.ms(500); b.in.armed = false; b.ms(300);
+      CHECK(b.svc.state() == ST_IDLE && b.svc.log().sessions() == 1 && b.svc.switch_erases() == 0, "BLACKBOX_ERASE on since power-up: a flight logged, nothing erased (a switch left on is not a flip)");
+      b.in.erase_switch = false; b.ms(20); b.in.erase_switch = true; b.ms(1);
+      CHECK(b.svc.state() == ST_ERASING && b.rec.busy() && b.svc.switch_erases() == 1, "flipped off and on, disarmed: erasing, the craft kept on the ground");
+      b.ms(50); CHECK(b.svc.state() == ST_IDLE && b.svc.log().sessions() == 0 && b.rec.take_erase_done(), "erased; 'done' posted for the beeper");
+      b.ms(300); CHECK(b.svc.switch_erases() == 1, "held on: once only");
+      b.in.armed = true; b.ms(500); b.in.erase_switch = false; b.ms(20); b.in.erase_switch = true; b.ms(50);
+      CHECK(b.svc.state() == ST_LOGGING && b.svc.switch_erases() == 1, "flipped while armed: ignored, the flight is logged");
+      b.in.armed = false; b.ms(300); CHECK(b.svc.log().sessions() == 1 && b.svc.switch_erases() == 1, "disarmed with the switch still on: nothing (it takes a new flip)");
+      b.cfg(DEV_FLASH, TRIG_ALWAYS); b.ms(200); b.in.erase_switch = false; b.ms(20); b.in.erase_switch = true; b.ms(50);
+      CHECK(b.svc.state() == ST_LOGGING && b.svc.switch_erases() == 0 + 1, "logging on the ground (trigger ALWAYS): the flip is refused, the log goes on");
+      b.cfg(DEV_FLASH, TRIG_ARMED); b.ms(300); CHECK(b.svc.state() == ST_IDLE && b.svc.switch_erases() == 1, "a refused flip is not retried later by itself");
+      b.cfg(DEV_FLASH, TRIG_SWITCH); b.in.armed = true; b.ms(100); b.in.erase_switch = false; b.ms(20); b.in.erase_switch = true; b.ms(50);
+      CHECK(b.svc.state() == ST_IDLE && b.svc.switch_erases() == 1 && b.svc.log().sessions() > 0, "armed but not logging (trigger SWITCH, its switch off): the flip is ignored all the same"); }
     { Bench b; b.mem.fill_garbage(0, 5000); b.svc.attach_store(&b.mem); b.in.armed = true; b.ms(500);
       CHECK(b.svc.state() == ST_NEEDS_ERASE && b.mem.writes == 0, "a region with foreign data: NEEDS_ERASE, not a byte written");
       b.in.armed = false; b.ms(5); CHECK(b.cmd(wbp::CMD_BLACKBOX_ERASE) == wbp::ERR_OK, "erase"); b.ms(50);

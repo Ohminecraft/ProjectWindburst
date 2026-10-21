@@ -614,6 +614,9 @@ static void t_safety() {
         for (int i = 0; i < 100; i++) { ar.update(true, true, ok); }
         CHECK(!ar.armed(), "and it stays disarmed while the switch stays on");
         ar.update(false, true, ok); CHECK(ar.blockers() == 0 && ar.update(true, true, ok), "switch off once, on again: armed"); }
+      { Arming ar; ar.update(false, true, ok); ar.update(true, true, ok); ar.force_disarm(AB_RUNAWAY_TAKEOFF); ar.update(true, true, ok);
+        ar.update(false, true, ok, true); const bool kept = (ar.blockers() & AB_RUNAWAY_TAKEOFF) != 0; ar.update(false, true, ok);
+        CHECK(kept && !(ar.blockers() & AB_RUNAWAY_TAKEOFF), "keep_reason (stick arming, sticks at rest): the reason of a forced disarm stays; it goes with the next switch-off without it"); }
       { Arming ar; ar.update(false, true, ok);                        // disarmed, link good, switch off; then out of range and back with the switch on
         for (int i = 0; i < 50; i++) { ar.update(false, false, nolink); }
         CHECK(!ar.update(true, true, ok) && (ar.blockers() & AB_ARM_SWITCH_ON), "the link comes back with the arm switch on: no arming (it has not been seen off since)");

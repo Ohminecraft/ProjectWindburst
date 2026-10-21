@@ -30,18 +30,12 @@
 #if defined(ARDUINO_ARCH_ESP32) && WB_FAST_CODE
 #include <esp_attr.h>
 #define WB_FAST IRAM_ATTR
+#elif defined(ARDUINO_ARCH_STM32) && WB_FAST_CODE && defined(WB_FAST_SECTION)
+// STM32: only where the board's linker script has a RAM section for code (WB_FAST_SECTION=".ccmram_code" on a G4 with its CCM
+// SRAM, ".tcm_code" on an H7 with ITCM - Betaflight's FAST_CODE). The F4 / G4 / H5 run code from flash through their flash
+// accelerator (ART / ICACHE) with no wait for a loop this size, so by default the mark is empty there. (A section on a chip
+// without one in its linker script ends in "section type conflict" between inline and out-of-line functions.)
+#define WB_FAST __attribute__((section(WB_FAST_SECTION)))
 #else
 #define WB_FAST
 #endif
-
-#if defined(ARDUINO_ARCH_STM32) && WB_FAST_CODE
-#if defined(ITCM_RAM_OPTIMISATION) && !defined(DEBUG)
-#define WB_FAST                   __attribute__((section(".tcm_code"))) __attribute__((optimize(ITCM_RAM_OPTIMISATION)))
-#else
-#define WB_FAST                   __attribute__((section(".tcm_code")))
-#endif
-// If a particular target is short of ITCM RAM, defining WB_FAST_PREF in the target.h file will
-// cause functions decorated WB_FAST_PREF to *not* go into ITCM RAM but if WB_FAST_PREF is not
-// defined for the target, WB_FAST_PREF will become an alias to WB_FAST (in the common post
-// header file), and functions decorated with WB_FAST_PREF *will* go into ITCM RAM. (betaflight)
-#endif // defined(ARDUINO_ARCH_STM32) && WB_FAST_CODE

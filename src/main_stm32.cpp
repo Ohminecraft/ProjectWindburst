@@ -1,12 +1,13 @@
 /*
  * This file is part of Windburst Project
  *
- * Firmware entry point of the STM32 build (STM32H5 so far: docs/STM32.md). The ESP32 one is main.cpp; both run the same
+ * Firmware entry point of the STM32 builds (H5, G4, F4, C5: docs/STM32.md). The ESP32 one is main.cpp; both run the same
  * FlightApp, settings, app link and blackbox - only the chip's ends differ:
  *   "wb_flight" : the control cycle, woken by TIM7                             [port/stm32/flight_task_stm32.h]
  *   "wb_sensor" : sensors, receiver, app requests, once per millisecond tick   [FlightApp::slow_update]
  *   "wb_link"   : app link over USB CDC (or a UART) + blackbox                 [LinkTask, wbp::Server, bb::Service]
- * One core: FreeRTOS priorities in that order (port/rtos.h). Settings and the flight log share flash bank 2 (port/stm32/flash_h5.h).
+ * One core: FreeRTOS priorities in that order (port/rtos.h). Settings (and on a chip with two flash banks the flight log) live
+ * in the chip's own flash (port/stm32/flash_stm32.h).
  * Not in this build yet: DShot (motors: PWM / Oneshot / Multishot / brushed), the SD card, bidirectional ESC telemetry.
  * NOT confirmed on hardware.
  */
@@ -23,7 +24,8 @@
 #include "port/platform.h"
 #include "port/rtos.h"
 #include "port/uart.h"
-#include "port/stm32/flash_h5.h"
+#include "port/stm32/flash_stm32.h"
+#include "port/chip.h"
 #include "app/flight_app.h"
 #include "port/stm32/flight_task_stm32.h"
 #include "app/link_arduino.h"
@@ -31,14 +33,57 @@
 #include "blackbox/bb_qword.h"
 #include "blackbox/bb_header.h"
 
-static constexpr uint32_t kSettingsBytes = 64u * 1024u;    // bank 2: settings first, the flight log after them
+#if defined(STM32F4xx)
+// The clock of an F4 (instead of the generic variant's internal 16 MHz oscillator): a flight controller has a crystal - 8 MHz on
+// most F4 boards, another one with the build flag WB_HSE_MHZ - and the USB needs its 48 MHz exact, which the internal oscillator
+// (+-1 %) does not promise. F405: 168 MHz; F412: 96 MHz (its 100 MHz top gives no exact 48 MHz). No crystal answering: the
+// internal oscillator, as before (the boot report says which).
+#ifndef WB_HSE_MHZ
+#define WB_HSE_MHZ 8
+#endif
+static bool g_clock_hse = false;
+extern "C" void SystemClock_Config(void) {
+    RCC_OscInitTypeDef o = {}; RCC_ClkInitTypeDef c = {};
+    __HAL_RCC_PWR_CLK_ENABLE();
+    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+#if defined(STM32F405xx) || defined(STM32F407xx)
+    const uint32_t n = 336, q = 7, lat = FLASH_LATENCY_5, apb1 = RCC_HCLK_DIV4, apb2 = RCC_HCLK_DIV2;     // 336 / 2 = 168, 336 / 7 = 48
+#else
+    const uint32_t n = 192, q = 4, lat = FLASH_LATENCY_3, apb1 = RCC_HCLK_DIV2, apb2 = RCC_HCLK_DIV1;     // 192 / 2 = 96, 192 / 4 = 48
+#endif
+    o.PLL.PLLState = RCC_PLL_ON; o.PLL.PLLN = n; o.PLL.PLLP = RCC_PLLP_DIV2; o.PLL.PLLQ = q;
+#if defined(RCC_PLLR_SUPPORT) || defined(RCC_PLLCFGR_PLLR)
+    o.PLL.PLLR = 2;
+#endif
+    o.OscillatorType = RCC_OSCILLATORTYPE_HSE; o.HSEState = RCC_HSE_ON; o.PLL.PLLSource = RCC_PLLSOURCE_HSE; o.PLL.PLLM = WB_HSE_MHZ;   // 1 MHz into the PLL
+    g_clock_hse = HAL_RCC_OscConfig(&o) == HAL_OK;
+    if (!g_clock_hse) {
+        o.OscillatorType = RCC_OSCILLATORTYPE_HSI; o.HSEState = RCC_HSE_OFF; o.HSIState = RCC_HSI_ON; o.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+        o.PLL.PLLSource = RCC_PLLSOURCE_HSI; o.PLL.PLLM = 16;
+        if (HAL_RCC_OscConfig(&o) != HAL_OK) Error_Handler();
+    }
+    c.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+    c.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK; c.AHBCLKDivider = RCC_SYSCLK_DIV1; c.APB1CLKDivider = apb1; c.APB2CLKDivider = apb2;
+    if (HAL_RCC_ClockConfig(&c, lat) != HAL_OK) Error_Handler();
+#if defined(RCC_PERIPHCLK_CLK48)
+    RCC_PeriphCLKInitTypeDef p = {}; p.PeriphClockSelection = RCC_PERIPHCLK_CLK48; p.Clk48ClockSelection = RCC_CLK48CLKSOURCE_PLLQ;
+    HAL_RCCEx_PeriphCLKConfig(&p);
+#endif
+}
+#define WB_CLOCK_NOTE (g_clock_hse ? ", crystal " : ", NO CRYSTAL (internal oscillator: USB may be unreliable)")
+#else
+#define WB_CLOCK_NOTE ""
+#endif
 
 static wbp::Settings settings;
 static FlightApp flight;
 static FlightTask flight_task;
-static port::FlashH5 flash;
-static port::QwFlashSlice settings_region(flash, 0, kSettingsBytes);
-static port::QwFlashSlice log_region(flash, kSettingsBytes, FLASH_BANK_SIZE - kSettingsBytes);
+static port::FlashStm32 flash;
+// a second bank: the settings first (64 kB on an H5's 1 MB bank, 32 kB on the others), the flight log after them;
+// one bank: the whole region is the settings' (there is no flight log in the chip's flash)
+static uint32_t settings_bytes() { return !flash.second_bank() ? flash.size() : flash.size() >= 1024u * 1024u ? 64u * 1024u : 32u * 1024u; }
+static port::QwFlashSlice settings_region(flash, 0, settings_bytes());
+static port::QwFlashSlice log_region(flash, settings_bytes(), flash.size() - settings_bytes());
 static wbp::KvFlashStorage kv(settings_region);
 static wbp::SettingsStore store(kv);
 static bb::QwBlockStore log_store(log_region, "flash bank 2");
@@ -78,10 +123,13 @@ void setup() {
     flight.configure(settings);
     flight.begin();
 
-    // 3. blackbox in bank 2
+    // 3. blackbox in bank 2 (a chip with one bank: none in the chip's flash)
     char line[176];                                          // (= FlightApp::kReportLen)
-    blackbox.attach_store(&log_store);
-    if (blackbox.log().ok())
+    const bool log_here = !flash.no_log_reason() && log_region.size() >= 64u * 1024u;
+    blackbox.attach_store(log_here ? &log_store : nullptr);
+    if (!log_here)
+        snprintf(line, sizeof(line), "blackbox: FAILED - no room for a log in the flash of the %s (%s)", WB_MCU_NAME, flash.no_log_reason() ? flash.no_log_reason() : "too small");
+    else if (blackbox.log().ok())
         snprintf(line, sizeof(line), "blackbox: %s %lu kB, %d sessions, %lu kB used%s", log_store.name(), (unsigned long)(log_store.size() / 1024u), blackbox.log().sessions(),
                  (unsigned long)(blackbox.log().used() / 1024u), blackbox.log().needs_erase() ? " - holds other data: erase it in the app" : "");
     else snprintf(line, sizeof(line), "blackbox: FAILED - the log region of flash bank 2 cannot be read");
@@ -91,34 +139,32 @@ void setup() {
     host.set_blackbox(&blackbox, &settings);
     host.set_port(&transport, &g_link_kicks);
     {   // the chip's 96-bit unique id: the MSP side's UID, and (with the clock) a boot id that differs every start
-        const uint32_t u0 = HAL_GetUIDw0(), u1 = HAL_GetUIDw1(), u2 = HAL_GetUIDw2();
+        const uint32_t u0 = port::uid_word(0), u1 = port::uid_word(1), u2 = port::uid_word(2);
         uint8_t uid[12]; memcpy(uid, &u0, 4); memcpy(uid + 4, &u1, 4); memcpy(uid + 8, &u2, 4); host.set_uid(uid);
         host.set_boot_id(u0 ^ (u1 * 2654435761u) ^ u2 ^ (uint32_t)micros() ^ (port::g_flash_ecc_errors << 24));
         msp_link.set_firmware(WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH, __DATE__, __TIME__);
         link_task.set_msp(&msp_link, [](EscPins& p) { p.n = 0; for (int m = 0; m < 8 && flight.escPin(m) != GPIO_UNUSED; m++) p.pin[p.n++] = flight.escPin(m); p.pullup = flight.escPullup(); });
     }
-    {   // why the chip started (RCC reset flags), then clear them for the next time
-        const uint32_t f = RCC->RSR;
-        const char* why = (f & RCC_RSR_BORRSTF) ? "BROWN-OUT or power on" : (f & RCC_RSR_IWDGRSTF) ? "CRASH (independent watchdog)" : (f & RCC_RSR_WWDGRSTF) ? "CRASH (window watchdog)"
-                        : (f & RCC_RSR_SFTRSTF) ? "software restart" : (f & RCC_RSR_LPWRRSTF) ? "low-power reset" : (f & RCC_RSR_PINRSTF) ? "reset pin" : "unknown";
-        snprintf(line, sizeof(line), "reset: %s", why); flight.add_report(line);
-        SET_BIT(RCC->RSR, RCC_RSR_RMVF);
-    }
+    snprintf(line, sizeof(line), "reset: %s", port::reset_reason()); flight.add_report(line);      // why the chip started (RCC reset flags)
+    snprintf(line, sizeof(line), "mcu: %s, %lu MHz%s, flash %lu kB (firmware %lu kB), settings in %s at 0x%08lx", WB_MCU_NAME, (unsigned long)(SystemCoreClock / 1000000u), WB_CLOCK_NOTE,
+             (unsigned long)(*(const uint16_t*)FLASHSIZE_BASE), (unsigned long)((port::image_end() - FLASH_BASE) / 1024u), flash.name(), (unsigned long)(flash.base()));
+    flight.add_report(line);
     if (WB_LINK_BYTES_PER_S) snprintf(line, sizeof(line), "link: %s, %lu bytes/s (the live log is slowed down to fit)", WB_LINK_KIND, (unsigned long)WB_LINK_BYTES_PER_S);
     else snprintf(line, sizeof(line), "link: %s", WB_LINK_KIND);
     flight.add_report(line);
     snprintf(line, sizeof(line), "settings: %s (gen %lu, %lu/%lu B), loaded 0x%06lx (0x%06lx older), defaulted 0x%06lx, clamped %u",
-             kv_ok ? "flash ok" : "flash FAILED", (unsigned long)kv.generation(), (unsigned long)kv.used(), (unsigned long)kv.half_size(),
-             (unsigned long)(rep.loaded_mask & 0xFFFFFFu), (unsigned long)(rep.migrated_mask & 0xFFFFFFu), (unsigned long)(rep.defaulted_mask & 0xFFFFFFu), (unsigned)(uint16_t)rep.clamped_fields);
+             kv_ok ? "flash ok" : !flash.usable() ? "flash FAILED - the firmware is too big: it reaches into the settings region" : "flash FAILED", (unsigned long)kv.generation(), (unsigned long)kv.used(), (unsigned long)kv.half_size(),
+             (unsigned long)rep.loaded_mask, (unsigned long)rep.migrated_mask, (unsigned long)rep.defaulted_mask, (unsigned)(uint16_t)rep.clamped_fields);
     flight.add_report(line);
     if (port::g_flash_ecc_errors) { snprintf(line, sizeof(line), "flash: %lu unreadable quad-words (ECC) skipped - a write cut by a power loss", (unsigned long)port::g_flash_ecc_errors); flight.add_report(line); }
 
     // 4. the tasks (FreeRTOS from here on: no more delay() until the scheduler runs)
     const bool flight_ok = flight_task.start(flight);
-    const bool sensor_ok = port::task_create(&sensor_entry, "wb_sensor", 16384, nullptr, port::kPrioSensor, &sensor_handle, 0);
+    const bool sensor_ok = port::task_create(&sensor_entry, "wb_sensor", WB_LOW_RAM ? 8192 : 16384, nullptr, port::kPrioSensor, &sensor_handle, 0);
     snprintf(line, sizeof(line), "loop: %s, TIM7 every %lu us%s", flight_ok ? "flight task" : "FAILED to start the flight task", (unsigned long)flight.period_us(),
              sensor_ok ? "" : " - FAILED to start the sensor task");
     flight.add_report(line);
+    { static uint8_t pins[port::kPinMaskBytes]; port::chip_pins(pins); server.set_chip(WB_MCU_NAME, pins); }      // the app: which MCU, which pins exist
     host.attach(&server);
     host.set_report(flight.report(), flight.report_lines());
     for (int i = 0; i < flight.report_lines(); i++) server.log(1, flight.report()[i]);

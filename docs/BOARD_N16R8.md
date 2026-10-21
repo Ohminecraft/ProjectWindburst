@@ -9,6 +9,7 @@ Bản 0.5 đã được bạn chạy trên mạch này (IMU ICM20602 qua SPI, ES
 ```
 pio run -e rx_s3 -t upload          # N16R8 (mặc định, chỉ cần `pio run -t upload`)
 pio run -e rx_s3_usb -t upload      # N16R8, app nối qua cổng USB của chính ESP32-S3 (USB Serial/JTAG)
+pio run -e rx_s3_otg -t upload      # N16R8, cổng USB của chính ESP32-S3, USB do firmware chạy (TinyUSB): đổi được tên USB
 pio run -e rx_s3_n8 -t upload       # module N8: 8 MB flash, không PSRAM
 ```
 | | `rx_s3` (N16R8) | `rx_s3_n8` |
@@ -21,6 +22,12 @@ pio run -e rx_s3_n8 -t upload       # module N8: 8 MB flash, không PSRAM
 - Đổi bảng phân vùng làm mất log cũ trong flash; settings (NVS) giữ nguyên vị trí nên không mất.
 - App nối qua **UART0** (cổng USB có chữ "UART" / "COM" trên DevKitC, qua chip cầu CP210x / CH34x) ở 230400 baud với `rx_s3`: đủ cho cấu hình, **không đủ** cho hình 3D mượt và log trực tiếp tốc độ cao.
 - Cổng "USB" gốc của S3: env `rx_s3_usb` (`ARDUINO_USB_CDC_ON_BOOT=1`, `ARDUINO_USB_MODE=1`). Nhanh hơn nhiều; khi đó GPIO19 / 20 là của USB (gán chức năng khác lên hai chân này thì báo cáo khởi động có dòng cảnh báo). Kiểu TinyUSB (`ARDUINO_USB_MODE=0`) cũng biên dịch được, chưa ai thử.
+- **Tên USB** (0.20, env `rx_s3_otg`: `ARDUINO_USB_CDC_ON_BOOT=0`, `ARDUINO_USB_MODE=0`, `WB_USB_OTG=1`): firmware tự chạy USB (TinyUSB) và khởi động nó trong `setup()` sau khi đọc cài đặt, nên máy tính thấy mạch dưới tên `general.usb_name`. Để trống thì tên là "Windburst ESP32-S3", tức tên của mạch vừa nạp firmware. Đặt tên ở tab Hệ thống, khối "Tên USB" (chỉ hiện khi firmware có tính năng `USB_NAME`); chỉ nhận ký tự ASCII in được, tối đa 31 ký tự; có hiệu lực sau khi lưu và khởi động lại. Báo cáo khởi động có dòng `usb: 'Windburst ESP32-S3' ...`.
+  - Cái giá: mất cổng debug JTAG của USB Serial/JTAG.
+  - **Nạp firmware**: PlatformIO gửi "1200 baud touch" để chip tự vào bootloader rồi chờ cổng của bootloader (`board_upload.use_1200bps_touch`). Không được thì giữ nút BOOT trong lúc cắm USB. DTR / RTS **không** bao giờ khởi động lại chip (BLHeliSuite và các terminal bật / tắt hai đường này).
+  - App mở cổng với DTR tắt, mà `USBCDC::write()` không gửi khi DTR tắt, nên link ghi thẳng vào FIFO của TinyUSB (`TinyUsbPort` trong `app/link_arduino.h`), không bao giờ ghi quá chỗ trống.
+  - Windows: danh sách cổng COM vẫn ghi "USB Serial Device (COMx)" (driver chung của Windows); tên nằm trong thuộc tính thiết bị ("Bus reported device description"), Linux / macOS hiện tên trong tên cổng.
+  - **Chưa thử trên mạch** (bản `rx_s3_otg` cũ của 0.9.1 – 0.9.4 từng chạy, kể cả với BLHeliSuite32 khi app nhả cổng).
 - So sánh có / không có mã trong RAM: thêm `-DWB_FAST_CODE=0` vào `build_flags` của `[rx_common]`. Xem mã nào đang ở đâu: `python3 tools/iram_report.py .pio/build/rx_s3/firmware.elf` (cần `pip install pyelftools`).
 - `lib_ldf_mode = deep` (không phải `deep+`): xem ghi chú trong `platformio.ini`.
 

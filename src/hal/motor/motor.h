@@ -11,15 +11,10 @@
 #if defined(ESP32)
 #include "dshot.h"
 #include "pwm_oneshot.h"
-#elif WB_PLATFORM_STM32                 // PWM / Oneshot / Multishot / brushed on the timers (port/pwm.h); DShot needs timer + DMA: not written yet
+#elif WB_PLATFORM_STM32                 // PWM / Oneshot / Multishot / brushed on the timers (port/pwm.h); DShot: timer + DMA burst
 #include "pwm_oneshot.h"
-class NoDshotHw : public MotorHw {
-public:
-    const char* name() const override { return "DShot (not on STM32 yet: use PWM, Oneshot or Multishot)"; }
-    bool begin(const uint8_t*, int, motor::Protocol, uint16_t, bool) override { return false; }
-    void write(const motor::Frame&) override {}
-};
-typedef NoDshotHw DshotHw;
+#include "../../port/stm32/dshot_stm32.h"
+typedef DshotTimDmaHw DshotHw;
 #else                                   // PC build (tests / simulator): frames are captured instead of driving pins
 #include "motor_hw_host.h"
 typedef HostMotorHw DshotHw;
@@ -74,6 +69,7 @@ public:
     uint8_t pinOf(int m) const { if (m < 0 || m >= mgr_.cfg.count || motor::is_can(mgr_.cfg.protocol)) return GPIO_UNUSED; const int slot = mgr_.cfg.order[m]; return slot >= 0 && slot < 8 ? used_[slot] : GPIO_UNUSED; }
     MotorHw* hw() { return hw_; }
     const char* backend() const { return hw_ ? hw_->name() : "none"; }
+    const char* failure() const { return hw_ ? hw_->why_not() : nullptr; }      // the backend's own reason when begin() failed
 
     // now_us from micros(). cmd[] = mixer output for logical motors, absolute 0..1.
     WB_FAST void update(uint32_t now_us, const float cmd[], bool armed) {

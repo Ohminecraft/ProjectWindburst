@@ -35,10 +35,32 @@ void loop() { Serial.println("Windburst TX: firmware not implemented yet"); dela
 #include "blackbox/bb_store_esp.h"
 #include "blackbox/bb_card_esp.h"
 #include "blackbox/bb_header.h"
+#include "app/usb_name.h"
 #include <esp_mac.h>
+#if WB_USB_OTG
+// rx_s3_otg: the firmware runs the USB stack (TinyUSB) and starts it in setup(), after the settings are read, so that the board
+// shows up under its own name (general.usb_name). The app link is usb_cdc; `Serial` is UART0 there.
+#include "USB.h"
+#include "esp32-hal-tinyusb.h"
+static USBCDC usb_cdc(0);                               // (the core defines USBSerial only when USB starts at boot)
+#define WB_LINK usb_cdc
+#define WB_FEAT_USB wbp::FEAT_USB_NAME
+#else
+#define WB_LINK Serial
+#define WB_FEAT_USB 0u
+#endif
 
 static wbp::Settings settings;
+#if defined(CONFIG_IDF_TARGET_ESP32)
+// The plain ESP32: the Arduino core reserves the start of its data RAM for the Bluetooth controller, and the static data no longer
+// fits beside WiFi. The flight app (~75 kB) lives in the internal heap instead (asked for explicitly: never PSRAM), made before
+// everything below that uses it.
+#include <new>
+#include "esp_heap_caps.h"
+static FlightApp& flight = *new (heap_caps_malloc(sizeof(FlightApp), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)) FlightApp;
+#else
 static FlightApp flight;
+#endif
 static FlightTask flight_task;
 static NvsStorage nvs;
 static wbp::SettingsStore store(nvs);
@@ -47,7 +69,11 @@ static wbp::SettingsStore store(nvs);
 #if WB_HAS_TWAI
 static TwaiBus can_bus;                                  // the CAN controller (section can: DroneCAN)
 #endif
+#if WB_USB_OTG
+static TinyUsbPort usb_port;
+#else
 static StreamPort usb_port(Serial);
+#endif
 #if WB_HAS_WIFI
 static WifiLink wifi;
 static app::LinkMux link_mux(usb_port, &wifi);
@@ -59,8 +85,8 @@ static app::LinkMux link_mux(usb_port, nullptr);
 static app::QueuedTransport transport(link_mux, WB_LINK_BYTES_PER_S, &LinkTask::wait_1ms, nullptr);
 static app::LinkHost host(flight.link, &LinkTask::wait_1ms, nullptr, &LinkTask::now_ms);
 static wbp::Server server(settings, &store, host, transport, wbp::ROLE_RX, WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH, "Windburst RX",
-                          wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | WB_FEAT_WIFI);
-static LinkTask link_task(server, Serial, transport);
+                          wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | WB_FEAT_WIFI | WB_FEAT_USB);
+static LinkTask link_task(server, WB_LINK, transport);
 static app::MspLink msp_link(host, transport);           // ESC tools on the same port (ESC passthrough)
 static app::Cli term_cli(settings, server, [](const char* t, void*) { transport.write((const uint8_t*)t, strlen(t)); }, nullptr);     // '#' on the serial port: the command line (app/cli.h)
 static EspPartitionStore log_store;                      // flash region of the flight log (partition "wblog", or the stock "spiffs" one)
@@ -76,6 +102,7 @@ static SdCardTask sd_task(card_log);
 // had: below the flight task on the same core, which preempts it for every control cycle.
 static constexpr uint32_t kSensorStack = 16384;
 RTC_NOINIT_ATTR static uint32_t g_boot_count;               // (link stream boot_id)
+RTC_NOINIT_ATTR static esc4way::Trace g_4way_trace;         // the last ESC passthrough session: survives the restart that ends it
 
 static void sensor_entry(void*) {
     for (;;) {
@@ -84,7 +111,17 @@ static void sensor_entry(void*) {
     }
 }
 
+#if WB_USB_OTG
+// "1200 baud touch" (PlatformIO / Arduino IDE before an upload): restart into the ROM bootloader. DTR / RTS never restart the chip
+// (USBCDC::enableReboot(false)): ESC tools and terminals toggle them (0.9.2).
+static void on_usb_cdc(void*, esp_event_base_t, int32_t id, void* data) {
+    if (id == ARDUINO_USB_CDC_LINE_CODING_EVENT && ((arduino_usb_cdc_event_data_t*)data)->line_coding.bit_rate == 1200) usb_persist_restart(RESTART_BOOTLOADER);
+}
+static char g_usb_name[app::kUsbNameLen + 1];
+#endif
+
 void setup() {
+#if !WB_USB_OTG
     Serial.setRxBufferSize(2048);
 #if !defined(WB_LINK_NO_TX_BUFFER)
     Serial.setTxBufferSize(4096);                        // (the queue in front of it is SerialTransport's own, 8 kB)
@@ -93,13 +130,23 @@ void setup() {
 #if WB_LINK_KICK
     Serial.setTxTimeoutMs(0);                            // a write to the USB port never waits (link_arduino.h: StreamPort)
 #endif
+#endif
 
     // 1. settings: a missing / resized / corrupted section falls back to its defaults, the others are kept
     const bool nvs_ok = nvs.begin();
     const wbp::SettingsStore::LoadReport rep = store.load(settings);
+#if WB_USB_OTG
+    //    ... then USB, under the name from the settings
+    app::usb_product_name(settings.general.usb_name, WB_MCU_NAME, g_usb_name);
+    USB.manufacturerName("Windburst"); USB.productName(g_usb_name);
+    usb_cdc.setRxBufferSize(2048);
+    usb_cdc.enableReboot(false); usb_cdc.onEvent(on_usb_cdc);
+    usb_cdc.begin(WB_LINK_BAUD);
+    USB.begin();
+#endif
 
     // 2. hardware
-#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+#if (defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT) || WB_USB_OTG
     flight.usb_link = true;
     flight.uart0 = &Serial0;                             // the app talks over USB: UART0 is free (an MSP optical flow sensor can have it)
 #endif
@@ -156,6 +203,15 @@ void setup() {
                         : r == ESP_RST_TASK_WDT ? "CRASH (task watchdog)" : r == ESP_RST_WDT ? "CRASH (watchdog)" : r == ESP_RST_BROWNOUT ? "BROWN-OUT (supply voltage dropped)"
                         : r == ESP_RST_EXT ? "reset pin" : r == ESP_RST_DEEPSLEEP ? "deep sleep" : r == ESP_RST_USB ? "USB (the port's reset line)" : r == ESP_RST_JTAG ? "JTAG" : "unknown";
         snprintf(line, sizeof(line), "reset: %s", why); flight.add_report(line);
+        snprintf(line, sizeof(line), "mcu: %s rev %u, %lu MHz, flash %lu MB, PSRAM %lu kB", WB_MCU_NAME, (unsigned)ESP.getChipRevision(), (unsigned long)getCpuFrequencyMhz(),
+                 (unsigned long)(ESP.getFlashChipSize() >> 20), (unsigned long)(ESP.getPsramSize() >> 10));
+        flight.add_report(line);
+        // after an ESC passthrough session (it ends with a software restart): what the PC tool asked and what the ESC answered
+        if (r == ESP_RST_SW && g_4way_trace.valid()) {
+            static char tl[4][176]; const int n = g_4way_trace.lines(tl, 4);
+            for (int i = 0; i < n; i++) flight.add_report(tl[i]);
+        }
+        g_4way_trace.clear();
     }
 #if WB_HAS_WIFI
     if (settings.wifi.mode != wbp::WIFI_MODE_OFF) {          // the radio (its driver takes ~50 kB of RAM and runs on core 0, beside the link)
@@ -173,19 +229,24 @@ void setup() {
     if (WB_LINK_BYTES_PER_S) snprintf(line, sizeof(line), "link: %s, %lu bytes/s (the live log is slowed down to fit)", WB_LINK_KIND, (unsigned long)WB_LINK_BYTES_PER_S);
     else snprintf(line, sizeof(line), "link: %s", WB_LINK_KIND);
     flight.add_report(line);
+#if WB_USB_OTG
+    snprintf(line, sizeof(line), "usb: '%s' (general.usb_name; flashing: 1200 baud touch, DTR / RTS never restart the chip)", g_usb_name); flight.add_report(line);
+#endif
 
     // 5. boot report (kept for the app's REPORT command) - sent once now, BEFORE the link task exists: from here on only that task uses the server
-    // (bit = section id; the masks are cut to 24 bits so that the line provably fits its buffer)
-    static_assert(wbp::kSectionCount < 24, "a section id of 24 or more needs wider masks in the boot report");
-    snprintf(line, sizeof(line), "settings: %s, loaded 0x%06lx (0x%06lx from an older firmware), defaulted 0x%06lx, clamped %u",
-             nvs_ok ? "NVS ok" : "NVS FAILED (nothing can be saved)", (unsigned long)(rep.loaded_mask & 0xFFFFFFu), (unsigned long)(rep.migrated_mask & 0xFFFFFFu), (unsigned long)(rep.defaulted_mask & 0xFFFFFFu), (unsigned)(uint16_t)rep.clamped_fields);
+    // (bit = section id; 32-bit masks: the line provably fits its buffer)
+    static_assert(wbp::kSectionCount < 32, "a section id of 32 or more needs wider masks in the boot report");
+    snprintf(line, sizeof(line), "settings: %s, loaded 0x%08lx (0x%08lx from an older firmware), defaulted 0x%08lx, clamped %u",
+             nvs_ok ? "NVS ok" : "NVS FAILED (nothing can be saved)", (unsigned long)rep.loaded_mask, (unsigned long)rep.migrated_mask, (unsigned long)rep.defaulted_mask, (unsigned)(uint16_t)rep.clamped_fields);
     flight.add_report(line);
+    { static uint8_t pins[port::kPinMaskBytes]; port::chip_pins(pins); server.set_chip(WB_MCU_NAME, pins); }      // the app: which MCU, which pins exist
     host.attach(&server);
     host.set_report(flight.report(), flight.report_lines());
     for (int i = 0; i < flight.report_lines(); i++) server.log(1, flight.report()[i]);
 
     // 6. app link, SD writer - then Arduino's loop task (this one) deletes itself
     link_task.set_cli(&term_cli);                            // (not "cli": that is the ESP32 core's interrupts-off macro)
+    link_task.set_trace(&g_4way_trace);
     link_task.start();
     sd_task.start();
     if (sensor_task) vTaskDelete(nullptr);                   // (otherwise loop() below takes over)

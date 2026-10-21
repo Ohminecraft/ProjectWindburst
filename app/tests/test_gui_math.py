@@ -32,6 +32,9 @@ out.beeper = m.BEEP_PATTERNS;
 out.motor_never = m.MOTOR_NEVER;
 out.motor_tones = Object.fromEntries(Object.keys(m.BEEP_PATTERNS).map((n) => [n, m.motorTones(n)]));
 out.beacon_slot_ms = m.BEACON_SLOT_MS;
+out.led = ref.led.map((c) => m.ledColors(c, c.st, c.t));
+{ let R = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]; out.acro = ref.acro.map(([r, p, y, dt, n]) => { for (let k = 0; k < n; k++) R = m.acroStep(R, [r, p, y], dt); return R.flat(); }); }
+out.angle = ref.angle.map(([l, c, mx, e, s]) => m.angleTarget(l, c, mx, e, s));
 console.log(JSON.stringify(out));
 """
 
@@ -117,3 +120,30 @@ def test_motor_sounder_shown_as_the_firmware_plays_it(both):
     sch = Schema()
     assert sorted(ref["motor_default"]) == sorted(sch.layout("section", "beeper").defaults()["motor_conditions"]), "schema default = firmware default"
     assert not set(ref["motor_default"]) & set(ref["motor_never"]) and "SYSTEM_INIT" not in ref["motor_default"]
+
+
+def test_led_preview_shows_what_the_strip_shows(both):
+    """Battery and beeper tab, LED layout MANUAL: the preview runs js/gfx/fwmath.js ledColors(); it must be src/app/led_logic.h."""
+    ref, js = both
+    from wbclient import Schema
+    assert Schema().enums["led_function"] == ref["led_functions"], "the schema's led_function names are LedLogic::Fn, in order"
+    assert len(ref["led"]) == 24 * 12
+    seen = set()
+    for c, got in zip(ref["led"], js["led"]):
+        assert got == c["out"], "count %d speed %d warnings %s state %s t %d" % (c["count"], c["speed"], c["warnings"], c["st"], c["t"])
+        seen.update(c["fn"][:c["count"]])
+    assert seen == set(ref["led_functions"]), "every function was compared"
+
+
+def test_stick_preview_flies_like_the_firmware(both):
+    """Receiver / Rate tabs, the craft on the sticks: Acro turns the body as the firmware's attitude would with those rates
+    (gyro alone through the Ahrs), Angle tilts to the AngleController's target."""
+    ref, js = both
+    assert len(ref["acro"]) == 6
+    for row, R in zip(ref["acro"], js["acro"]):
+        assert R == pytest.approx(row[5:], abs=2e-3), "after rates roll %.0f pitch %.0f yaw %.0f" % tuple(row[:3])
+    # the conventions in words: +roll = right wing down, +pitch = nose down
+    one = ref["acro"][0]; assert one[5 + 7] > 0.5, "200 deg/s roll for 0.5 s: the right wing points down"
+    assert len(ref["angle"]) > 100
+    for row, v in zip(ref["angle"], js["angle"]):
+        assert v == pytest.approx(row[5], abs=1e-3), "limit %d centre %d max %d expo %d stick %.1f" % tuple(row[:5])

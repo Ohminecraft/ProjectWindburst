@@ -16,9 +16,10 @@ import nav from './tabs/nav.js';
 import power from './tabs/power.js';
 import blackbox from './tabs/blackbox.js';
 import pins from './tabs/pins.js';
+import osd from './tabs/osd.js';
 import system from './tabs/system.js';
 
-const TABS = [overview, receiver, modes, sensors, motors, tuning, rates, filters, nav, power, blackbox, pins, system];
+const TABS = [overview, receiver, modes, sensors, motors, tuning, rates, filters, nav, power, osd, blackbox, pins, system];
 const $ = (id) => document.getElementById(id);
 let current = null;          // id of the tab on screen
 let settingsReady = false;
@@ -31,6 +32,7 @@ const baudSel = h('select', { id: 'baud', 'aria-label': tr('Tốc độ baud'), 
 const connectBtn = h('button', { type: 'button', class: 'btn primary', id: 'connect' }, tr('Kết nối'));
 const refreshBtn = h('button', { type: 'button', class: 'btn quiet', id: 'refresh', title: tr('Tìm lại các cổng') }, tr('Tìm cổng'));
 const fwLabel = h('span', { class: 'fw', id: 'fw' });
+const mcuBadge = h('span', { class: 'mcu-badge', id: 'mcu', hidden: true, title: tr('Vi điều khiển (MCU) của flight controller') });
 const armPill = h('span', { class: 'pill off', id: 'arm-pill' }, tr('Chưa kết nối'));
 const readyLine = h('span', { class: 'ready', id: 'ready' });
 const chips = h('div', { class: 'chips', id: 'chips' });
@@ -41,7 +43,7 @@ const langSel = h('select', { id: 'lang', class: 'lang', 'aria-label': 'Ngôn ng
 
 function buildBar() {
   $('bar').append(
-    h('div', { class: 'brand' }, h('strong', {}, 'Windburst'), fwLabel),
+    h('div', { class: 'brand' }, h('strong', {}, 'Windburst'), fwLabel, mcuBadge),
     h('div', { class: 'link' }, portSel, baudSel, refreshBtn, connectBtn),
     h('div', { class: 'state' }, armPill, readyLine),
     chips,
@@ -162,6 +164,9 @@ function paintBar() {
   portSel.disabled = baudSel.disabled = c.connected || busy;
   refreshBtn.disabled = c.connected || busy;
   fwLabel.textContent = c.info ? `${c.info.name} ${c.info.version}` : '';
+  // which chip: the firmware says it from 0.25 on; before, only "STM32" or not
+  const mcu = c.info ? (c.info.mcu || ((c.info.features || []).includes('STM32') ? 'STM32' : 'ESP32')) : '';
+  mcuBadge.textContent = mcu; mcuBadge.hidden = !mcu; mcuBadge.dataset.mcu = mcu;
   clear(chips);
   let bannerText = '';
   if (!store.serverUp) bannerText = tr('Mất liên lạc với chương trình wbclient trên máy này. Chạy lại "python -m wbclient gui" rồi tải lại trang.');

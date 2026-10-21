@@ -46,7 +46,7 @@ struct Config {
     uint16_t rate_hz = 250;
     uint32_t groups = 0;
 };
-struct Inputs { uint32_t now_ms = 0; bool armed = false, switch_on = false, app_active = false; };
+struct Inputs { uint32_t now_ms = 0; bool armed = false, switch_on = false, app_active = false, erase_switch = false; };      // erase_switch: the BLACKBOX_ERASE mode
 
 // The live stream shares the link with the telemetry and the replies: it gets half of what the link carries.
 // -> the highest record rate that fits (records of `record_bytes` incl. their type byte; frames add about 3 %); 0 = no limit.
@@ -86,6 +86,17 @@ public:
     Storage& log() { return *cur_; }                               // the storage the settings select (NONE: the flash, for reading back)
     FlashLog& flash() { return flash_; }
     uint8_t device() const { return dev_; }                        // the device log() belongs to
+    uint32_t switch_erases() const { return switch_erases_; }      // erases started by the BLACKBOX_ERASE switch since boot
+    // Erase the log memory (the app's BLACKBOX_ERASE command, the BLACKBOX_ERASE switch): one block per poll() from now on.
+    wbp::Err erase() {
+        if (!cur_->ok()) return wbp::ERR_NO_SENSOR;
+        if (state_ == ST_LOGGING || state_ == ST_ERASING) return wbp::ERR_BUSY;
+        rd_pos_ = rd_end_ = 0; reading_held_ = false;
+        if (!cur_->erase_start()) return wbp::ERR_FAILED;
+        if (state_ == ST_STREAMING) { rec_.stop(); rec_.ring().clear(); stream_wanted_ = false; closing_ = false; }
+        rec_.set_busy(true); state_ = ST_ERASING;
+        return wbp::ERR_OK;
+    }
     State state() const { return state_; }
 
     // ------------------------------------------------------------------------------------------------ once per millisecond
@@ -99,6 +110,11 @@ public:
             if (!cur_->erase_step()) { rec_.set_busy(false); rec_.post_erase_done(); state_ = idle_state(); }
             return;
         }
+        // ---- the BLACKBOX_ERASE switch (Betaflight BOXBLACKBOXERASE): flipped on while disarmed, it erases what the app's button
+        // erases. Only a flip counts - it must have been seen off first, so a switch left on at power-up erases nothing - and a
+        // refused erase (logging, nothing there) is not retried until the next flip.
+        if (!in.erase_switch) erase_ready_ = true;
+        else if (erase_ready_) { erase_ready_ = false; if (!in.armed && erase() == wbp::ERR_OK) { switch_erases_++; return; } }
         // a switch session the app closed (to download) starts again only when the pilot flips the switch off and on: before 0.8.8
         // it started a new one by itself 3 s later, with the switch still on, and the next look at the list closed that one too
         if (!in.switch_on) switch_held_ = false;
@@ -138,14 +154,7 @@ public:
     wbp::Err command(uint8_t cmd, const uint8_t* a, uint8_t* result, uint16_t& rlen) {
         rlen = 0;
         switch (cmd) {
-        case wbp::CMD_BLACKBOX_ERASE:
-            if (!cur_->ok()) return wbp::ERR_NO_SENSOR;
-            if (state_ == ST_LOGGING || state_ == ST_ERASING) return wbp::ERR_BUSY;
-            rd_pos_ = rd_end_ = 0; reading_held_ = false;
-            if (!cur_->erase_start()) return wbp::ERR_FAILED;
-            if (state_ == ST_STREAMING) { rec_.stop(); rec_.ring().clear(); stream_wanted_ = false; closing_ = false; }
-            rec_.set_busy(true); state_ = ST_ERASING;
-            return wbp::ERR_OK;
+        case wbp::CMD_BLACKBOX_ERASE: return erase();
         case wbp::CMD_BLACKBOX_STREAM: {
             const bool enable = a[0] != 0; const uint16_t rate = (uint16_t)(a[1] | (a[2] << 8));
             if (!enable) { stream_wanted_ = false; return wbp::ERR_OK; }
@@ -372,7 +381,8 @@ private:
     Config cfg_; State state_ = ST_OFF;
     ExtraFn extra_ = nullptr; void* extra_ctx_ = nullptr; float loop_hz_ = 4000.0f, gyro_hz_ = 4000.0f; uint8_t motors_ = 4;
     bool stream_wanted_ = false, closing_ = false, end_written_ = false, out_droppable_ = false, armed_ = false;
-    bool switch_held_ = false;                       // see poll(): the switch must go off before it starts a session again
+    bool switch_held_ = false;
+    bool erase_ready_ = false; uint32_t switch_erases_ = 0;      // the BLACKBOX_ERASE switch: seen off since its last flip; erases it started                       // see poll(): the switch must go off before it starts a session again
     uint8_t close_reason_ = 0, hdr_seq_ = 0, data_seq_ = 0, blob_seq_ = 0; uint16_t close_polls_ = 0;
     uint16_t stream_rate_ = 0, pay_n_ = 0, out_n_ = 0, rate_hz_ = 0;
     uint32_t now_ms_ = 0, flush_ms_ = 0, frame_ms_ = 0, sec_ms_ = 0, sec_fast_ = 0, sec_bytes_ = 0, byte_rate_ = 0, dropped_seen_ = 0, stream_dropped_ = 0, session_no_ = 0;

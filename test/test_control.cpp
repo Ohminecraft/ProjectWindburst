@@ -11,6 +11,7 @@
 #include "../src/core/gyro_filter.h"
 #include "../src/core/pid.h"
 #include "../src/core/setpoint.h"
+#include "../src/core/acro_trainer.h"
 #include "../src/core/attitude.h"
 #include "../src/core/simplified_tuning.h"
 #include "../src/core/inflight_trim.h"
@@ -420,6 +421,28 @@ static void t_pid() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
+// Acro trainer (Betaflight applyAcroTrainer): the setpoint it gives back
+static void t_acro_trainer() {
+    printf("[acro trainer] the angle limit in Acro\n");
+    AcroTrainer t; bool ri = false;
+    CHECK(t.cfg.angle_limit_deg == 20.0f && t.cfg.lookahead_s == 0.05f && t.cfg.gain == 7.5f, "defaults: Betaflight's (20 deg, 50 ms, gain 75)");
+    CHECK(t.apply(ROLL, 300, 0, 0, ri) == 300 && !ri && t.state(ROLL) == 0, "level: the stick's rate goes through");
+    float v = t.apply(ROLL, 100, 25, 0, ri); CHECK(near(v, -37.5f, 1e-4f) && ri && t.state(ROLL) == 1, "25 deg, stick still right: back to the limit, (20 - 25) x 7.5 = %.1f, I-term cleared", v);
+    v = t.apply(ROLL, 100, 22, 0, ri); CHECK(near(v, -15.0f, 1e-4f) && !ri && t.state(ROLL) == 1, "held: (20 - 22) x 7.5, the I-term only cleared when it takes over");
+    v = t.apply(ROLL, 100, 18, 0, ri); CHECK(near(v, 15.0f, 1e-4f), "below the limit while held: pushed up to it (%.1f)", v);
+    v = t.apply(ROLL, -50, 22, 0, ri); CHECK(v == -50 && t.state(ROLL) == 0, "the stick reverses: let go");
+    v = t.apply(PITCH, 400, 15, 500, ri); CHECK(near(v, -150.0f, 1e-3f) && ri && t.state(PITCH) == 0, "15 deg at 500 deg/s: 25 deg ahead in 50 ms -> 40 projected, (20 - 40) x 7.5 = %.1f", v);
+    v = t.apply(PITCH, 400, 15, 250, ri); CHECK(near(v, -9.375f, 1e-3f), "at 250 deg/s the lookahead is half: 21.25 projected (%.3f)", v);
+    v = t.apply(PITCH, 400, 15, 100, ri); CHECK(v == 400 && !ri, "at 100 deg/s: 16 projected, free");
+    v = t.apply(ROLL, -100, -25, 0, ri); CHECK(near(v, 37.5f, 1e-4f) && t.state(ROLL) == -1, "the left side the same (%.1f)", v);
+    v = t.apply(ROLL, 0, -25, 0, ri); CHECK(near(v, 37.5f, 1e-4f) && t.state(ROLL) == -1, "the stick centred is 'negative' (Betaflight's sign of 0): still held on the left");
+    t.reset(); CHECK(t.state(ROLL) == 0, "reset (switched on): nothing held");
+    v = t.apply(ROLL, 0, 25, 0, ri); CHECK(v == 0.0f && t.state(ROLL) == 0, "the stick centred at 25 deg right: not held, rate 0");
+    t.cfg.gain = 25.5f; v = t.apply(ROLL, 100, 80, 0, ri); CHECK(v == -1000.0f, "the correction is limited to 1000 deg/s");
+    t.reset(); t.cfg.gain = 7.5f; t.cfg.angle_limit_deg = 45; v = t.apply(ROLL, 100, 30, 0, ri); CHECK(v == 100, "limit 45: 30 deg is free");
+    PidController pc; PidConfig c; pc.configure(c, 4000); pc.i_term[1] = 50; pc.reset_i(1); CHECK(pc.i_term[1] == 0, "reset_i clears one axis' I-term");
+}
+
 static void t_setpoint() {
     printf("[stick path] frame rate, RC smoothing, feedforward\n");
     // ---- receiver frame rate
@@ -746,6 +769,6 @@ static void t_inflight_trim() {
 }
 
 int main() {
-    t_filters(); t_gyro_chain(); t_dyn_notch(); t_pid(); t_setpoint(); t_attitude(); t_sliders(); t_inflight_trim();
+    t_filters(); t_gyro_chain(); t_dyn_notch(); t_pid(); t_acro_trainer(); t_setpoint(); t_attitude(); t_sliders(); t_inflight_trim();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

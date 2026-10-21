@@ -24,6 +24,28 @@
 // ============================================================================
 namespace app {
 
+// What an MSP peer is told about the craft (msp::Bridge): the ESC tools on the app link, the video transmitter on the OSD's UART.
+inline void msp_info_of(const Telemetry& t, const wbp::Settings* s, msp::Info& in) {
+    in.armed = t.armed; in.motors = t.motor_count; in.cycle_us = t.pid_target_hz ? (uint16_t)(1000000u / t.pid_target_hz) : 250;   // (Betaflight's cycle time is the PID loop's)
+    in.batt_v = t.batt_v; in.amps = t.batt_amps; in.cells = t.batt_cells; in.mah = (uint16_t)(t.batt_mah > 65535.0f ? 65535.0f : t.batt_mah > 0 ? t.batt_mah : 0.0f);
+    if (s) {                                             // (read only)
+        static const uint8_t bf[] = {0, 1, 2, 3, 5, 6, 7, 7, 8, 4};   // esc_protocol -> Betaflight (DShot1200: none there, said 600)
+        const uint8_t pr = s->motors.protocol;
+        in.bf_motor_protocol = pr < sizeof(bf) ? bf[pr] : 6;
+        in.pwm_rate = s->motors.pulse_hz; in.idle_x100 = (uint16_t)(s->motors.idle_x10 * 10u);
+        in.pulse_disarmed = s->motors.pulse_disarmed; in.pulse_armed = s->motors.pulse_armed; in.pulse_max = s->motors.pulse_max;
+        in.pole_count = s->motors.pole_count; in.bidir = s->motors.bidirectional != 0;
+        in.airmode = s->general.airmode != 0;
+        const uint8_t rp = s->receiver.protocol;
+        in.rx_kind = rp == wbp::RX_PROTOCOL_PPM ? 1 : rp == wbp::RX_PROTOCOL_PWM ? 2 : 0;
+        in.gps = s->sensors.gps_enabled != 0; in.range = s->sensors.range_enabled != 0;
+        in.modes_set = 0;
+        for (int i = 0; i < 16; i++) if (s->modes.hi[i] > s->modes.lo[i] && s->modes.mode[i] < 32) in.modes_set |= 1u << s->modes.mode[i];
+    }
+    in.health = t.health; in.modes_on = t.modes; in.blockers = t.blockers; in.cpu_pct = t.cpu_pct;
+    for (int i = 0; i < 8; i++) in.motor_out[i] = t.motor_cmd[i];
+}
+
 // Flight-loop side. Returns ERR_OK if the request may be executed now.
 inline wbp::Err check_request(const Request& r, bool armed) {
     if (r.cmd == REQ_APPLY_SECTION) return armed ? wbp::ERR_ARMED : (r.n == 1 && wbp::find_section(r.args[0]) ? wbp::ERR_OK : wbp::ERR_BAD_SECTION);
@@ -67,6 +89,7 @@ public:
         if (tel_.fw_saved_seq != saved_seq_) { saved_seq_ = tel_.fw_saved_seq; autosave_ = tel_.fw_saved_section; }       // the flight loop changed a section and wants it kept
         if (!bb_) return;
         bb::Inputs in; in.now_ms = now_ms; in.armed = tel_.armed; in.switch_on = ((tel_.modes >> wbp::MODE_BLACKBOX) & 1u) != 0; in.app_active = x_.link_active(now_ms);
+        in.erase_switch = ((tel_.modes >> wbp::MODE_BLACKBOX_ERASE) & 1u) != 0;
         bb_->poll(in);
     }
     uint32_t now_ms() override { return now_(); }
@@ -102,7 +125,9 @@ public:
 
     bool apply_live(uint8_t section) override {
         const wbp::SectionInfo* si = wbp::find_section(section);
-        if (!si || !si->live) return false;                    // needs a reboot: the server raises SF_REBOOT_REQUIRED
+        // needs a reboot: the server raises SF_REBOOT_REQUIRED. (motors: the flight loop takes a new order / spin direction at once
+        // and says no to anything else - FlightApp::apply_motor_order, the motor wizard)
+        if (!si || (!si->live && section != wbp::SEC_MOTORS)) return false;
         if (section == wbp::SEC_BLACKBOX) {                    // read by the blackbox service only; applies to the next session
             if (bb_ && settings_) { bb::Config c; wbp::apply_blackbox(*settings_, c); bb_->set_config(c); }
             return true;
@@ -132,25 +157,8 @@ public:
     // what the MSP side (ESC tools) is told: from the telemetry snapshot
     void msp_info(msp::Info& in) {
         x_.snapshot(tel_);
-        in.armed = tel_.armed; in.motors = tel_.motor_count; in.cycle_us = tel_.pid_target_hz ? (uint16_t)(1000000u / tel_.pid_target_hz) : 250;   // (Betaflight's cycle time is the PID loop's)
-        in.batt_v = tel_.batt_v; in.amps = tel_.batt_amps; in.cells = tel_.batt_cells; in.mah = (uint16_t)(tel_.batt_mah > 65535.0f ? 65535.0f : tel_.batt_mah > 0 ? tel_.batt_mah : 0.0f);
+        msp_info_of(tel_, settings_, in);
         memcpy(in.uid, uid_, 12);
-        if (settings_) {                                     // (the link task owns the settings: read here, never written)
-            static const uint8_t bf[] = {0, 1, 2, 3, 5, 6, 7, 7, 8, 4};   // esc_protocol -> Betaflight (DShot1200: none there, said 600)
-            const uint8_t pr = settings_->motors.protocol;
-            in.bf_motor_protocol = pr < sizeof(bf) ? bf[pr] : 6;
-            in.pwm_rate = settings_->motors.pulse_hz; in.idle_x100 = (uint16_t)(settings_->motors.idle_x10 * 10u);
-            in.pulse_disarmed = settings_->motors.pulse_disarmed; in.pulse_armed = settings_->motors.pulse_armed; in.pulse_max = settings_->motors.pulse_max;
-            in.pole_count = settings_->motors.pole_count; in.bidir = settings_->motors.bidirectional != 0;
-            in.airmode = settings_->general.airmode != 0;
-            const uint8_t rp = settings_->receiver.protocol;
-            in.rx_kind = rp == wbp::RX_PROTOCOL_PPM ? 1 : rp == wbp::RX_PROTOCOL_PWM ? 2 : 0;
-            in.gps = settings_->sensors.gps_enabled != 0; in.range = settings_->sensors.range_enabled != 0;
-            in.modes_set = 0;
-            for (int i = 0; i < 16; i++) if (settings_->modes.hi[i] > settings_->modes.lo[i] && settings_->modes.mode[i] < 32) in.modes_set |= 1u << settings_->modes.mode[i];
-        }
-        in.health = tel_.health; in.modes_on = tel_.modes; in.blockers = tel_.blockers; in.cpu_pct = tel_.cpu_pct;
-        for (int i = 0; i < 8; i++) in.motor_out[i] = tel_.motor_cmd[i];
     }
     void set_uid(const uint8_t uid[12]) { memcpy(uid_, uid, 12); }
 

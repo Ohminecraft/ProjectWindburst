@@ -19,6 +19,7 @@ struct FirmwareHeader {
         t.add("schema 0x%08lX\n", (unsigned long)wbp::kSchemaHash);
         for (const wbp::SectionInfo& si : wbp::kSections) {
             if (si.id == wbp::SEC_WIFI) continue;            // (the WiFi password stays out of a file that is passed around)
+            if (si.id == wbp::SEC_OSD) continue;             // (the screen layout says nothing about the flight; 150 bytes less per session start)
             t.add("set %s ", si.name); t.hex(wbp::section_ptr(*h.settings, si.id), si.size); t.add("\n");
         }
     }

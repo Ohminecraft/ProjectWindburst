@@ -16,6 +16,9 @@
 //       3.0 V .. one full cell, or more than 6.0 V. In between is a USB supply (5 V), not a battery.
 //   * the cell count is the configured one, or detected at that moment:  cells = voltage / cell_max + 1   (max 8)
 //       A pack plugged in nearly empty is detected one cell short (4S at 12.8 V reads as a full 3S): set the cell count when you can.
+//       A count the voltage has outgrown is counted again (more than cell_max per cell cannot be): a source whose reading comes up
+//       slowly - the ESCs' telemetry voltage (AM32 filters it), a slow supply - passes through 3.0 .. 4.3 V stable enough to look
+//       like a 1S pack (hardware feedback, 0.18). Only upwards: a voltage that sags under load never takes a cell away.
 //   * OK -> WARNING below cells * cell_warning, WARNING -> CRITICAL below cells * cell_min, each after its delay and with 10 mV
 //     hysteresis; CRITICAL -> WARNING -> OK as soon as the voltage is back above the level.
 //
@@ -66,6 +69,9 @@ public:
             auto_cells_ = (uint8_t)c;                                  // what the voltage says, kept for when the setting is 0 = detect
         } else if (state_ != State::NOT_PRESENT && stable() && !from_battery()) {
             state_ = State::NOT_PRESENT; cells_ = 0;
+        } else if (state_ != State::NOT_PRESENT && stable() && auto_cells_ < kMaxAutoCells && filt_ > auto_cells_ * cfg.cell_max_v) {
+            int c = (int)(filt_ / cfg.cell_max_v) + 1; if (c > kMaxAutoCells) c = kMaxAutoCells;
+            auto_cells_ = (uint8_t)c;
         }
         if (state_ == State::NOT_PRESENT) return;
         cells_ = cfg.cells ? cfg.cells : auto_cells_;                  // the setting wins, also when it is typed while the battery is connected

@@ -59,7 +59,7 @@ export default {
     const blockers = h('ul', { class: 'blockers', id: 'blockers' });
     const paintBlockers = (st) => {
       const items = st.armed ? [h('li', { class: 'bad' }, tr('Đang ARM'))] :
-        st.blockers.length ? st.blockers.map((b) => h('li', { 'data-blocker': b }, BLOCKERS[b] ? tr(BLOCKERS[b]) : b)) : [h('li', { class: 'ok' }, tr('Không còn gì chặn. Gạt công tắc ARM để bật motor.'))];
+        st.blockers.length ? st.blockers.map((b) => h('li', { 'data-blocker': b }, BLOCKERS[b] ? tr(BLOCKERS[b]) : b)) : [h('li', { class: 'ok' }, (store.settings.general || {}).stick_arm ? tr('Không còn gì chặn. Kéo ga và pitch xuống, yaw và roll sang hai phía ngược nhau, giữ 1 giây để bật motor.') : tr('Không còn gì chặn. Gạt công tắc ARM để bật motor.'))];
       blockers.replaceChildren(...items);
     };
     listen('stream:status', paintBlockers);

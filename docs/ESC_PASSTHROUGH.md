@@ -63,6 +63,18 @@ PC tool ──4-way──▶ hal/motor/esc4way.h   (Interface<EspEscPort>, chạ
 
 `test_fw` nhóm `esc` (firmware thật trên mạch ảo): MSP qua `MspLink`, ARM thì từ chối và motor vẫn chạy, disarm thì 4 ESC và **không còn khung motor nào** sau đó, ARM lại cũng không, yêu cầu lần hai → 0, chân của 4 motor; WBP vẫn chạy bình thường khi có byte MSP lẫn vào.
 
+## 3b. Bản ghi phiên (0.18.1)
+AM32 Configurator kết nối được nhưng không đọc được ESC (`docs/HARDWARE_FEEDBACK_4.md`, mục 2). Để biết nó dừng ở đâu, mỗi phiên passthrough được ghi lại (`esc4way::Trace`):
+- Ghi gì: mỗi lệnh 4-way, kèm ESC / địa chỉ / số byte, câu trả lời, và 4 byte đầu của thông tin thiết bị hoặc dữ liệu đọc được.
+- Giữ ở đâu: RAM RTC, nên còn nguyên sau lần khởi động lại khi kết thúc phiên. 12 lệnh đầu và 12 lệnh cuối được giữ.
+- Đọc ở đâu: lần khởi động sau, báo cáo khởi động có tối đa 4 dòng `4way:`, ví dụ:
+
+```
+4way: 9 requests, 1 ESC errors: NAME ok IFVER ok PROTO ok MODE ok INIT#0 ok 061F6304 READ 7C00/48 ESC-ERR ...
+```
+
+Ý nghĩa: `INIT#0 ok 061F6304` = ESC 1 đã vào bootloader (chữ ký 0x1F06, ARM). `READ 7C00/48 ESC-ERR` = đọc 48 byte ở 0x7C00 mà ESC không trả lời đúng.
+
 ## 4. Chưa kiểm chứng (cần mạch thật)
 
 - Chưa chạy với BLHeliSuite32 / ESC Configurator thật, chưa với ESC thật. Thứ tự các yêu cầu MSP của từng công cụ lấy theo mã nguồn Betaflight; công cụ nào hỏi thêm lệnh khác sẽ nhận `$M!` (Betaflight cũng trả như vậy với lệnh nó không có) - nếu công cụ dừng ở đó, gửi mình log của công cụ.

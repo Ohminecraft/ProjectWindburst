@@ -226,6 +226,97 @@ def test_modes_tab(gui):
     assert stab.locator(".mode-range").count() == 0
 
 
+def test_osd_tab(gui):
+    pg = gui.connect().page
+    gui.tab("osd")
+    pg.wait_for_selector("#osd-canvas .osd-item", timeout=8000)
+    assert pg.locator("#osd-canvas .osd-item").count() == 24
+    pos = gui.setting("osd", "pos")
+    assert not pos[17] & 0x800, "the artificial horizon starts hidden"
+    pg.check('[data-show="HORIZON"]')
+    gui.wait(lambda: gui.setting("osd", "pos")[17] & 0x800, what="horizon shown")
+    pg.focus('[data-el="BATT"]')
+    pg.keyboard.press("ArrowRight")
+    gui.wait(lambda: gui.setting("osd", "pos")[1] & 0x3F == (pos[1] & 0x3F) + 1, what="battery one column right: %s" % gui.setting("osd", "pos")[1])
+    pg.select_option('[data-field="osd.canvas"]', "SD_30X16")
+    pg.wait_for_function("document.querySelector('[data-el=\"MODE\"]').hidden")      # column 47 is off a 30 column canvas
+
+
+def test_switch_modes(gui):
+    pg = gui.connect().page
+    gui.tab("modes")
+    for name in ("ACRO_TRAINER", "AIRMODE", "ANTI_GRAVITY", "BLACKBOX_ERASE"):
+        pg.wait_for_selector('[data-mode="%s"]' % name, timeout=8000)
+    pg.click('[data-add="ACRO_TRAINER"]')
+    gui.wait(lambda: "ACRO_TRAINER" in gui.setting("modes", "mode"), what="an ACRO_TRAINER range")
+    gui.tab("tuning")
+    gui.type_into("pid.acro_trainer_angle_limit", "30")
+    gui.wait(lambda: gui.setting("pid", "acro_trainer_angle_limit") == 30, what="trainer limit 30")
+
+
+def test_stick_arm_setting(gui):
+    pg = gui.connect().page
+    gui.tab("modes")
+    pg.wait_for_selector('[data-field="general.stick_arm"]', timeout=8000)
+    assert "bad" in pg.get_attribute("#no-arm-switch", "class"), "no ARM switch and no stick arming: shown as a problem"
+    pg.check('[data-field="general.stick_arm"]')
+    gui.wait(lambda: gui.setting("general", "stick_arm") in (1, True), what="stick_arm on")
+    pg.wait_for_function("!document.getElementById('no-arm-switch').classList.contains('bad')")
+
+
+def test_stick_preview(gui):
+    pg = gui.connect().page
+    for tab, mode in (("receiver", "ANGLE"), ("rates", "ACRO")):
+        gui.tab(tab)
+        pg.wait_for_selector("#stick-preview", timeout=8000)
+        assert pg.input_value("#preview-mode") == mode, "%s: the preview starts in %s" % (tab, mode)
+        assert pg.evaluate("document.getElementById('stick-preview').width") > 0, "%s: the canvas is drawn" % tab
+    pg.select_option("#preview-mode", "ANGLE")
+    pg.click("#preview-level")
+
+
+def test_led_manual(gui):
+    pg = gui.connect().page
+    gui.tab("power")
+    assert pg.locator("#led-manual").is_hidden(), "the per-LED table only for layout MANUAL"
+    gui.type_into("led.count", "5")
+    pg.select_option('[data-field="led.layout"]', "MANUAL")
+    pg.wait_for_selector("#led-manual", state="visible", timeout=8000)
+    assert pg.locator("#led-table tbody tr").count() == 5 and pg.locator("#led-preview .led-dot").count() == 5
+    pg.select_option('[data-field="led.fn[2]"]', "RAINBOW")
+    gui.wait(lambda: gui.setting("led", "fn")[2] == "RAINBOW", what="LED 3 rainbow")
+    pg.select_option("#led-all-fn", "COLOR")
+    pg.fill("#led-all-color", "#ff8000")
+    pg.click("#led-all")
+    gui.wait(lambda: gui.setting("led", "fn")[:5] == ["COLOR"] * 5 and gui.setting("led", "color")[4] == 0xFF8000, what="every LED orange")
+    # the preview: brightness 30 % of (255, 128, 0)
+    pg.wait_for_function("getComputedStyle(document.querySelector('#led-preview .led-dot')).backgroundColor === 'rgb(76, 38, 0)'")
+
+
+def test_motor_wizard(gui):
+    pg = gui.connect().page
+    gui.tab("motors")
+    pg.click("#wiz-order")
+    pg.wait_for_function("/tháo hết cánh/.test(document.getElementById('wiz-msg').textContent)")      # props not declared off: nothing turns
+    assert all(float(gui.sim.state()["m%d" % i]) == 0.0 for i in range(4))
+    pg.check("#props-off")
+    pg.click("#wiz-order")
+    # the outputs turn one after another (output 1 first); the person clicks where each one sits: 3, 1, 4, 2
+    for k, pos in enumerate([2, 0, 3, 1]):
+        gui.wait(lambda: float(gui.sim.state()["m%d" % k]) > 0.03, what="output %d turning" % (k + 1))
+        pg.click('#wiz-frame [data-motor="%d"]' % pos)
+    gui.wait(lambda: gui.setting("motors", "order")[:4] == [1, 3, 0, 2], what="new order %s" % gui.setting("motors", "order"))
+    pg.wait_for_function("/thứ tự mới đang chạy/.test(document.getElementById('wiz-msg').textContent)")
+    gui.wait(lambda: all(float(gui.sim.state()["m%d" % i]) == 0.0 for i in range(4)), what="nothing turns after the last click")
+    # direction: pick motor 2, reverse it
+    pg.click("#wiz-dir")
+    pg.click('#wiz-frame [data-motor="1"]')
+    pg.click("#wiz-flip")
+    gui.wait(lambda: gui.setting("motors", "reversed_mask") == 2, what="reversed bit of motor 2")
+    pg.click("#wiz-stop")
+    gui.wait(lambda: all(float(gui.sim.state()["m%d" % i]) == 0.0 for i in range(4)), what="stopped")
+
+
 def test_motor_tab_and_test_sliders(gui):
     pg = gui.connect().page
     gui.tab("motors")
@@ -875,7 +966,7 @@ def test_serial_ports_table(gui):
     pg = gui.connect().page
     gui.tab("pins")
     assert pg.locator("#ports-table th").all_inner_texts() == ["Cổng", "Chức năng", "UART0", "UART1", "UART2"], "no baud column any more"
-    assert "chưa hỗ trợ" in pg.inner_text('[data-field="ports.function[0]"] option[value="TELEMETRY"]')
+    assert "chưa hỗ trợ" not in pg.inner_text('[data-field="ports.function[0]"] option[value="TELEMETRY"]'), "MAVLink telemetry is implemented (0.19)"
     pg.select_option('[data-field="ports.assign"]', "TABLE")
     pg.wait_for_function("/bảng không có UART nào cho receiver nối tiếp/.test(document.getElementById('pin-warnings').textContent)")
     pg.select_option('[data-field="ports.function[2]"]', "SERIAL_RX")
@@ -892,6 +983,22 @@ def test_serial_ports_table(gui):
     pg.wait_for_selector('[data-module="rx"]', timeout=8000)
     rows = {r.get_attribute("data-module"): r.inner_text() for r in pg.locator("table.modules tbody tr").all()}
     assert "CRSF on UART2" in rows["rx"] and "UART1" in rows["gps"], rows
+
+
+def test_telemetry_block(gui):
+    pg = gui.connect().page
+    gui.tab("pins")
+    pg.wait_for_selector("#tlm-pins", timeout=8000)
+    pg.select_option('[data-field="telemetry.protocol"]', "MAVLINK")
+    gui.wait(lambda: gui.setting("telemetry", "protocol") == "MAVLINK", what="protocol stored")
+    gui.type_into("telemetry.tx_pin", "38")
+    gui.wait(lambda: gui.setting("telemetry", "tx_pin") == 38, what="TX pin stored: %s" % gui.setting("telemetry", "tx_pin"))
+    gui.type_into("pins.led", "38")
+    pg.wait_for_function("/GPIO38 đang gán cho cả/.test(document.getElementById('pin-warnings').textContent)")
+    gui.type_into("pins.led", "")
+    gui.type_into("telemetry.tx_pin", "")
+    pg.uncheck('[data-field="telemetry.wifi"]')
+    pg.wait_for_function("/không có chân TX và không gửi qua WiFi/.test(document.getElementById('pin-warnings').textContent)")
 
 
 def test_gps_baud_is_a_list(gui):
@@ -1677,22 +1784,29 @@ def test_pins_tab_stm32(gui_stm32):
     gui = gui_stm32
     pg = gui.connect().page
     gui.tab("pins")
-    assert gui.field("pins.imu_cs").input_value() == "PA10" and gui.field("pins.batt_adc").input_value() == "PA2", "pin numbers shown as STM32 names"
-    assert gui.field("pins.ppm").input_value() == "" and pg.locator("#pins-stm32").is_visible() and pg.locator("#pins-preset").count() == 0
-    gui.type_into("pins.buzzer", "pc13")
+    pick = lambda name, part: pg.locator('[data-field="%s"] [data-part="%s"]' % (name, part))
+    pin_of = lambda name: gui.field(name).get_attribute("data-pin")
+    assert pin_of("pins.imu_cs") == "PA10" and pin_of("pins.batt_adc") == "PA2", "pin numbers shown as STM32 names"
+    assert pin_of("pins.ppm") == "" and pg.locator("#pins-stm32").is_visible() and pg.locator("#pins-preset").count() == 0
+    assert pg.inner_text("#mcu") == "STM32H563", "the MCU is named next to the firmware version"
+    ports = pick("pins.buzzer", "port").locator("option").all_inner_texts()
+    assert ports[1:] == ["PA", "PB", "PC", "PD", "PE", "PF", "PG"], "only the ports the chip has (the simulator: PA .. PG): %s" % ports
+    # two steps: the port, then the pin
+    pick("pins.buzzer", "port").select_option("2")
+    assert gui.setting("pins", "buzzer") == 255, "a port alone writes nothing"
+    pick("pins.buzzer", "pin").select_option("13")
     gui.wait(lambda: gui.setting("pins", "buzzer") == 45, what="PC13 = port C (2) * 16 + 13")
-    assert gui.field("pins.buzzer").input_value() == "PC13"
-    gui.type_into("pins.motor[4]", "PB3")
-    gui.wait(lambda: gui.setting("pins", "motor")[4] == 19, what="a motor slot by name")
-    gui.type_into("pins.led", "PZ1")                                   # not a pin: refused, the box shows the old value again
-    pg.wait_for_selector(".toast:has-text('không phải tên chân STM32')")
-    assert gui.setting("pins", "led") == 255 and gui.field("pins.led").input_value() == ""
-    gui.type_into("pins.led", "PA11")
+    assert pin_of("pins.buzzer") == "PC13"
+    pick("pins.motor[4]", "port").select_option("1"); pick("pins.motor[4]", "pin").select_option("3")
+    gui.wait(lambda: gui.setting("pins", "motor")[4] == 19, what="a motor slot: PB3")
+    pick("pins.led", "port").select_option("0"); pick("pins.led", "pin").select_option("11")
     pg.wait_for_function("/PA11 thường là USB D-/.test(document.getElementById('pin-warnings').textContent)")
-    gui.type_into("pins.buzzer", "PA2")                                # the battery's ADC pin
+    pick("pins.buzzer", "port").select_option("0")                     # another port: the old pin is let go until a pin is chosen
+    gui.wait(lambda: gui.setting("pins", "buzzer") == 255, what="port changed")
+    pick("pins.buzzer", "pin").select_option("2")                      # PA2: the battery's ADC pin
     pg.wait_for_function("/PA2 đang gán cho cả/.test(document.getElementById('pin-warnings').textContent)")
     assert "không đo được điện áp" not in pg.inner_text("#pin-warnings"), "the ESP32-S3 ADC rule does not apply"
-    gui.type_into("pins.buzzer", "")
+    pick("pins.buzzer", "port").select_option("")
     gui.wait(lambda: gui.setting("pins", "buzzer") == 255, what="pin cleared")
 
 

@@ -1,7 +1,7 @@
 // Modes: which aux switch position turns each flight mode on (Betaflight style ranges). The firmware has 16 entries;
 // an entry is { mode, aux channel, low, high } and a mode is on while its aux channel is inside one of its ranges.
 import { store, setFields } from '../store.js';
-import { h, block, listen, note, toast } from '../ui.js';
+import { h, block, fields, listen, note, toast } from '../ui.js';
 import { MODES } from '../labels.js';
 import { tr } from '../i18n.js';
 
@@ -57,6 +57,8 @@ export default {
     const list = h('div', { class: 'modes', id: 'modes' });
     let rows = [], signature = '';
     const m = () => store.settings.modes;
+    const stickArm = () => !!(store.settings.general || {}).stick_arm;
+    const hasStickArm = store.schema.sectionByName.general.fields.some((f) => f.n === 'stick_arm');
 
     function writeSlot(i, patch) {
       const cur = m(), out = { mode: [...cur.mode], aux: [...cur.aux], lo: [...cur.lo], hi: [...cur.hi] };
@@ -92,9 +94,9 @@ export default {
         });
         const none = !cur.mode.includes(name);
         return h('div', { class: 'mode' + (meta.todo ? ' todo' : ''), 'data-mode': name },
-          h('div', { class: 'mode-head' }, h('h3', {}, meta.label), state, h('p', { class: 'help' }, meta.help ? tr(meta.help) : '')),
+          h('div', { class: 'mode-head' }, h('h3', {}, tr(meta.label)), state, h('p', { class: 'help' }, meta.help ? tr(meta.help) : '')),
           h('div', { class: 'mode-body' }, ranges,
-            none && name === 'ARM' ? h('p', { class: 'note bad' }, tr('Chưa gán công tắc ARM: máy sẽ không arm được.')) : null,
+            none && name === 'ARM' ? h('p', { class: 'note ' + (stickArm() ? '' : 'bad'), id: 'no-arm-switch' }, stickArm() ? tr('Đang arm bằng cần: không cần công tắc ARM. Nên gán một công tắc ARM để có thể tắt motor ngay lập tức.') : tr('Chưa gán công tắc ARM: máy sẽ không arm được.')) : null,
             add));
       }));
       signature = JSON.stringify([cur.mode, cur.aux]);
@@ -123,7 +125,9 @@ export default {
     }
     listen('settings:modes', sync); listen('stream:rc', live); listen('stream:status', live); listen('armed', lock);
     build();
+    if (hasStickArm) listen('settings:general', build);
     view.append(
+      hasStickArm ? block(tr('Arm bằng cần'), fields('general', ['stick_arm'], { stick_arm: { rebootNote: true } })) : null,
       block(null, list),
       note(tr('Altitude Hold, Position Hold và GPS Rescue tự bật Angle. Mode không có dải nào thì luôn tắt. Thay đổi ở tab này có tác dụng ngay, nhưng vẫn cần bấm "Lưu" để giữ lại sau khi tắt nguồn.')));
   },

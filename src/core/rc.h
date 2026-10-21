@@ -28,7 +28,12 @@ inline float rc_throttle_cmd(uint16_t us) { return clampf((float)((int)us - kRcM
 // like Betaflight BOXALTHOLD/BOXPOSHOLD. Acro = neither Angle nor Stabilize.
 // M_CALIB = in-flight level trim: while it is on in a steady hover the attitude is averaged, and becomes the new "level" after landing.
 // M_RESCUE = GPS Rescue on a switch (rescue.h): the craft flies home and lands by itself for as long as it is on.
-enum Mode : uint8_t { M_ARM, M_ANGLE, M_STABILIZE, M_ALTHOLD, M_POSHOLD, M_FAILSAFE_SW, M_BEEPER, M_BLACKBOX, M_CALIB, M_RESCUE, M_COUNT };
+// M_ACRO_TRAINER = in Acro, roll / pitch are held below an angle (acro_trainer.h, Betaflight ACRO TRAINER).
+// M_AIRMODE, M_ANTI_GRAVITY = once a switch is assigned to one of them, the switch turns it on and off (the settings
+// general.airmode / pid.anti_gravity then only say how it works / are ignored); without a switch the setting alone decides.
+// M_BLACKBOX_ERASE = flipping it on while disarmed erases the log memory (bb_service.h; Betaflight BLACKBOX ERASE).
+enum Mode : uint8_t { M_ARM, M_ANGLE, M_STABILIZE, M_ALTHOLD, M_POSHOLD, M_FAILSAFE_SW, M_BEEPER, M_BLACKBOX, M_CALIB, M_RESCUE,
+                      M_ACRO_TRAINER, M_AIRMODE, M_ANTI_GRAVITY, M_BLACKBOX_ERASE, M_COUNT };
 
 struct ModeRange { uint8_t mode; uint8_t aux; uint16_t lo_us, hi_us; }; // active when lo <= aux < hi (like BF, 900..2100 clamp)
 
@@ -37,6 +42,7 @@ public:
     static constexpr int kMax = 16;
     ModeRange r[kMax]; int n = 0;
     bool add(uint8_t mode, uint8_t aux, uint16_t lo, uint16_t hi) { if (n >= kMax || aux >= kAuxCount) return false; r[n++] = {mode, aux, lo, hi}; return true; }
+    bool has(uint8_t mode) const { for (int i = 0; i < n; i++) if (r[i].mode == mode) return true; return false; }      // a switch is assigned to it
     // bit i set => Mode i active. A mode with several ranges is active if ANY matches (BF: OR within the same mode).
     WB_FAST uint32_t resolve(const uint16_t aux_us[kAuxCount]) const {
         uint32_t m = 0;

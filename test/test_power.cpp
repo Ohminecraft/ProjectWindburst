@@ -31,6 +31,26 @@ static void t_battery() {
     { Bench b; b.run(0.0f, 1.0); const double t = b.until(16.0f, batt::State::OK, 8.0);
       CHECK(t > 2.0 && t < 5.0, "plugged in later: accepted once the filtered value has settled (%.2f s)", t);
       CHECK(b.m.cells() == 4, "and the cell count comes from the settled voltage, not from the ramp: %u", b.m.cells()); }
+    {   // a source that comes up in steps (the ESCs' telemetry voltage: the first answers while their supply is still charging, then
+        // AM32's filtered value): it rests near 4 V long enough to be taken for a 1S pack, then goes on to 16.4 V. 0.18 on the board:
+        // a 4S stayed "1S" at 16 V.
+        Bench b; b.run(0.0f, 1.0); uint8_t first = 0; bool critical = false, low = false;
+        auto ramp = [&](Bench& x, float from, float to, double s) {
+            const int n = (int)(s * 50);
+            for (int i = 1; i <= n; i++) {
+                x.ms += 20; x.m.update(x.ms, from + (to - from) * (float)i / (float)n, true);
+                if (!first && x.m.cells()) first = x.m.cells();
+                critical |= x.m.critical(); low |= x.m.low();
+            }
+        };
+        ramp(b, 0.0f, 4.0f, 0.5); ramp(b, 4.0f, 4.0f, 3.0); ramp(b, 4.0f, 16.4f, 10.0);
+        b.run(16.4f, 3.0); critical |= b.m.critical();
+        CHECK(first == 1 && b.m.cells() == 4 && b.m.state() == batt::State::OK && fabsf(b.m.cell_voltage() - 4.1f) < 0.02f,
+              "a slow source: first counted as %u cell, counted again as the voltage outgrew it - 4S at the end, OK", first);
+        CHECK(!critical && !low, "and never low on the way up (no BAT_LOW beeps, no arming blocker while it comes up)");
+        b.run(13.0f, 4.0); CHECK(b.m.cells() == 4 && b.m.low(), "the pack sagging under load: still 4 cells (a count only goes up), now low (%u)", b.m.cells());
+        Bench c; c.m.cfg.cells = 3; c.run(0.0f, 1.0); ramp(c, 0.0f, 4.0f, 0.5); ramp(c, 4.0f, 4.0f, 3.0); ramp(c, 4.0f, 16.4f, 10.0); c.run(16.4f, 3.0);
+        CHECK(c.m.cells() == 3, "a cell count set in the settings is never counted again (3 at 16.4 V)"); }
     { const struct { float v; int cells; } table[] = {{3.7f, 1}, {4.2f, 1}, {7.4f, 2}, {8.4f, 2}, {11.1f, 3}, {12.6f, 3}, {14.8f, 4}, {16.8f, 4}, {21.0f, 5}, {22.2f, 6}, {25.2f, 6}, {33.6f, 8}, {50.0f, 8}};
       bool ok = true; int bad_cells = 0; float bad_v = 0;
       for (const auto& e : table) { Bench b; b.run(e.v, 1.5); if (!b.m.present() || b.m.cells() != e.cells) { ok = false; bad_cells = b.m.cells(); bad_v = e.v; } }
@@ -293,8 +313,9 @@ static void t_conditions() {
       CHECK(k.beacons == 3 && k.beacon_at[0] - t0 <= 2 && k.gaps() == std::vector<int>({550, 550}), "gyro calibrated: the motors beep 3 times, 550 ms apart (%d tones)", k.beacons); }
     { Craft k; k.run(2000); CHECK(k.beacons == 0, "healthy and quiet: no tone");
       k.in.rx_ok = false; k.run(4800);
-      // RX_LOST = {500 on, 500 off}: tone 450 + pause 500 + 1 ms in which the finished pattern is asked for again = 951 ms
-      CHECK(k.beacons == 6 && k.gaps() == std::vector<int>({951, 951, 951, 951, 951}), "signal lost while disarmed: a tone every 951 ms (%d in 4.8 s)", k.beacons);
+      // RX_LOST = {500 on, 500 off}: on 500 (longer than one ESC tone: kept) + pause 500 + 1 ms in which the finished pattern is asked
+      // for again = 1001 ms - the buzzer's rhythm
+      CHECK(k.beacons == 5 && k.gaps() == std::vector<int>({1001, 1001, 1001, 1001}), "signal lost while disarmed: a tone every 1001 ms (%d in 4.8 s)", k.beacons);
       int n = k.beacons; k.in.app_active = true; k.run(2000); CHECK(k.beacons == n && k.m.current() == beep::NO_MODE, "never with the configurator connected (it is a bench, not a lost model)");
       k.in.app_active = false; k.in.armed = true; k.in.throttle_low = false; k.run(2000); CHECK(k.beacons == n, "never while armed");
       const uint32_t t_dis = k.in.now_ms; k.in.armed = false; k.run(1190); CHECK(k.beacons == n, "and not in the first 1.2 s after a disarm (the motors are still spinning down)");
@@ -307,9 +328,10 @@ static void t_conditions() {
       CHECK(k.beacons == 2 && k.beacon_at[0] - t_dis >= 1200 && k.beacon_at[0] - t_dis <= 1203 && k.gaps() == std::vector<int>({500}), "the motors say it 1.2 s later: 2 tones (%d)", k.beacons); }
     { Craft k; k.run(500); k.in.armed = true; k.in.throttle_low = false; k.in.batt_state = 3; k.run(3000); CHECK(k.beacons == 0, "battery critical in flight: nothing from the motors (they are flying)");
       k.in.armed = false; k.run(1150); const bool quiet = k.beacons == 0; k.run(3000);
-      // after the guard: DISARMING (2 tones) wins over BAT_CRIT_LOW, which then repeats every 450 + 20 + 1 ms
+      // after the guard: DISARMING (2 tones, its 150 ms notes stretched to one ESC tone) wins over BAT_CRIT_LOW, which then repeats
+      // every 500 + 20 + 1 ms
       const std::vector<int> g = k.gaps();
-      CHECK(quiet && k.beacons >= 6 && g.size() >= 4 && g[0] == 500 && g[2] == 471 && g[3] == 471, "landed with an empty pack: 'disarmed', then the critical-battery tone every 471 ms (%d tones)", k.beacons); }
+      CHECK(quiet && k.beacons >= 5 && g.size() >= 4 && g[0] == 500 && g[2] == 521 && g[3] == 521, "landed with an empty pack: 'disarmed', then the critical-battery tone every 521 ms (%d tones)", k.beacons); }
     { Craft k; k.run(200); k.in.batt_state = 2; k.run(3000);
       // BAT_LOW = {250 on, 500 off}: 450 + 500 + 1
       CHECK(k.beacons == 4 && k.gaps()[0] == 951, "battery warning on the ground: a tone every 951 ms (%d in 3 s)", k.beacons); }
@@ -327,7 +349,7 @@ static void t_conditions() {
     { Craft k; k.m.enabled = 0; k.run(200); const size_t m0 = k.on.size(); k.in.rx_ok = false; k.run(3000);
       CHECK(k.beacons == 0 && starts_with(k.runs_since(m0), {500, 500, 500}), "all motor conditions switched off: silent motors, the buzzer is not affected"); }
     { Craft k; k.b.enabled = 0; k.run(200); k.in.rx_ok = false; k.run(3000);
-      CHECK(k.beacons == 4 && k.on_ms(3000) == 0, "all buzzer conditions switched off: silent buzzer, the motors are not affected (%d tones)", k.beacons); }
+      CHECK(k.beacons == 3 && k.on_ms(3000) == 0, "all buzzer conditions switched off: silent buzzer, the motors are not affected (%d tones)", k.beacons); }
     { Craft k; k.m.enabled = 0xFFFFFFFFu; k.run(200); k.in.armed = true; k.in.throttle_low = true; k.run(6000); k.in.failsafe_landing = true; k.run(3000);
       CHECK(k.beacons == 0, "even with every bit set the motors never play ARMING / ARMED / the landing SOS (%d)", k.beacons); }
     { // the 3-tone "gyro calibrated" is running (1 tone sent) when the craft is armed: the other two must never reach the ESCs
@@ -353,7 +375,7 @@ static void t_conditions() {
       CHECK(n == 1 && k.beacons == 3, "the app connects during the 3-tone 'gyro calibrated': the motors finish it (%d)", k.beacons); }
     { // millis() wrapping (49 days) must not start or stop anything
       Craft k; k.in.now_ms = 0xFFFFFFFFu - 3000u; k.run(1000); k.in.rx_ok = false; k.run(5700);
-      CHECK(k.beacons == 6 && k.gaps() == std::vector<int>({951, 951, 951, 951, 951}) && abs(k.on_ms(4000) - 2000) < 20, "through the millis() wrap: tones and RX_LOST keep their rhythm (%d tones, %d ms on)", k.beacons, k.on_ms(4000));
+      CHECK(k.beacons == 6 && k.gaps() == std::vector<int>({1001, 1001, 1001, 1001, 1001}) && abs(k.on_ms(4000) - 2000) < 20, "through the millis() wrap: tones and RX_LOST keep their rhythm (%d tones, %d ms on)", k.beacons, k.on_ms(4000));
       k.in.rx_ok = true; k.in.armed = true; k.in.throttle_low = false; k.run(100);
       Craft w; w.in.now_ms = 0xFFFFFFFFu - 600u; w.run(100); w.in.armed = true; w.in.throttle_low = false; w.run(200); const uint32_t t_dis = w.in.now_ms; w.in.armed = false; w.run(3000);
       CHECK(w.beacons == 2 && w.beacon_at[0] - t_dis >= 1200 && w.beacon_at[0] - t_dis <= 1203, "the 1.2 s guard also holds across the wrap"); }

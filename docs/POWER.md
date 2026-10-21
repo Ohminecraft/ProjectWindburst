@@ -12,7 +12,7 @@ src/hal/battery/battery_base.h      BatterySensor: chọn nguồn (ADC / ESC), �
   ADC đọc bằng `analogReadMilliVolts()` (đã hiệu chỉnh của Arduino-ESP32) rồi nhân `battery.divider` (= điện áp pin / điện áp ở chân; cầu 10k : 1k là 11).
 - **Lọc**: PT1 1/3 Hz ở 50 Hz, nên một cú đạp ga không trông như pin cạn.
 - **Có pin hay không**: điện áp đã lọc ổn định (10 trong 11 khoảng 100 ms không lệch quá 0,1 V) và hợp lý: 3,0 V … một cell đầy, hoặc trên 6,0 V. Khoảng giữa là nguồn USB 5 V, không phải pin.
-- **Số cell**: theo `battery.cells`, hoặc tự nhận lúc cắm pin: `điện áp / cell_max + 1` (tối đa 8). Pin cắm lúc gần cạn bị nhận thiếu một cell (4S còn 12,8 V = 3S đầy): biết số cell thì nên nhập.
+- **Số cell**: theo `battery.cells`, hoặc tự nhận lúc cắm pin: `điện áp / cell_max + 1` (tối đa 8). Pin cắm lúc gần cạn bị nhận thiếu một cell (4S còn 12,8 V = 3S đầy): biết số cell thì nên nhập. Từ 0.18.1, khi điện áp ổn định vượt `số cell × cell_max` (một cell không thể cao hơn) thì đếm lại: nguồn lên từng bậc, như điện áp từ telemetry ESC dừng một lúc quanh 4 V, không còn bị chốt 1S. Chỉ đếm tăng, không bao giờ giảm.
 - **Trạng thái**: `NOT_PRESENT → OK → WARNING → CRITICAL`, có trễ 10 mV và thời gian chờ (`warning_delay`, `critical_delay`; thời gian chờ nguy hiểm đếm thời gian **liên tục** dưới ngưỡng).
 - **Tác dụng**: `WARNING` trở xuống chặn arm (blocker `BATT_LOW`); `CRITICAL` lúc đang bay → failsafe hạ cánh nếu `land_on_critical` bật. Lõi bay không còn ngưỡng pin riêng: nó nhận `fc::Health{batt_low, batt_critical}` từ `FlightApp`.
 - Cả section `battery` là **live**: sửa ngưỡng có hiệu lực ngay.
@@ -51,7 +51,7 @@ beep::Beeper motor_beeper  cùng các tình huống, slot_ms = 450: mỗi đoạ
 beep::Conditions           đưa yêu cầu cho cả hai; motor chỉ nhận khi được phép (dưới đây)
 MotorOutputManager::beacon_all(tone)   một khung DShot, mọi motor cùng lúc (Betaflight: dshotCommandWrite(ALL_MOTORS))
 ```
-- Motor phát **số tiếng** của mẫu âm, không phát được nhịp: gyro hiệu chuẩn xong = 3 tiếng, vừa disarm = 2 tiếng, không arm được = 3 tiếng, mất sóng = 1 tiếng lặp lại mỗi 0,95 s, pin dưới mức tối thiểu = bíp liên tục mỗi 0,47 s. (Một tiếng của ESC mất khoảng 450 ms: `DSHOT_BEACON_MODE_INTERVAL_US` của Betaflight.)
+- Motor phát **số tiếng** của mẫu âm, theo nhịp của mẫu (0.18.1): gyro hiệu chuẩn xong = 3 tiếng, vừa disarm = 2 tiếng, không arm được = 3 tiếng, mất sóng = 1 tiếng mỗi 1 s, pin dưới mức tối thiểu = một tiếng mỗi 0,52 s. Một phần "bật" ngắn hơn 450 ms (`DSHOT_BEACON_MODE_INTERVAL_US` của Betaflight) được kéo lên 450 ms, phần dài hơn giữ nguyên. **Độ dài của từng tiếng do ESC quyết định**: DShot chỉ có lệnh "beacon 1 – 5", không có độ dài (Betaflight: "the DShot Beacon tone duration is determined by the ESC").
 - **Chỉ khi chưa arm**, và không sớm hơn 1,2 s sau khi disarm (`DSHOT_BEACON_GUARD_DELAY_US`). Tiếng "vừa disarm" vì thế đến sau 1,2 s.
 - **Lúc đang bay motor không báo được gì**: pin yếu, failsafe đang hạ cánh, "đang arm, ga thấp" không có tiếng. Các tình huống đó (`ARMING*`, `ARMED`, `RX_LOST_LANDING`) bị firmware loại khỏi danh sách của motor dù settings có bật. Muốn có cảnh báo lúc bay: gắn còi, hoặc xem điện áp trên tay điều khiển (telemetry CRSF, phần việc sau).
 - Chỉ với giao thức **DShot** (PWM / Oneshot / Multishot không có lệnh). Báo cáo khởi động ghi rõ: `beeper: motors (DShot beacon, disarmed only)`, `beeper: active buzzer + motors (...)`, hoặc `beeper: FAILED - no buzzer pin set, and the motors can only beep with a DShot protocol`.

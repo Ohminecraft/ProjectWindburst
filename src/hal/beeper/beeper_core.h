@@ -21,8 +21,10 @@
 //
 // TWO SOUNDERS can play: a buzzer on a pin, and the MOTORS (the ESCs beep them on a DShot beacon command) - for a craft without a
 // buzzer. Each is its own Beeper with its own set of enabled conditions. The motors differ in three ways:
-//   * one tone takes the ESC about 450 ms, so every "on" part of a pattern becomes exactly one tone: the motors play the NUMBER of
-//     beeps of a pattern (3 = gyro calibrated, 2 = disarmed ...), not its rhythm;
+//   * every "on" part of a pattern becomes exactly one tone, and how long a tone sounds is up to the ESC (DShot only says "beacon
+//     1 .. 5", never for how long; Betaflight: "the DShot Beacon tone duration is determined by the ESC, and should not exceed
+//     250ms"). The motors play the NUMBER of beeps of a pattern (3 = gyro calibrated, 2 = disarmed ...) and its rhythm as far as
+//     a tone every 450 ms allows - not the length of each note;
 //   * a spinning motor cannot beep: nothing while armed, and nothing in the first 1.2 s after a disarm (Betaflight's guard time);
 //   * only with a DShot protocol (the firmware checks that; here it is `motors_ok`).
 // ============================================================================
@@ -67,7 +69,7 @@ inline bool has_sound(uint8_t mode) { return mode < MODE_COUNT && kTable[mode].s
 class Beeper {
 public:
     uint32_t enabled = ((1u << MODE_COUNT) - 1u) & ~(1u << ON_USB);     // bit per Mode: the settings field beeper.conditions (default: every sound, quiet on the bench)
-    uint16_t slot_ms = 0;               // 0: patterns as written (a buzzer). > 0: every "on" part lasts exactly this long = one ESC tone (the motors)
+    uint16_t slot_ms = 0;               // 0: patterns as written (a buzzer). > 0: every "on" part lasts at least this long = one ESC tone (the motors)
 
     // Ask for a sound. Ignored when that condition is switched off, and while a sound of the same or a higher priority plays.
     void request(uint8_t mode) { if (mode < MODE_COUNT && ((enabled >> mode) & 1u)) start(mode, false); }
@@ -86,7 +88,9 @@ public:
             const bool on_phase = (pos_ % 2) == 0;       // on/off is strictly index based
             pos_++;
             if (d == 0) continue;                        // a zero duration is skipped (a pattern that starts with its pause)
-            next_ms_ = now_ms + ((on_phase && slot_ms) ? (uint32_t)slot_ms : 10u * d); waiting_ = true;
+            // (motors: an "on" part shorter than one ESC tone is stretched to it - the next tone would be dropped otherwise; a longer
+            // one keeps its length, so the rhythm of the pattern stays. How long the ESC sounds is the ESC's own: DShot has no length.)
+            next_ms_ = now_ms + ((on_phase && slot_ms && 10u * d < slot_ms) ? (uint32_t)slot_ms : 10u * d); waiting_ = true;
             on_ = on_phase; if (on_phase) started_ = true;
             return on_;
         }

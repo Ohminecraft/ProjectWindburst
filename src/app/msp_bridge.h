@@ -115,9 +115,10 @@ struct Info {
     bool gps = false, range = false;                     // sensors.* enabled
 };
 
-// Our modes (core/rc.h order: ARM, ANGLE, STABILIZE, ALTHOLD, POSHOLD, FAILSAFE, BEEPER, BLACKBOX, CALIB, RESCUE) as Betaflight's
-// permanent box ids (msp_box.c); 255: Betaflight has none (STABILIZE).
-constexpr uint8_t kBfBox[10] = {0, 1, 255, 3, 11, 27, 13, 26, 17, 46};
+// Our modes (core/rc.h order: ARM, ANGLE, STABILIZE, ALTHOLD, POSHOLD, FAILSAFE, BEEPER, BLACKBOX, CALIB, RESCUE, ACRO_TRAINER,
+// AIRMODE, ANTI_GRAVITY, BLACKBOX_ERASE) as Betaflight's permanent box ids (msp_box.c); 255: Betaflight has none (STABILIZE).
+constexpr int kModeBoxes = 14;
+constexpr uint8_t kBfBox[kModeBoxes] = {0, 1, 255, 3, 11, 27, 13, 26, 17, 46, 47, 28, 4, 31};
 // Our ARM_BLOCKER_* bits (wbp_schema.h order) as Betaflight's armingDisableFlags_e bits (runtime_config.h); 255: none there.
 constexpr uint8_t kBfArmBit[18] = {0, 12, 2, 7, 8, 1, 26, 255, 29, 255, 12, 27, 255, 255, 11, 5, 18, 18};
 constexpr uint8_t kBfArmFlagsCount = 30;             // ARMING_DISABLE_FLAGS_COUNT (ARM_SWITCH = bit 29)
@@ -144,6 +145,14 @@ public:
         return out_n ? REPLY : NONE;
     }
     size_t passthrough_reply(uint8_t esc_count, uint8_t* out, size_t cap) { return encode(pending_version_, SET_PASSTHROUGH, &esc_count, 1, false, out, cap); }
+    // The answer to a request read elsewhere (the OSD's UART, osd/osd.h): the same answers, ESC passthrough always refused there.
+    size_t reply(const Frame& f, const Info& info, uint8_t* out, size_t cap) {
+        if (f.cmd == SET_PASSTHROUGH) { const uint8_t zero = 0; refused_++; return encode(f.version, SET_PASSTHROUGH, &zero, 1, false, out, cap); }
+        uint8_t p[64]; uint16_t n = 0; const bool ok = answer(f.cmd, info, p, n);
+        if (!ok) unknown_++;
+        answered_++;
+        return encode(f.version, f.cmd, p, ok ? n : 0, !ok, out, cap);
+    }
     static constexpr int kCmdRing = 12;
     // The last request numbers, oldest first (port_diag.h); returns how many.
     int last_cmds(uint16_t* out) const { const int n = cmd_n_ < (uint32_t)kCmdRing ? (int)cmd_n_ : kCmdRing; for (int i = 0; i < n; i++) out[i] = cmds_[(cmd_n_ - n + i) % kCmdRing]; return n; }
@@ -195,7 +204,7 @@ private:
             p[n++] = 0;                                                                    // more mode flag bytes: none
             p[n++] = kBfArmFlagsCount; u32(p, n, arm_flags(in)); p[n++] = 0;               // why it will not arm; reboot needed
             return true; }
-        case BOXIDS: { uint8_t ids[10]; const int k = boxes(in, ids); for (int i = 0; i < k; i++) p[n++] = ids[i]; return true; }
+        case BOXIDS: { uint8_t ids[kModeBoxes]; const int k = boxes(in, ids); for (int i = 0; i < k; i++) p[n++] = ids[i]; return true; }
         case MOTOR:                                   // 1000 .. 2000, as Betaflight shows them (disarmed: 1000)
             for (int i = 0; i < 8; i++) { const float o = in.motor_out[i] < 0 ? 0.0f : in.motor_out[i] > 1 ? 1.0f : in.motor_out[i];
                 u16(p, n, i < in.motors ? (uint16_t)(1000.0f + (in.armed ? o : 0.0f) * 1000.0f + 0.5f) : 0); }
@@ -227,12 +236,12 @@ public:
     static int boxes(const Info& in, uint8_t* ids, uint8_t* ours = nullptr) {
         int k = 0;
         for (uint8_t id = 0; id < 64; id++)
-            for (int m = 0; m < 10; m++)
+            for (int m = 0; m < kModeBoxes; m++)
                 if (kBfBox[m] == id && (m == 0 || ((in.modes_set >> m) & 1u))) { if (ours) ours[k] = (uint8_t)m; ids[k++] = id; }
         return k;
     }
     static uint32_t mode_flags(const Info& in) {
-        uint8_t ids[10], ours[10]; const int k = boxes(in, ids, ours); uint32_t f = 0;
+        uint8_t ids[kModeBoxes], ours[kModeBoxes]; const int k = boxes(in, ids, ours); uint32_t f = 0;
         for (int i = 0; i < k; i++) if (ours[i] == 0 ? in.armed : ((in.modes_on >> ours[i]) & 1u)) f |= 1u << i;
         return f;
     }

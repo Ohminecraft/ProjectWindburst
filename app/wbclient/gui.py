@@ -109,7 +109,7 @@ class Hub:
             "stalls": self.stalls,
             "link": self.link,
             "info": None if not info else {"name": info.name, "version": info.version, "role": info.role, "protocol": info.protocol,
-                                          "schema_hash": "0x%08X" % info.schema_hash, "features": info.features},
+                                          "schema_hash": "0x%08X" % info.schema_hash, "features": info.features, "mcu": info.mcu, "pins": info.pins},
             "report": list(self.report),
             "rates": dict(self.rates),
         }

@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0xA8C528D6",
+ "hash": "0x944FD130",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -107,7 +107,8 @@
    "GPS",
    "TELEMETRY",
    "FLOW_MSP",
-   "ESC_SENSOR"
+   "ESC_SENSOR",
+   "DISPLAYPORT"
   ],
   "mode": [
    "ARM",
@@ -119,7 +120,11 @@
    "BEEPER",
    "BLACKBOX",
    "CALIB",
-   "RESCUE"
+   "RESCUE",
+   "ACRO_TRAINER",
+   "AIRMODE",
+   "ANTI_GRAVITY",
+   "BLACKBOX_ERASE"
   ],
   "failsafe": [
    "NONE",
@@ -437,7 +442,32 @@
   ],
   "led_layout": [
    "ALL",
-   "NAV"
+   "NAV",
+   "MANUAL"
+  ],
+  "led_function": [
+   "OFF",
+   "STATUS",
+   "COLOR",
+   "MODE",
+   "ARMED",
+   "BLINK",
+   "STROBE",
+   "BREATHE",
+   "RAINBOW",
+   "LARSON",
+   "BATTERY",
+   "THROTTLE"
+  ],
+  "osd_type": [
+   "NONE",
+   "MSP_DISPLAYPORT"
+  ],
+  "osd_canvas": [
+   "AUTO",
+   "HD_53X20",
+   "HDZERO_50X18",
+   "SD_30X16"
   ]
  },
  "bits": {
@@ -642,12 +672,28 @@
      "min": 1,
      "max": 8,
      "desc": "the control part (attitude, modes, PID, mixer, motor output) runs on every n-th gyro sample: control rate = loop_hz / pid_denom (Betaflight pid_process_denom)"
+    },
+    {
+     "n": "usb_name",
+     "t": "u8",
+     "count": 32,
+     "d": 0,
+     "text": true,
+     "desc": "name of the board on USB (product string), printable ASCII, 0-padded; empty = Windburst + the MCU (Windburst ESP32-S3). Only builds whose USB stack is the firmware's own (feature USB_NAME: ESP32-S3 rx_s3_otg); the ESP32-S3's built-in USB Serial/JTAG has a fixed name"
+    },
+    {
+     "n": "stick_arm",
+     "t": "bool",
+     "d": 0,
+     "desc": "arm / disarm with the sticks: throttle and pitch down, yaw and roll to opposite sides (yaw left + roll right, or yaw right + roll left), held 1 s; disarm only on the ground. An ARM switch, if assigned, must be on (off disarms at once)"
     }
    ],
    "live": false,
    "compat": [
+    56,
     22,
-    23
+    23,
+    24
    ]
   },
   {
@@ -734,10 +780,19 @@
      "min": 0,
      "max": 250,
      "desc": "the same for the throttle"
+    },
+    {
+     "n": "telemetry",
+     "t": "bool",
+     "d": 1,
+     "desc": "send telemetry back through the receiver (CRSF on the UART's TX pin: battery, attitude, GPS, flight mode on the transmitter); off = the TX pin stays silent"
     }
    ],
    "live": false,
-   "compat": 9
+   "compat": [
+    12,
+    9
+   ]
   },
   {
    "id": 3,
@@ -1263,9 +1318,34 @@
      "t": "bool",
      "d": 1,
      "desc": "Stabilize: shaped attitude target with rate feedforward (ATC_RATE_FF_ENAB)"
+    },
+    {
+     "n": "acro_trainer_angle_limit",
+     "t": "u8",
+     "d": 20,
+     "min": 10,
+     "max": 80,
+     "desc": "ACRO_TRAINER switch, Acro: the roll / pitch angle the craft is held below (deg) (Betaflight acro_trainer_angle_limit)"
+    },
+    {
+     "n": "acro_trainer_lookahead_ms",
+     "t": "u16",
+     "d": 50,
+     "min": 10,
+     "max": 200,
+     "desc": "ms: how far ahead the angle is projected, so the craft does not overshoot the limit (Betaflight acro_trainer_lookahead_ms)"
+    },
+    {
+     "n": "acro_trainer_gain",
+     "t": "u8",
+     "d": 75,
+     "min": 25,
+     "max": 255,
+     "desc": "how hard the craft is pushed back to the limit (Betaflight acro_trainer_gain)"
     }
    ],
-   "live": true
+   "live": true,
+   "compat": 75
   },
   {
    "id": 6,
@@ -1318,7 +1398,8 @@
      "t": "u16",
      "d": 0,
      "min": 0,
-     "max": 2000
+     "max": 2000,
+     "desc": "pulse while disarmed (PWM / Oneshot / Multishot), us; 0 = 1000 (Betaflight's mincommand) - an ESC arms only after it has seen its zero throttle"
     },
     {
      "n": "pulse_armed",
@@ -1415,7 +1496,7 @@
      "n": "dir_cmd_extended",
      "t": "bool",
      "d": 0,
-     "desc": "use DShot commands 20/21 (AM32) instead of 7/8 for spin direction"
+     "desc": "not used since 0.18.1: the spin direction is always set with DShot 7 / 8 + save (20 / 21 are not stored by the ESC)"
     },
     {
      "n": "reserved1",
@@ -2971,6 +3052,7 @@
    "name": "led",
    "desc": "WS2812 / SK6812 LED strip on pins.led (sent through the second SPI bus): the craft's state in colors",
    "live": false,
+   "compat": 3,
    "fields": [
     {
      "n": "count",
@@ -2993,7 +3075,38 @@
      "t": "u8",
      "d": 0,
      "enum": "led_layout",
-     "desc": "ALL: every LED the same; NAV: armed, first half red (left), second half green (right), the last a white strobe, the mode in the middle"
+     "desc": "ALL: every LED the same; NAV: armed, first half red (left), second half green (right), the last a white strobe, the mode in the middle; MANUAL: each LED its own function (fn) and color"
+    },
+    {
+     "n": "fn",
+     "t": "u8",
+     "count": 32,
+     "d": 1,
+     "enum": "led_function",
+     "desc": "MANUAL: what each LED shows (STATUS = the state picture of ALL; COLOR, ARMED, BLINK, STROBE, BREATHE, LARSON use its color; RAINBOW and LARSON run across the LEDs that have them)"
+    },
+    {
+     "n": "color",
+     "t": "u32",
+     "count": 32,
+     "d": 16777215,
+     "min": 0,
+     "max": 16777215,
+     "desc": "MANUAL: each LED's color, 0xRRGGBB"
+    },
+    {
+     "n": "warnings",
+     "t": "bool",
+     "d": 1,
+     "desc": "MANUAL: failsafe, battery critical and a motor stall still take the whole strip"
+    },
+    {
+     "n": "speed",
+     "t": "u8",
+     "d": 5,
+     "min": 1,
+     "max": 10,
+     "desc": "MANUAL: speed of the effects (5 = one cycle in 2 s)"
     }
    ]
   },
@@ -3083,6 +3196,96 @@
      "min": 0,
      "max": 20,
      "desc": "RC_CHANNELS per second (0 = off)"
+    }
+   ]
+  },
+  {
+   "id": 24,
+   "name": "osd",
+   "desc": "On-screen display in the goggles (digital FPV: DJI O3 / O4, Walksnail, HDZero) over MSP DisplayPort on a UART (AUTO = the UART left after GPS, receiver, flow sensor and ESC wire; TABLE = the UART with the function DISPLAYPORT). Elements as Betaflight's, drawn with the goggles' own Betaflight font",
+   "live": false,
+   "fields": [
+    {
+     "n": "type",
+     "t": "u8",
+     "d": 0,
+     "enum": "osd_type",
+     "desc": "NONE = off; MSP_DISPLAYPORT = the goggles draw the OSD (digital FPV systems)"
+    },
+    {
+     "n": "canvas",
+     "t": "u8",
+     "d": 0,
+     "enum": "osd_canvas",
+     "desc": "grid of characters: AUTO = what the video transmitter asks for (MSP_SET_OSD_CANVAS: HDZero, Walksnail), else 53 x 20; or fixed"
+    },
+    {
+     "n": "baud",
+     "t": "u32",
+     "d": 115200,
+     "min": 9600,
+     "max": 2000000,
+     "desc": "UART speed (115200 for DJI, Walksnail and HDZero)"
+    },
+    {
+     "n": "tx_pin",
+     "t": "u8",
+     "d": 255,
+     "desc": "UART TX, to the video transmitter's RX"
+    },
+    {
+     "n": "rx_pin",
+     "t": "u8",
+     "d": 255,
+     "desc": "UART RX, from the video transmitter's TX (it asks for the armed state: recording starts on arming)"
+    },
+    {
+     "n": "rate",
+     "t": "u8",
+     "d": 10,
+     "min": 1,
+     "max": 30,
+     "desc": "screen refreshes per second"
+    },
+    {
+     "n": "name",
+     "t": "u8",
+     "count": 16,
+     "d": 0,
+     "text": true,
+     "desc": "craft name (element NAME, and MSP_NAME), ASCII, 0-padded"
+    },
+    {
+     "n": "pos",
+     "t": "u16",
+     "count": 24,
+     "d": [
+      2113,
+      3201,
+      1089,
+      3209,
+      3217,
+      3247,
+      2134,
+      2158,
+      174,
+      2241,
+      2305,
+      2200,
+      2202,
+      2734,
+      750,
+      3240,
+      2713,
+      346,
+      2899,
+      216,
+      641,
+      705,
+      1025,
+      2326
+     ],
+     "desc": "per element (src/osd/osd.h order: RSSI, BATT, CELL, CURRENT, MAH, MODE, NAME, FLY_TIME, ON_TIME, SATS, SPEED, HOME_DIR, HOME_DIST, ALT, VARIO, THROTTLE, CROSSHAIRS, HORIZON, WARNINGS, HEADING, PITCH, ROLL, ESC_TEMP, DISARMED): column (bits 0-5), row (bits 6-10), shown (bit 11) - Betaflight's osd_*_pos"
     }
    ]
   }
@@ -3423,6 +3626,26 @@
      "n": "stall_motor",
      "t": "u8",
      "desc": "the motor (1..8) the stall guard last saw stop, 0 = none since boot"
+    },
+    {
+     "n": "no_start",
+     "t": "u16",
+     "desc": "bidirectional DShot, last second: captures without a start bit (the window held no reply: timing / pin hand-over)"
+    },
+    {
+     "n": "bad_bits",
+     "t": "u16",
+     "desc": "... captures with a start bit, then not 18..21 bits (noise or slow edges on the line)"
+    },
+    {
+     "n": "bad_crc",
+     "t": "u16",
+     "desc": "... replies with clean bits but a wrong checksum"
+    },
+    {
+     "n": "rpm_ok",
+     "t": "u8",
+     "desc": "bit i = logical motor i has a fresh rpm (younger than 100 ms); rpm[i] is 0 otherwise"
     }
    ]
   },

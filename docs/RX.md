@@ -78,3 +78,6 @@ Spektrum / PPM / PWM: `test_rx` (khung dựng từng bit theo mô tả, 2048 / 1
 **Chưa kiểm chứng trên mạch**: UART 420 kbaud của ESP32 có rớt byte khi vòng bay bận không (bộ đệm RX đã đặt 512 byte), đảo mức SBUS bằng phần cứng.
 **Chưa kiểm chứng trên mạch (Spektrum / PPM / PWM)**: độ trễ ngắt GPIO thật (ngắt khác, ghi flash tắt cache → mất một khung), receiver 5 V cần chia áp, satellite thật (byte `system`, thứ tự khung), bind.
 **Chưa làm**: nRF24 (WireEnvelope) — `begin()` từ chối kèm lý do; bind Spektrum.
+
+## Telemetry về tay điều khiển: bật / tắt (0.20)
+`receiver.telemetry` (tab Receiver, mặc định bật): bật thì firmware gửi telemetry CRSF trên chân TX của receiver (pin, tư thế, GPS, vario, mode). Tắt thì chân TX im lặng, receiver vẫn nhận kênh bình thường; báo cáo khởi động ghi `rx: CRSF on UART2, telemetry off (receiver.telemetry)`. Có hiệu lực sau khi lưu và khởi động lại. Bản ghi cài đặt receiver của bản cũ (12 byte) vẫn đọc được, telemetry giữ bật. Kiểm chứng: `test_fw` nhóm `crsf`, `test_proto`.

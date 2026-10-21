@@ -57,3 +57,15 @@ def test_parsing_matches_the_firmware(both):
             continue
         assert st == (None if fw_stm32 < 0 else fw_stm32), "STM32 %r: firmware %d, page %r" % (text, fw_stm32, st)
         assert esp == (None if fw_esp < 0 else fw_esp), "ESP32 %r: firmware %d, page %r" % (text, fw_esp, esp)
+
+
+def test_device_info_names_the_chip_and_its_pins():
+    """DEVICE_INFO from 0.25 on: [name][0][mcu][0][32-byte pin mask] (src/proto/wbp_server.h set_chip); before: [name] alone."""
+    import struct
+    from wbclient.client import DeviceInfo
+    head = struct.pack("<BBBBBII", 1, 0, 0, 25, 0, 0x12345678, 1 << 7)
+    mask = bytearray(32); mask[0] = 0x05; mask[31] = 0x80
+    info = DeviceInfo(head + b"Windburst RX\0STM32F405\0" + bytes(mask))
+    assert info.name == "Windburst RX" and info.mcu == "STM32F405" and info.pins == [0, 2, 255] and "STM32" in info.features
+    old = DeviceInfo(head + b"Windburst RX")
+    assert old.name == "Windburst RX" and old.mcu is None and old.pins is None

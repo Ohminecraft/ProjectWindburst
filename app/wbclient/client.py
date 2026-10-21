@@ -41,17 +41,28 @@ class SchemaMismatch(Exception):
 
 class DeviceInfo:
     ROLES = {0: "RX", 1: "TX"}
-    FEATURES = ["STREAMS", "CALIBRATION", "MOTOR_TEST", "GPS", "BLACKBOX", "BATTERY", "BEEPER", "STM32", "WIFI"]   # STM32: pins are PA0 .. PK15 (port * 16 + pin); WIFI: the board has a radio (section wifi)
+    FEATURES = ["STREAMS", "CALIBRATION", "MOTOR_TEST", "GPS", "BLACKBOX", "BATTERY", "BEEPER", "STM32", "WIFI", "USB_NAME"]   # STM32: pins are PA0 .. PK15 (port * 16 + pin); WIFI: the board has a radio (section wifi); USB_NAME: general.usb_name names the board on USB
 
     def __init__(self, payload):
         self.protocol, role, maj, mnr, pat, self.schema_hash, feat = struct.unpack_from("<BBBBBII", payload)
         self.role = self.ROLES.get(role, str(role))
         self.version = "%d.%d.%d" % (maj, mnr, pat)
         self.features = [n for i, n in enumerate(self.FEATURES) if (feat >> i) & 1]
-        self.name = payload[13:].decode("utf-8", "replace")
+        # [name] and, from 0.25 on, [0][mcu][0][32-byte pin mask]: which chip, which pin numbers exist on it
+        rest = payload[13:]
+        self.mcu, self.pins = None, None
+        if b"\0" in rest:
+            name, rest = rest.split(b"\0", 1)
+            if b"\0" in rest:
+                mcu, mask = rest.split(b"\0", 1)
+                self.mcu = mcu.decode("utf-8", "replace")
+                if len(mask) >= 32:
+                    self.pins = [n for n in range(256) if (mask[n >> 3] >> (n & 7)) & 1]
+            rest = name
+        self.name = rest.decode("utf-8", "replace")
 
     def __repr__(self):
-        return "%s v%s (%s, protocol %d, schema 0x%08X, %s)" % (self.name, self.version, self.role, self.protocol, self.schema_hash, " ".join(self.features))
+        return "%s v%s (%s%s, protocol %d, schema 0x%08X, %s)" % (self.name, self.version, self.role, ", " + self.mcu if self.mcu else "", self.protocol, self.schema_hash, " ".join(self.features))
 
 
 class WbClient:

@@ -41,6 +41,7 @@ struct Telemetry {
     float motor_cmd[8] = {}, rpm[8] = {}; uint8_t esc_err_pct[8] = {}, esc_temp[8] = {}; float esc_volt = 0, dyn_idle = 0;
     float esc_amps[8] = {}; uint16_t esc_tlm_frames = 0, esc_tlm_crc = 0, esc_tlm_timeouts = 0; uint8_t stall_motor = 0;   // per-ESC current; ESC telemetry wire: answers / bad CRC / no answer, last second
     uint8_t bidir_state = 0, esc_answers = 0, motor_count = 0; uint16_t hw_skipped = 0, hw_late = 0, hw_replies = 0, hw_garbled = 0;                 // output driver: bidirectional DShot state, which ESCs answer, frames skipped / replies lost in the last second
+    uint16_t hw_no_start = 0, hw_bad_bits = 0, hw_bad_crc = 0; uint8_t rpm_ok = 0;        // why replies were rejected, last second; bit i = motor i has a fresh rpm
     // ---- sensors
     float mag[3] = {}; float baro_alt = 0, baro_pa = 0, temp_c = 0, range_m = 0;
     // ---- gps (Betaflight units)
@@ -131,6 +132,7 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
         T_motors o;
         for (int i = 0; i < 8; i++) { o.cmd[i] = u16(t.motor_cmd[i], scale::motors_cmd); o.rpm[i] = u16(t.rpm[i], scale::motors_rpm); o.err[i] = t.esc_err_pct[i]; o.temp[i] = t.esc_temp[i]; }
         o.volt[0] = u16(t.esc_volt, scale::motors_volt); o.dyn_idle = u16(t.dyn_idle, scale::motors_dyn_idle);
+        o.no_start = t.hw_no_start; o.bad_bits = t.hw_bad_bits; o.bad_crc = t.hw_bad_crc; o.rpm_ok = t.rpm_ok;
         o.bidir = t.bidir_state; o.answers = t.esc_answers; o.skipped = t.hw_skipped; o.late = t.hw_late; o.replies = t.hw_replies; o.garbled = t.hw_garbled;
         for (int i = 0; i < 4; i++) o.servo[i] = t.servo_us[i];
         for (int i = 0; i < 8; i++) o.amps[i] = u16(t.esc_amps[i], scale::motors_amps);

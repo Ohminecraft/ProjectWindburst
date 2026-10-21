@@ -9,6 +9,7 @@
 #include <vector>
 #include <algorithm>
 #include "../src/hal/motor/dshot_direct.h"
+#include "../src/hal/motor/dshot_burst.h"
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(cond, ...) do { if (cond) g_pass++; else { g_fail++; printf("  FAIL line %d: %s   ", __LINE__, #cond); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -26,7 +27,7 @@ struct SimPort {
     void tx_load(int c, const uint32_t* words, int n); void tx_start(int c);
     void rx_start(int c); int rx_stop(int c, uint32_t* words, int max);
     void delay_us(uint32_t us);
-    void listen(int) {}                           // (the model's receiver always hears the wire)
+    void listen(int c);                           // input path of the pin on (until then the receiver hears a constant 0)
     int level(int c);
     void lock(); void unlock();
 };
@@ -40,6 +41,7 @@ struct Wire {
     uint16_t esc_value[4] = {0x123, 0x456, 0x789, 0xABC};     // 12-bit value each ESC answers with
     bool esc_noise[4] = {false, false, false, false};         // the reply carries one extra glitch-free but wrong edge
     bool esc_short[4] = {false, false, false, false};         // the ESC stops after 9 bits
+    bool esc_spike[4] = {false, false, false, false};         // instead of a reply only a 400 ns low spike (passes the filter, shorter than half a bit)
     bool esc_pulldown[4] = {false, false, false, false};      // the ESC input pulls the line down: a released line sits LOW, not at the pull-up
     ns_t isr_latency_ns = 4000;                   // timer alarm -> interrupt handler runs
     ns_t cost_load = 1500, cost_start = 400, cost_pin = 100, cost_rx_start = 300, cost_rx_stop = 800, cost_alarm = 2000;
@@ -51,13 +53,14 @@ struct Wire {
     ns_t now = 0;
     DshotDirect<SimPort>* d = nullptr;
     bool alarm_set = false, in_isr = false, masked = false; ns_t alarm_t = 0;
-    struct TxFrame { ns_t t0; uint32_t w[kMem]; bool settled = false, valid = false, replied = false, audited = false; uint16_t packet = 0; ns_t reply_t0 = 0; uint8_t reply_lv[22]; int reply_n = 0; };
+    struct TxFrame { ns_t t0; uint32_t w[kMem]; bool settled = false, valid = false, replied = false, audited = false; uint16_t packet = 0; ns_t reply_t0 = 0; uint8_t reply_lv[22]; int reply_n = 0; ns_t spike = 0; };
     struct Chan {
         uint32_t mem[kMem];                       // the transmitter runs through its memory until it meets an end mark
         Chan() { for (int i = 0; i < kMem; i++) mem[i] = rmt_word(200, 1, 200, 0); }
         std::vector<TxFrame> frames;
         std::vector<std::pair<ns_t, bool>> drv;   // (time, driving)
         bool rx_on = false; ns_t rx_t0 = 0;
+        ns_t inp_t0 = -1;                         // when the input path was switched on (-1 = never)
         // what the ESC saw
         int good = 0, bad = 0; uint16_t last_value = 0; bool last_telem = false;
         ns_t contention_ns = 0; ns_t worst_release_after_ns = -1;
@@ -118,6 +121,7 @@ struct Wire {
         for (int k = (int)c.frames.size() - 1; k >= 0; k--) {
             const TxFrame& f = c.frames[k];
             if (!f.replied || t < f.reply_t0) continue;
+            if (f.spike) { if (t >= f.reply_t0 + f.spike) return false; lv = 0; return true; }
             const ns_t rb = reply_bit_ns(proto);
             const ns_t i = (t - f.reply_t0) / rb;
             if (i >= f.reply_n) return false;
@@ -163,6 +167,7 @@ struct Wire {
                 for (int i = 0; i < 21; i++) f.reply_lv[i] = lv[i];
                 if (esc_noise[ci]) f.reply_lv[7] ^= 1;
                 if (esc_short[ci]) f.reply_n = 9;
+                if (esc_spike[ci]) { f.reply_n = 0; f.spike = 400; }
             }
         }
     }
@@ -182,23 +187,28 @@ struct Wire {
     }
     void settle_all() { for (int i = 0; i < count; i++) settle(i); }
 
-    // What an RMT receiver records between rx_start and rx_stop.
+    // What the receiver's input sees: the line once the input path is on, a constant 0 before.
+    int rx_input(const Chan& c, ns_t t) const { return c.inp_t0 >= 0 && t >= c.inp_t0 ? wire(c, t) : 0; }
+    // What an RMT receiver records between rx_start and rx_stop. Its glitch filter passes a level change on filter_ns late,
+    // so the receiver at time t acts on the input at t - filter_ns: a step just before rx_start can still arrive after it.
     int capture(int ci, uint32_t* out, int max) {
         Chan& c = ch[ci];
         if (c.rx_deaf) return 0;
-        const ns_t t0 = c.rx_t0, t1 = now;
+        const ns_t t0 = c.rx_t0 - filter_ns, t1 = now - filter_ns;       // the window, in input time
         std::vector<ns_t> ev;
         for (auto& e : c.drv) if (e.first > t0 && e.first < t1) ev.push_back(e.first);
+        if (c.inp_t0 > t0 && c.inp_t0 < t1) ev.push_back(c.inp_t0);
         for (auto& f : c.frames) {
             ns_t x = f.t0;
             for (int i = 0; i < kMem; i++) { uint32_t d0, d1; int l0, l1; word(f.w[i], d0, l0, d1, l1); if (x > t0 && x < t1) ev.push_back(x); if (!d0) break; x += tk(d0); if (x > t0 && x < t1) ev.push_back(x); if (!d1) break; x += tk(d1); }
             if (x > t0 && x < t1) ev.push_back(x);
             if (f.replied) { const ns_t rb = reply_bit_ns(proto); for (int i = 0; i <= f.reply_n; i++) { const ns_t t = f.reply_t0 + i * rb; if (t > t0 && t < t1) ev.push_back(t); } }
+            if (f.spike && f.reply_t0 + f.spike > t0 && f.reply_t0 + f.spike < t1) ev.push_back(f.reply_t0 + f.spike);
         }
         std::sort(ev.begin(), ev.end());
         // level changes
-        std::vector<std::pair<ns_t, int>> edges; int lv = wire(c, t0);
-        for (ns_t t : ev) { const int n = wire(c, t); if (n != lv) { edges.push_back({t, n}); lv = n; } }
+        std::vector<std::pair<ns_t, int>> edges; int lv = rx_input(c, t0);
+        for (ns_t t : ev) { const int n = rx_input(c, t); if (n != lv) { edges.push_back({t, n}); lv = n; } }
         // glitch filter: a level that lasts less than the filter time is not seen
         for (size_t i = 0; i + 1 < edges.size();) { if (edges[i + 1].first - edges[i].first < filter_ns) edges.erase(edges.begin() + i, edges.begin() + i + 2); else i++; }
         // runs from the first edge; a run longer than the idle threshold ends the capture
@@ -246,6 +256,7 @@ void SimPort::delay_us(uint32_t us) { w->run_to(w->now + (ns_t)us * 1000); }
 int SimPort::level(int c) { w->settle(c); return w->wire(w->ch[c], w->now); }
 void SimPort::lock() { w->masked = true; }
 void SimPort::unlock() { w->masked = false; if (w->alarm_set && !w->in_isr && w->alarm_t <= w->now) w->fire(); }
+void SimPort::listen(int c) { if (w->ch[c].inp_t0 < 0) w->ch[c].inp_t0 = w->now; w->tick_cost(w->cost_pin); }
 void SimPort::rx_start(int c) { w->settle(c); w->ch[c].rx_on = true; w->ch[c].rx_t0 = w->now; w->tick_cost(w->cost_rx_start); }
 int SimPort::rx_stop(int c, uint32_t* words, int max) {
     w->settle(c);
@@ -342,7 +353,7 @@ static void t_bidir() {
         CHECK(ok, "DShot%u at %.0f us: 400 frames valid at the ESC, every reply decoded (%d good frames, %d replies, %d garbled)", (unsigned)dshot_kbps(cs.p), cs.period, r.good(0), r.got[0], r.bad[0]);
         CHECK(cont == 0, "the two ends never drive against each other (%lld ns)", cont);
         CHECK(worst >= 0 && worst < 25000, "pin released %lld ns after the frame (the ESC starts at 30000)", worst);
-        CHECK(r.d.stats().late_switch == 0 && r.d.stats().skipped == 0 && r.d.stats().garbled == 0 && r.d.stats().replies >= 4 * 399, "counters clean");
+        CHECK(r.d.stats().late_switch == 0 && r.d.stats().skipped == 0 && r.d.stats().garbled == 0 && r.d.stats().no_start == 0 && r.d.stats().bad_bits == 0 && r.d.stats().replies >= 4 * 399, "counters clean");
         CHECK(r.d.responsive(0) && r.d.responsive(3) && !r.d.responsive(4) && !r.d.responsive(-1), "all four answer");
     }
     { Rig r; r.begin(PROTO_DSHOT300, true); r.run(3, 250, 0, false);
@@ -379,7 +390,25 @@ static void t_bidir() {
       CHECK(r.d.stats().garbled == 0, "(21 clean bits with a wrong one: found by the checksum, not by the receiver)"); }
     { Rig r; r.begin(PROTO_DSHOT300, true); r.w.esc_short[1] = true; r.run(100, 250);
       CHECK(r.bad[1] >= 99 && r.got[1] == 0 && r.wrong[1] == 0 && r.got[0] >= 99, "a reply that stops half way is invalid (%d)", r.bad[1]);
-      CHECK(r.d.stats().garbled >= 99 && r.d.stats().replies >= 4 * 99, "and counted as garbled (%u)", (unsigned)r.d.stats().garbled); }
+      CHECK(r.d.stats().garbled >= 99 && r.d.stats().replies >= 4 * 99, "and counted as garbled (%u)", (unsigned)r.d.stats().garbled);
+      CHECK(r.d.stats().bad_bits == r.d.stats().garbled && r.d.stats().no_start == 0, "as too few bits, not as a missing start bit (%u)", (unsigned)r.d.stats().bad_bits); }
+    { Rig r; r.begin(PROTO_DSHOT300, true); r.w.esc_spike[1] = true; r.run(100, 250);
+      CHECK(r.d.stats().no_start >= 99 && r.d.stats().bad_bits == 0 && r.got[1] == 0 && r.wrong[1] == 0 && r.got[0] >= 99, "a spike instead of a reply: no start bit (%u), never a value", (unsigned)r.d.stats().no_start);
+      CHECK(!r.d.responsive(1) && r.d.responsive(0), "and that ESC counts as not answering"); }
+    printf("[pin hand-over: the receiver never sees an edge before the start bit (0.18.2)]\n");
+    { Rig r; r.begin(PROTO_DSHOT600, true);
+      bool on = true; for (int c = 0; c < 4; c++) on = on && r.w.ch[c].inp_t0 >= 0 && r.w.ch[c].inp_t0 <= r.w.now;
+      CHECK(on, "begin() switches the input path of every pin on, before the first frame");
+      const ns_t t_on = r.w.ch[3].inp_t0; r.run(50, 125);
+      CHECK(r.w.ch[3].inp_t0 == t_on, "and it is never switched again"); }
+    for (Protocol p : {PROTO_DSHOT300, PROTO_DSHOT600})
+      for (ns_t filt : {(ns_t)150, (ns_t)reply_bit_ns(p) / 4, (ns_t)reply_bit_ns(p) / 2}) {
+        Rig r; r.w.filter_ns = filt; r.w.cost_rx_start = 50; r.w.cost_pin = 30;          // receivers started quickly one after another: the worst case for a late step
+        r.begin(p, true); r.run(300, 250);
+        bool ok = true; for (int c = 0; c < 4; c++) ok = ok && r.got[c] >= 299 && r.bad[c] == 0;
+        CHECK(ok && r.d.stats().no_start == 0, "DShot%u, filter %lld ns: every reply of all 4 motors decoded, no capture without a start bit (%d %d %d %d)",
+              (unsigned)dshot_kbps(p), filt, r.got[0], r.got[1], r.got[2], r.got[3]);
+      }
     { Rig r; r.w.tick = 40000000; r.begin(PROTO_DSHOT300, true); r.run(100, 250);        // (the clock of the timer is fixed before the driver starts)
       CHECK(r.got[0] >= 99 && r.good(0) == 100, "40 MHz ticks work the same"); }
 }
@@ -464,7 +493,84 @@ static void t_proshot() {
     CHECK(!r.d.responsive(0) && r.d.stats().replies == 0, "no replies expected");
 }
 
+// ---- the reply decoder alone (motor_protocol.h: reply_from_runs), the cases a wire model does not produce
+static int to_runs(const uint8_t* lv, int n, uint32_t bit, double scale, Run* out) {
+    int k = 0;
+    for (int i = 0; i < n;) { int j = i; while (j < n && lv[j] == lv[i]) j++; out[k++] = {lv[i], (uint32_t)((j - i) * bit * scale)}; i = j; }
+    return k;
+}
+static void t_decode() {
+    printf("[reply decoder: start bit, 18..21 bits, Betaflight rules]\n");
+    const uint32_t bit = 16 * 1000;
+    int ok = 0, low_end = -1, high_end = -1;
+    for (int v = 0; v < 4096; v++) {
+        uint8_t lv[21]; gcr_to_levels(gcr_encode((uint16_t)v), lv);
+        if (lv[20] && high_end < 0) high_end = v;
+        if (!lv[20] && low_end < 0) low_end = v;
+        Run runs[24]; int n = to_runs(lv, 21, bit, 1.0, runs);
+        if (runs[n - 1].level == 1) n--;                                        // a reply that ends high: that run is the idle line, no end edge
+        const ReplyDecode r = reply_from_runs(runs, n, bit);
+        if (r.err == RE_OK && gcr_decode(r.gcr) == (uint32_t)v) ok++;
+    }
+    CHECK(ok == 4096, "every value, last high run left to the idle line (%d)", ok);
+    uint8_t lv[21]; gcr_to_levels(gcr_encode(0x5A3), lv);
+    auto dec = [&](const std::vector<Run>& pre, const std::vector<Run>& post, double scale) {
+        Run body[24]; const int n = to_runs(lv, 21, bit, scale, body);
+        std::vector<Run> all = pre; for (int i = 0; i < n; i++) all.push_back(body[i]);
+        for (auto& x : post) all.push_back(x);
+        return reply_from_runs(all.data(), (int)all.size(), bit);
+    };
+    auto good = [&](const ReplyDecode& r) { return r.err == RE_OK && gcr_decode(r.gcr) == 0x5A3u; };
+    CHECK(good(dec({}, {}, 1.0)), "plain");
+    CHECK(good(dec({{1, 27 * bit}}, {}, 1.0)), "the idle line before the start bit is skipped");
+    CHECK(good(dec({{0, bit / 5}, {1, 20 * bit}}, {}, 1.0)), "a glitch shorter than half a bit before it too");
+    CHECK(good(dec({}, {{1, 8 * bit}}, 1.0)), "the idle run after the reply is not a bit");
+    CHECK(good(dec({}, {}, 0.88)) && good(dec({}, {}, 1.12)), "an ESC clock 12 %% off");
+    CHECK(reply_from_runs(nullptr, 0, bit).err == RE_NO_START, "nothing captured: no start bit");
+    { Run r1[] = {{1, 27 * bit}}; CHECK(reply_from_runs(r1, 1, bit).err == RE_NO_START, "only the idle line: no start bit"); }
+    { Run r2[] = {{0, bit / 4}, {1, 9 * bit}}; CHECK(reply_from_runs(r2, 2, bit).err == RE_NO_START, "only a glitch: no start bit"); }
+    { Run body[24]; const int n = to_runs(lv, 21, bit, 1.0, body);
+      CHECK(reply_from_runs(body, n, 0).err == RE_NO_START && reply_from_runs(body, n, 0).gcr == kGcrInvalid, "bit length 0: rejected");
+      int k = 0, pos = 0; while (k < n && pos + (int)(body[k].dur / bit) <= 9) pos += (int)(body[k++].dur / bit);
+      CHECK(reply_from_runs(body, k, bit).err == RE_BITS, "cut after %d bits: wrong bit count", pos); }
+    { Run r3[] = {{0, bit}, {1, bit / 8}, {0, bit}}; CHECK(reply_from_runs(r3, 3, bit).err == RE_BITS, "a run shorter than half a bit after the start: wrong bit count"); }
+    CHECK(low_end < 0, "(a valid reply always ends high: its checksum fixes the number of level changes)");
+    { Run b[24]; int n = to_runs(lv, 21, bit, 1.0, b); n--;                     // without its last (high) run: 19..20 bits
+      b[n++] = {0, 4 * bit};
+      CHECK(reply_from_runs(b, n, bit).err == RE_BITS, "a LOW run past bit 21: not a reply (Betaflight: bits != 21)"); }
+    { uint8_t l[21]; gcr_to_levels(gcr_encode((uint16_t)high_end), l); Run b[24]; const int n = to_runs(l, 21, bit, 1.0, b); b[n - 1].dur += 20 * bit;
+      const ReplyDecode r = reply_from_runs(b, n, bit);
+      CHECK(high_end >= 0 && r.err == RE_OK && gcr_decode(r.gcr) == (uint32_t)high_end, "reply ending high (0x%03x), idle line counted into its last run: accepted", high_end); }
+}
+
+// 0.26: DShot on an STM32 timer by DMA burst: the rows of compare values (hal/motor/dshot_burst.h)
+static void t_burst() {
+    printf("[burst] STM32 timer + DMA: the compare values of a frame\n");
+    using namespace motor;
+    CHECK(burst_period(168000000, PROTO_DSHOT600) == 280 && burst_period(84000000, PROTO_DSHOT150) == 560 && burst_period(250000000, PROTO_DSHOT1200) == 208,
+          "period = timer clock / bit rate (F405 TIM1 168 MHz, DShot600: 280 ticks)");
+    CHECK(burst_period(10000000, PROTO_DSHOT1200) == 0 && burst_period(168000000, PROTO_PROSHOT1000) == 0,
+          "too coarse (8 ticks a bit), ProShot: refused");
+    CHECK(burst_one(280) == 196 && burst_zero(280) == 98, "a 1 = 14 / 20 of the bit, a 0 = 7 / 20 (Betaflight)");
+    uint16_t pk[4] = {dshot_packet(1046, false, false), 0, dshot_packet(48, true, false), dshot_packet(0, false, false)};
+    bool used[4] = {true, false, true, true};
+    uint32_t rows[kBurstRows * 4];
+    const int n = burst_fill(rows, 1, 4, pk, used, 280);
+    CHECK(n == 72 && burst_read(rows, 1, 4, 1, 280) == pk[0] && burst_read(rows, 1, 4, 3, 280) == pk[2] && burst_read(rows, 1, 4, 4, 280) == pk[3],
+          "channels 1, 3, 4 of a timer: 18 rows of 4, each motor's packet MSB first (%d words)", n);
+    bool idle = true; for (int b = 0; b < kBurstRows; b++) idle &= rows[b * 4 + 1] == 0;
+    CHECK(idle && rows[16 * 4] == 0 && rows[17 * 4 + 2] == 0, "the channel between them stays 0; the two last rows are 0 (the line low after the frame)");
+    CHECK(rows[0] == ((pk[0] >> 15) & 1u ? 196u : 98u) && rows[15 * 4] == ((pk[0] & 1u) ? 196u : 98u), "row 0 = the first bit on the wire, row 15 the last");
+    const int m = burst_fill(rows, 3, 2, pk, used, 140);
+    CHECK(m == 36 && burst_read(rows, 3, 2, 3, 140) == pk[2] && burst_read(rows, 3, 2, 4, 140) == pk[3] && dshot_packet_valid((uint16_t)burst_read(rows, 3, 2, 3, 140), false),
+          "channels 3 .. 4 only (DCR base = CCR3): 2 words a row");
+    CHECK(burst_fill(rows, 0, 2, pk, used, 140) == 0 && burst_fill(rows, 3, 3, pk, used, 140) == 0, "a range outside channels 1 .. 4: nothing");
+    rows[5] = 1; CHECK(burst_read(rows, 3, 2, 4, 140) == -1, "a row that is neither a 1 nor a 0 is not read as a packet");
+}
+
 int main() {
+    t_decode();
+    t_burst();
     t_words();
     t_oneway();
     t_bidir();

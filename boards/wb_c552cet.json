@@ -1,0 +1,34 @@
+{
+  "build": {
+    "core": "stm32",
+    "cpu": "cortex-m33",
+    "extra_flags": "-DSTM32C5 -DSTM32C5xx -DSTM32C552xx",
+    "f_cpu": "144000000L",
+    "mcu": "stm32c552cet6",
+    "product_line": "STM32C552xx",
+    "variant": "STM32C5xx/C552C(C-E)(T-U)_C562CE(T-U)",
+    "arduino": {
+      "board": "GENERIC_C552CETX"
+    }
+  },
+  "debug": {
+    "jlink_device": "STM32C552CE",
+    "openocd_target": "stm32c5x"
+  },
+  "frameworks": [
+    "arduino"
+  ],
+  "name": "STM32C552CET (128k RAM, 512k Flash) - Windburst",
+  "upload": {
+    "maximum_ram_size": 131072,
+    "maximum_size": 524288,
+    "protocol": "stlink",
+    "protocols": [
+      "stlink",
+      "jlink",
+      "dfu"
+    ]
+  },
+  "url": "https://www.st.com/",
+  "vendor": "Generic"
+}

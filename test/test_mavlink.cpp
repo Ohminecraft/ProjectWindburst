@@ -116,9 +116,13 @@ static void t_scheduler() {
         bool same_counts = true; for (int i = 0; i < 256; i++) if (all.count[i] != slow.count[i]) same_counts = false;
         CHECK(same_counts && slow.frames.size() == all.frames.size(), "64 bytes of room per call: the same frames as with room enough (%d / %d; ATTITUDE %d / %d, GPS_RAW %d / %d, BATTERY %d / %d), none cut", (int)slow.frames.size(), (int)all.frames.size(), slow.count[MSG_ATTITUDE], all.count[MSG_ATTITUDE], slow.count[MSG_GPS_RAW_INT], all.count[MSG_GPS_RAW_INT], slow.count[MSG_BATTERY_STATUS], all.count[MSG_BATTERY_STATUS]); }
     {   // a frame bigger than the room never goes out cut: it waits, the smaller ones go
-        Scheduler sch; sch.configure(Rates(), 1); Parser p; uint8_t buf[512]; State s = base_state(); bool within = true;
-        for (uint32_t t = 0; t < 5000; t++) { s.time_ms = t; const size_t n = sch.poll(t, s, buf, 45); if (n > 45) within = false; for (size_t i = 0; i < n; i++) p.feed(buf[i]); }
-        CHECK(within && p.bad() == 0 && p.good() > 100, "45 bytes of room: %u whole frames (the bigger ones wait), never a cut one", p.good()); }
+        Scheduler sch; sch.configure(Rates(), 1); Parser p; uint8_t buf[512]; State s = base_state(); bool within = true, seq = true; int last = -1;
+        for (uint32_t t = 0; t < 5000; t++) {
+            s.time_ms = t; const size_t n = sch.poll(t, s, buf, 45); if (n > 45) within = false;
+            for (size_t i = 0; i < n; i++) if (p.feed(buf[i])) { if (last >= 0 && p.frame().seq != (uint8_t)(last + 1)) seq = false; last = p.frame().seq; }
+        }
+        CHECK(within && p.bad() == 0 && p.good() > 100, "45 bytes of room: %u whole frames (the bigger ones wait), never a cut one", p.good());
+        CHECK(seq, "and no gap in the sequence numbers: a frame that waits gives its number back (a gap = a lost frame for the ground station)"); }
     {   // no room at all for 3 s: nothing piles up (afterwards one of each, then the normal rate - no burst)
         Scheduler sch; sch.configure(Rates(), 1); uint8_t buf[2048]; State s = base_state();
         for (uint32_t t = 0; t < 3000; t++) sch.poll(t, s, buf, 0);
@@ -172,6 +176,10 @@ static void t_text() {
         CHECK(sch.queued_texts() == Scheduler::kTexts && sch.dropped_texts() == 4, "10 texts into a queue of 6: the 4 oldest dropped");
         uint32_t first = 0, second = 0; for (uint32_t t = 0; t < 300; t++) { const size_t n = sch.poll(t, st, buf, sizeof(buf)); Parser p; for (size_t i = 0; i < n; i++) if (p.feed(buf[i]) && p.frame().msgid == MSG_STATUSTEXT) { if (!first) first = t + 1; else if (!second) second = t + 1; } }
         CHECK(second - first == Scheduler::kTextGapMs, "one text every %u ms (%u)", (unsigned)Scheduler::kTextGapMs, second - first); }
+    {   Scheduler sch; sch.configure(off, 1);
+        for (int i = 0; i < 7; i++) { char b[16]; snprintf(b, sizeof(b), "line %d", i); sch.text(MAV_SEVERITY_INFO, b); }
+        const auto t = texts(run(sch, State(), 1000));
+        CHECK(t.size() == 6 && t[0].second == "line 1" && t[5].second == "line 6", "a full queue drops the oldest: the newest text always goes out (%d texts, first '%s')", (int)t.size(), t.empty() ? "" : t[0].second.c_str()); }
 }
 
 static void t_heartbeat() {

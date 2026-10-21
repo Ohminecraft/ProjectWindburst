@@ -146,12 +146,12 @@ inline int esc_uart(bool gps_on_uart1, bool receiver_on_uart2, bool uart0_free, 
     }
     return -1;
 }
-// AUTO: the MAVLink telemetry (section telemetry) gets the UART that is left after the GPS, the receiver, an MSP flow sensor and the
-// ESC telemetry wire (-1 = none of them is left).
-inline int telemetry_uart(bool gps_on_uart1, bool receiver_on_uart2, bool uart0_free, int flow_uart, int esc_uart) {
+// AUTO: the OSD (section osd) and then the MAVLink telemetry (section telemetry) get the UART that is left after the GPS, the
+// receiver, an MSP flow sensor, the ESC telemetry wire (and the OSD) (-1 = none of them is left).
+inline int telemetry_uart(bool gps_on_uart1, bool receiver_on_uart2, bool uart0_free, int flow_uart, int esc_uart, int osd_uart = -1) {
     const int order[3] = {1, 2, 0};
     for (int u : order) {
-        if (u == flow_uart || u == esc_uart) continue;
+        if (u == flow_uart || u == esc_uart || u == osd_uart) continue;
         if (u == 1 && gps_on_uart1) continue;
         if (u == 2 && receiver_on_uart2) continue;
         if (u == 0 && !uart0_free) continue;
@@ -164,8 +164,8 @@ inline int telemetry_uart(bool gps_on_uart1, bool receiver_on_uart2, bool uart0_
 //          other two have started - pass gps_on / rx_on then).
 //   TABLE: the ports section's function per UART (port_function: NONE, SERIAL_RX, GPS, TELEMETRY = unused, FLOW_MSP).
 //          UART0 only when the app link does not use it (native USB). A device with no UART in the table gets a reason.
-enum PortFn : uint8_t { PF_NONE, PF_SERIAL_RX, PF_GPS, PF_TELEMETRY, PF_FLOW_MSP, PF_ESC_SENSOR };     // == schema enum port_function
-struct UartPlan { int gps = -1, rx = -1, flow = -1, esc = -1, tlm = -1; const char* why = ""; };      // tlm: TABLE only (AUTO: telemetry_uart)
+enum PortFn : uint8_t { PF_NONE, PF_SERIAL_RX, PF_GPS, PF_TELEMETRY, PF_FLOW_MSP, PF_ESC_SENSOR, PF_DISPLAYPORT };     // == schema enum port_function
+struct UartPlan { int gps = -1, rx = -1, flow = -1, esc = -1, tlm = -1, osd = -1; const char* why = ""; };      // tlm, osd: TABLE only (AUTO: telemetry_uart)
 inline UartPlan plan_uarts(bool table, const uint8_t fn[3], bool want_gps, bool want_rx, bool want_flow, bool uart0_free, bool gps_on, bool rx_on) {
     UartPlan p;
     if (!table) {
@@ -175,9 +175,9 @@ inline UartPlan plan_uarts(bool table, const uint8_t fn[3], bool want_gps, bool 
     }
     bool uart0_wanted = false;
     for (int u = 0; u < 3; u++) {
-        if (fn[u] != PF_GPS && fn[u] != PF_SERIAL_RX && fn[u] != PF_FLOW_MSP && fn[u] != PF_ESC_SENSOR && fn[u] != PF_TELEMETRY) continue;
+        if (fn[u] != PF_GPS && fn[u] != PF_SERIAL_RX && fn[u] != PF_FLOW_MSP && fn[u] != PF_ESC_SENSOR && fn[u] != PF_TELEMETRY && fn[u] != PF_DISPLAYPORT) continue;
         if (u == 0 && !uart0_free) { uart0_wanted = true; continue; }
-        int& slot = fn[u] == PF_GPS ? p.gps : fn[u] == PF_SERIAL_RX ? p.rx : fn[u] == PF_FLOW_MSP ? p.flow : fn[u] == PF_TELEMETRY ? p.tlm : p.esc;
+        int& slot = fn[u] == PF_GPS ? p.gps : fn[u] == PF_SERIAL_RX ? p.rx : fn[u] == PF_FLOW_MSP ? p.flow : fn[u] == PF_TELEMETRY ? p.tlm : fn[u] == PF_DISPLAYPORT ? p.osd : p.esc;
         if (slot < 0) slot = u;
     }
     if (!want_gps) p.gps = -1;

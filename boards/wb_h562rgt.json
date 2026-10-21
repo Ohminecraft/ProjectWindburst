@@ -1,0 +1,34 @@
+{
+  "build": {
+    "core": "stm32",
+    "cpu": "cortex-m33",
+    "extra_flags": "-DSTM32H5 -DSTM32H5xx -DSTM32H562xx",
+    "f_cpu": "250000000L",
+    "mcu": "stm32h562rgt6",
+    "product_line": "STM32H562xx",
+    "variant": "STM32H5xx/H562R(G-I)T",
+    "arduino": {
+      "board": "GENERIC_H562RGTX"
+    }
+  },
+  "debug": {
+    "jlink_device": "STM32H562RG",
+    "openocd_target": "stm32h5x"
+  },
+  "frameworks": [
+    "arduino"
+  ],
+  "name": "STM32H562RGT (640k RAM, 1024k Flash) - Windburst",
+  "upload": {
+    "maximum_ram_size": 655360,
+    "maximum_size": 1048576,
+    "protocol": "stlink",
+    "protocols": [
+      "stlink",
+      "jlink",
+      "dfu"
+    ]
+  },
+  "url": "https://www.st.com/",
+  "vendor": "Generic"
+}

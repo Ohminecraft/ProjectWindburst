@@ -4,6 +4,7 @@
 
 #pragma once
 #include "../config/fast_code.h"
+#include "../config/ram_profile.h"
 
 #include <stdint.h>
 #include <atomic>
@@ -97,7 +98,7 @@ inline uint16_t pack_slow(const Plan& plan, uint32_t t_us, const app::Telemetry&
     return (uint16_t)(p - out);
 }
 
-constexpr uint32_t kRingBytes = 16384;
+constexpr uint32_t kRingBytes = WB_LOW_RAM ? 4096 : 16384;      // (config/ram_profile.h)
 
 // A flag the link task sets and the control cycle reads - several times per cycle. The ESP32 build (-Os) does not inline
 // std::atomic<bool>::load: it would be a call into flash from code that otherwise sits in RAM. The compiler builtin is

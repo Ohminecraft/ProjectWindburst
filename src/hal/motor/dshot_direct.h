@@ -17,9 +17,15 @@
 //
 //   send()      collect the previous reply, drive the pins, load 16 symbols + end mark per motor, start all transmitters,
 //               ask for a timer interrupt at the end of the frame
-//   on_alarm()  (timer interrupt, a few microseconds after the last bit) pins become inputs with pull-up, receivers start
+//   on_alarm()  (timer interrupt, a few microseconds after the last bit) receivers start, then the pins become inputs with pull-up
 //   ESC         30 us after the frame: 21 bits at 5/4 of the DShot bit rate, driven by the ESC
-//   send()      next cycle: stop the receivers, decode what they captured
+//   send()      next cycle: stop the receivers, decode what they captured (Betaflight style: find the start bit in the window)
+//
+// The receiver must see no level change between its start and the reply's start bit, or it takes the idle line before the reply
+// for a whole capture and ends on its idle threshold before the ESC talks (0.18.2). So the input path of every pin is switched on
+// once at begin() and stays on (an ESP32 pad reads back what it drives; the receiver is stopped while we talk), and the receivers
+// start while we still hold the line high: the release itself is then no edge either. (Up to 0.18.1 the input was switched on at
+// the release, a 0 -> 1 step the receiver's glitch filter passed on a few hundred ns later - right after the receiver started.)
 //
 // The pin is PUSH-PULL while we talk and an INPUT while the ESC talks - the same as Betaflight and esp-fc. An open-drain pin
 // with only the internal pull-up cannot produce DShot300/600 edges (rise time of several bit times).
@@ -33,7 +39,7 @@
 //   void rx_start(int ch);                     capture from the next edge on
 //   int  rx_stop(int ch, uint32_t* words, int max);       stop capturing, copy the captured words, return how many
 //   void delay_us(uint32_t us);                busy wait (only used by loopback(), at start-up)
-//   void listen(int ch);                       while driving, let the receiver hear the pin too (only used by loopback())
+//   void listen(int ch);                       input path of the pin on, for good: the receiver hears the line, also while we drive
 // A word is one RMT symbol: duration0 (15 bits) | level0 << 15 | duration1 << 16 | level1 << 31; duration 0 = end.
 // ============================================================================
 namespace motor {
@@ -67,7 +73,9 @@ public:
         uint32_t skipped = 0;         // update came before the previous frame (and its reply) was over
         uint32_t late_switch = 0;     // the timer interrupt had not run when the next frame was due: that reply is lost
         uint32_t replies = 0;         // replies captured (valid or garbled)
-        uint32_t garbled = 0;         // captured, but not 21 clean bits
+        uint32_t garbled = 0;         // captured, but not 21 clean bits (= no_start + bad_bits)
+        uint32_t no_start = 0;        // ... the line moved, but no start bit: the window held no reply (timing, pin hand-over)
+        uint32_t bad_bits = 0;        // ... a start bit, then not 18..21 bits (noise, a slow edge, the reply cut off)
     };
 
     bool begin(Port& port, int count, Protocol proto, bool bidirectional) {
@@ -78,7 +86,7 @@ public:
         reply_bit_q4_ = (uint32_t)(((uint64_t)reply_bit_ns(proto) * port.tick_hz() * 16u + 500000000ull) / 1000000000ull);      // one reply bit in 1/16 timer tick
         started_ = false; pending_ = false; stats_ = Stats();
         for (int c = 0; c < kMaxCh; c++) { rx_on_[c] = false; has_reply_[c] = false; silent_[c] = 0; }
-        for (int c = 0; c < count_; c++) port_->drive(c);
+        for (int c = 0; c < count_; c++) { port_->drive(c); if (bidir_) port_->listen(c); }
         return true;
     }
     int count() const { return count_; }
@@ -117,8 +125,8 @@ public:
         if (!pending_) return;
         if ((uint32_t)(port_->micros() - t_tx_) < frame_us_) return;            // an old interrupt that arrives inside a new frame must not cut it
         pending_ = false;
+        for (int c = 0; c < count_; c++) { port_->rx_start(c); rx_on_[c] = true; }    // the line is still held high: no edge
         for (int c = 0; c < count_; c++) port_->release(c);
-        for (int c = 0; c < count_; c++) { port_->rx_start(c); rx_on_[c] = true; }
     }
 
     // Newest reply of this channel since the last call: 20 GCR bits, or kGcrInvalid for a garbled one.
@@ -194,10 +202,15 @@ private:
             runs[nr++] = {(uint8_t)(w[i] >> 31), d1 << 4};
         }
         if (nr == 0) { if (silent_[c] < 0xFFFF) silent_[c]++; return; }        // the line never moved: no reply
-        const int first = runs[0].level == 0 ? 0 : 1;                           // a receiver may also report the idle-high time before the start bit
-        const uint32_t g = first < nr ? runs_to_gcr(runs + first, nr - first, reply_bit_q4_) : kGcrInvalid;
-        reply_[c] = g; has_reply_[c] = true; silent_[c] = 0;
-        stats_.replies++; if (g == kGcrInvalid) stats_.garbled++;
+        const ReplyDecode r = reply_from_runs(runs, nr, reply_bit_q4_);
+        reply_[c] = r.gcr; has_reply_[c] = true;
+        stats_.replies++;
+        if (r.err == RE_OK) silent_[c] = 0;
+        else {
+            stats_.garbled++;
+            if (r.err == RE_NO_START) { stats_.no_start++; if (silent_[c] < 0xFFFF) silent_[c]++; }     // not an answer of the ESC
+            else { stats_.bad_bits++; silent_[c] = 0; }
+        }
     }
 
     Port* port_ = nullptr;

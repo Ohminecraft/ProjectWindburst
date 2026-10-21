@@ -1,0 +1,34 @@
+{
+  "build": {
+    "core": "stm32",
+    "cpu": "cortex-m4",
+    "extra_flags": "-DSTM32G4 -DSTM32G4xx -DSTM32G491xx",
+    "f_cpu": "170000000L",
+    "mcu": "stm32g491ret6",
+    "product_line": "STM32G491xx",
+    "variant": "STM32G4xx/G491RC(I-T)_G491RE(I-T-Y)x(Z)_G4A1RE(I-T-Y)",
+    "arduino": {
+      "board": "GENERIC_G491RETX"
+    }
+  },
+  "debug": {
+    "jlink_device": "STM32G491RE",
+    "openocd_target": "stm32g4x"
+  },
+  "frameworks": [
+    "arduino"
+  ],
+  "name": "STM32G491RET (112k RAM, 512k Flash) - Windburst",
+  "upload": {
+    "maximum_ram_size": 114688,
+    "maximum_size": 524288,
+    "protocol": "stlink",
+    "protocols": [
+      "stlink",
+      "jlink",
+      "dfu"
+    ]
+  },
+  "url": "https://www.st.com/",
+  "vendor": "Generic"
+}

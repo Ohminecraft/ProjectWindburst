@@ -15,7 +15,9 @@ struct HwStats {
     uint32_t skipped = 0;         // updates that came before the previous frame was over (loop faster than the protocol allows)
     uint32_t late_switch = 0;     // bidirectional: the pin was not handed to the ESC in time, that reply was lost
     uint32_t replies = 0;         // bidirectional: replies captured
-    uint32_t garbled = 0;         // bidirectional: captured, but not a clean 21-bit reply
+    uint32_t garbled = 0;         // bidirectional: captured, but not a clean 21-bit reply (= no_start + bad_bits)
+    uint32_t no_start = 0;        // ... no start bit in the window (timing / pin hand-over)
+    uint32_t bad_bits = 0;        // ... a start bit, then not 18..21 bits (noise on the line)
 };
 }
 
@@ -32,4 +34,5 @@ public:
     virtual motor::HwStats stats() const { return motor::HwStats(); }
     virtual bool rx_responsive(int slot) const { return false; }   // false = the ESC on this slot is not answering (no bidirectional firmware / wiring)
     virtual const char* name() const = 0;
+    virtual const char* why_not() const { return nullptr; }        // why begin() said no, when the backend can tell (nullptr: no idea / it did not)
 };

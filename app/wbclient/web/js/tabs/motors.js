@@ -1,5 +1,5 @@
 // Motors: frame layout, ESC protocol, spin direction, motor order, motor test with live RPM, and the gyro vibration graph.
-import { store, setField, wantStreams, command } from '../store.js';
+import { store, setField, setFields, flush, wantStreams, command } from '../store.js';
 import { h, block, fields, control, listen, note, toast, showError, track, readout, cmdButton, errorText, kv } from '../ui.js';
 import { LAYOUTS, motorCount } from '../gfx/fwmath.js';
 import { ENUM_LABELS } from '../labels.js';
@@ -15,15 +15,13 @@ function s(tag, attrs, ...kids) {
   return el;
 }
 
-// Top view of the frame: motor numbers, the direction each prop must turn, and a ring that fills with the live command.
-function diagram() {
-  const box = h('div', { class: 'frame', id: 'frame' });
-  let fills = [];
-  const build = () => {
-    const m = store.settings.motors, L = LAYOUTS[m.layout], n = L.angles.length;
+// Top view of the frame: motor numbers, the direction each prop must turn, and a ring per motor (for the live command).
+// Returns the svg, the ring of each motor and its group (the motor wizard clicks on those).
+function frameSvg(m) {
+    const L = LAYOUTS[m.layout], n = L.angles.length;
     const svg = s('svg', { viewBox: '-140 -152 280 292', role: 'img', 'aria-label': tr('Khung {layout} nhìn từ trên xuống, {n} motor', { layout: m.layout, n }) });
     svg.append(s('path', { d: 'M0 -150 l-12 20 h24 z', class: 'nose' }), s('text', { x: 0, y: -116, class: 'nose-t', 'text-anchor': 'middle' }, tr('mũi')));
-    fills = [];
+    const fills = [], groups = [];
     // where motor i is drawn: its arm (r: fraction of a full arm); the lower motor of a coaxial pair sits a little inwards and
     // off to the side, so that both discs stay visible
     const pos = (i) => {
@@ -48,10 +46,20 @@ function diagram() {
       const arc = ccw ? `M ${26 * k} ${-15 * k} A ${30 * k} ${30 * k} 0 0 0 ${-26 * k} ${-15 * k}` : `M ${-26 * k} ${-15 * k} A ${30 * k} ${30 * k} 0 0 1 ${26 * k} ${-15 * k}`;
       const tip = ccw ? `M ${-26 * k} ${-15 * k} l ${11 * k} ${-4 * k} l ${-2 * k} ${11 * k} z` : `M ${26 * k} ${-15 * k} l ${-11 * k} ${-4 * k} l ${2 * k} ${11 * k} z`;
       g.append(s('circle', { r: disc, class: under ? 'disc under' : 'disc' }), fill, s('path', { d: arc, class: 'spin' }), s('path', { d: tip, class: 'spin-tip' }),
-        s('text', { y: 12 * k, 'text-anchor': 'middle', class: 'mnum' }, String(i + 1) + (under ? '↓' : '')));
+        s('text', { y: 12 * k, 'text-anchor': 'middle', class: 'mnum' }, String(i + 1) + (under ? '↓' : '')),
+        s('text', { y: disc + 16, 'text-anchor': 'middle', class: 'mtag' }, ''));
+      groups.push(g);
       svg.append(g);
     });
-    box.replaceChildren(svg, h('p', { class: 'help' }, tr('Mũi tên là chiều mỗi cánh PHẢI quay (nhìn từ trên xuống). Vòng tô đậm là lệnh đang gửi tới ESC.')));
+    return { svg, fills, groups };
+}
+
+function diagram() {
+  const box = h('div', { class: 'frame', id: 'frame' });
+  let fills = [];
+  const build = () => {
+    const f = frameSvg(store.settings.motors); fills = f.fills;
+    box.replaceChildren(f.svg, h('p', { class: 'help' }, tr('Mũi tên là chiều mỗi cánh PHẢI quay (nhìn từ trên xuống). Vòng tô đậm là lệnh đang gửi tới ESC.')));
   };
   const live = (mo) => { fills.forEach(({ fill, C }, i) => fill.setAttribute('stroke-dasharray', `${(mo.cmd[i] || 0) * C} ${C}`)); };
   let sig = '';
@@ -127,6 +135,126 @@ function motorTest() {
     h('p', { class: 'help' }, tr('Kéo từng thanh để biết motor số mấy nằm ở đâu và quay chiều nào. Sai vị trí thì sửa "Thứ tự motor"; sai chiều thì bật "Đảo chiều" cho motor đó.')));
 }
 
+// Motor wizard (Betaflight Configurator 4.3+): the order and the spin directions are found by looking at the motors, not typed in.
+//   Order:     each motor output turns in turn (slowly); click where on the frame the turning motor sits. At the end the new
+//              motors.order is written; the firmware takes it at once (FlightApp::apply_motor_order), "Lưu" keeps it.
+//   Direction: click a motor to turn it (or turn all), compare with the arrow, "Đảo chiều" sends the ESC its new direction
+//              (DShot 7 / 8 + save) and sets motors.reversed_mask.
+// Every 200 ms the test is refreshed: the firmware stops a motor that is not refreshed for 0.5 s.
+function wizard() {
+  const box = h('div', { class: 'frame wizard', id: 'wiz-frame' });
+  const msg = h('p', { class: 'note', id: 'wiz-msg' }, tr('Tháo cánh, đánh dấu "Đã tháo hết cánh quạt" ở khối Test motor, rồi chọn một bước.'));
+  const pct = h('input', { type: 'number', class: 'num', id: 'wiz-pct', min: 3, max: 25, step: 1, value: 8, 'aria-label': tr('Ga khi quay thử (%)') });
+  pct.style.width = '64px';
+  const bOrder = h('button', { type: 'button', class: 'btn', id: 'wiz-order' }, tr('Sắp xếp lại thứ tự motor'));
+  const bDir = h('button', { type: 'button', class: 'btn', id: 'wiz-dir' }, tr('Chiều quay motor'));
+  const bStop = h('button', { type: 'button', class: 'btn danger', id: 'wiz-stop' }, tr('Dừng'));
+  const all = h('input', { type: 'checkbox', id: 'wiz-all' });
+  const bFlip = h('button', { type: 'button', class: 'btn', id: 'wiz-flip', disabled: true }, tr('Đảo chiều motor này'));
+  const dirRow = h('div', { class: 'btn-row', id: 'wiz-dir-row', hidden: true }, h('label', { class: 'inline' }, all, tr(' Quay tất cả')), bFlip);
+  let mode = null, groups = [], timer = null, busy = false;
+  let k = 0, cur = [], next = [], sel = -1;                      // order: the output turning now, the old order, the new one; direction: the motor picked
+
+  const n = () => motorCount(store.settings.motors.layout);
+  const value = () => Math.max(3, Math.min(25, Number(pct.value) || 8)) * 10;
+  const say = (text, kind = '') => { msg.className = 'note ' + kind; msg.textContent = text; };
+  const tag = (i, text, cls) => { const g = groups[i]; if (!g) return; g.querySelector('.mtag').textContent = text; g.dataset.state = cls || ''; };
+  const draw = () => {
+    const f = frameSvg(store.settings.motors); groups = f.groups;
+    groups.forEach((g, i) => g.addEventListener('click', () => pick(i)));
+    box.replaceChildren(f.svg);
+    if (mode === 'order') next.forEach((slot, p) => { if (slot !== null) tag(p, 'Slot ' + (slot + 1), 'done'); });
+    if (mode === 'dir') paintDir();
+  };
+  const paintDir = () => { const mask = store.settings.motors.reversed_mask; for (let i = 0; i < n(); i++) tag(i, (mask >> i) & 1 ? tr('đảo') : '', i === sel || all.checked ? 'on' : ''); };
+  async function tick() {
+    if (!mode || busy) return;
+    busy = true;
+    try {
+      if (mode === 'order') await command('MOTOR_TEST', { motor: k, value: value() });
+      else if (all.checked) await command('MOTOR_TEST', { motor: 255, value: value() });
+      else if (sel >= 0) await command('MOTOR_TEST', { motor: sel, value: value() });
+    } catch (e) { showError(e); await stop(); }
+    busy = false;
+  }
+  async function stop(text) {
+    const was = mode;
+    mode = null; clearInterval(timer); timer = null; sel = -1; dirRow.hidden = true;
+    if (was) { try { await command('MOTOR_STOP'); } catch (e) { /* not connected */ } }
+    draw();
+    if (text) say(text, 'ok'); else if (was) say(tr('Đã dừng. Không có gì bị đổi.'));
+  }
+  // what must hold before a motor may turn
+  const ready = () => {
+    const st = store.streams.status, flags = st ? String(st.settings_dirty) : '';
+    if (!store.conn.connected) return tr('Chưa kết nối.');
+    if (store.armed) return tr('Máy đang arm.');
+    if (!(document.getElementById('props-off') || {}).checked) return tr('Đánh dấu "Đã tháo hết cánh quạt" ở khối Test motor trước.');
+    if (flags.includes('REBOOT_REQUIRED')) return tr('Có cài đặt đang chờ khởi động lại (giao thức, kiểu khung ...): bấm "Lưu và khởi động lại" trước, wizard chạy trên cấu hình motor đang chạy.');
+    return '';
+  };
+  async function start(which) {
+    await stop();
+    const why = ready();
+    if (why) { say(why, 'bad'); return; }
+    if (which === 'dir' && !/^DSHOT/.test(String(store.settings.motors.protocol))) { say(tr('Đổi chiều bằng lệnh chỉ làm được với DShot. Với PWM / Oneshot / Multishot hãy đổi hai trong ba dây motor.'), 'bad'); return; }
+    mode = which;
+    if (which === 'order') {
+      cur = store.settings.motors.order.slice(); next = new Array(n()).fill(null); k = 0;
+      say(tr('Motor đang quay: bấm vào vị trí của nó trên hình ({i} / {n}).', { i: 1, n: n() }));
+    } else {
+      sel = -1; dirRow.hidden = false; all.checked = false;
+      say(tr('Bấm vào một motor để nó quay, so với mũi tên trên hình. Quay sai thì bấm "Đảo chiều motor này".'));
+    }
+    draw();
+    timer = setInterval(tick, 200); tick();
+  }
+  async function pick(p) {
+    if (mode === 'order') {
+      if (next[p] !== null) { toast(tr('Vị trí này đã có motor. Bấm vào vị trí của motor đang quay.'), 'warn'); return; }
+      next[p] = cur[k]; tag(p, 'Slot ' + (cur[k] + 1), 'done'); k++;
+      try { await command('MOTOR_STOP'); } catch (e) { /* the next tick shows it */ }
+      if (k < n()) { say(tr('Motor đang quay: bấm vào vị trí của nó trên hình ({i} / {n}).', { i: k + 1, n: n() })); return; }
+      const order = cur.slice(); next.forEach((slot, i) => { order[i] = slot; });
+      mode = null; clearInterval(timer); timer = null;
+      setFields('motors', { order }); await flush('motors');
+      draw();
+      const changed = order.some((v, i) => v !== cur[i]);
+      say(changed ? tr('Xong: thứ tự mới đang chạy. Kiểm tra bằng thanh test motor, rồi bấm "Lưu" để giữ.') : tr('Xong: thứ tự không đổi, các motor đã nằm đúng chỗ.'), 'ok');
+    } else if (mode === 'dir') {
+      if (all.checked) { await flip(p); return; }
+      sel = p; bFlip.disabled = false; paintDir();
+      try { await command('MOTOR_STOP'); } catch (e) { /* the next tick turns the new one */ }
+    }
+  }
+  async function flip(p) {
+    const mask = store.settings.motors.reversed_mask, rev = !((mask >> p) & 1);
+    try {
+      await command('MOTOR_DIRECTION', { motor: p, reversed: rev ? 1 : 0 });
+      setField('motors', 'reversed_mask', rev ? (mask | (1 << p)) : (mask & ~(1 << p)));
+      paintDir();
+      toast(tr('Motor {n}: đã gửi chiều mới cho ESC. Bấm "Lưu" để giữ.', { n: p + 1 }), 'ok');
+    } catch (e) { showError(e); }
+  }
+  bOrder.addEventListener('click', () => start('order'));
+  bDir.addEventListener('click', () => start('dir'));
+  bStop.addEventListener('click', () => stop());
+  bFlip.addEventListener('click', () => { if (sel >= 0) flip(sel); });
+  all.addEventListener('change', () => { sel = -1; bFlip.disabled = true; paintDir(); if (!all.checked) command('MOTOR_STOP').catch(() => {}); });
+  const lock = () => { bOrder.disabled = bDir.disabled = store.armed; if (store.armed && mode) stop(); };
+  listen('armed', lock); lock();
+  let sig = '';
+  listen('settings:motors', () => { const m = store.settings.motors, s2 = m.layout + m.props_out; if (s2 !== sig) { sig = s2; if (mode) stop(); else draw(); } else if (mode === 'dir') paintDir(); });
+  const hidden = () => { if (document.hidden && mode) stop(); };
+  document.addEventListener('visibilitychange', hidden);
+  track(() => { document.removeEventListener('visibilitychange', hidden); if (mode) { clearInterval(timer); command('MOTOR_STOP').catch(() => {}); } });
+  sig = store.settings.motors.layout + store.settings.motors.props_out; draw();
+  return block(tr('Motor wizard'),
+    h('p', { class: 'help' }, tr('Thay cho chọn tay "Slot phần cứng" và "Đảo chiều". Sắp xếp: từng motor quay lần lượt, bấm vào vị trí của motor đang quay trên hình. Chiều quay (chỉ DShot): bấm vào motor để nó quay, quay ngược mũi tên thì bấm "Đảo chiều motor này". Thứ tự mới chạy ngay; bấm "Lưu" để giữ.')),
+    h('div', { class: 'btn-row' }, bOrder, bDir, bStop, h('label', { class: 'inline' }, tr('Ga khi quay thử'), ' ', pct, ' %')),
+    dirRow, msg, box);
+}
+
 // "Motor i is wired to hardware slot k" (motors.order). Shown 1-based like the Slot boxes of the pins tab.
 function slotSelect(i) {
   const sel = h('select', { 'data-order': i, 'aria-label': tr('Slot phần cứng của motor {n}', { n: i + 1 }) }, Array.from({ length: 8 }, (_, k) => h('option', { value: k }, 'Slot ' + (k + 1))));
@@ -153,7 +281,8 @@ function perMotor() {
       return h('tr', {},
         h('th', { scope: 'row' }, `Motor ${i + 1}`),
         h('td', {}, readout('motors', (mo) => Math.round(mo.cmd[i] * 100) + ' %')),
-        h('td', {}, readout('motors', (mo) => (m.bidirectional || m.esc_sensor || m.protocol === 'DRONECAN' ? String(mo.rpm[i]) : '–'))),
+        // '–' while the rpm is stale (rpm_ok bit clear): a 0 there would read as "motor stopped"
+        h('td', {}, readout('motors', (mo) => (!(m.bidirectional || m.esc_sensor || m.protocol === 'DRONECAN') ? '–' : mo.rpm_ok === undefined || ((mo.rpm_ok >> i) & 1) ? String(mo.rpm[i]) : '–'))),
         h('td', {}, readout('motors', (mo) => (m.bidirectional ? mo.err[i] + ' %' : '–'))),
         h('td', {}, readout('motors', (mo) => (mo.temp[i] ? mo.temp[i] + ' °C' : '–'))),
         h('td', {}, readout('motors', (mo) => (mo.amps && mo.amps[i] ? mo.amps[i].toFixed(1) + ' A' : '–'))),
@@ -182,7 +311,8 @@ function perMotor() {
     })),
       h('span', {}, tr('Khung DShot bỏ qua trong giây vừa rồi: '), readout('motors', (mo) => String(mo.skipped))),
       h('span', {}, tr('Lượt trả lời bị lỡ: '), readout('motors', (mo) => String(mo.late))),
-      h('span', {}, tr('Trả lời nhận được / hỏng mỗi giây: '), readout('motors', (mo) => `${mo.replies} / ${mo.garbled}`))),
+      h('span', {}, tr('Trả lời nhận được / hỏng mỗi giây: '), readout('motors', (mo) => `${mo.replies} / ${mo.garbled}`)),
+      h('span', {}, readout('motors', (mo) => (mo.no_start === undefined ? '' : tr('không có bit start: {a}, sai số bit: {b}, sai checksum: {c}', { a: mo.no_start, b: mo.bad_bits, c: mo.bad_crc }))))),
     h('div', { class: 'link-read', id: 'esc-wire-state' }, h('span', {}, tr('Dây telemetry ESC, mỗi giây: '), readout('motors', (mo) => (store.settings.motors.esc_sensor
       ? tr('{ok} trả lời, {crc} hỏng CRC, {lost} ESC không trả lời', { ok: mo.tlm_frames, crc: mo.tlm_crc, lost: mo.tlm_timeouts }) : tr('tắt'))))),
     h('div', { class: 'link-read' }, h('span', {}, tr('Điện áp ESC báo: '), readout('motors', (mo) => (mo.volt[0] ? mo.volt[0].toFixed(2) + ' V' : tr('không có')))),
@@ -229,7 +359,7 @@ export default {
   mount(view) {
     const pulse = h('div', { id: 'pulse-fields' }, fields('motors', ['pulse_disarmed', 'pulse_armed', 'pulse_max', 'pulse_hz']),
       h('p', { class: 'help' }, tr('Với PWM, Oneshot, Multishot và brushed không có "Motor idle": ga thấp nhất khi đã arm chính là "Xung khi arm" (như min_throttle của Betaflight).')));
-    const dshot = h('div', { id: 'dshot-fields' }, fields('motors', ['bidirectional', 'ext_pullup', 'pole_count', 'edt', 'esc_sensor', 'dir_cmd_extended', 'dyn_idle_min_rpm', 'dyn_idle_p', 'dyn_idle_i', 'dyn_idle_d', 'dyn_idle_max_inc']));
+    const dshot = h('div', { id: 'dshot-fields' }, fields('motors', ['bidirectional', 'ext_pullup', 'pole_count', 'edt', 'esc_sensor', 'dyn_idle_min_rpm', 'dyn_idle_p', 'dyn_idle_i', 'dyn_idle_d', 'dyn_idle_max_inc']));
     const idle = h('div', { id: 'idle-field' }, fields('motors', ['idle_x10']));
     const tooMany = h('p', { class: 'note bad', id: 'dshot-count' });
     const canNote = h('p', { class: 'help', id: 'can-esc-note' }, tr('ESC DroneCAN: lệnh ga đi trên bus CAN (esc.RawCommand, 400 lần/giây), ESC index = slot motor (thứ tự motor vẫn áp dụng). Không cần chân motor; CAN bus phải bật (tab Cảm biến). Vòng quay, điện áp, dòng, nhiệt độ lấy từ esc.Status của ESC. Không có lệnh DShot (beacon, đổi chiều): chiều quay đặt trong cấu hình của ESC.'));
@@ -245,10 +375,11 @@ export default {
       h('div', {},
         block(tr('Khung'), diagram(), fields('motors', ['layout', 'props_out'])),
         motorTest(),
+        wizard(),
         vibration()),
       h('div', {},
         block('ESC', fields('motors', ['protocol']), idle, fields('motors', ['output_limit']), tooMany, canNote, pulse, dshot,
-          note(tr('Kiểu khung, giao thức ESC và thứ tự motor có hiệu lực sau khi lưu và khởi động lại. DShot qua RMT của ESP32-S3 chạy được tối đa 4 motor.'))),
+          note(tr('Kiểu khung và giao thức ESC có hiệu lực sau khi lưu và khởi động lại; thứ tự motor và chiều quay có hiệu lực ngay (lưu để giữ). DShot qua RMT của ESP32-S3 chạy được tối đa 4 motor.'))),
         perMotor(),
         block(tr('Motor dừng giữa chừng'), fields('motors', ['stall_disarm', 'stall_min_rpm', 'stall_drop', 'stall_min_cmd', 'stall_ms']),
           h('div', { class: 'link-read', id: 'stall-state' }, h('span', {}, tr('Lần gần nhất: '), readout('motors', (mo) => (mo.stall_motor ? tr('motor {n} đã dừng (máy đã disarm)', { n: mo.stall_motor }) : tr('chưa có lần nào'))))),

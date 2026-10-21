@@ -128,3 +128,77 @@ export function motorTones(name) {
   });
   return [tones, last - first];
 }
+
+// The LED strip, layout MANUAL: the colors at t (ms), the same integer sums as app::LedLogic::render() (src/app/led_logic.h).
+// led: the section (count, brightness, fn[] names, color[] 0xRRGGBB, warnings, speed).
+// st: { armed, ready, failsafe, batt_critical, batt_warning, stall, calibrating, mode (ACRO / ANGLE / ...), batt (% or 255), thr (%) }
+const LED_RGB = { RED: [255, 0, 0], GREEN: [0, 255, 0], BLUE: [0, 0, 255], AMBER: [255, 110, 0], CYAN: [0, 200, 255], PURPLE: [170, 0, 255], TEAL: [0, 255, 140], ORANGE: [255, 60, 0], WHITE: [255, 255, 255] };
+const LED_MODE = { ANGLE: 'BLUE', STABILIZE: 'CYAN', ALTHOLD: 'PURPLE', POSHOLD: 'TEAL', RESCUE: 'ORANGE' };
+const ledScale = (c, k) => c.map((v) => Math.floor(v * k / 255));
+export const ledModeColor = (mode) => LED_RGB[LED_MODE[mode] || 'WHITE'];
+export function ledHue(d) {
+  d %= 360; const x = Math.floor((d % 60) * 255 / 60);
+  return [[255, x, 0], [255 - x, 255, 0], [0, 255, x], [0, 255 - x, 255], [x, 0, 255], [255, 0, 255 - x]][Math.floor(d / 60)];
+}
+export function ledColors(led, st, t) {
+  const n = Math.max(0, Math.min(32, led.count));
+  let c, lit = true;
+  if (st.failsafe) { c = LED_RGB.RED; lit = Math.floor(t / 100) % 2 === 0; }
+  else if (st.batt_critical) { c = LED_RGB.RED; const p = t % 1000; lit = p < 100 || (p >= 200 && p < 300); }
+  else if (st.stall) c = Math.floor(t / 250) % 2 ? LED_RGB.AMBER : LED_RGB.RED;
+  else if (st.calibrating) { const p = t % 1500, k = p < 750 ? p : 1500 - p; c = ledScale(LED_RGB.CYAN, 40 + Math.floor(k * 215 / 750)); }
+  else if (!st.armed) { if (st.ready) c = LED_RGB.GREEN; else { c = LED_RGB.AMBER; lit = Math.floor(t / 500) % 2 === 0; } }
+  else { c = ledModeColor(st.mode); if (st.mode === 'RESCUE') lit = Math.floor(t / 250) % 2 === 0; if (st.batt_warning && t % 2000 < 200) c = LED_RGB.AMBER; }
+  const status = lit ? c : [0, 0, 0];
+  let out = Array.from({ length: n }, () => status);
+  if (!(led.warnings && (st.failsafe || st.batt_critical || st.stall))) {
+    const speed = Math.max(1, Math.min(10, led.speed)), cy = Math.floor(10000 / speed), ph = t % cy;
+    const fns = led.fn.slice(0, n), nr = fns.filter((f) => f === 'RAINBOW').length, nl = fns.filter((f) => f === 'LARSON').length;
+    let kr = 0, kl = 0, head = 0;
+    if (nl > 1) { const span = 2 * (nl - 1), x = Math.floor(ph * span / cy); head = x <= nl - 1 ? x : span - x; }
+    const off = [0, 0, 0];
+    out = fns.map((f, i) => {
+      const v = Number(led.color[i]) >>> 0, col = [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+      switch (f) {
+        case 'STATUS': return status;
+        case 'COLOR': return col;
+        case 'MODE': return ledModeColor(st.mode);
+        case 'ARMED': return st.armed ? col : off;
+        case 'BLINK': return ph < Math.floor(cy / 2) ? col : off;
+        case 'STROBE': return t % Math.floor(cy / 2) < 60 ? col : off;
+        case 'BREATHE': { const k = ph < Math.floor(cy / 2) ? Math.floor(ph * 2 * 255 / cy) : Math.floor((cy - ph) * 2 * 255 / cy); return ledScale(col, 20 + Math.floor(k * 235 / 255)); }
+        case 'RAINBOW': return ledHue(Math.floor(ph * 360 / cy) + Math.floor(kr++ * 360 / nr));
+        case 'LARSON': { const d = Math.abs(kl++ - head); return d === 0 ? col : d === 1 ? ledScale(col, 50) : off; }
+        case 'BATTERY': return st.batt <= 100 ? [Math.floor(255 * (100 - st.batt) / 100), Math.floor(255 * st.batt / 100), 0] : off;
+        case 'THROTTLE': { const p = Math.min(100, st.thr), r = Math.floor(255 * p / 100); return [r, 0, 255 - r]; }
+        default: return off;
+      }
+    });
+  }
+  const k = Math.floor(Math.min(100, led.brightness) * 255 / 100);
+  return out.map((x) => ledScale(x, k));
+}
+
+// ---- the stick preview (Receiver and Rate tabs): what the craft would do with these sticks
+// Acro: the body turns at the commanded rates. R (body -> world, rows north / east / down, as rotation()) times the turn of one
+// step: user rates (roll right, pitch nose down, yaw nose right, deg/s) are the FRD body rates (p, -q, r) - the same integration
+// as the firmware's Ahrs with the gyro alone (src/core/ahrs.h; test_gui_math compares).
+export function acroStep(R, rateDps, dt) {
+  const D = Math.PI / 180, w = [rateDps[0] * D * dt, -rateDps[1] * D * dt, rateDps[2] * D * dt];
+  const th = Math.hypot(w[0], w[1], w[2]);
+  if (th < 1e-12) return R.map((r) => r.slice());
+  const k = w.map((v) => v / th), s = Math.sin(th), c = 1 - Math.cos(th);
+  const K = [[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]];
+  const E = [0, 1, 2].map((i) => [0, 1, 2].map((j) => (i === j ? 1 : 0) + s * K[i][j] + c * (K[i][0] * K[0][j] + K[i][1] * K[1][j] + K[i][2] * K[2][j])));
+  const out = R.map((row) => [0, 1, 2].map((j) => row[0] * E[0][j] + row[1] * E[1][j] + row[2] * E[2][j]));
+  // keep it a rotation: Gram-Schmidt on the columns (body axes in world)
+  const col = (j) => [out[0][j], out[1][j], out[2][j]], norm = (v) => { const n = Math.hypot(v[0], v[1], v[2]); return v.map((x) => x / n); };
+  const x = norm(col(0)); let y = col(1); const d = x[0] * y[0] + x[1] * y[1] + x[2] * y[2]; y = norm(y.map((v, i) => v - d * x[i]));
+  const z = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
+  return [0, 1, 2].map((i) => [x[i], y[i], z[i]]);
+}
+// Angle: the tilt the stick asks for (deg) - the firmware's AngleController target: angle_limit x rate / max rate, limited.
+export function angleTarget(limitDeg, centerSens, maxRate, expoPct, s) {
+  const t = maxRate > 0 ? limitDeg * actualRate(centerSens, maxRate, expoPct, s) / maxRate : 0;
+  return Math.max(-limitDeg, Math.min(limitDeg, t));
+}

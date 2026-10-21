@@ -8,7 +8,7 @@ STUB = -DARDUINO=1 -Itest/arduino_stub
 # `make apptest`   : the Python client against the simulator (needs python3, pyserial, pytest)
 # `make proto`     : regenerate src/proto/wbp_schema.h after editing protocol/wbp_schema.json
 # `make mutate`    : mutation test of the protocol / link / receiver / calibration / app glue (deliberate bugs; every one must be caught - takes hours, see docs/HANDOFF.md). GUI: python3 tools/mutate_gui.py
-test: build/test_core build/test_ekf build/test_control build/test_nav build/test_flight build/test_accgyro build/test_manager build/test_motor build/test_baro build/test_range build/test_flowsensor build/test_gps build/test_mag build/test_dshot build/test_esc4way build/test_port build/test_proto build/test_cli build/test_can build/test_mavlink build/test_rx build/test_power build/test_blackbox build/test_app build/test_fw build/test_threads
+test: build/test_core build/test_ekf build/test_control build/test_nav build/test_flight build/test_accgyro build/test_manager build/test_motor build/test_baro build/test_range build/test_flowsensor build/test_gps build/test_mag build/test_dshot build/test_esc4way build/test_port build/test_proto build/test_cli build/test_can build/test_mavlink build/test_osd build/test_rx build/test_power build/test_blackbox build/test_app build/test_fw build/test_threads
 	./build/test_core
 	./build/test_ekf
 	./build/test_control
@@ -29,6 +29,7 @@ test: build/test_core build/test_ekf build/test_control build/test_nav build/tes
 	./build/test_cli
 	./build/test_can
 	./build/test_mavlink
+	./build/test_osd
 	./build/test_rx
 	./build/test_power
 	./build/test_blackbox
@@ -62,13 +63,15 @@ FLAGS_wb_sim = $(STUB) -pthread
 
 build/test_%: test/test_%.cpp
 	@mkdir -p build
-	$(CXX) $(CXXFLAGS) $(FLAGS_test_$*) -MMD -MP -MF build/test_$*.d $< -o $@ -lm
+	$(CXX) $(CXXFLAGS) $(FLAGS_test_$*) -MMD -MP -MT $@ -MF build/test_$*.d $< -o $@ -lm
 # the firmware's own numbers for what the GUI previews (mixer rows, rate / throttle curves); compared with the page's JS by app/tests/test_gui_math.py
 build/ui_reference: tools/ui_reference.cpp
 	@mkdir -p build
-	$(CXX) $(CXXFLAGS) -MMD -MP -MF build/ui_reference.d $< -o $@ -lm
+	$(CXX) $(CXXFLAGS) -MMD -MP -MT $@ -MF build/ui_reference.d $< -o $@ -lm
 build/wb_sim: tools/wb_sim.cpp
 	@mkdir -p build
-	$(CXX) $(CXXFLAGS) $(FLAGS_wb_sim) -MMD -MP -MF build/wb_sim.d $< -o $@ -lm
+	$(CXX) $(CXXFLAGS) $(FLAGS_wb_sim) -MMD -MP -MT $@ -MF build/wb_sim.d $< -o $@ -lm
+# (-MT $@: the target in a .d file is the name make knows - g++ on Windows would write build/x.exe, and a changed header
+#  would then never rebuild anything)
 # the schema is not a header: the generated wbp_schema.h is (run `make proto` after editing the json)
 -include $(wildcard build/*.d)

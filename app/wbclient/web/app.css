@@ -232,6 +232,20 @@ span.cal-state { font-weight: 400; color: var(--muted); }
 .frame .spin { fill: none; stroke: var(--ink); stroke-width: 2.5; }
 .frame .spin-tip { fill: var(--ink); }
 .frame .mnum { fill: var(--ink); font: 600 26px var(--num); }
+.frame .mtag { fill: var(--muted); font: 600 13px var(--ui); }
+/* ---- OSD preview: the goggles' character grid (--cols x --rows), one cell = --cell px */
+.osd-canvas { position: relative; width: 100%; aspect-ratio: calc(var(--cols) * 12) / calc(var(--rows) * 18); background: #2b3a46; border-radius: 3px; overflow: hidden; touch-action: none;
+  background-image: linear-gradient(#ffffff0d 1px, transparent 1px), linear-gradient(90deg, #ffffff0d 1px, transparent 1px); background-size: calc(100% / var(--cols)) calc(100% / var(--rows)); }
+.osd-item { position: absolute; height: calc(100% / var(--rows)); min-width: calc(var(--len, 1) * 100% / var(--cols)); display: flex; align-items: center; white-space: nowrap;
+  font: 600 calc(var(--cell, 8px) * 1.15) var(--num); line-height: 1; color: #fff; text-shadow: 0 0 2px #000; cursor: grab; user-select: none; }
+.osd-item:hover, .osd-item:focus-visible { outline: 1px dashed var(--rail-mark); outline-offset: 0; }
+.osd-item.drag { cursor: grabbing; outline: 1px solid var(--rail-mark); z-index: 2; }
+.osd-list td:first-child { width: 48px; }
+.frame.wizard g[data-motor] { cursor: pointer; }
+.frame.wizard g[data-motor]:hover .disc { stroke: var(--blue); }
+.frame.wizard g[data-state="done"] .disc { fill: var(--ok-bg); stroke: var(--ok); }
+.frame.wizard g[data-state="done"] .mtag { fill: var(--ok); }
+.frame.wizard g[data-state="on"] .disc { stroke: var(--blue); }
 .tag-warn { display: flex; gap: 10px; align-items: center; padding: 9px 12px; margin: 4px 0 12px; background: var(--bad); color: #fff; border-radius: 3px; cursor: pointer; }
 .tag-warn input { width: 18px; height: 18px; accent-color: #fff; flex: none; }
 .test-row { display: grid; grid-template-columns: 70px minmax(120px, 1fr) 48px minmax(0, auto); gap: 12px; align-items: center; margin-bottom: 8px; }
@@ -340,3 +354,14 @@ table#logs td:last-child, table#bb-sessions td:last-child { white-space: nowrap;
 .block h3 { font: 600 13px/1.3 var(--ui); color: var(--muted); margin: 14px 0 8px; text-transform: none; }
 .legend.wrap { flex-wrap: wrap; row-gap: 4px; }
 .row-actions { display: flex; gap: 10px; margin: 6px 0 10px; }
+/* LED strip MANUAL: the preview, one dot per LED */
+.led-strip { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; margin: 6px 0 10px; background: #111; border-radius: 6px; }
+.led-dot { width: 18px; height: 18px; border-radius: 50%; background: #000; box-shadow: 0 0 0 1px #333; }
+#led-table input[type="color"] { width: 44px; height: 26px; padding: 0; border: 0; background: none; }
+/* the stick preview (Receiver, Rate) */
+.stick-preview .btn-row { align-items: center; flex-wrap: wrap; }
+/* the MCU of the flight controller, next to the firmware version */
+.mcu-badge { margin-left: 8px; padding: 1px 7px; border-radius: 9px; font: 600 11.5px/1.5 var(--ui); background: var(--blue); color: #fff; letter-spacing: .02em; }
+/* STM32 pin: port, then pin */
+.pin-pick { display: inline-flex; gap: 4px; }
+.pin-pick select { width: 64px; }

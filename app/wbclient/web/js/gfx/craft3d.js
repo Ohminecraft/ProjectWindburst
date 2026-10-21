@@ -19,7 +19,7 @@ function shade(hex, k) {
   return `rgb(${f(r)},${f(g)},${f(b)})`;
 }
 
-// get(): { roll, pitch, yaw, layout }.  The view yaw can be re-centred so the nose points away from the viewer.
+// get(): { roll, pitch, yaw, layout } or { R, layout }.  The view yaw can be re-centred so the nose points away from the viewer.
 export function craftView(get, height = 300) {
   let yaw0 = null;
   const cv = h('canvas', { class: 'cv craft', style: { height: height + 'px' }, role: 'img', 'aria-label': tr('Hình 3D của máy theo tư thế đang đo') });
@@ -35,7 +35,7 @@ export function craftView(get, height = 300) {
     ctx.clearRect(0, 0, w, hh);
     const a = get();
     if (yaw0 === null) yaw0 = a.yaw || 0;
-    const R = rotation(a.roll || 0, a.pitch || 0, (a.yaw || 0) - yaw0);
+    const R = a.R || rotation(a.roll || 0, a.pitch || 0, (a.yaw || 0) - yaw0);     // (a.R: a body -> world matrix of its own, the stick preview)
     const F = Math.min(w, hh * 1.5) * 1.55, cx = w / 2, cy = hh * 0.50;
     const proj = (p) => {                        // world (n, e, d) -> screen + depth
       const zc = p[0] * cel + p[2] * sel, yc = p[0] * sel - p[2] * cel, s = F / (DIST + zc);

@@ -1,8 +1,8 @@
 // Battery and beeper: what the pack reads right now, the per-cell limits, the divider calibration; which situations beep and how.
-import { store, setField, command } from '../store.js';
-import { h, block, fields, listen, note, readout, toast, showError } from '../ui.js';
+import { store, setField, setFields, command } from '../store.js';
+import { h, block, fields, control, clear, listen, track, note, readout, toast, showError } from '../ui.js';
 import { ENUM_LABELS, BEEP_CONDITIONS } from '../labels.js';
-import { BEEP_PATTERNS, MOTOR_NEVER, motorTones } from '../gfx/fwmath.js';
+import { BEEP_PATTERNS, MOTOR_NEVER, motorTones, ledColors } from '../gfx/fwmath.js';
 import { tr } from '../i18n.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
@@ -210,7 +210,61 @@ function beeperColumn() {
       fields('beeper', ['type', 'inverted', 'frequency', 'volume'])),
     store.schema.sections.find((x) => x.name === 'led') ? block(tr('Đèn LED (WS2812)'),
       fields('led', ['count', 'brightness', 'layout']),
-      note(tr('Dải LED WS2812 / SK6812 nối vào chân LED (tab Chân, nhóm Khác). Xanh lá: sẵn sàng arm; vàng nhấp nháy: còn điều gì chặn arm; khi bay: màu theo mode (Acro trắng, Angle xanh dương, Stabilize xanh lơ, Altitude Hold tím, Position Hold xanh ngọc, GPS Rescue cam nhấp nháy); đỏ nháy nhanh: failsafe; đỏ nháy đôi: pin cạn. Gửi qua bus SPI thứ hai, nên không dùng được cùng thẻ SD kiểu SPI hoặc PMW3901. Có hiệu lực sau khi lưu và khởi động lại.'))) : null);
+      note(tr('Dải LED WS2812 / SK6812 nối vào chân LED (tab Chân, nhóm Khác). Xanh lá: sẵn sàng arm; vàng nhấp nháy: còn điều gì chặn arm; khi bay: màu theo mode (Acro trắng, Angle xanh dương, Stabilize xanh lơ, Altitude Hold tím, Position Hold xanh ngọc, GPS Rescue cam nhấp nháy); đỏ nháy nhanh: failsafe; đỏ nháy đôi: pin cạn. Gửi qua bus SPI thứ hai, nên không dùng được cùng thẻ SD kiểu SPI hoặc PMW3901. Có hiệu lực sau khi lưu và khởi động lại.')),
+      fieldOf('led', 'fn') ? ledManual() : null) : null);
+}
+
+// ---- LED strip, layout MANUAL: a function and a color for each LED, a preview that runs the firmware's effects (fwmath.js ledColors)
+const fieldOf = (section, name) => (store.schema.sectionByName[section] || { fields: [] }).fields.find((f) => f.n === name);
+const hex = (v) => '#' + (Number(v) >>> 0 & 0xFFFFFF).toString(16).padStart(6, '0');
+function ledManual() {
+  const names = store.schema.enums.led_function;
+  const allFn = h('select', { id: 'led-all-fn', 'aria-label': tr('Chức năng') }, names.map((n) => h('option', { value: n }, tr((ENUM_LABELS.led_function || {})[n] || n))));
+  const allCol = h('input', { type: 'color', id: 'led-all-color', value: '#ffffff', 'aria-label': tr('Màu') });
+  const allBtn = h('button', { type: 'button', class: 'btn', id: 'led-all' }, tr('Áp cho mọi LED'));
+  allBtn.addEventListener('click', () => {
+    const v = parseInt(allCol.value.slice(1), 16);
+    setFields('led', { fn: Array(32).fill(allFn.value), color: Array(32).fill(v) });
+  });
+  const lockAll = () => { allFn.disabled = allCol.disabled = allBtn.disabled = store.armed; };
+  listen('armed', lockAll); lockAll();
+  const strip = h('div', { class: 'led-strip', id: 'led-preview' });
+  const state = h('select', { id: 'led-state', 'aria-label': tr('Trạng thái xem thử') },
+    h('option', { value: 'ready' }, tr('Chưa arm, sẵn sàng')), h('option', { value: 'armed' }, tr('Đang bay (Angle), ga 60 %, pin 70 %')), h('option', { value: 'failsafe' }, 'Failsafe'));
+  const tbody = h('tbody', {});
+  let shown = '';
+  const rows = () => {
+    const led = store.settings.led; const key = `${led.layout}/${led.count}`;
+    if (key === shown) return; shown = key;
+    clear(tbody); clear(strip);
+    for (let i = 0; i < Math.min(32, led.count); i++) {
+      const pick = h('input', { type: 'color', 'data-led-color': i, 'aria-label': tr('Màu LED {n}', { n: i + 1 }) });
+      pick.addEventListener('change', () => setField('led', 'color', parseInt(pick.value.slice(1), 16), i));
+      const sync = () => { if (document.activeElement !== pick) pick.value = hex(store.settings.led.color[i]); };
+      const lock = () => { pick.disabled = store.armed; };
+      listen('settings:led', sync); listen('armed', lock); sync(); lock();
+      tbody.append(h('tr', {}, h('td', { class: 'num' }, String(i + 1)), h('td', {}, control('led', 'fn', { index: i })), h('td', {}, pick)));
+      strip.append(h('span', { class: 'led-dot' }));
+    }
+    box.hidden = led.layout !== 'MANUAL';
+  };
+  const box = h('div', { id: 'led-manual' },
+    h('h3', {}, tr('Tự gán từng LED')),
+    h('p', { class: 'help' }, tr('Mỗi LED một chức năng: trạng thái (như kiểu "Mọi LED cùng màu"), màu cố định, màu theo mode, sáng khi arm, nháy, chớp, thở, cầu vồng, quét qua lại, mức pin, mức ga. Cầu vồng và quét chạy qua những LED có cùng chức năng đó, theo thứ tự trên dải.')),
+    fields('led', ['warnings', 'speed']),
+    h('div', { class: 'btn-row' }, allFn, allCol, allBtn),
+    h('div', { class: 'ctl-line' }, h('span', {}, tr('Xem thử:')), state), strip,
+    h('table', { class: 'grid', id: 'led-table' }, h('thead', {}, h('tr', {}, h('th', {}, 'LED'), h('th', {}, tr('Chức năng')), h('th', {}, tr('Màu')))), tbody));
+  listen('settings:led', rows); rows();
+  const t0 = performance.now();
+  const timer = setInterval(() => {
+    const led = store.settings.led; if (!led || box.hidden) return;
+    const st = { armed: state.value === 'armed', ready: true, failsafe: state.value === 'failsafe', mode: state.value === 'armed' ? 'ANGLE' : 'ACRO', batt: 70, thr: state.value === 'armed' ? 60 : 0 };
+    const cs = ledColors(led, st, Math.floor(performance.now() - t0));
+    strip.querySelectorAll('.led-dot').forEach((d, i) => { if (cs[i]) d.style.background = `rgb(${cs[i].join(',')})`; });
+  }, 40);
+  track(() => clearInterval(timer));
+  return box;
 }
 
 export default {

@@ -13,7 +13,7 @@
 ## Quy ước quan trọng
 - Mixer xuất giá trị **tuyệt đối 0..1** (đã gồm idle). Đặt `mixer.idle = motors.idleFraction(...)` mỗi vòng và `mixer.output_limit = cfg.output_limit`. Manager là nơi duy nhất sở hữu motor idle (tĩnh + động).
 - Đang arm thì motor **không bao giờ xuống dưới idle** (mixer lỡ ra 0 cũng không dừng motor giữa không trung). Disarm: DShot = 0, xung = giá trị "không arm" trong app (mặc định 0 = không phát xung).
-- `reversed[]` không đổi mixer (giống Betaflight): nó gửi lệnh đảo chiều cho ESC (mặc định lệnh 7/8 + save 12, đặt `dir_cmd_extended` để dùng 20/21). Chỉ gửi khi **disarm**, đúng nhịp Betaflight (chờ 10 ms, lặp 10 lần cách 1 ms). Arm thì mọi lệnh đang chờ bị huỷ.
+- `reversed[]` không đổi mixer (giống Betaflight): nó gửi lệnh đảo chiều cho ESC, **luôn là 7/8 + save 12** (ESC lưu vào flash; AM32, BLHeli_S, Bluejay, BLHeli_32 đều nhận). Từ 0.18.1 không dùng 20/21 nữa (`dir_cmd_extended` bị bỏ qua): hai lệnh đó không được lưu và còn là chiều so với chiều đã lưu, nên AM32 quên đảo chiều sau mỗi lần FC khởi động lại (`docs/HARDWARE_FEEDBACK_4.md`). Chỉ gửi khi **disarm**, đúng nhịp Betaflight (chờ 10 ms, lặp 10 lần cách 1 ms). Arm thì mọi lệnh đang chờ bị huỷ.
 - Motor reorder: `order[logical] = slot phần cứng`, sai hoán vị thì tự về mặc định. Chân của slot k = `HardwareConfig::getMotorPins()[k]`: chân app gửi (tab Chân và cổng), hoặc mặc định ghi trong `hardware_config.h`.
 - Slider test: chỉ khi disarm, tự tắt sau 0,5 s nếu app ngừng refresh (app gửi ~10 Hz).
 - Mất telemetry ≠ mất motor: rpm quá 100 ms thì RPM notch của **motor đó** mờ đi, dynamic idle về idle tĩnh.
@@ -66,6 +66,31 @@ So với driver ESC của esp-fc (`lib/EscDriver/src/EscDriverEsp32.cpp`, chạy
 ### 0.8.5: điện trở kéo lên ngoài
 `motors.ext_pullup` (tab Motor, "Có điện trở kéo lên ngoài"; lưu và khởi động lại): mạch đã có điện trở kéo dây tín hiệu lên 3,3 V (thường 1 – 4,7 kΩ), firmware **tắt** pull-up nội (~45 kΩ) của chân motor khi chạy DShot hai chiều. Dòng `motors:` của báo cáo khởi động ghi "internal / external pull-up". Với 2 kΩ: kéo dây xuống thấp tốn 1,65 mA, ESC kéo được dễ dàng; và dây nhả ra lên mức cao trong khoảng một phần mười micro giây thay vì vài micro giây. Kiểm chứng: `test_fw` nhóm `rxdiag` (cài đặt tới được driver). **Chưa thử trên mạch.**
 
+### 0.18.2: bộ thu không được thấy cạnh nào trước bit start
+Hiện tượng trên mạch (AM32): điện áp / dòng từ EDT vẫn có, rpm hầu như luôn 0, thỉnh thoảng mới có số. Điện áp được giữ 1 s, nhiệt độ giữ mãi, còn rpm chỉ hợp lệ 100 ms sau lần nhận cuối: chỉ cần vài phần trăm reply nhận đúng là điện áp vẫn hiện, còn rpm thì tắt liên tục. Vậy phần lớn reply bị mất, eRPM và EDT như nhau.
+
+Nguyên nhân tìm được khi đọc lại trình tự (chưa đo trên mạch): đến 0.18.1, đường vào của chân bị tắt lúc phát (`PIN_INPUT_DISABLE`, chân đọc ra 0) và bật lại lúc nhả chân, rồi bộ thu khởi động ngay sau đó. Bước 0 → 1 đó đi qua bộ lọc nhiễu của RMT (¼ bit trả lời, 333 – 667 ns) nên tới bộ thu **sau** khi nó đã chạy, nhất là ở các kênh khởi động sau cùng. Bộ thu coi đó là cạnh đầu tiên, đo mức cao 27 µs trước reply, dài hơn ngưỡng rảnh (8 bit = 10,7 µs ở DShot600), và **dừng trước khi ESC kịp trả lời**. esp-fc cũng làm theo kiểu này; có thể nó chạy được nhờ ngưỡng rảnh khác, nhưng không chắc.
+
+Sửa (khâu thu viết lại theo cách Betaflight làm trên STM32: thu cả cửa sổ, tìm bit start trong đó):
+- Đường vào của chân bật **một lần** ở `begin()` (`listen()`) và để nguyên. Chân ESP32 đọc lại mức nó đang phát; bộ thu dừng trong lúc mình phát nên không ảnh hưởng. `drive()` vẫn nối lại tín hiệu phát và bật output như esp-fc (bài học 0.8.2), `release()` chỉ tắt output.
+- Bộ thu khởi động **trước** khi nhả chân, lúc dây vẫn đang được giữ ở mức cao: lúc nhả chân cũng không có cạnh nào.
+- Giải mã `reply_from_runs()` (`motor_protocol.h`), theo `dshot_bitbang_decode.c` / `pwm_output_dshot_shared.c`: bỏ qua mọi thứ trước bit start (mức rảnh, xung nhiễu ngắn hơn nửa bit), các đoạn phải cộng lại 18 – 21 bit; chỉ đoạn mức **cao** được vượt bit 21 (đó là dây rảnh sau reply), đoạn mức thấp vượt bit 21 thì không phải reply (Betaflight: `bits != 21`). Một reply đúng luôn kết thúc ở mức cao (checksum cố định số lần đổi mức).
+- Đếm riêng lý do hỏng, gửi lên app mỗi giây (stream `motors`): `no_start` (cửa sổ không có bit start: vấn đề thời gian / đổi chân), `bad_bits` (có bit start nhưng số bit sai: nhiễu, cạnh chậm), `bad_crc` (bit sạch, checksum sai). Một lần thu không có bit start không tính là ESC trả lời.
+- App: cột RPM hiện "–" khi rpm cũ hơn 100 ms (`rpm_ok`), không hiện 0 nữa (0 dễ đọc thành "motor đứng").
+
+Rủi ro cần thử trên mạch: đường vào bật cả lúc phát là khác với esp-fc. Về điện thì nó chỉ bật bộ đệm vào, và kiểm tra lúc khởi động (`loopback()`) đã phát với đường vào bật từ 0.8.1. Nếu ESC không nhận khung nữa khi bật DShot hai chiều (motor không quay, không kêu) thì nguyên nhân là thay đổi này.
+
+## Motor wizard (0.20, như Betaflight Configurator 4.3+)
+Tab Motor, khối "Motor wizard": thứ tự motor và chiều quay được tìm bằng cách nhìn motor quay, không phải gõ số slot. Cột "Slot phần cứng" và công tắc "Đảo chiều" trong bảng "Từng motor" vẫn còn để sửa tay.
+
+- **Điều kiện**: đã kết nối, chưa arm, đã đánh dấu "Đã tháo hết cánh quạt", và không có cài đặt nào đang chờ khởi động lại. Wizard chạy trên cấu hình motor đang chạy; đổi giao thức hay kiểu khung thì phải lưu và khởi động lại trước.
+- **Sắp xếp lại thứ tự**: lần lượt từng đầu ra quay chậm (ga đặt được, mặc định 8 %). Bạn bấm vào vị trí của motor đang quay trên hình. Sau motor cuối, app ghi `motors.order` mới. Firmware dùng thứ tự đó **ngay**, không cần khởi động lại; bấm "Lưu" để giữ.
+- **Chiều quay** (chỉ DShot): bấm vào một motor để nó quay (hoặc chọn "Quay tất cả"), rồi so với mũi tên trên hình. Quay ngược thì bấm "Đảo chiều motor này" (ở chế độ "Quay tất cả" thì bấm thẳng vào motor). App gửi lệnh 7 / 8 + 12 cho ESC và đặt `motors.reversed_mask`.
+- **An toàn**: lệnh test được làm mới mỗi 200 ms, firmware tự dừng motor nếu 0,5 s không được làm mới. Motor dừng khi bấm "Dừng", khi rời tab, khi cửa sổ bị ẩn, hoặc khi máy arm.
+
+Firmware: `FlightApp::apply_motor_order()`. Khi section `motors` được ghi, nếu so với lúc khởi động chỉ có `order` / `reversed_mask` đổi, thì thứ tự và chiều được áp ngay (`MotorOutputManager::set_order()`). Thứ tự phải là hoán vị của các motor, nếu không thì giữ thứ tự cũ. Có field khác đổi thì không áp gì cả và báo cần khởi động lại, như trước. Khi thứ tự thật sự đổi, lệnh test và lệnh DShot đang chờ (nhắm vào slot cũ) bị bỏ.
+Kiểm chứng: `test_motor` (`set_order`), `test_fw` nhóm motor test (thứ tự mới chạy ngay, slot đúng quay, thứ tự sai bị từ chối, đổi giao thức thì không áp), 7 mutant `wizard:`. Trang thật: `test_gui_browser.py::test_motor_wizard` (viết nhưng chưa chạy được trên máy này). **Chưa thử trên mạch.**
+
 ## Giao thức (0.8.2)
 - **ProShot1000** (Betaflight `loadDmaBufferProshot`): cùng gói 16 bit như DShot, gửi thành 4 xung nibble (nibble cao trước), mỗi xung trong ô 4 µs, mức cao 1 µs + nibble × 125 ns; 16 µs một khung. Chỉ một chiều. Mang được lệnh DShot (beacon, chiều quay...), như Betaflight coi ProShot là một giao thức DShot. Cần ESC hỗ trợ (BLHeli_32 có; BLHeli_S / Bluejay không).
 - **Brushed**: motor chổi than qua MOSFET, LEDC 16 kHz, 1000..2000 = 0..100 % duty.
@@ -80,7 +105,9 @@ Ngoài Quad X, Quad +, Hexa X (của bản này): các bảng của Betaflight (
 3. Multishot 5 – 25 µs, Oneshot42 = giá trị / 24 là định nghĩa giao thức phổ biến; file pwm_output của Betaflight trong zip không có hằng số này để đối chiếu.
 4. Pin qua ESC (EDT voltage) cần ESC hỗ trợ và bật "Extended DShot telemetry".
 5. DShot300 là mặc định (dễ tính hơn 600 với dây dài).
-6. Xung lúc chưa arm của PWM / Oneshot mặc định là **0 (không phát)** theo đặc tả. Nhiều ESC analog chỉ khởi động khi thấy xung thấp nhất: đặt `pulse_disarmed = 1000`.
+6. Xung lúc chưa arm của PWM / Oneshot / Multishot: `pulse_disarmed`, **0 = 1000 µs** (từ 0.18.1, `mincommand` của Betaflight; thấp hơn nếu `pulse_armed` < 1000). Không bao giờ "không phát": ESC chỉ arm sau khi thấy xung ga 0, và AM32 thấy ga cao trước (motor test) thì vào hiệu chuẩn ga.
+7. **AM32 chỉ nhận DShot và Servo PWM** (800 – 2200 µs), không nhận Oneshot125 / Oneshot42 / Multishot (`signal.c: detectInput`). Các giao thức đó dùng với BLHeli_S / BLHeli_32 / KISS.
+8. LEDC ghi thẳng thanh ghi (`port/pwm.h`, `hal/ledc_ll.h`, 0.18.1) thay vì `ledcAttach` / `ledcWrite` của Arduino: không còn gọi hàm trong flash mỗi chu kỳ. Các đầu ra cùng tần số + độ phân giải dùng chung một trong 4 timer.
 
 ## Kiểm tra trên mạch (theo thứ tự, không lắp cánh)
 1. Tab Tổng quan, dòng Motor / ESC: `DShot/RMT direct` hay `DShot/RMT idf` hay `Pulse/LEDC`.

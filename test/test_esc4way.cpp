@@ -209,6 +209,26 @@ static void t_bootloader() {
         Reply r = b.ask(CMD_DEVICE_INIT_FLASH, 0, {0}); CHECK(r.ack == ACK_D_GENERAL_ERROR, "an ESC 12 %% off the baud rate is not understood: an error, not garbage"); }
 }
 
+// The session record for the next boot report (esc4way::Trace): which request failed and what the ESC said
+static void t_trace() {
+    printf("[4-way] the session record for the boot report\n");
+    Bench b; esc4way::Trace t; t.start(); b.itf.set_trace(&t); b.esc[1].present = false;
+    b.ask(CMD_INTERFACE_GET_NAME, 0, {0}); b.ask(CMD_DEVICE_INIT_FLASH, 0, {0}); b.ask(CMD_DEVICE_READ, 0x7C00, {48}); b.ask(CMD_DEVICE_INIT_FLASH, 0, {1});
+    char l[4][176]; int n = t.lines(l, 4); std::string all; for (int i = 0; i < n; i++) all += l[i];
+    if (getenv("V")) for (int i = 0; i < n; i++) printf("      %s\n", l[i]);
+    CHECK(t.valid() && n == 1 && all.find("4way: 4 requests, 1 ESC errors:") == 0, "a short session: one line, the count and the ESC errors ('%s')", n ? l[0] : "");
+    CHECK(all.find("INIT#0 ok 061F6304") != std::string::npos && all.find("READ 7C00/48 ok FFFFFFFF") != std::string::npos && all.find("INIT#1 ESC-ERR") != std::string::npos,
+          "each request: what was asked (command, address, bytes), the answer, the device info / the first bytes read");
+    for (int i = 0; i < 40; i++) b.ask(CMD_DEVICE_READ, (uint16_t)(0x1000 + i * 16), {16});
+    n = t.lines(l, 4); if (getenv("V")) for (int i = 0; i < n; i++) printf("      %s\n", l[i]); bool fits = true; for (int i = 0; i < n; i++) fits &= strlen(l[i]) < 176;
+    std::string last = l[n - 1];
+    CHECK(t.total == 44 && n >= 2 && n <= 4 && fits && (std::string(l[0]) + l[1]).find(" ...") != std::string::npos && last.find("READ 1270/16 ESC-ERR") != std::string::npos,
+          "44 requests: the first 12 and the last 12 kept, a gap mark between them, at most 4 lines of 175 characters (%d lines)", n);
+    { char two[4][176] = {}; CHECK(t.lines(two, 2) == 2 && two[2][0] == 0, "asked for 2 lines: 2 lines, nothing written past them (the boot report has room for 4)"); }
+    t.clear(); CHECK(!t.valid() && t.lines(l, 4) == 0, "cleared after it went into the report: nothing the next time");
+    esc4way::Trace junk; memset(&junk, 0xA5, sizeof(junk)); CHECK(!junk.valid(), "memory that was never written (RTC memory after power-on) is not a record");
+}
+
 static void t_msp() {
     printf("[MSP] what the ESC tools ask before the passthrough\n");
     msp::Bridge br; msp::Info in; in.motors = 4; in.batt_v = 16.4f; in.cells = 4; in.mah = 120; in.amps = 1.25f;
@@ -234,6 +254,12 @@ static void t_msp() {
     in.armed = true; in.modes_on = (1u << 0) | (1u << 3); in.health = 1u | (1u << 2) | (1u << 4); in.cpu_pct = 37; in.cycle_us = 250;
     CHECK(run(v1(msp::STATUS)) == msp::Bridge::REPLY && out[3] == 22 && (out[9] | out[10] << 8) == (1 | 2 | 8 | 32) && out[11] == (1 | 4) && (out[16] | out[17] << 8) == 37,
           "STATUS: sensors ACC + GYRO + BARO + GPS, flight modes ARM + ALTHOLD (bits 0 and 2 of BOXIDS), load 37 %% (%u bytes)", (unsigned)out[3]);
+    { const uint32_t ms0 = in.modes_set, mo0 = in.modes_on;      // the switch modes of 0.23: ACRO_TRAINER 10, AIRMODE 11, ANTI_GRAVITY 12, BLACKBOX_ERASE 13
+      in.modes_set = (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13); in.modes_on = (1u << 10) | (1u << 12);
+      CHECK(run(v1(msp::BOXIDS)) == msp::Bridge::REPLY && out[3] == 5 && out[5] == 0 && out[6] == 4 && out[7] == 28 && out[8] == 31 && out[9] == 47,
+            "BOXIDS: ANTI GRAVITY 4, AIR MODE 28, BLACKBOX ERASE 31, ACRO TRAINER 47 (Betaflight's permanent ids)");
+      CHECK(run(v1(msp::STATUS)) == msp::Bridge::REPLY && out[11] == (1 | 2 | 16), "STATUS: ARM + ANTI GRAVITY + ACRO TRAINER (bits 0, 1, 4 of BOXIDS) (0x%x)", out[11]);
+      in.modes_set = ms0; in.modes_on = mo0; }
     in.armed = false; in.blockers = (1u << 2) | (1u << 3) | (1u << 7);   // RX_LOST, THROTTLE_HIGH, BATT_LOW (none in Betaflight)
     CHECK(run(v1(msp::STATUS_EX)) == msp::Bridge::REPLY && out[3] == 22 && out[5 + 16] == 30 && (uint32_t)(out[22] | out[23] << 8 | out[24] << 16 | out[25] << 24) == ((1u << 2) | (1u << 7)),
           "STATUS_EX: why it will not arm, as Betaflight's flags (RX_FAILSAFE, THROTTLE)");
@@ -257,6 +283,7 @@ static void t_msp() {
 }
 
 int main() {
+    t_trace();
     t_interface(); t_bootloader(); t_msp();
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

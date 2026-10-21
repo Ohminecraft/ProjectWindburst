@@ -13,7 +13,7 @@
 // this interface must not rely on that.
 //   proto/kv_flash.h        the settings, a small key -> record log in two sector groups
 //   blackbox/bb_qword.h     the flight log (bb::BlockStore over this)
-//   port/stm32/flash_h5.h   the chip; test/sim_qwflash.h the model the tests run against (it enforces the rules)
+//   port/stm32/flash_stm32.h the chip (H5 / C5 / G4 / F4); test/sim_qwflash.h the model the tests run against (it enforces the rules)
 // Addresses are offsets inside the region. Portable.
 // ============================================================================
 namespace port {

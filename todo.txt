@@ -1,0 +1,60 @@
+Mục cần làm:
+- mavlink telemetry * (ongoing)
+- osd *
+- thêm đổi tên port (có thể dùng otg để đổi product name thay vì usb serial/jtag) tên mặc định sẽ là Windburst + _tên mcu_ *
+- thêm switch on/off cho rx telemetry *
+- thêm mode: acro trainer, blackbox erase, airmode (bật tắt bằng nút bên ngoài), antigravity
+- thêm arm bằng cách kéo cần thr pitch xuống low và 2 cần yaw và roll kéo 1 cần kéo sang trái 1 cần kéo sang phải hoặc ngược lại (thêm như setting)
+- remake lại motor reorder và motor reversed như betaflight 4.3+ motor wizard thay vì chọn thủ công **
+- hỗ trợ mcu *
+ + esp32 thường
+ + stm32 (G491, G473, H523, C552, G431, H562, F412, F405)
+- preview drone khi kéo cần roll, pitch, yaw (ở receiver tab, ở rates tab)
+
+- Lưu ý khi thêm mcu:
+ + App phải chỉ ra rõ ràng mcu đang sử dụng
+ + ở app chọn pin đối với stm32 sẽ có 2 mục là: 1 chọn tên cổng, 2 chọn pin (tất cả phải đúng với mẫu model của bản stm32 đó)
+ + full support cho stm32 như esp32 bao gồm motor protocol, ghi blackbox qua thẻ sd... (hoặc cải thiện thêm về hiệu năng đối với stm32 thì càng tốt)
+
+/!\ FIX KHẨN CẤP /!\ (dựa vào source betaflight) (completed nhưng chưa test)
+
+- bidirectional dshot telemetry không ổn định rpm liên lục về 0 thỉnh thoảng mới nhảy số (có thể do app không cập nhật rpm chăng?)
+- esc passthough không hoạt động với am32 configurator (có connect đươc nhưng không nhận được thông tin từ esc)
+- Oneshot, Multishot không hoạt động kéo test motor lên thì motor cứ kêu liên tục chứ không quay
+- battery cập nhật cell không đúng bidir dshot nó lên volt từ từ nên khi từ 0v lên 4v thì đã tính là 1s nên nó không kiểm tra lại nữa mà pin 4s là 16v
+- reserved motor bị lỗi là khi lúc đầu bật lên thì nó vẫn hoạt động bình thường nhưng khi khởi động lại fc thì nó không hoạt động nữa phải tắt đi bật lại
+- dshot beacon beeper phát theo pattern nhưng không đúng duration (nốt nào cũng có duration như nhau)
+- thay ledc qua api bằng ledc_ll
+
+Cần update thêm:
+- thêm led máy bay... (completed nhưng chưa test) (cần update thêm mode nữa là manual, mode này sẽ để user nhập có bao nhiêu led, set led 1..2..N gán với chức năng nào hay chỉ cho dùng effect có sẵn như breathe, rainbow, v.v)
+
+Hoàn Thành:
+- esc passthorugh (completed nhưng vẫn có bug)
+- Không sử dụng loop của arduino, ở setup sau khi init và createtask hết thì sẽ gọi vTaskDelete(NULL) để xoá task loop mặc định của arduino đi (completed)
+- bug fw thỉnh thoảng không trả lời (có lẽ là do app gửi lấy thông tin nhanh quá gây quá tải? hoặc app nhận thông tin có vấn đề vì tôi đã thấy trong log có hiện software restart) (completed nhưng chưa test hết)
+- thêm mục cho altitude hold là throttle hover/min/max/deadband (là chỉ số cần ga mình muốn nó hover ở mức đó... lưu ý throttle curve sẽ không áp dụng lên mode này), climb rate up/down m/s (completed nhưng chưa test)
+- đổi yaw thành từ 180 độ sang 360 độ (completed)
+- gps rescue khi set aux mặc dù không bật nó lên nhưng nó vẫn báo gps rescue phải có fix nhưng mỗi lần bay phải đợi có fix nên nó khá là khó chịu đó (completed)
+- bug blackbox khi đang bật ghi blackbox bằng aux thì khi vào app mục blackbox thì nó sẽ bị ghi xong ngắt xong lại ghi một bản mới tiếp (completed nhưng chưa test)
+- pos hold vẫn chưa được ổn định bị rung lắc liên tục (chắc do tôi tuning chưa tốt), bạn thử xem phần poshold của betaflight xem nó như nào với ardupilot, với lại tôi sẽ gửi dữ liệu từ blackbox cho bạn để bạn phân tích (completed nhưng chưa test)
+- bạn xem có code có EKF cho pos hold không nếu không thì hãy thêm vào để nó hợp nhất dữ liệu phi tuyến tính từ acc hay những module khác để tính toán hướng để tránh trôi kéo drone về vị trí cũ (completed nhưng chưa test)
+- tách pid loop hz riêng, imu sample loop hz riêng (completed)
+- esc telemetry qua đường tín hiệu riêng (completed nhưng có bug)
+- CLI (completed nhưng chưa test)
+- bỏ cách phát dshot esp-idf vì sử dụng nó tốn quá nhiều tài nguyên và không cần thiết, đối với protocol analog không có motor idle thì hide lựa chọn đó đi hoặc fix để sử dụng với motor idle (completed nhưng chưa test)
+- loop hz giảm khi armed (từ ~5700hz xuống còn ~4400hz khi bật stablize, ~4700hz với angle, ~4900hz với acro) (completed)
+- dual gyro/acc (completed nhưng chưa test)
+- giao tiếp qua wifi (không áp dụng với stm32) (completed nhưng chưa test)
+- làm đồ thị độ rung ở tab motor hiện cả 3 trục với 3 màu khác nhau thay vì chọn từng trục như cũ (completed)
+- thêm tính năng khi cánh/motor bị chạm hoặc dừng đột ngột thì sẽ disarm để dừng tất cả motor (thêm như setting, tôi nghĩ sẽ cần sensor để biết rpm của động cơ) (completed nhưng chưa test)
+- thêm tính năng auto magnetometer cali giống như betaflight đời mới (completed nhưng chưa thử)
+- dronecan (completed nhưng chưa thử)
+
+Loại bỏ:
+- tăng tốc độ ghi của blackbox lên >1khz nếu khả thi
+- set pid/gyro loop ở 5000hz thì bị lock ở 4000hz và khi set trên ~5500hz thì không thể lên được nữa làm tôi thắc mắc rằng sao stm32 sử dụng betaflight có thể loop được 8khz
+
+Note:
+càng nhiều sao thì càng được ưu tiên làm trước
+clone bản mới nhất của betaflight

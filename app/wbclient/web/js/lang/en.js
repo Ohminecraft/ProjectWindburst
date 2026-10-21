@@ -208,8 +208,7 @@ export const EN = {
     "Frame type, ESC, spin direction and motor order. Remove the propellers before testing.",
   "Khung":
     "Frame",
-  "Kiểu khung, giao thức ESC và thứ tự motor có hiệu lực sau khi lưu và khởi động lại. DShot qua RMT của ESP32-S3 chạy được tối đa 4 motor.":
-    "Frame type, ESC protocol and motor order take effect after save and restart. DShot over the RMT of the ESP32-S3 drives at most 4 motors.",
+
   "La bàn":
     "Compass",
   "firmware không báo cáo":
@@ -620,10 +619,6 @@ export const EN = {
     "0 = off. Needs bidirectional DShot.",
   "Dynamic idle, mức tăng tối đa":
     "Dynamic idle, max increase",
-  "Lệnh đảo chiều kiểu AM32 (20/21)":
-    "AM32-style direction commands (20/21)",
-  "Tắt = lệnh DShot 7/8 (BLHeli_S, Bluejay, BLHeli_32).":
-    "Off = DShot commands 7/8 (BLHeli_S, Bluejay, BLHeli_32).",
   "Loại la bàn":
     "Compass type",
   "Hướng chip la bàn":
@@ -1642,8 +1637,8 @@ export const EN = {
     ", ESCs not answering: {list}",
   ", mọi ESC đều trả lời":
     ", every ESC answers",
-  "0 = không phát xung. Nhiều ESC analog (PWM, Oneshot, Multishot) chỉ khởi động khi thấy xung thấp nhất: nếu ESC không kêu tiếng sẵn sàng, đặt 1000.":
-    "0 = no pulse. Many analog ESCs (PWM, Oneshot, Multishot) only start up when they see the minimum pulse: if the ESC does not play its ready tone, set 1000.",
+  "0 = 1000 µs (mincommand của Betaflight). ESC chỉ arm sau khi đã thấy xung ga 0, nên lúc chưa arm luôn có xung. AM32 chỉ nhận DShot và PWM thường (1000 – 2000 µs), không nhận Oneshot / Multishot.":
+    "0 = 1000 µs (Betaflight's mincommand). An ESC arms only after it has seen its zero throttle, so there are always pulses while disarmed. AM32 reads DShot and plain PWM (1000 – 2000 µs) only, not Oneshot / Multishot.",
   "Bỏ cuộc sau khi không xuống được":
     "Give up when it does not come down for",
   "Chặn runaway lúc cất cánh":
@@ -2132,6 +2127,8 @@ export const EN = {
     "The firmware finds the u-blox module at whatever rate it runs (with \"Detect baud\" on) and switches it to this one; 115200 is recommended. An NMEA module must already be set to this rate. Takes effect after saving and restarting.",
   "Trả lời nhận được / hỏng mỗi giây: ":
     "Replies received / garbled per second: ",
+  "không có bit start: {a}, sai số bit: {b}, sai checksum: {c}":
+    "no start bit: {a}, wrong bit count: {b}, bad checksum: {c}",
   "Brushed (motor chổi than, MOSFET)":
     "Brushed (brushed motors, MOSFET)",
   "Khung này có {n} motor: DShot / ProShot trên ESP32-S3 chỉ chạy được 4 (4 bộ phát RMT). Chọn PWM, Oneshot hoặc Multishot.":
@@ -2290,16 +2287,10 @@ export const EN = {
     "the debug port (SWDIO)",
   "cổng debug (SWCLK)":
     "the debug port (SWCLK)",
-  "{label}: \"{text}\" không phải tên chân STM32 (PA0 đến PK15).":
-    "{label}: \"{text}\" is not an STM32 pin name (PA0 to PK15).",
   "{label}: {pin} thường là {what}.":
     "{label}: {pin} is usually {what}.",
   "{pin} đang gán cho cả \"{a}\" và \"{b}\".":
     "{pin} is set for both \"{a}\" and \"{b}\".",
-  "Mạch STM32":
-    "STM32 board",
-  "Chân ghi theo tên: PA0, PB3, PC13 ... Trên STM32 mỗi UART, SPI, I2C và timer chỉ ra được một số chân nhất định; firmware kiểm tra lúc khởi động và ghi lỗi vào báo cáo ở tab Tổng quan nếu chân không đúng chức năng.":
-    "Pins are written by name: PA0, PB3, PC13 ... On an STM32 each UART, SPI, I2C and timer reaches only certain pins; the firmware checks this at boot and writes an error into the report on the Overview tab if a pin cannot do its job.",
   "Chân telemetry (T) của các ESC nối chung vào RX của một UART (chân ở tab Chân: Telemetry ESC). Firmware hỏi lần lượt từng ESC bằng bit telemetry của khung DShot; ESC trả lời nhiệt độ, điện áp, dòng, mAh và RPM. Dùng với BLHeli_32, AM32, KISS. Chỉ với DShot. Đủ cho đo pin và nhiệt độ, không đủ nhanh cho bộ lọc RPM (cần DShot hai chiều). Có hiệu lực sau khi lưu và khởi động lại.":
     "The ESCs' telemetry pads (T) joined to the RX of one UART (pin on the Pins tab: ESC telemetry). The firmware asks one ESC at a time with the telemetry bit of the DShot frame; the ESC answers with temperature, voltage, current, mAh and RPM. For BLHeli_32, AM32, KISS. DShot only. Good for the battery and the temperatures, not fast enough for the RPM filter (that needs bidirectional DShot). Takes effect after saving and restarting.",
   "Dây telemetry ESC (KISS)":
@@ -2484,6 +2475,130 @@ export const EN = {
     "Navigation lights (left red, right green, white tail strobe)",
   "Độ sáng":
     "Brightness",
+  "Vi điều khiển (MCU) của flight controller":
+    "The flight controller's microcontroller (MCU)",
+  "{label}: cổng":
+    "{label}: port",
+  "{label}: chân":
+    "{label}: pin",
+  "{pin} (không có trên chip)":
+    "{pin} (not on this chip)",
+  "{label}: {pin} không có trên {mcu}.":
+    "{label}: {pin} does not exist on the {mcu}.",
+  "{label}: GPIO{pin} trên ESP32 chỉ là chân vào, không xuất tín hiệu được.":
+    "{label}: GPIO{pin} is an input-only pin on the ESP32, it cannot drive a signal.",
+  "ADC đo pin: GPIO{pin} không đo được điện áp trên ESP32 (chỉ GPIO32 đến GPIO39, ADC1).":
+    "Battery ADC: GPIO{pin} cannot measure a voltage on the ESP32 (only GPIO32 to GPIO39, ADC1).",
+  "ADC đo dòng: GPIO{pin} không đo được điện áp trên ESP32 (chỉ GPIO32 đến GPIO39, ADC1).":
+    "Current ADC: GPIO{pin} cannot measure a voltage on the ESP32 (only GPIO32 to GPIO39, ADC1).",
+  "chân strapping (điện áp flash: phải ở mức thấp lúc khởi động)":
+    "a strapping pin (flash voltage: must be low at start-up)",
+  "UART0 TX (cổng nối app qua cầu USB-UART)":
+    "UART0 TX (the app link through the USB-UART bridge)",
+  "UART0 RX (cổng nối app qua cầu USB-UART)":
+    "UART0 RX (the app link through the USB-UART bridge)",
+  "PSRAM trên module WROVER":
+    "the PSRAM on a WROVER module",
+  "Mạch {mcu}":
+    "{mcu} board",
+  "Chọn chân theo hai bước: cổng (PA, PB ...) rồi chân của cổng đó. Chỉ có những chân mà vỏ chip {mcu} này có. Trên STM32 mỗi UART, SPI, I2C và timer chỉ ra được một số chân nhất định; firmware kiểm tra lúc khởi động và ghi lỗi vào báo cáo ở tab Tổng quan nếu chân không đúng chức năng.":
+    "Pick a pin in two steps: the port (PA, PB ...), then the pin of that port. Only the pins this {mcu} package has are offered. On an STM32 each UART, SPI, I2C and timer reaches only some pins; the firmware checks at boot and reports a pin that cannot do its job in the Overview tab.",
+  "ESP32: GPIO 0 đến 39, trừ 6 đến 11 (flash của module). GPIO34 đến 39 chỉ là chân vào (đo pin, RX). Đo điện áp: GPIO32 đến 39. App nối qua UART0 (GPIO1 / 3) và mạch USB-UART của board.":
+    "ESP32: GPIO 0 to 39, except 6 to 11 (the module's flash). GPIO34 to 39 are inputs only (battery, RX). Voltage measurement: GPIO32 to 39. The app link is UART0 (GPIO1 / 3) through the board's USB-UART bridge.",
+  "Hình 3D của máy bay theo cần đang gạt":
+    "3D view of the craft flown by the sticks",
+  "Kiểu bay xem thử":
+    "Preview flight mode",
+  "Acro (quay theo rate)":
+    "Acro (turns at the rates)",
+  "Angle (nghiêng theo cần)":
+    "Angle (tilts with the sticks)",
+  "Về cân bằng":
+    "Level",
+  "Chưa có tín hiệu từ tay điều khiển.":
+    "No signal from the transmitter yet.",
+  "Chỉ là hình mô phỏng trong app, không gửi gì xuống máy bay. Acro: máy quay đúng tốc độ của đường cong rate, thả cần thì đứng yên ở tư thế đó. Angle: góc nghiêng theo cần (giới hạn góc ở tab Rate), cần yaw xoay hướng mũi.":
+    "A simulation in the app only; nothing is sent to the craft. Acro: the craft turns at the rates of the rate curve and stays where it is when the sticks are released. Angle: the tilt follows the sticks (angle limit in the Rate tab), the yaw stick turns the nose.",
+  "Máy bay theo cần":
+    "The craft on the sticks",
+  "Không còn gì chặn. Kéo ga và pitch xuống, yaw và roll sang hai phía ngược nhau, giữ 1 giây để bật motor.":
+    "Nothing blocks. Throttle and pitch down, yaw and roll to opposite sides, hold 1 second to start the motors.",
+  "Arm bằng cần":
+    "Arm with the sticks",
+  "Kéo cần ga và cần pitch xuống hết, đồng thời kéo cần yaw và cần roll sang hai phía ngược nhau (yaw trái + roll phải, hoặc yaw phải + roll trái), giữ 1 giây: arm. Làm lại y như vậy khi máy đang nằm trên đất: disarm (khi đang bay thì không). Nếu có gán công tắc ARM thì công tắc phải bật mới arm được, gạt tắt là disarm ngay (dùng làm công tắc ngắt khẩn cấp).":
+    "Pull the throttle and pitch sticks all the way down and, at the same time, the yaw and roll sticks to opposite sides (yaw left + roll right, or yaw right + roll left), hold 1 second: armed. The same again while the craft sits on the ground: disarmed (never in flight). With an ARM switch assigned, the switch must be on to arm, and switching it off disarms at once (an emergency cut).",
+  "Đang arm bằng cần: không cần công tắc ARM. Nên gán một công tắc ARM để có thể tắt motor ngay lập tức.":
+    "Arming with the sticks: no ARM switch needed. An ARM switch is still worth assigning, to stop the motors at once.",
+  "Acro trainer":
+    "Acro trainer",
+  "Chỉ trong Acro: máy không nghiêng quá một góc (mặc định 20°, tab PID), cần vẫn điều khiển tốc độ quay như Acro. Để tập bay Acro mà không bị lật.":
+    "Acro only: the craft does not lean past an angle (20° by default, PID tab); the sticks still give the rate as in Acro. For learning Acro without flipping over.",
+  "Airmode (công tắc)":
+    "Airmode (switch)",
+  "Có công tắc này thì airmode chỉ bật khi công tắc bật (kiểu theo mục Airmode ở tab Cảm biến; mục đó là Tắt thì dùng \"Khi đang bay\"). Công tắc tắt: ga về min là motor về idle.":
+    "With this switch, airmode is on only while the switch is on (the kind set under Airmode in the Sensors tab; if that is Off, \"while flying\"). Switch off: throttle at the bottom puts the motors at idle.",
+  "Anti Gravity (công tắc)":
+    "Anti Gravity (switch)",
+  "Có công tắc này thì Anti Gravity chỉ chạy khi công tắc bật, bất kể ô Anti Gravity ở tab PID.":
+    "With this switch, Anti Gravity works only while the switch is on, whatever the Anti Gravity box in the PID tab says.",
+  "Xoá blackbox":
+    "Erase blackbox",
+  "Gạt công tắc từ tắt sang bật khi chưa arm: xoá hết log (flash hoặc các file log trên thẻ SD), xong thì còi kêu. Đang bật sẵn lúc khởi động thì không xoá; muốn xoá lần nữa phải gạt tắt rồi bật lại.":
+    "Flip the switch from off to on while disarmed: every log is erased (the flash, or the log files on the SD card), with a beep when done. Already on at power-up: nothing is erased; to erase again, flip it off and on.",
+  "Góc giới hạn":
+    "Angle limit",
+  "Nhìn trước":
+    "Look-ahead",
+  "Độ mạnh":
+    "Strength",
+  "Bật bằng công tắc ACRO TRAINER (tab Mode), chỉ có tác dụng trong Acro. Nhìn trước: máy quay càng nhanh thì càng phanh sớm để không vượt góc; gạt hết cần có thể vượt vài độ rồi kéo về.":
+    "Switched on with the ACRO TRAINER switch (Modes tab), works in Acro only. Look-ahead: the faster the craft turns, the earlier it brakes so it does not pass the angle; full stick may pass it by a few degrees and come back.",
+  "Cảnh báo chiếm cả dải":
+    "Warnings take the whole strip",
+  "Failsafe, pin cạn, motor dừng đột ngột: cả dải đổi sang hình cảnh báo, dù LED đang gán gì.":
+    "Failsafe, battery empty, a motor stall: the whole strip shows the warning, whatever its LEDs are set to.",
+  "Tốc độ hiệu ứng":
+    "Effect speed",
+  "1 chậm nhất, 10 nhanh nhất; 5 = một vòng trong 2 giây.":
+    "1 slowest, 10 fastest; 5 = one cycle in 2 seconds.",
+  "Tự gán từng LED":
+    "Each LED set by hand",
+  "Màu cố định":
+    "Fixed color",
+  "Màu theo mode":
+    "Flight mode color",
+  "Sáng khi arm":
+    "Lit when armed",
+  "Nháy":
+    "Blink",
+  "Chớp":
+    "Strobe",
+  "Thở":
+    "Breathe",
+  "Cầu vồng":
+    "Rainbow",
+  "Quét qua lại":
+    "Scanner",
+  "Mức pin":
+    "Battery level",
+  "Mức ga":
+    "Throttle level",
+  "Màu":
+    "Color",
+  "Áp cho mọi LED":
+    "Apply to every LED",
+  "Trạng thái xem thử":
+    "Preview state",
+  "Chưa arm, sẵn sàng":
+    "Disarmed, ready",
+  "Đang bay (Angle), ga 60 %, pin 70 %":
+    "Flying (Angle), throttle 60 %, battery 70 %",
+  "Màu LED {n}":
+    "Color of LED {n}",
+  "Mỗi LED một chức năng: trạng thái (như kiểu \"Mọi LED cùng màu\"), màu cố định, màu theo mode, sáng khi arm, nháy, chớp, thở, cầu vồng, quét qua lại, mức pin, mức ga. Cầu vồng và quét chạy qua những LED có cùng chức năng đó, theo thứ tự trên dải.":
+    "One function per LED: status (as in \"Every LED the same color\"), a fixed color, the flight mode's color, lit when armed, blink, strobe, breathe, rainbow, scanner, battery level, throttle level. Rainbow and scanner run across the LEDs that have that function, in strip order.",
+  "Xem thử:":
+    "Preview:",
   "ESC DroneCAN: lệnh ga đi trên bus CAN (esc.RawCommand, 400 lần/giây), ESC index = slot motor (thứ tự motor vẫn áp dụng). Không cần chân motor; CAN bus phải bật (tab Cảm biến). Vòng quay, điện áp, dòng, nhiệt độ lấy từ esc.Status của ESC. Không có lệnh DShot (beacon, đổi chiều): chiều quay đặt trong cấu hình của ESC.":
     "DroneCAN ESCs: the throttle goes over the CAN bus (esc.RawCommand, 400 times a second), ESC index = motor slot (the motor order still applies). No motor pins; the CAN bus must be on (Sensors tab). Speed, voltage, current and temperature come from the ESCs' esc.Status. No DShot commands (beacon, direction): set the spin direction in the ESC's own configuration.",
   "ESC: đã gửi {n} lệnh, bỏ {drop}; nghe thấy ESC {list}":
@@ -2522,6 +2637,178 @@ export const EN = {
     "Automatic calibration",
   "Như Betaflight 4.5: bấm nút (hoặc ở ngoài sân, khi disarm: ga lên hết, cần pitch kéo về, roll và yaw ở giữa, giữ 1 giây), rồi nhấc máy lên xoay theo mọi hướng. Firmware tự dừng khi đủ (thường 5 – 15 giây), kêu 3 tiếng và tự lưu vào flash. Chỉ đổi offset (hard iron); ma trận soft iron của lần hiệu chuẩn đầy đủ vẫn giữ.":
     "Like Betaflight 4.5: press the button (or in the field, disarmed: throttle full up, pitch stick back, roll and yaw centred, hold 1 second), then pick the craft up and turn it in every direction. The firmware stops by itself when it has enough (usually 5 to 15 seconds), beeps 3 times and saves to flash. Only the offset (hard iron) changes; the soft-iron matrix of a full calibration is kept.",
+  "0 = không gửi.":
+    "0 = not sent.",
+  "57600 cho đa số radio telemetry 433 / 915 MHz; 115200 trở lên cho ELRS backpack hoặc dây nối thẳng.":
+    "57600 for most 433 / 915 MHz telemetry radios; 115200 or more for an ELRS backpack or a direct wire.",
+  "Baud UART":
+    "UART baud",
+  "Cổng nối tiếp: bảng không có UART nào cho telemetry.":
+    "Serial ports: the table has no UART for telemetry.",
+  "GLOBAL_POSITION_INT và GPS_RAW_INT. 0 = không gửi.":
+    "GLOBAL_POSITION_INT and GPS_RAW_INT. 0 = not sent.",
+  "Giao thức telemetry":
+    "Telemetry protocol",
+  "Gửi cả qua WiFi":
+    "Also send over WiFi",
+  "Gửi trạng thái máy bay cho Mission Planner / QGroundControl: qua radio telemetry (433 / 915 MHz, ELRS backpack) nối vào một UART, và / hoặc qua WiFi (UDP cổng 14550, ground station tự nhận). Chỉ gửi, chưa nhận lệnh. UART: Tự động lấy UART còn trống sau GPS, receiver, optical flow và dây telemetry ESC; Theo bảng: UART có chức năng Telemetry.":
+    "Sends the state of the craft to Mission Planner / QGroundControl: through a telemetry radio (433 / 915 MHz, ELRS backpack) on a UART, and / or over WiFi (UDP port 14550, the ground station finds it by itself). Send only, no commands yet. UART: Automatic takes the UART left after GPS, receiver, optical flow and the ESC telemetry wire; Table: the UART with the function Telemetry.",
+  "HUD (tốc độ, độ cao, ga)":
+    "HUD (speed, altitude, throttle)",
+  "Khi WiFi đang bật: gửi broadcast UDP tới cổng 14550, Mission Planner / QGroundControl trên cùng mạng tự nhận.":
+    "While WiFi is on: UDP broadcast to port 14550; Mission Planner / QGroundControl on the same network pick it up by themselves.",
+  "MAVLink 2: Mission Planner, QGroundControl, radio telemetry, ELRS backpack. Có hiệu lực sau khi lưu và khởi động lại.":
+    "MAVLink 2: Mission Planner, QGroundControl, telemetry radios, ELRS backpack. Takes effect after saving and restarting.",
+  "Mã của máy bay trong MAVLink. Hai máy bay cùng một ground station cần mã khác nhau.":
+    "The craft's MAVLink id. Two crafts on one ground station need different ids.",
+  "RC_CHANNELS. 0 = không gửi.":
+    "RC_CHANNELS. 0 = not sent.",
+  "SYS_STATUS và BATTERY_STATUS. 0 = không gửi.":
+    "SYS_STATUS and BATTERY_STATUS. 0 = not sent.",
+  "Telemetry MAVLink: không có chân TX và không gửi qua WiFi - không có gì được gửi đi.":
+    "MAVLink telemetry: no TX pin and WiFi sending off - nothing is sent.",
+  "Trạng thái và pin":
+    "Status and battery",
+  "Tư thế (ATTITUDE)":
+    "Attitude (ATTITUDE)",
+  "VFR_HUD. 0 = không gửi.":
+    "VFR_HUD. 0 = not sent.",
+  "Vị trí (GPS)":
+    "Position (GPS)",
+  "lần/s":
+    "per s",
+  " Quay tất cả":
+    " Spin all",
+  "Bấm vào một motor để nó quay, so với mũi tên trên hình. Quay sai thì bấm \"Đảo chiều motor này\".":
+    "Click a motor to spin it and compare with the arrow on the picture. Wrong way: click \"Reverse this motor\".",
+  "Chiều quay motor":
+    "Motor direction",
+  "Chưa kết nối.":
+    "Not connected.",
+  "Có cài đặt đang chờ khởi động lại (giao thức, kiểu khung ...): bấm \"Lưu và khởi động lại\" trước, wizard chạy trên cấu hình motor đang chạy.":
+    "Some settings wait for a restart (protocol, frame type ...): click \"Save and restart\" first, the wizard works on the motor setup that is running.",
+  "Dừng":
+    "Stop",
+  "Ga khi quay thử":
+    "Test throttle",
+  "Ga khi quay thử (%)":
+    "Test throttle (%)",
+  "Kiểu khung và giao thức ESC có hiệu lực sau khi lưu và khởi động lại; thứ tự motor và chiều quay có hiệu lực ngay (lưu để giữ). DShot qua RMT của ESP32-S3 chạy được tối đa 4 motor.":
+    "Frame type and ESC protocol take effect after saving and restarting; motor order and spin direction take effect at once (save to keep them). DShot over the ESP32-S3 RMT drives at most 4 motors.",
+  "Motor {n}: đã gửi chiều mới cho ESC. Bấm \"Lưu\" để giữ.":
+    "Motor {n}: the new direction was sent to the ESC. Click \"Save\" to keep it.",
+  "Motor đang quay: bấm vào vị trí của nó trên hình ({i} / {n}).":
+    "A motor is spinning: click where it sits on the picture ({i} / {n}).",
+  "Máy đang arm.":
+    "The craft is armed.",
+  "Sắp xếp lại thứ tự motor":
+    "Reorder motors",
+  "Thay cho chọn tay \"Slot phần cứng\" và \"Đảo chiều\". Sắp xếp: từng motor quay lần lượt, bấm vào vị trí của motor đang quay trên hình. Chiều quay (chỉ DShot): bấm vào motor để nó quay, quay ngược mũi tên thì bấm \"Đảo chiều motor này\". Thứ tự mới chạy ngay; bấm \"Lưu\" để giữ.":
+    "Instead of picking \"Hardware slot\" and \"Reversed\" by hand. Reorder: the motors spin one after another, click where the spinning one sits on the picture. Direction (DShot only): click a motor to spin it; if it turns against the arrow, click \"Reverse this motor\". The new order runs at once; click \"Save\" to keep it.",
+  "Tháo cánh, đánh dấu \"Đã tháo hết cánh quạt\" ở khối Test motor, rồi chọn một bước.":
+    "Remove the props, tick \"All propellers are removed\" in the Motor test block, then pick a step.",
+  "Vị trí này đã có motor. Bấm vào vị trí của motor đang quay.":
+    "That position already has a motor. Click where the spinning motor sits.",
+  "Xong: thứ tự không đổi, các motor đã nằm đúng chỗ.":
+    "Done: the order is unchanged, every motor was already in its place.",
+  "Xong: thứ tự mới đang chạy. Kiểm tra bằng thanh test motor, rồi bấm \"Lưu\" để giữ.":
+    "Done: the new order is running. Check it with the motor test sliders, then click \"Save\" to keep it.",
+  "Đánh dấu \"Đã tháo hết cánh quạt\" ở khối Test motor trước.":
+    "Tick \"All propellers are removed\" in the Motor test block first.",
+  "Đã dừng. Không có gì bị đổi.":
+    "Stopped. Nothing was changed.",
+  "Đảo chiều motor này":
+    "Reverse this motor",
+  "Đổi chiều bằng lệnh chỉ làm được với DShot. Với PWM / Oneshot / Multishot hãy đổi hai trong ba dây motor.":
+    "Reversing by command needs DShot. With PWM / Oneshot / Multishot swap two of the three motor wires.",
+  "đảo":
+    "reversed",
+  "Telemetry về tay điều khiển":
+    "Telemetry to the transmitter",
+  "CRSF / ELRS: pin, tư thế, GPS, mode hiện trên màn hình tay điều khiển (cần chân TX của receiver). Tắt: chân TX im lặng. Có hiệu lực sau khi lưu và khởi động lại.":
+    "CRSF / ELRS: battery, attitude, GPS and flight mode on the transmitter's screen (needs the receiver's TX pin). Off: the TX pin stays silent. Takes effect after saving and restarting.",
+  "Tên USB":
+    "USB name",
+  "Tên thiết bị USB":
+    "USB device name",
+  "Tên đang dùng: {name}":
+    "Name in use: {name}",
+  "Tên máy tính thấy khi cắm USB (Linux / macOS: tên cổng; Windows: thuộc tính thiết bị, \"Bus reported device description\"). Để trống = tên mặc định. Chỉ chữ, số và ký hiệu ASCII, tối đa 31 ký tự. Có hiệu lực sau khi lưu và khởi động lại.":
+    "The name the computer sees when the board is plugged in (Linux / macOS: the port's name; Windows: the device properties, \"Bus reported device description\"). Empty = the default name. ASCII letters, digits and signs only, at most 31 characters. Takes effect after saving and restarting.",
+  "Chất lượng sóng (LQ)":
+    "Link quality (LQ)",
+  "Điện áp trung bình mỗi cell":
+    "Average cell voltage",
+  "mAh đã dùng":
+    "mAh drawn",
+  "Mode bay":
+    "Flight mode",
+  "Tên máy bay":
+    "Craft name",
+  "Thời gian bay":
+    "Flight time",
+  "Thời gian bật nguồn":
+    "On time",
+  "Số vệ tinh GPS":
+    "GPS satellites",
+  "Tốc độ (GPS)":
+    "Speed (GPS)",
+  "Hướng về nhà":
+    "Home direction",
+  "Khoảng cách về nhà":
+    "Home distance",
+  "Tốc độ lên / xuống":
+    "Vertical speed",
+  "Tâm ngắm":
+    "Crosshairs",
+  "Đường chân trời giả":
+    "Artificial horizon",
+  "Góc pitch":
+    "Pitch angle",
+  "Góc roll":
+    "Roll angle",
+  "Chữ DISARMED":
+    "DISARMED text",
+  "Màn hình OSD: kéo một mục để dời nó":
+    "OSD screen: drag an element to move it",
+  "(chưa đặt tên)":
+    "(no name set)",
+  "Hiện":
+    "Show",
+  "Mục":
+    "Element",
+  "Cột, hàng":
+    "Column, row",
+  "Thông tin hiện trong kính của hệ FPV digital (DJI O3 / O4, Walksnail, HDZero) qua MSP DisplayPort.":
+    "What the goggles of a digital FPV system (DJI O3 / O4, Walksnail, HDZero) show, over MSP DisplayPort.",
+  "Firmware này chưa có OSD (cần bản 0.21 trở lên).":
+    "This firmware has no OSD (0.21 or newer needed).",
+  "Nối TX của flight controller vào RX của bộ phát hình, RX vào TX của nó (bộ phát hỏi trạng thái arm để bắt đầu quay video). UART: Tự động lấy UART còn trống sau GPS, receiver, optical flow và dây telemetry ESC; Theo bảng (tab Chân và cổng): UART có chức năng DisplayPort. Trong kính chọn chế độ OSD \"Custom\" / \"Betaflight\" (DJI: Canvas mode / custom OSD). Có hiệu lực sau khi lưu và khởi động lại.":
+    "Connect the flight controller's TX to the video transmitter's RX and RX to its TX (the transmitter asks for the armed state to start recording). UART: Automatic takes the UART left after GPS, receiver, optical flow and the ESC telemetry wire; Table (Pins and ports tab): the UART with the function DisplayPort. In the goggles pick the \"Custom\" / \"Betaflight\" OSD (DJI: canvas mode / custom OSD). Takes effect after saving and restarting.",
+  "Các mục":
+    "Elements",
+  "Màn hình":
+    "Screen",
+  "Kéo một mục để dời nó, hoặc bấm vào nó rồi dùng phím mũi tên. Ký hiệu ở đây chỉ là hình minh hoạ: kính vẽ bằng font Betaflight của nó. Canvas \"Tự động\" xem như 53 x 20; HDZero tự báo lưới 50 x 18 của nó, mục nào nằm ngoài lưới đó sẽ không hiện.":
+    "Drag an element to move it, or click it and use the arrow keys. The symbols here are only stand-ins: the goggles draw with their Betaflight font. The \"Automatic\" canvas is shown as 53 x 20; HDZero reports its own 50 x 18 grid, elements outside it are not shown.",
+  "Cổng nối tiếp: bảng không có UART nào cho OSD (DisplayPort).":
+    "Serial ports: the table has no UART for the OSD (DisplayPort).",
+  "Tự động (theo bộ phát hình)":
+    "Automatic (as the video transmitter asks)",
+  "OSD (DisplayPort)":
+    "OSD (DisplayPort)",
+  "Lưới ký tự":
+    "Character grid",
+  "Tự động: HDZero và Walksnail tự báo lưới của chúng; không báo thì dùng 53 x 20 (DJI).":
+    "Automatic: HDZero and Walksnail report their grid; otherwise 53 x 20 (DJI).",
+  "115200 cho DJI, Walksnail và HDZero.":
+    "115200 for DJI, Walksnail and HDZero.",
+  "Số lần vẽ mỗi giây":
+    "Screens per second",
+  "Hiện trong kính (mục \"Tên máy bay\"), chữ in hoa, tối đa 15 ký tự ASCII.":
+    "Shown in the goggles (element \"Craft name\"), in capitals, at most 15 ASCII characters.",
+  "{label}: cột {c}, hàng {r}":
+    "{label}: column {c}, row {r}",
 };
 
 // Strings that read the same in both languages (units, protocol names, terms pilots use in English).
@@ -2550,4 +2837,7 @@ export const SAME = [
   "WiFi",
   "1 Mbit/s", "125 kbit/s", "250 kbit/s", "500 kbit/s", "CAN bus", "CAN bus (DroneCAN)", "DroneCAN", "Node {id}",
   "rpm", "ms",
+  "MAVLink 2", "System ID", "Telemetry (MAVLink)", "Telemetry RX", "Telemetry TX",
+  "Motor wizard",
+  "MSP DisplayPort (DJI, Walksnail, HDZero)", "HD 53 x 20 (DJI, Walksnail)", "HDZero 50 x 18", "SD 30 x 16", "OSD",
 ];

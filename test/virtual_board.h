@@ -276,9 +276,10 @@ public:
         void dev_config(uint32_t bd, uint32_t, bool) override { baud = bd; }
     } esc_wire;
     bool esc_wire_on = true; int esc_wire_corrupt = 0; float esc_temp_c = 35.0f;
-    struct TlmWire : StubUartDevice {                     // a telemetry radio on a UART (wire it: SerialN.dev = &b.tlm_wire): what the firmware sends
-        std::vector<uint8_t> sent; uint32_t baud = 0; size_t max_write = 0;
-        int dev_read() override { return -1; }
+    struct TlmWire : StubUartDevice {                     // a telemetry radio / video transmitter on a UART (wire it: SerialN.dev = &b.tlm_wire): what the firmware sends; q: what the device sends
+        std::vector<uint8_t> sent; std::deque<uint8_t> q; uint32_t baud = 0; size_t max_write = 0;
+        int dev_read() override { if (q.empty()) return -1; const uint8_t c = q.front(); q.pop_front(); return c; }
+        int dev_pending() override { return (int)q.size(); }
         void dev_write(const uint8_t* d, size_t n) override { sent.insert(sent.end(), d, d + n); if (n > max_write) max_write = n; }
         void dev_config(uint32_t bd, uint32_t, bool) override { baud = bd; }
     } tlm_wire;

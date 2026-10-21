@@ -23,7 +23,7 @@ wbclient/web/js/labels.js      nhãn tiếng Việt, đơn vị, giải thích; 
 wbclient/web/js/i18n.js        tr('chuỗi tiếng Việt', {giá trị}) → chuỗi theo ngôn ngữ đang chọn
 wbclient/web/js/lang/en.js     bản tiếng Anh: EN (Việt → Anh) và SAME (chuỗi giống nhau ở hai ngôn ngữ)
 wbclient/web/js/tabs/*.js      mỗi tab một file
-wbclient/web/js/gfx/           fwmath.js (công thức giống firmware), craft3d.js (hình 3D), scope.js (đồ thị cuộn), logplot.js (đồ thị log blackbox)
+wbclient/web/js/gfx/           fwmath.js (công thức giống firmware), craft3d.js (hình 3D), stickpreview.js (máy bay xem thử theo cần), scope.js (đồ thị cuộn), logplot.js (đồ thị log blackbox)
 wbclient/logview.py            thư mục log trên máy tính, khung nhìn rút gọn của một log cho đồ thị (xem docs/BLACKBOX.md)
 ```
 - Trình duyệt không thấy giao thức nhị phân: settings và telemetry tới dưới dạng JSON, đơn vị kỹ thuật, enum bằng tên (đúng các giá trị dòng lệnh in ra).
@@ -52,12 +52,12 @@ wbclient/logview.py            thư mục log trên máy tính, khung nhìn rút
 | Tab | Có gì | Firmware chưa có (trang ghi rõ) |
 |---|---|---|
 | Tổng quan | hình 3D theo tư thế, bảng module (có / không có + lý do firmware báo; thêm dòng "Optical flow" khi đã chọn cảm biến và dòng "Bảng chân" khi firmware thấy trùng chân), danh sách lý do chưa arm được (kể cả "vòng điều khiển không đạt tần số", "vừa bị tắt vì runaway"), số đo trực tiếp, **CPU / RAM / PSRAM**, **tần số thực / tần số đặt và số chu kỳ bỏ lỡ, thời gian từng khâu của một chu kỳ, failsafe kèm nguyên nhân** | |
-| Receiver | 12 kênh trực tiếp theo channel map, chất lượng sóng, giao thức, thứ tự kênh (AETR / TAER), RC smoothing | SPEKTRUM, nRF24, PPM, PWM |
+| Receiver | 12 kênh trực tiếp theo channel map, chất lượng sóng, giao thức, thứ tự kênh (AETR / TAER), RC smoothing, máy bay xem thử theo cần (mặc định Angle) | SPEKTRUM, nRF24, PPM, PWM |
 | Mode | dải AUX cho từng mode (kéo hai đầu dải; vạch đậm = vị trí công tắc lúc này), trạng thái bật/tắt thật; có Position Hold và GPS Rescue | |
 | Cảm biến | hiệu chuẩn gyro, accelerometer 6 mặt, level trim, **level trim khi bay** (trạng thái lần đo: chưa đo / đang đo % / đã đo xong chờ disarm; trang tự đọc lại và báo khi firmware tự lưu), la bàn (đám mây điểm); hướng chip; airmode + ngưỡng ga bắt đầu; bật tắt module; GPS + đặt home | gyro 1/2 |
 | Motor | hình khung với số motor và chiều quay bắt buộc, giao thức ESC (motor idle chỉ hiện với DShot), test từng motor (RPM, lỗi telemetry), **dòng trạng thái DShot hai chiều: ESC nào không trả lời, khung bỏ qua, lượt trả lời bị lỡ**, đảo chiều, thứ tự motor, đồ thị rung gyro thô / sau lọc | DShot quá 4 motor |
 | PID | **thanh trượt tune** (kéo: chỉ con số cạnh thanh đổi; thả: một lần ghi; firmware tính P I D Dmax F và trả về, ô của trục do thanh trượt tính bị khoá), bảng PID từng trục, feedforward, I-term relax, anti-gravity, D max, TPA và throttle boost, Angle, Stabilize (P từng trục, gia tốc, input time constant); số liệu lúc này: TPA, anti-gravity, airmode, PID sum, **ga treo đo được** | |
-| Rate | rate kiểu Actual + đồ thị có chấm vị trí cần, đường cong ga, giới hạn góc của Angle / Stabilize | |
+| Rate | rate kiểu Actual + đồ thị có chấm vị trí cần, máy bay xem thử theo cần (mặc định Acro), đường cong ga, giới hạn góc của Angle / Stabilize | |
 | Bộ lọc | **bản đồ tần số** (từng lowpass và vùng nó trượt, notch tĩnh, vị trí dynamic notch từng trục và RPM notch từng motor lúc này), hai thanh trượt lọc (bật thì các ô tần số cắt bị khoá và hiện kết quả), gyro lowpass 1 / 2, notch tĩnh, RPM filter (ghi rõ khi DShot hai chiều chưa bật), dynamic notch, lọc D-term, yaw lowpass | |
 | **Vị trí** | cảm biến optical flow: loại, dòng firmware báo lúc khởi động, số mẫu/giây, chất lượng bề mặt, lý do mẫu bị bỏ, tốc độ đo được và **vòng tròn có mũi tên** để kiểm tra hướng lắp (mũi máy ở phía trên; hướng lắp / lật gương / hệ số có tác dụng ngay); ước lượng vị trí (nguồn vận tốc, vị trí, hướng mũi theo la bàn hay chỉ gyro, góc nghiêng có được chỉnh hay không); Position Hold (trạng thái, từng trục, góc nghiêng yêu cầu, điểm giữ, bù gió, hệ số); GPS Rescue và thủ tục failsafe (sẵn sàng hay chưa, giai đoạn + lý do bỏ cuộc, khoảng cách tới home, độ cao bay về, mọi thông số); xem `docs/NAV.md` | |
 | Pin và còi | điện áp, số cell, thang một cell theo ngưỡng, các ngưỡng, hiệu chỉnh hệ số chia ADC; bảng 18 tình huống với **hai cột: còi và motor**, hình mẫu âm, số tiếng motor phát, nút "Thử"; âm của motor; loại còi (xem `docs/POWER.md`) | đo dòng điện, mAh |
@@ -164,3 +164,10 @@ Mỗi test trình duyệt còn kiểm tra trang không ghi lỗi nào ra console
 - Nhận diện cổng theo VID của chip USB (danh sách trong `gui.py`) chưa thử với mạch nào.
 - GUI mới chỉ chạy trong Chromium không đầu trên Linux. Chưa mở bằng Chrome / Edge / Firefox trên Windows; font Bahnschrift (số) chỉ có trên Windows nên ảnh chụp trong lúc phát triển dùng font thay thế.
 - `wb_sim` trên Windows (mã winsock đã viết nhưng chưa biên dịch thử).
+
+## Máy bay xem thử theo cần (0.24.1)
+Tab **Receiver** và tab **Rate** có khối "Máy bay theo cần": hình 3D của máy, chạy theo cần đang gạt trên tay điều khiển (stream `rc`). Đây chỉ là mô phỏng trong app, không gửi gì xuống firmware.
+- **Acro** (mặc định ở tab Rate): máy quay đúng tốc độ mà đường cong rate cho ra với vị trí cần lúc đó. Thả cần thì máy đứng yên ở tư thế đang có. Cách cộng dồn góc giống bộ ước lượng tư thế của firmware khi chỉ dùng gyro (`acroStep`).
+- **Angle** (mặc định ở tab Receiver): góc nghiêng roll / pitch bằng góc đích của `AngleController` (giới hạn góc × rate / max rate). Cần yaw xoay hướng mũi.
+- Nút "Về cân bằng" đặt máy về thăng bằng, mũi hướng ra xa người xem. Khi mất sóng thì máy đứng yên và trang báo "Chưa có tín hiệu".
+- **Kiểm chứng:** `test_gui_math::test_stick_preview_flies_like_the_firmware` so `acroStep` với `Ahrs` của firmware chỉ dùng gyro (6 đoạn quay nối nhau), và so `angleTarget` với `AngleController` (198 trường hợp, có cả độ nhạy giữa lớn hơn max rate). `test_gui_browser::test_stick_preview` đã viết nhưng chưa chạy được ở máy này.

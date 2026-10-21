@@ -15,19 +15,13 @@
 #define WB_PLATFORM_ESP32 1
 #define WB_PLATFORM_STM32 0
 #define WB_PLATFORM_HOST 0
-#define WB_CHIP_NAME "ESP32S3"
 #elif defined(ARDUINO_ARCH_STM32)
 #define WB_PLATFORM_ESP32 0
 #define WB_PLATFORM_STM32 1
 #define WB_PLATFORM_HOST 0
-#if defined(STM32H5xx)
-#define WB_CHIP_NAME "STM32H5"
-#else
-#define WB_CHIP_NAME "STM32"
-#endif
 #else
 #define WB_PLATFORM_ESP32 0
 #define WB_PLATFORM_STM32 0
 #define WB_PLATFORM_HOST 1
-#define WB_CHIP_NAME "ESP32S3"          // (the simulator plays an ESP32-S3 board)
 #endif
+// The chip by name, and the pins it has: port/chip.h

@@ -17,6 +17,7 @@
 #include "flow.h"
 #include "poshold.h"
 #include "rescue.h"
+#include "acro_trainer.h"
 
 // ============================================================================
 // FlightCore - the whole flight stack behind two entry points, shaped around what the hardware drivers actually deliver:
@@ -76,10 +77,12 @@ struct CoreConfig {
     int pid_denom = 1;                             // the control part (attitude, modes, PID, mixer) runs on every pid_denom-th gyro sample (Betaflight pid_process_denom)
     float pid_hz() const { return loop_hz / (float)(pid_denom < 1 ? 1 : pid_denom); }
     RcConfig rc; RateProfile rates;
+    AcroTrainerConfig trainer;                       // the ACRO_TRAINER switch (acro_trainer.h)
     PidConfig pid; GyroFilterConfig gyro; FeedforwardConfig ff; RcSmoothingConfig rc_smoothing;
     AngleConfig angle; StabilizeConfig stab;
     uint8_t throttle_boost = 5, throttle_boost_cutoff = 15;      // Betaflight throttle_boost / throttle_boost_cutoff
     uint8_t airmode = AM_AUTO;                     // AirmodeSetting: stabilised with the throttle stick at the bottom?
+    bool stick_arm = false;                          // arm / disarm with the sticks (safety.h StickArm); an ARM switch then only enables
     float airmode_threshold = 0.25f;                 // throttle (0..1) that counts as "in the air" at once (Betaflight airmode_start_throttle_percent)
     float airborne_after_s = 1.0f;                   // ... and so does any throttle above "low" held this long (a strong craft hovers below that threshold)
     MixerConfig mixer;
@@ -151,6 +154,7 @@ struct CoreOutput {
     float sp_dps[3] = {}, gyro_f_dps[3] = {}, u[3] = {};               // debug / blackbox; u = PID sum / 1000 (the mixer's input)
     float pid_p[3] = {}, pid_i[3] = {}, pid_d[3] = {}, pid_f[3] = {};  // the terms that make up u[], in PID sum units (x 1000)
     bool airmode_active = false;   // stabilised (full authority, I-terms) although the throttle stick is at the bottom
+    bool trainer_active = false;   // the acro trainer watches roll / pitch (ACRO_TRAINER switch, Acro)
     bool airborne = false;         // the craft is taken to be in the air (see FlightCore::update, step 6)
     bool ground_idle = false;      // every motor at idle, nothing mixed: armed and standing on the ground
     uint8_t stall_motor = 0;       // the motor (1..8) the stall guard last saw stop (0 = none since boot): safety.h StallGuard
@@ -297,7 +301,13 @@ private:
         ai.calibrating = in.health.calibrating; ai.batt_low = in.health.batt_low;
         ai.use_mag = cfg.use_mag; ai.mag_calibrated = in.health.mag_calibrated; ai.pin_conflict = in.health.pin_conflict; ai.loop_slow = in.health.loop_slow;
         const bool was_armed = armed_;
-        armed_ = arming_.update((cmd.modes >> M_ARM) & 1u, in.rc_link, ai);
+        bool arm_sw = (cmd.modes >> M_ARM) & 1u, keep_reason = false;
+        if (cfg.stick_arm) {
+            const bool g = StickArm::gesture(cmd.roll, cmd.pitch, cmd.yaw, cmd.throttle_low, stick_arm_.cfg.threshold);
+            arm_sw = stick_arm_.update(g, in.rc_link, !rc.modes.has(M_ARM) || arm_sw, armed_, !airborne_, dt);
+            keep_reason = !g;
+        }
+        armed_ = arming_.update(arm_sw, in.rc_link, ai, keep_reason);
         if (armed_ && !was_armed) runaway_.on_arm();
         o.arm_blockers = arming_.blockers(); o.arm_refused = arming_.refused();
         o.stick[0] = cmd.roll; o.stick[1] = cmd.pitch; o.stick[2] = cmd.yaw; o.stick[3] = cmd.throttle_raw; o.throttle_low = cmd.throttle_low;
@@ -391,7 +401,10 @@ private:
         // Airmode = the craft stays stabilised (full authority, I-terms) with the throttle stick at the bottom. AUTO: while it is in
         // the air. ALWAYS: from the first time the throttle was up until the disarm, as Betaflight does - on the ground or on the
         // bench the I-terms then wind up against a craft that cannot answer, and the motors run up.
-        const bool airmode = pilot_throttle && (cfg.airmode == AM_ALWAYS ? raised_ : cfg.airmode == AM_AUTO ? airborne_ : false);
+        // An AIRMODE switch, when one is assigned, turns it on and off; on = the kind general.airmode sets (AUTO if that is OFF).
+        uint8_t am = cfg.airmode;
+        if (rc.modes.has(M_AIRMODE)) am = !((cmd.modes >> M_AIRMODE) & 1u) ? (uint8_t)AM_OFF : cfg.airmode == AM_OFF ? (uint8_t)AM_AUTO : cfg.airmode;
+        const bool airmode = pilot_throttle && (am == AM_ALWAYS ? raised_ : am == AM_AUTO ? airborne_ : false);
         o.airmode_active = airmode && cmd.throttle_low;
         // ground_idle: every motor at idle, nothing mixed, nothing integrates (ArduCopter's GROUND_IDLE)
         const bool ground_idle = pilot_throttle ? (cmd.throttle_low && !airmode)
@@ -461,13 +474,21 @@ private:
         } else {                                               // Acro
             for (int a = 0; a < 3; a++) pin.feedforward[a] = ss.feedforward[a];
         }
+        // the acro trainer: Acro only (Betaflight: not in Angle / Horizon / the rescue / the hold modes - all of which are Angle here)
+        const bool trainer = !angle && !stab && ((cmd.modes >> M_ACRO_TRAINER) & 1u);
+        if (trainer && !was_trainer_) trainer_.reset();
+        trainer_reset_i_[0] = trainer_reset_i_[1] = false;
+        if (trainer) for (int a = ROLL; a <= PITCH; a++) sp_dps[a] = trainer_.apply(a, sp_dps[a], a == ROLL ? att_.roll : att_.pitch, g_f_[a], trainer_reset_i_[a]);
+        was_trainer_ = trainer; o.trainer_active = trainer;
         was_angle_ = angle; was_stab_ = stab;
 
         // ---- 8. rate loop + mixer
         // TPA and the dynamic low-passes follow the throttle that is flown, whoever commands it. Anti-gravity and the throttle
         // boost answer the PILOT'S hand only: fed with Altitude Hold's output they would amplify barometer noise into the motors
         // (Betaflight computes them from the stick as well, and puts the autopilot's throttle in afterwards).
+        pid_.set_anti_gravity_switch(rc.modes.has(M_ANTI_GRAVITY) ? (int8_t)((cmd.modes >> M_ANTI_GRAVITY) & 1u) : (int8_t)-1);
         pid_.update_throttle(thr, &gf_, pilot_throttle);
+        for (int a = ROLL; a <= PITCH; a++) if (trainer_reset_i_[a]) pid_.reset_i(a);
         for (int a = 0; a < 3; a++) { pin.setpoint[a] = sp_dps[a]; pin.gyro[a] = g_f_[a]; }
         pin.angle_mode = angle || stab;
         pin.i_enabled = !ground_idle;
@@ -523,14 +544,14 @@ private:
     void configure_control() {
         const float hz = cfg.pid_hz();                 // the controllers run at the control rate, the gyro filters (gf_) at the gyro's
         pid_.configure(cfg.pid, hz); sp_gen_.configure(cfg.ff, cfg.rc_smoothing, hz);
-        angle_.configure(cfg.angle, hz); stab_.configure(cfg.stab); boost_.configure(cfg.throttle_boost, cfg.throttle_boost_cutoff, hz);
+        angle_.configure(cfg.angle, hz); stab_.configure(cfg.stab); trainer_.cfg = cfg.trainer; boost_.configure(cfg.throttle_boost, cfg.throttle_boost_cutoff, hz);
         have_rc_ = false; ctl_dirty_ = true;
     }
     // disarmed: the controllers forget everything, once
     WB_FAST void reset_control() {
         if (!ctl_dirty_) return;
         pid_.reset(); angle_.reset(); boost_.reset();
-        raised_ = airborne_ = false; up_t_ = 0.0f; land_.reset(); was_angle_ = was_stab_ = false; ctl_dirty_ = false;
+        raised_ = airborne_ = false; up_t_ = 0.0f; land_.reset(); was_angle_ = was_stab_ = was_trainer_ = false; ctl_dirty_ = false;
     }
     WB_FAST void estimator_step(Vec3 acc, float dt_est, uint32_t now) {
         float an, ae, aup; ahrs_.world_accel(acc, an, ae, aup);
@@ -605,6 +626,8 @@ private:
 
     Ahrs ahrs_; AccelGainSchedule acc_gain_; VerticalEstimator vert_; HorizontalEstimator horiz_; Mixer mixer_; AltHold alt_; Failsafe fs_; Arming arming_; RunawayTakeoff runaway_; StallGuard stall_;
     GyroFilter gf_; SetpointGenerator sp_gen_; PidController pid_; AngleController angle_; StabilizeController stab_; ThrottleBoost boost_;
+    AcroTrainer trainer_; bool was_trainer_ = false, trainer_reset_i_[2] = {false, false};
+    StickArm stick_arm_;
     float g_f_[3] = {};
     EulerDeg att_; Estimate est_;
     int denom_ = 1, pid_n_ = 0; float win_dt_ = 0.0f; Vec3 win_g_, win_a_; CoreOutput last_;     // the gyro samples of the control cycle to come

@@ -242,7 +242,11 @@ int main(int argc, char** argv) {
     }
     int flash_writes = rig.flash.writes; uint32_t log_ops = rig.logmem.writes + rig.logmem.erases; double log_saved = 0;
     rig.boot();
-    if (stm32) rig.fw->server.set_features(wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | wbp::FEAT_STM32);
+    auto play_stm32 = [&]() {          // an STM32H563 in a 144-pin package as far as the app can tell: PA0 .. PG15
+        rig.fw->server.set_features(wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | wbp::FEAT_STM32);
+        uint8_t pins[port::kPinMaskBytes] = {}; port::stm32_port_pins(pins, 7); rig.fw->server.set_chip("STM32H563", pins);
+    };
+    if (stm32) play_stm32();
     printf("wb_sim: firmware %s, app on socket://127.0.0.1:%d, control on %d, flash '%s'%s\n", rig.fw->began ? "running" : "started WITHOUT a working IMU/motor setup", port, port + 1, flash_path.c_str(), fresh ? " (fresh)" : "");
     for (int i = 0; i < rig.app().report_lines(); i++) printf("  %s\n", rig.app().report()[i]);
     fflush(stdout);
@@ -274,7 +278,7 @@ int main(int argc, char** argv) {
         const uint64_t target = sim0 + (uint64_t)(wall * speed * 1e6);
         int budget = 50;
         while (g_stub_us < target && budget-- > 0) rig.run(0.001);
-        if (rig.boots != boots) { boots = rig.boots; if (stm32) rig.fw->server.set_features(wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | wbp::FEAT_STM32); printf("wb_sim: firmware restarted (boot %d)\n", boots); fflush(stdout); }
+        if (rig.boots != boots) { boots = rig.boots; if (stm32) play_stm32(); printf("wb_sim: firmware restarted (boot %d)\n", boots); fflush(stdout); }
         if (rig.flash.writes != flash_writes) { flash_writes = rig.flash.writes; flash_save(rig.flash, flash_path); }
         if (rig.has_logmem && rig.logmem.writes + rig.logmem.erases != log_ops && wall - log_saved > 0.5) { log_ops = rig.logmem.writes + rig.logmem.erases; log_saved = wall; logmem_save(rig.logmem, log_path); }
 

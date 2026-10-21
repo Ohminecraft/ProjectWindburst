@@ -21,6 +21,7 @@
 #include "../src/config/hardware_config.h"
 #include "../src/config/pin_check.h"
 #include "../src/app/sysload.h"
+#include "../src/app/usb_name.h"
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(cond, ...) do { const bool ok_ = (cond); if (getenv("V")) { printf("    "); printf(__VA_ARGS__); printf("\n"); } if (ok_) g_pass++; else { g_fail++; printf("  FAIL line %d: %s   ", __LINE__, #cond); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -47,6 +48,8 @@ static void t_pack() {
     t.rpm[7] = 900000.0f; t.esc_volt = 16.42f; t.dyn_idle = 0.031f; t.bidir_state = BIDIR_STATE_UNAVAILABLE; t.esc_answers = 0x0B; t.hw_skipped = 1234; t.hw_late = 56;
     app::pack_stream(STR_MOTORS, t, 0, b, sizeof(b));
     { T_motors m; memcpy(&m, b, sizeof(m)); CHECK(m.bidir == BIDIR_STATE_UNAVAILABLE && m.answers == 0x0B && m.skipped == 1234 && m.late == 56, "motors: output driver state"); }
+    t.hw_no_start = 321; t.hw_bad_bits = 45; t.hw_bad_crc = 6; t.rpm_ok = 0x0D; app::pack_stream(STR_MOTORS, t, 0, b, sizeof(b));
+    { T_motors m; memcpy(&m, b, sizeof(m)); CHECK(m.no_start == 321 && m.bad_bits == 45 && m.bad_crc == 6 && m.rpm_ok == 0x0D, "motors: why replies were rejected, which rpm is fresh"); }
     { T_motors m; memcpy(&m, b, sizeof(m)); CHECK(m.cmd[3] == 300 && m.rpm[5] == 500 && m.rpm[7] == 65535 && m.err[6] == 6 && m.temp[2] == 32 && m.volt[0] == 1642 && m.dyn_idle == 31, "motors: cmd x1000, rpm/10 (saturating), volt x100: %u %u %u", m.cmd[3], m.rpm[5], m.rpm[7]); }
     t.gyro_raw[1] = -45.67f; t.acc[2] = -0.9987f; t.mag[0] = 0.2504f; t.baro_alt = -12.345f; t.baro_pa = 101325.4f; t.temp_c = 24.56f; t.range_m = 1.2345f;
     app::pack_stream(STR_SENSORS, t, 0, b, sizeof(b));
@@ -259,11 +262,12 @@ static void t_host() {
     uint8_t res[16]; uint16_t rlen = 9;
     CHECK(h.now_ms() == 1234, "clock");
     CHECK(h.apply_live(SEC_PID) && fl.ran == 1 && fl.last_cmd == app::REQ_APPLY_SECTION, "a live section is handed to the flight loop");
-    CHECK(!h.apply_live(SEC_MOTORS) && !h.apply_live(SEC_PINS) && !h.apply_live(99) && fl.ran == 1, "a section that needs a reboot is NOT applied (and the flight loop is not even asked)");
+    CHECK(!h.apply_live(SEC_PINS) && !h.apply_live(99) && fl.ran == 1, "a section that needs a reboot is NOT applied (and the flight loop is not even asked)");
+    CHECK(h.apply_live(SEC_MOTORS) && fl.ran == 2 && fl.last_cmd == app::REQ_APPLY_SECTION, "motors: the flight loop decides (a new order / direction runs at once, the motor wizard)");
     const uint8_t a3[3] = {0, 100, 0};
-    CHECK(h.command(CMD_MOTOR_TEST, a3, 2, res, rlen) == ERR_BAD_ARG && fl.ran == 1, "wrong argument size never reaches the flight loop");
-    CHECK(h.command(123, a3, 0, res, rlen) == ERR_UNKNOWN && fl.ran == 1, "unknown command never reaches the flight loop");
-    CHECK(h.command(CMD_MOTOR_TEST, a3, 3, res, rlen) == ERR_OK && fl.ran == 2 && fl.last_cmd == CMD_MOTOR_TEST && rlen == 1 && res[0] == 7, "a valid command is executed and its result byte returned");
+    CHECK(h.command(CMD_MOTOR_TEST, a3, 2, res, rlen) == ERR_BAD_ARG && fl.ran == 2, "wrong argument size never reaches the flight loop");
+    CHECK(h.command(123, a3, 0, res, rlen) == ERR_UNKNOWN && fl.ran == 2, "unknown command never reaches the flight loop");
+    CHECK(h.command(CMD_MOTOR_TEST, a3, 3, res, rlen) == ERR_OK && fl.ran == 3 && fl.last_cmd == CMD_MOTOR_TEST && rlen == 1 && res[0] == 7, "a valid command is executed and its result byte returned");
     CHECK(!h.take_settings_changed(), "a command that does not write settings leaves them clean");
     CHECK(h.command(CMD_LEVEL_TRIM, a3, 0, res, rlen) == ERR_OK && h.take_settings_changed() && !h.take_settings_changed(), "a command that writes the calibration section marks settings changed, once");
     h.reboot(); CHECK(fl.last_cmd == app::REQ_REBOOT, "reboot goes through the flight loop");
@@ -434,7 +438,7 @@ static void t_settings() {
     printf("[settings] validation that protects the flight code\n");
     Settings s; defaults(s);
     CHECK(validate(s.modes) == 0 && s.modes.mode[0] == 255 && s.modes.mode[15] == 255, "defaults are valid; unused mode slots stay 255");
-    s.modes.mode[2] = 10; CHECK(validate(s.modes) == 1 && s.modes.mode[2] == 255, "an unknown mode id (from a newer firmware, or a damaged record) empties its slot - it does not become some other mode");
+    s.modes.mode[2] = MODE_BLACKBOX_ERASE + 1; CHECK(validate(s.modes) == 1 && s.modes.mode[2] == 255, "an unknown mode id (from a newer firmware, or a damaged record) empties its slot - it does not become some other mode");
     for (const SectionInfo& si : kSections) { Settings d; defaults(d); CHECK(validate_section(d, si.id) == 0, "section %s: defaults pass their own validation", si.name); }
     const float nan = NAN;
     s.pid.stab_p[1] = nan; s.pid.stab_p[2] = nan; s.calibration.acc_scale[2] = nan; s.calibration.mag_matrix[4] = nan;
@@ -586,6 +590,42 @@ static void t_led() {
       CHECK(eq(c[0], app::LedLogic::kRed) && eq(c[2], app::LedLogic::kRed) && eq(c[3], app::LedLogic::kTeal) && eq(c[4], app::LedLogic::kGreen) && eq(c[5], app::LedLogic::kWhite), "navigation lights: left red, right green, the mode in the middle, a white strobe at the end");
       N.render(in, 500, c); CHECK(eq(c[5], Rgb()), "the strobe is a flash"); }
     { app::LedLogic D; D.configure(1, 50, app::LedLogic::ALL); in = app::LedInput(); in.ready = true; D.render(in, 0, c); CHECK(c[0].g == 127 && c[0].r == 0, "brightness 50 %%: half (%u)", c[0].g); }
+    { // MANUAL: each LED its own function and color
+      using L_ = app::LedLogic; L_ M; M.configure(7, 100, L_::MANUAL); uint8_t fn[32] = {}; uint32_t col[32] = {};
+      const uint8_t f0[7] = {L_::F_COLOR, L_::F_MODE, L_::F_ARMED, L_::F_BLINK, L_::F_OFF, L_::F_STATUS, 200};
+      for (int i = 0; i < 7; i++) { fn[i] = f0[i]; col[i] = 0x123456; } M.manual(fn, col, true, 5);
+      in = app::LedInput(); in.ready = true; in.mode = app::LedInput::ANGLE; const Rgb k = L_::rgb(0x123456);
+      M.render(in, 100, c);
+      CHECK(eq(c[0], k) && eq(c[1], L_::kBlue) && eq(c[2], Rgb()) && eq(c[3], k) && eq(c[4], Rgb()) && eq(c[5], L_::kGreen) && eq(c[6], Rgb()),
+            "manual, disarmed: fixed color, the mode's color, ARMED dark, blink on, OFF, the state picture, an unknown function dark");
+      in.armed = true; M.render(in, 1100, c); CHECK(eq(c[2], k) && eq(c[3], Rgb()) && eq(c[5], L_::kBlue), "armed: ARMED lit; blink off in the second half of its 2 s cycle; STATUS follows the mode");
+      in.failsafe = true; M.render(in, 0, c); CHECK(eq(c[0], L_::kRed) && eq(c[4], L_::kRed) && eq(c[6], L_::kRed), "warnings on: failsafe takes the whole strip");
+      M.manual(fn, col, false, 5); M.render(in, 0, c); CHECK(eq(c[0], k) && eq(c[4], Rgb()) && eq(c[5], L_::kRed), "warnings off: the functions stay, only STATUS shows the failsafe");
+      in.failsafe = false; in.stall = true; M.manual(fn, col, true, 5); M.render(in, 0, c); CHECK(eq(c[0], L_::kRed) && eq(c[4], L_::kRed), "warnings on: a motor stall too"); in.stall = false;
+      in.batt_critical = true; M.render(in, 0, c); CHECK(eq(c[4], L_::kRed), "warnings on: battery critical too"); in.batt_critical = false;
+      in.batt_warning = true; M.render(in, 100, c); CHECK(eq(c[0], k) && eq(c[4], Rgb()), "a battery warning is not urgent: the functions stay"); in.batt_warning = false;
+      M.manual(fn, col, true, 0); in.armed = false; M.render(in, 4000, c); const bool on = eq(c[3], k); M.render(in, 6000, c);
+      CHECK(on && eq(c[3], Rgb()), "speed 0 is taken as 1: blink cycle 10 s"); }
+    { using L_ = app::LedLogic; L_ M; M.configure(8, 100, L_::MANUAL); uint8_t fn[32] = {}; uint32_t col[32] = {};
+      for (int i = 0; i < 3; i++) fn[i] = L_::F_RAINBOW;
+      fn[3] = L_::F_STATUS;
+      for (int i = 4; i < 8; i++) { fn[i] = L_::F_LARSON; col[i] = 0xFF0000; } M.manual(fn, col, true, 5);
+      in = app::LedInput(); in.ready = true; M.render(in, 0, c);
+      CHECK(eq(c[0], L_::kRed) && eq(c[1], L_::kGreen) && eq(c[2], L_::kBlue), "rainbow across its 3 LEDs: red, green, blue at t = 0");
+      M.render(in, 1000, c); CHECK(c[0].r == 0 && c[0].g == 255 && c[0].b == 255, "half a cycle later the first is cyan (%u %u %u)", c[0].r, c[0].g, c[0].b);
+      M.render(in, 0, c); CHECK(c[4].r == 255 && c[5].r == 50 && c[6].r == 0 && c[7].r == 0, "scanner at its first LED, a dim neighbour (%u %u %u %u)", c[4].r, c[5].r, c[6].r, c[7].r);
+      M.render(in, 1000, c); CHECK(c[7].r == 255 && c[6].r == 50 && c[4].r == 0, "half a cycle: at the far end");
+      M.render(in, 1500, c); CHECK(c[6].r == 255 && c[5].r == 50 && c[7].r == 50 && c[4].r == 0, "on its way back (%u %u %u %u)", c[4].r, c[5].r, c[6].r, c[7].r); }
+    { using L_ = app::LedLogic; L_ M; M.configure(4, 50, L_::MANUAL); uint8_t fn[32] = {}; uint32_t col[32] = {};
+      fn[0] = L_::F_BREATHE; fn[1] = L_::F_STROBE; fn[2] = L_::F_BATTERY; fn[3] = L_::F_THROTTLE; col[0] = col[1] = 0xFFFFFF; M.manual(fn, col, true, 5);
+      in = app::LedInput(); in.batt_pct = 100; in.throttle = 0; M.render(in, 0, c);
+      CHECK(c[0].r == 9 && c[1].r == 127 && c[2].g == 127 && c[2].r == 0 && c[3].b == 127 && c[3].r == 0, "brightness 50 %%: breathe at its dimmest (%u), strobe flash, battery full green, throttle low blue", c[0].r);
+      in.batt_pct = 0; in.throttle = 100; M.render(in, 1000, c);
+      CHECK(c[0].r == 127 && c[1].r == 127 && c[2].r == 127 && c[2].g == 0 && c[3].r == 127 && c[3].b == 0, "breathe at its brightest, the strobe again (every 1 s), battery empty red, full throttle red");
+      M.render(in, 100, c); CHECK(c[1].r == 0, "the strobe is a flash");
+      in.batt_pct = 255; M.render(in, 0, c); CHECK(eq(c[2], Rgb()), "no battery: the gauge is dark");
+      in.batt_pct = 25; in.throttle = 50; M.render(in, 0, c); CHECK(c[2].r == 95 && c[2].g == 31 && c[3].r == 63 && c[3].b == 63, "a quarter left, half throttle: between (%u %u, %u %u)", c[2].r, c[2].g, c[3].r, c[3].b); }
+    { using L_ = app::LedLogic; CHECK(eq(L_::hue(60), Rgb{255, 255, 0}) && eq(L_::hue(300), Rgb{255, 0, 255}) && eq(L_::hue(390), Rgb{255, 127, 0}) && eq(L_::hue(180), Rgb{0, 255, 255}), "hue wheel"); }
     { Rgb k[3] = {{255, 0, 0}, {0, 0x81, 0}, {0x12, 0x34, 0x56}}; uint8_t b[200]; const size_t n = led::encode(k, 3, b, sizeof(b)); Rgb back[3]; const int m = led::decode(b, n, back, 3);
       CHECK(n == 3 * 12 + led::kLatchBytes && b[0] == 0x88 && b[4] == 0xEE && b[sizeof(b) > n ? n - 1 : 0] == 0 && m == 3 && eq(back[0], k[0]) && eq(back[1], k[1]) && eq(back[2], k[2]),
             "WS2812 on SPI: 12 bytes per LED, G R B, 1000 = 0 / 1110 = 1 (first bytes %02X %02X), the latch, decoded back", b[0], b[4]);
@@ -610,7 +650,22 @@ static void t_sticks() {
           "thresholds: pitch under 1100, throttle over 1900, yaw centred for the compass");
 }
 
+static void t_usb_name() {
+    printf("[usb name] the product string from general.usb_name\n");
+    char out[app::kUsbNameLen + 1]; S_general g; defaults(g);
+    CHECK(!strcmp(app::usb_product_name(g.usb_name, "ESP32-S3", out), "Windburst ESP32-S3"), "empty: the default, Windburst + the MCU ('%s')", out);
+    CHECK(!strcmp(app::usb_product_name(g.usb_name, WB_MCU_NAME, out), "Windburst PC"), "(this build: '%s')", out);
+    memcpy(g.usb_name, "  My Quad 5\"  ", 14); CHECK(!strcmp(app::usb_product_name(g.usb_name, "ESP32-S3", out), "My Quad 5\""), "spaces at both ends dropped ('%s')", out);
+    memset(g.usb_name, ' ', sizeof(g.usb_name)); CHECK(!strcmp(app::usb_product_name(g.usb_name, "ESP32-S3", out), "Windburst ESP32-S3"), "only spaces: the default");
+    memset(g.usb_name, 0, sizeof(g.usb_name)); memcpy(g.usb_name, "Qu\xc3\xa1" "d" "\x01", 6);
+    CHECK(!strcmp(app::usb_product_name(g.usb_name, "ESP32-S3", out), "Qu__d_"), "not printable ASCII: '_' (a USB string here is 8-bit) ('%s')", out);
+    memset(g.usb_name, 'x', sizeof(g.usb_name)); app::usb_product_name(g.usb_name, "ESP32-S3", out);
+    CHECK(strlen(out) == 32 && out[31] == 'x', "all 32 bytes used (no end mark): taken whole, ended in the output");
+    CHECK(sizeof(g.usb_name) == app::kUsbNameLen && offsetof(S_general, usb_name) == 24 && find_section(SEC_GENERAL)->compat4 == 24, "the field: 32 bytes at the end of the general section, the old size known");
+}
+
 int main() {
+    t_usb_name();
     t_pack(); t_sticks();
     t_sync();
     t_tx_queue(); t_gate(); t_host(); t_exchange(); t_acc(); t_level(); t_settings(); t_hwconfig(); t_pins_load(); t_loop_rate(); t_uart_plan(); t_link_mux(); t_led();

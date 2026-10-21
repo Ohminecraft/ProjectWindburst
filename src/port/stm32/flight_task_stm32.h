@@ -4,6 +4,7 @@
 
 #pragma once
 #include "../rtos.h"
+#include "../../config/ram_profile.h"
 #include "HardwareTimer.h"
 #include "../../app/flight_app.h"
 
@@ -43,7 +44,7 @@ public:
         app_ = &app;
         if (!sync_.create()) return false;
         app.set_sync(&sync_);
-        if (!port::task_create(&FlightTask::entry, "wb_flight", 24000, this, port::kPrioFlight, &task_, 0)) return false;
+        if (!port::task_create(&FlightTask::entry, "wb_flight", WB_LOW_RAM ? 8192 : 24000, this, port::kPrioFlight, &task_, 0)) return false;
         self_ = this;
         return true;
     }

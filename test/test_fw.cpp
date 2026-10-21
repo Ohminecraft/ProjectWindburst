@@ -127,8 +127,10 @@ static void t_loop() {
       S_motors m; r->get_section(SEC_MOTORS, &m, sizeof(m)); m.bidirectional = 1; r->set_section(SEC_MOTORS, &m, sizeof(m));
       r->request(MSG_SETTINGS_SAVE); r->request(MSG_REBOOT); r->run(2.0); r->stream(STR_MOTORS, 50); r->run(0.2);
       CHECK(r->latest(STR_MOTORS, mo) && mo.bidir == BIDIR_STATE_ACTIVE && mo.answers == 0x0F && (r->tel().health & HEALTH_ESC_TELEMETRY), "bidirectional on: ACTIVE, all four ESCs answer (0x%x)", mo.answers);
+      CHECK(mo.rpm_ok == 0x0F && mo.no_start == 0 && mo.bad_bits == 0 && mo.bad_crc == 0, "every rpm fresh (0x%x), no reply rejected (%u %u %u)", mo.rpm_ok, mo.no_start, mo.bad_bits, mo.bad_crc);
       r->board.esc_silent[2] = true; r->run(0.5); r->clear_inbox(); r->run(0.1);
       CHECK(r->latest(STR_MOTORS, mo) && mo.answers == 0x0B && !(r->tel().health & HEALTH_ESC_TELEMETRY), "the ESC of motor 3 stops answering: shown per motor (0x%x)", mo.answers);
+      CHECK(mo.rpm_ok == 0x0B && mo.rpm[2] == 0, "its rpm is marked stale (rpm_ok 0x%x), the app shows '-' instead of 0", mo.rpm_ok);
       r->board.esc_silent[2] = false; r->run(0.2); r->clear_inbox(); r->run(0.1);
       CHECK(r->latest(STR_MOTORS, mo) && mo.answers == 0x0F, "and when it is back");
       arm_switch_setup(*r); r->board.rc[4] = 2000; r->run(0.5); CHECK(r->tel().armed && r->board.motor_frac[0] > 0.03f, "armed with bidirectional DShot: the motors run"); }
@@ -307,7 +309,10 @@ static void t_link_streams() {
     auto r = fresh(); r->run(1.5);
     { const Rig::Rx h = r->request(MSG_HELLO);
       uint32_t hash = 0; if (h.p.size() >= 9) memcpy(&hash, h.p.data() + 5, 4);
-      CHECK(h.type == MSG_DEVICE_INFO && h.p[0] == kProtocolVersion && h.p[1] == ROLE_RX && hash == kSchemaHash, "DEVICE_INFO carries the schema hash 0x%08X", hash); }
+      CHECK(h.type == MSG_DEVICE_INFO && h.p[0] == kProtocolVersion && h.p[1] == ROLE_RX && hash == kSchemaHash, "DEVICE_INFO carries the schema hash 0x%08X", hash);
+      const std::string rest(h.p.begin() + 13, h.p.end()); const size_t z = rest.find(' ');
+      CHECK(z != std::string::npos && rest.compare(z + 1, 9, std::string("ESP32-S3", 9)) == 0 && rest.size() == z + 1 + 9 + 32 && (uint8_t)rest[z + 1 + 9 + 4] == 0xC0,
+            "DEVICE_INFO names the MCU (ESP32-S3) and its pins (32-byte mask; of GPIO 32 .. 39 the N16R8 has 38 and 39 only)"); }
     r->board.rest(20.0f, -10.0f); r->run(3.0);              // right side down 20, nose UP 10
     r->clear_inbox();
     CHECK(r->stream(STR_ATTITUDE, 50) && r->stream(STR_STATUS, 10) && r->stream(STR_SENSORS, 100) && r->stream(STR_RC, 20), "streams subscribed");
@@ -402,6 +407,23 @@ static void t_motor_test() {
     r->run(1.0);
     CHECK(r->command(CMD_MOTOR_BEACON, {3}).err == ERR_OK && r->command(CMD_MOTOR_BEACON, {7}).err == ERR_BAD_ARG, "beacon");
     CHECK(r->command(200).err == ERR_UNKNOWN, "unknown command");
+    printf("[motor wizard] a new motor order / spin direction takes effect at once, anything else still needs the restart\n");
+    {   auto w = fresh(); w->run(1.5); HostMotorHw* hw = VirtualBoard::host_hw(w->app());
+        S_motors m; w->get_section(SEC_MOTORS, &m, sizeof(m));
+        m.order[0] = 2; m.order[1] = 0; m.order[2] = 3; m.order[3] = 1; m.reversed_mask = 0x05;
+        CHECK(w->set_section(SEC_MOTORS, &m, sizeof(m)).type == MSG_SECTION && !(w->fw->server.flags() & SF_REBOOT_REQUIRED), "order and reversed only: no restart asked for");
+        const auto& cfg = w->app().motors.cfg();
+        CHECK(cfg.order[0] == 2 && cfg.order[3] == 1 && cfg.reversed[0] && !cfg.reversed[1] && cfg.reversed[2], "the outputs run with the new order at once");
+        w->command(CMD_MOTOR_TEST, {0, 44, 1}); w->run(0.05);
+        CHECK(hw->last.value[2] > 600 && hw->last.value[0] == 0 && hw->last.value[1] == 0 && hw->last.value[3] == 0, "motor 1 now spins hardware slot 3 (%u %u %u %u)", hw->last.value[0], hw->last.value[1], hw->last.value[2], hw->last.value[3]);
+        w->command(CMD_MOTOR_STOP); w->run(0.05);
+        S_motors bad = m; bad.order[1] = 2;
+        w->set_section(SEC_MOTORS, &bad, sizeof(bad));
+        CHECK(cfg.order[0] == 2 && cfg.order[1] == 0 && (w->fw->server.flags() & SF_REBOOT_REQUIRED), "two motors on one slot: not taken (%u %u), the firmware fixes it at the restart", cfg.order[0], cfg.order[1]); }
+    {   auto w = fresh(); w->run(1.5);
+        S_motors m; w->get_section(SEC_MOTORS, &m, sizeof(m)); m.protocol = m.protocol == ESC_PROTOCOL_DSHOT150 ? ESC_PROTOCOL_DSHOT300 : ESC_PROTOCOL_DSHOT150; m.order[0] = 1; m.order[1] = 0;
+        w->set_section(SEC_MOTORS, &m, sizeof(m));
+        CHECK((w->fw->server.flags() & SF_REBOOT_REQUIRED) && w->app().motors.cfg().order[0] == 0, "the protocol changed as well: nothing applied, restart asked for"); }
 }
 
 static void t_acc_cal() {
@@ -855,8 +877,8 @@ static void t_motor_beeper() {
 
       // ---- transmitter off: the lost-model finder
       b.tx_on = false; r.run(1.5); t0 = millis(); r.run(5.0); t = b.tones(t0, millis(), 3);
-      bool rhythm = t.size() >= 5; for (size_t i = 1; i < t.size(); i++) if (t[i] - t[i - 1] < 949 || t[i] - t[i - 1] > 953) rhythm = false;
-      CHECK(!r.tel().rc_link && rhythm, "receiver signal lost: a tone every 951 ms for as long as it takes to find the craft (%zu in 5 s)", t.size());
+      bool rhythm = t.size() >= 4; for (size_t i = 1; i < t.size(); i++) if (t[i] - t[i - 1] < 999 || t[i] - t[i - 1] > 1003) rhythm = false;
+      CHECK(!r.tel().rc_link && rhythm, "receiver signal lost: a tone every 1001 ms (the buzzer's rhythm) for as long as it takes to find the craft (%zu in 5 s)", t.size());
       r.request(MSG_HELLO); r.run(0.6); t0 = millis(); for (int i = 0; i < 6; i++) { r.run(0.5); r.request(MSG_HELLO); }
       CHECK(b.tones(t0, millis(), 3).empty(), "with the app connected the motors keep quiet on the desk");
       b.tx_on = true; r.run(4.0);
@@ -982,7 +1004,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.18.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.26.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -1865,6 +1887,8 @@ static void t_crsf_telemetry() {
       b.rc[2] = 1000; b.rc[4] = 1000; g.run(1.0);
       b.tx_on = false; g.run(1.0); b.rc_uart_sent().clear(); g.run(1.0);
       CHECK(b.rc_uart_sent().empty(), "link lost: nothing sent (nobody to take it)"); }
+    { auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.receiver.telemetry = 0; }); r->run(2.0); r->board.rc_uart_sent().clear(); r->run(1.0);
+      CHECK(has_line(*r, "rx: CRSF on UART2, telemetry off (receiver.telemetry)") && r->board.rc_uart_sent().empty() && r->tel().rc_link, "telemetry switched off: the TX pin stays silent, the receiver still works (%zu bytes)", r->board.rc_uart_sent().size()); }
     { auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.pins.rx_tx = 255; }); r->run(2.0);
       CHECK(has_line(*r, "rx: CRSF on UART2") && !has_line(*r, "telemetry on its TX pin") && r->board.rc_uart_sent().empty(), "no TX pin: no telemetry (%zu bytes)", r->board.rc_uart_sent().size()); }
     { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { b.has_baro = false; s.sensors.gps_enabled = 0; s.sensors.range_enabled = 0; }); r->run(3.0);
@@ -2181,6 +2205,84 @@ static const mav::Parser::Frame* mav_last(const MavSeen& m, uint32_t id) { for (
 static int mav_text(const MavSeen& m, const char* needle) { for (auto& t : m.texts) if (t.second.find(needle) != std::string::npos) return t.first; return -1; }     // its severity, -1 = not sent
 static float mav_f(const mav::Parser::Frame* f, int off) { return f ? mav::Parser::get<float>(*f, off) : -999.0f; }
 
+// ---- OSD: MSP DisplayPort to a digital video transmitter (osd/osd.h)
+struct DpFrame { char dir; uint8_t cmd; std::vector<uint8_t> p; };
+static std::vector<DpFrame> dp_read(const std::vector<uint8_t>& b, int& bad) {
+    std::vector<DpFrame> out; bad = 0;
+    for (size_t i = 0; i + 6 <= b.size();) {
+        if (b[i] != '$' || b[i + 1] != 'M') { bad++; i++; continue; }
+        const uint8_t n = b[i + 3], c = b[i + 4]; if (i + 6 + n > b.size()) break;      // (the rest of a screen still on its way)
+        uint8_t ck = n ^ c; DpFrame f; f.dir = (char)b[i + 2]; f.cmd = c;
+        for (int k = 0; k < n; k++) { f.p.push_back(b[i + 5 + k]); ck ^= b[i + 5 + k]; }
+        if (ck != b[i + 5 + n]) bad++; else out.push_back(f);
+        i += 6 + n;
+    }
+    return out;
+}
+static void dp_ask(VirtualBoard& b, uint8_t cmd, std::vector<uint8_t> p) {
+    b.tlm_wire.q.push_back('$'); b.tlm_wire.q.push_back('M'); b.tlm_wire.q.push_back('<'); b.tlm_wire.q.push_back((uint8_t)p.size()); b.tlm_wire.q.push_back(cmd);
+    uint8_t ck = (uint8_t)(p.size() ^ cmd); for (uint8_t x : p) { b.tlm_wire.q.push_back(x); ck ^= x; } b.tlm_wire.q.push_back(ck);
+}
+// the strings of the last whole screen: "row,col:text"
+static std::vector<std::string> dp_screen(const std::vector<DpFrame>& f) {
+    std::vector<std::string> cur, last;
+    for (const auto& x : f) {
+        if (x.cmd != 182 || x.p.empty()) continue;
+        if (x.p[0] == 2) cur.clear();
+        else if (x.p[0] == 3 && x.p.size() >= 4) { char h[16]; snprintf(h, sizeof(h), "%u,%u:", x.p[1], x.p[2]); cur.push_back(h + std::string(x.p.begin() + 4, x.p.end())); }
+        else if (x.p[0] == 4) last = cur;
+    }
+    return last;
+}
+static bool dp_has(const std::vector<std::string>& s, const char* text) { for (auto& l : s) if (l.find(text) != std::string::npos) return true; return false; }
+
+static void t_osd() {
+    printf("[osd] MSP DisplayPort to the goggles: screens, the video transmitter's requests, the armed state\n");
+    auto osd_on = [&](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.osd.type = OSD_TYPE_MSP_DISPLAYPORT; s.osd.tx_pin = 43; s.osd.rx_pin = 44; memcpy(s.osd.name, "Quad 1", 6); Serial0.dev = &b.tlm_wire; };
+    {   auto r = nav_rig(osd_on); VirtualBoard& b = r->board;
+        CHECK(has_line(*r, "osd: MSP DisplayPort on UART0 TX GPIO43 RX GPIO44, 115200 baud, 53 x 20 (or what the video transmitter asks for), 10 screens/s") && b.tlm_wire.baud == 115200,
+              "boot report: UART0 (GPS and receiver have the others, the app is on USB)");
+        r->run(3.0); b.tlm_wire.sent.clear(); r->run(2.0);
+        int bad = 0; auto f = dp_read(b.tlm_wire.sent, bad);
+        int draws = 0, beats = 0; for (auto& x : f) if (x.cmd == 182) { if (x.p[0] == 4) draws++; if (x.p[0] == 0) beats++; }
+        CHECK(bad == 0 && draws >= 19 && draws <= 21 && beats >= 1 && beats <= 3, "2 s: %d screens, %d heartbeats, nothing damaged", draws, beats);
+        auto scr = dp_screen(f);
+        CHECK(dp_has(scr, "DISARMED") && dp_has(scr, "QUAD 1") && dp_has(scr, "ANGL") == false, "on the screen: DISARMED, the craft name in capitals (%zu strings)", scr.size());
+        bool batt = false; for (auto& l : scr) if (l.rfind("18,1:", 0) == 0) batt = true;
+        CHECK(batt, "the battery at row 18, column 1 (the default layout)");
+        bool zero = false; for (auto& l : scr) if (l.rfind("1,46:", 0) == 0 && l.substr(6) == "00:00") zero = true;
+        CHECK(zero, "5 s on the ground, disarmed: the flight timer still at 00:00");
+        // the video transmitter: armed?  canvas (HDZero: 50 x 18)
+        dp_ask(b, 101, {}); dp_ask(b, 188, {50, 18}); b.tlm_wire.sent.clear(); r->run(0.3);
+        f = dp_read(b.tlm_wire.sent, bad); const DpFrame* st = nullptr; bool canvas_ack = false;
+        for (auto& x : f) { if (x.cmd == 101) st = &x; if (x.cmd == 188) canvas_ack = true; }
+        CHECK(st && st->dir == '>' && !(st->p[6] & 1) && canvas_ack, "MSP_STATUS answered, ARM box off; the canvas acknowledged");
+        CHECK(r->app().osd_.cols() == 50 && r->app().osd_.rows() == 18, "the canvas is now 50 x 18");
+        b.tlm_wire.sent.clear(); r->run(0.5); scr = dp_screen(dp_read(b.tlm_wire.sent, bad));
+        batt = false; bool wide = false; for (auto& l : scr) { if (l.rfind("18,", 0) == 0) batt = true; const unsigned col = (unsigned)atoi(l.c_str() + l.find(',') + 1); if (col >= 50) wide = true; }
+        CHECK(!batt && !wide, "row 18 and columns 50+ are off this canvas: left out");
+        // armed: the goggles are told, the screen follows (back on the 53 x 20 canvas: the elements on its right edge)
+        dp_ask(b, 188, {53, 20}); r->run(0.2);
+        nav_takeoff(*r, 2.0);
+        dp_ask(b, 101, {}); b.tlm_wire.sent.clear(); r->run(0.5);
+        f = dp_read(b.tlm_wire.sent, bad); st = nullptr; for (auto& x : f) if (x.cmd == 101) st = &x;
+        scr = dp_screen(f);
+        CHECK(r->tel().armed && st && (st->p[6] & 1), "armed: MSP_STATUS has the ARM box on (DJI / Walksnail start recording)");
+        CHECK(!dp_has(scr, "DISARMED") && dp_has(scr, "ALTH"), "the screen: no DISARMED, flight mode ALTH");
+        bool timer = false; for (auto& l : scr) if (l.rfind("1,46:", 0) == 0 && l.size() == 5 + 6 && l.substr(6) != "00:00") timer = true;
+        CHECK(timer, "the flight timer runs"); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.telemetry.protocol = TELEMETRY_PROTOCOL_MAVLINK; s.telemetry.tx_pin = 38; s.telemetry.wifi = 0; });
+        CHECK(has_line(*r, "osd: MSP DisplayPort on UART0") && has_line(*r, "telemetry: FAILED - no UART left (GPS, receiver, flow sensor, ESC wire and OSD have them)"), "OSD and MAVLink both on AUTO: the OSD has the last UART"); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.ports.assign = PORT_ASSIGN_TABLE; s.ports.function[0] = PORT_FUNCTION_NONE; s.ports.function[1] = PORT_FUNCTION_GPS; s.ports.function[2] = PORT_FUNCTION_SERIAL_RX; });
+        CHECK(has_line(*r, "osd: FAILED - no UART has the function DISPLAYPORT in the serial ports table"), "port table without DISPLAYPORT: says so"); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.ports.assign = PORT_ASSIGN_TABLE; s.ports.function[0] = PORT_FUNCTION_DISPLAYPORT; s.ports.function[1] = PORT_FUNCTION_GPS; s.ports.function[2] = PORT_FUNCTION_SERIAL_RX; });
+        r->run(1.0); CHECK(has_line(*r, "osd: MSP DisplayPort on UART0") && !r->board.tlm_wire.sent.empty(), "port table: the UART with the function DISPLAYPORT"); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.osd.tx_pin = 255; });
+        CHECK(has_line(*r, "osd: FAILED - no TX pin (osd.tx_pin)"), "no TX pin: says why"); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.pins.buzzer = 44; });
+        CHECK(has_line(*r, "pins: FAILED - GPIO44 is set for both") && r->app().status.pin_conflict, "its pins are checked against the others"); }
+}
+
 static void t_mavlink() {
     printf("[mavlink] telemetry on a UART: rates, values from the plant, texts, room on the UART, WiFi, no UART\n");
     using P = mav::Parser;
@@ -2443,10 +2545,68 @@ static void t_led() {
     CHECK(r->tel().armed && c[0].r == 170 && c[0].b == 255 && c[0].g == 0, "armed in Altitude Hold: purple (%u %u %u)", c[0].r, c[0].g, c[0].b);
     r->board.tx_on = false; r->run(1.5); bool red = false, dark = false; for (int i = 0; i < 40; i++) { r->run(0.025); c = r->app().ledColors(); red |= c[0].r == 255 && c[0].g == 0; dark |= c[0].r == 0 && c[0].g == 0 && c[0].b == 0; }
     CHECK(red && dark, "the transmitter lost (failsafe): red, flashing");
+    {   // MANUAL: a function per LED (fixed color, throttle, battery, off)
+        auto q = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.led.count = 4; s.led.brightness = 100; s.pins.led = 3; s.led.layout = LED_LAYOUT_MANUAL;
+            s.led.fn[0] = LED_FUNCTION_COLOR; s.led.color[0] = 0x00FF00; s.led.fn[1] = LED_FUNCTION_THROTTLE; s.led.fn[2] = LED_FUNCTION_BATTERY; s.led.fn[3] = LED_FUNCTION_OFF; });
+        CHECK(has_line(*q, "led: 4 LEDs on GPIO3, 100 % brightness, manual"), "boot report says manual");
+        q->run(3.0); const app::Rgb* m = q->app().ledColors();
+        CHECK(m[0].g == 255 && m[0].r == 0 && m[1].b > 200 && m[1].r < 50 && m[2].g > 0 && m[3].r == 0 && m[3].g == 0 && m[3].b == 0,
+              "disarmed: its color, throttle low blue, the battery gauge lit (%u %u), the LED set OFF dark", m[2].r, m[2].g);
+        nav_takeoff(*q, 1.0); m = q->app().ledColors(); const unsigned thr_r = m[1].r;
+        CHECK(q->tel().armed && thr_r > 60, "armed, throttle up: the throttle LED turns red (%u)", thr_r);
+        q->board.tx_on = false; q->run(1.5); bool red3 = false; for (int i = 0; i < 40; i++) { q->run(0.025); m = q->app().ledColors(); red3 |= m[3].r == 255 && m[0].g == 0; }
+        CHECK(red3, "failsafe (warnings on): the whole strip flashes red, the OFF LED too"); }
     { auto q = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.led.count = 4; s.pins.led = 3; s.blackbox.device = BB_DEVICE_SDCARD; s.blackbox.sd_mode = SD_MODE_SPI; });
       CHECK(has_line(*q, "led: FAILED - the second SPI bus is taken") && !q->app().status.led, "an SD card on SPI: the bus is taken, says so"); }
     { auto q = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.led.count = 4; s.pins.led = 3; s.pins.buzzer = 3; });
       CHECK(q->app().status.pin_conflict, "its pin is checked against the others"); }
+}
+
+// 0.23: the switches ACRO_TRAINER, AIRMODE, ANTI_GRAVITY, BLACKBOX_ERASE on the virtual board
+static void t_switch_modes() {
+    printf("[switch modes] acro trainer, airmode, anti-gravity, blackbox erase from the transmitter\n");
+    {   auto r = fresh(); VirtualBoard& b = r->board; arm_switch_setup(*r);
+        S_modes m; r->get_section(SEC_MODES, &m, sizeof(m));
+        const uint8_t extra[4] = {MODE_ACRO_TRAINER, MODE_AIRMODE, MODE_ANTI_GRAVITY, MODE_BLACKBOX_ERASE};
+        for (int i = 0; i < 4; i++) { m.mode[3 + i] = extra[i]; m.aux[3 + i] = (uint8_t)(3 + i); m.lo[3 + i] = 1700; m.hi[3 + i] = 2100; }
+        CHECK(r->set_section(SEC_MODES, &m, sizeof(m)).type == MSG_SECTION, "the four new modes are accepted in the mode table");
+        r->run(2.0);
+        CHECK(r->app().core.rc.modes.has(fc::M_ACRO_TRAINER) && r->app().core.rc.modes.has(fc::M_BLACKBOX_ERASE), "applied at once (the modes section is live)");
+        b.rc[7] = 2000; b.rc[9] = 2000; r->run(0.3);
+        CHECK((r->tel().modes >> MODE_ACRO_TRAINER & 1u) && (r->tel().modes >> MODE_ANTI_GRAVITY & 1u) && !(r->tel().modes >> MODE_AIRMODE & 1u), "status.modes: the switches as they stand (0x%x)", (unsigned)r->tel().modes);
+        b.rc[7] = 1000; b.rc[9] = 1000;
+        // the acro trainer's settings (section pid, live)
+        S_pid p; r->get_section(SEC_PID, &p, sizeof(p));
+        CHECK(p.acro_trainer_angle_limit == 20 && p.acro_trainer_lookahead_ms == 50 && p.acro_trainer_gain == 75, "defaults: Betaflight's (20 deg, 50 ms, 75)");
+        p.acro_trainer_angle_limit = 35; p.acro_trainer_gain = 100; r->set_section(SEC_PID, &p, sizeof(p)); r->run(0.1);
+        CHECK(r->app().core.cfg.trainer.angle_limit_deg == 35.0f && r->app().core.cfg.trainer.gain == 10.0f && r->app().core.cfg.trainer.lookahead_s == 0.05f, "changed in the app: in use at once");
+        // the BLACKBOX_ERASE switch: a flight logged, then flipped on the ground
+        bb_config(*r, BB_DEVICE_FLASH, BB_TRIGGER_ARMED, 500);
+        b.rc[4] = 2000; r->run(1.0); b.rc[4] = 1000; r->run(0.5);
+        T_blackbox st = bb_status(*r); CHECK(st.sessions == 1, "a flight logged (%u sessions)", st.sessions);
+        b.rc[4] = 2000; r->run(0.5); b.rc[10] = 2000; r->run(0.5);
+        st = bb_status(*r); CHECK(st.sessions >= 1 && r->tel().armed && r->fw->blackbox.switch_erases() == 0, "flipped while armed: nothing erased");
+        b.rc[4] = 1000; r->run(0.5); b.rc[10] = 1000; r->run(0.2); b.rc[10] = 2000; r->run(2.0);
+        st = bb_status(*r); CHECK(st.sessions == 0 && st.used == 0 && r->fw->blackbox.switch_erases() == 1, "flipped on the ground: the log memory is erased (%u sessions)", st.sessions);
+        b.rc[4] = 2000; r->run(1.0); CHECK(r->tel().armed && r->fw->blackbox.state() == bb::ST_LOGGING, "and the next flight is logged"); }
+}
+
+// 0.24: arming with the sticks on the virtual board (general.stick_arm, needs a reboot)
+static void t_stick_arm() {
+    printf("[stick arming] the gesture through the receiver\n");
+    g_stub_us = 0; g_stub_delay_advances = true;
+    std::unique_ptr<Rig> r(new Rig()); r->provision();
+    { wbp::Settings s; wbp::SettingsStore st(r->flash); st.load(s); s.general.stick_arm = 1; st.save(s); }
+    r->boot(); VirtualBoard& b = r->board; r->run(3.0);
+    CHECK(has_line(*r, "arming: sticks: throttle + pitch down, yaw and roll to opposite sides, 1 s") && !has_line(*r, "ARM switch must be on"), "boot report: stick arming, no ARM switch");
+    CHECK(!r->tel().armed && !(r->tel().blockers & ARM_BLOCKER_ARM_SWITCH_ON), "disarmed, nothing blocks (0x%x)", r->tel().blockers);
+    auto gesture = [&](bool on) { b.rc[2] = 1000; b.rc[1] = on ? 1000 : 1500; b.rc[3] = on ? 1000 : 1500; b.rc[0] = on ? 2000 : 1500; };
+    gesture(true); r->run(0.6); CHECK(!r->tel().armed, "0.6 s of the gesture: not yet");
+    r->run(0.6); CHECK(r->tel().armed, "1.2 s: armed");
+    gesture(false); r->run(0.5); CHECK(r->tel().armed, "sticks released: still armed");
+    gesture(true); r->run(1.3); CHECK(!r->tel().armed, "the gesture again on the ground: disarmed");
+    gesture(false); r->run(0.3);
+    { wbp::Settings s; wbp::SettingsStore st(r->flash); st.load(s); CHECK(s.general.stick_arm == 1, "stored"); }
 }
 
 int main() {
@@ -2472,6 +2632,9 @@ int main() {
         if (!strcmp(only, "dronecan2")) t_dronecan2();
         if (!strcmp(only, "magauto")) t_mag_autocal();
         if (!strcmp(only, "mavlink")) t_mavlink();
+        if (!strcmp(only, "osd")) t_osd();
+        if (!strcmp(only, "switch")) t_switch_modes();
+        if (!strcmp(only, "stickarm")) t_stick_arm();
         printf("%d checks, %d failed (only '%s')\n", g_pass + g_fail, g_fail, only); return 1;
     }
     t_boot();
@@ -2512,6 +2675,9 @@ int main() {
     t_led();
     t_dronecan2();
     t_mag_autocal();
+    t_osd();
+    t_switch_modes();
+    t_stick_arm();
     t_mavlink();
     t_esc_passthrough();
     t_ekf();

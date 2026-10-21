@@ -17,8 +17,8 @@ static const char* const kE_utc[] = {"AUTO", "USNO", "EU", "SU", "NTSC"};
 static const char* const kE_range_model[] = {"AUTO", "VL53L1X", "VL53L0X", "MSP"};
 static const char* const kE_mag_model[] = {"AUTO", "HMC5883L", "QMC5883L", "QMC5883P", "AK8963_MPU9250", "DRONECAN"};
 static const char* const kE_baro_model[] = {"AUTO", "DRONECAN"};
-static const char* const kE_port_function[] = {"NONE", "SERIAL_RX", "GPS", "TELEMETRY", "FLOW_MSP", "ESC_SENSOR"};
-static const char* const kE_mode[] = {"ARM", "ANGLE", "STABILIZE", "ALTHOLD", "POSHOLD", "FAILSAFE", "BEEPER", "BLACKBOX", "CALIB", "RESCUE"};
+static const char* const kE_port_function[] = {"NONE", "SERIAL_RX", "GPS", "TELEMETRY", "FLOW_MSP", "ESC_SENSOR", "DISPLAYPORT"};
+static const char* const kE_mode[] = {"ARM", "ANGLE", "STABILIZE", "ALTHOLD", "POSHOLD", "FAILSAFE", "BEEPER", "BLACKBOX", "CALIB", "RESCUE", "ACRO_TRAINER", "AIRMODE", "ANTI_GRAVITY", "BLACKBOX_ERASE"};
 static const char* const kE_failsafe[] = {"NONE", "GUARD", "DESCENT", "LANDED"};
 static const char* const kE_ah_state[] = {"STOPPED", "LANDED_IDLE", "LANDED_PRE_TAKEOFF", "TAKEOFF", "FLYING"};
 static const char* const kE_gps_state[] = {"UNKNOWN", "INITIALIZED", "DETECT_BAUD", "CHANGE_BAUD", "CONFIGURE", "RECEIVING_DATA", "LOST_COMMUNICATION"};
@@ -65,7 +65,10 @@ static const char* const kE_link_via[] = {"SERIAL", "WIFI"};
 static const char* const kE_can_mode[] = {"OFF", "DRONECAN"};
 static const char* const kE_can_bitrate[] = {"K125", "K250", "K500", "M1"};
 static const char* const kE_can_state[] = {"OFF", "RUNNING", "BUS_OFF", "FAILED"};
-static const char* const kE_led_layout[] = {"ALL", "NAV"};
+static const char* const kE_led_layout[] = {"ALL", "NAV", "MANUAL"};
+static const char* const kE_led_function[] = {"OFF", "STATUS", "COLOR", "MODE", "ARMED", "BLINK", "STROBE", "BREATHE", "RAINBOW", "LARSON", "BATTERY", "THROTTLE"};
+static const char* const kE_osd_type[] = {"NONE", "MSP_DISPLAYPORT"};
+static const char* const kE_osd_canvas[] = {"AUTO", "HD_53X20", "HDZERO_50X18", "SD_30X16"};
 static const char* const kB_arm_blocker[] = {"NO_IMU", "GYRO_NOT_CAL", "RX_LOST", "THROTTLE_HIGH", "ANGLE_TOO_HIGH", "FAILSAFE", "ALTHOLD_NO_BARO", "BATT_LOW", "ARM_SWITCH_ON", "CONFIG_UNSAVED", "CALIBRATING", "POSHOLD_NO_GPS", "MAG_NOT_CALIBRATED", "PIN_CONFLICT", "LOOP_RATE", "RUNAWAY_TAKEOFF", "RESCUE_NO_FIX", "RESCUE_NO_COMPASS", "MOTOR_STALL"};
 static const char* const kB_health[] = {"IMU", "GYRO_CAL", "BARO", "RANGE", "GPS", "MAG_READY", "MAG_CAL", "RX", "MOTORS", "ESC_TELEMETRY", "ACC_CAL", "BATTERY", "FLOW", "IMU2", "CAN"};
 static const char* const kB_settings_flags[] = {"DIRTY", "REBOOT_REQUIRED"};
@@ -74,7 +77,7 @@ static const char* const kB_fs_cause[] = {"LINK", "SWITCH", "BATTERY"};
 static const char* const kB_nav_flags[] = {"POSHOLD", "POSHOLD_UNAVAILABLE", "RESCUE", "RESCUE_AVAILABLE", "NAV_LEAN", "POSHOLD_SLOW_GPS"};
 static const char* const kB_ekf_flags[] = {"ALIGNED", "GPS_AIDING", "HEADING_OK", "USED_FOR_NAV"};
 static const char* const kB_imu_src[] = {"IMU1", "IMU2"};
-constexpr int kFieldCount = 315;
+constexpr int kFieldCount = 333;
 static const FieldInfo kFields[kFieldCount] = {
     {SEC_GENERAL, "loop_hz", 0, FT_U16, 1, FF_RANGE, 1.0f, 500.0f, 8000.0f, nullptr, 0},
     {SEC_GENERAL, "est_hz", 2, FT_U16, 1, FF_RANGE, 1.0f, 100.0f, 1000.0f, nullptr, 0},
@@ -92,6 +95,8 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_GENERAL, "runaway_takeoff", 21, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_GENERAL, "reserved_g", 22, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_GENERAL, "pid_denom", 23, FT_U8, 1, FF_RANGE, 1.0f, 1.0f, 8.0f, nullptr, 0},
+    {SEC_GENERAL, "usb_name", 24, FT_U8, 32, FF_TEXT, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_GENERAL, "stick_arm", 56, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_RECEIVER, "protocol", 0, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_rx_protocol, 8},
     {SEC_RECEIVER, "ch_roll", 1, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 15.0f, nullptr, 0},
     {SEC_RECEIVER, "ch_pitch", 2, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 15.0f, nullptr, 0},
@@ -103,7 +108,8 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_RECEIVER, "rc_smoothing", 9, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_RECEIVER, "rc_smoothing_factor", 10, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 250.0f, nullptr, 0},
     {SEC_RECEIVER, "rc_smoothing_throttle", 11, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 250.0f, nullptr, 0},
-    {SEC_MODES, "mode", 0, FT_U8, 16, FF_OPTIONAL, 1.0f, 0.0f, 0.0f, kE_mode, 10},
+    {SEC_RECEIVER, "telemetry", 12, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_MODES, "mode", 0, FT_U8, 16, FF_OPTIONAL, 1.0f, 0.0f, 0.0f, kE_mode, 14},
     {SEC_MODES, "aux", 16, FT_U8, 16, FF_RANGE, 1.0f, 0.0f, 7.0f, nullptr, 0},
     {SEC_MODES, "lo", 32, FT_U16, 16, FF_RANGE, 1.0f, 900.0f, 2100.0f, nullptr, 0},
     {SEC_MODES, "hi", 64, FT_U16, 16, FF_RANGE, 1.0f, 900.0f, 2100.0f, nullptr, 0},
@@ -163,6 +169,9 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_PID, "stab_accel_yaw", 71, FT_U16, 1, FF_RANGE, 1.0f, 20.0f, 1000.0f, nullptr, 0},
     {SEC_PID, "stab_input_tc", 73, FT_U8, 1, FF_RANGE, 0.01f, 0.0f, 100.0f, nullptr, 0},
     {SEC_PID, "stab_rate_ff", 74, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_PID, "acro_trainer_angle_limit", 75, FT_U8, 1, FF_RANGE, 1.0f, 10.0f, 80.0f, nullptr, 0},
+    {SEC_PID, "acro_trainer_lookahead_ms", 76, FT_U16, 1, FF_RANGE, 1.0f, 10.0f, 200.0f, nullptr, 0},
+    {SEC_PID, "acro_trainer_gain", 78, FT_U8, 1, FF_RANGE, 1.0f, 25.0f, 255.0f, nullptr, 0},
     {SEC_MOTORS, "layout", 0, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_layout, 14},
     {SEC_MOTORS, "props_out", 1, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_MOTORS, "protocol", 2, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_esc_protocol, 11},
@@ -227,7 +236,7 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_BEEPER, "volume", 8, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 100.0f, nullptr, 0},
     {SEC_BEEPER, "dshot_beacon_tone", 9, FT_U8, 1, FF_RANGE, 1.0f, 1.0f, 5.0f, nullptr, 0},
     {SEC_BEEPER, "motor_conditions", 10, FT_U32, 1, FF_BITS, 1.0f, 0.0f, 0.0f, kE_beeper_cond, 18},
-    {SEC_PORTS, "function", 0, FT_U8, 3, 0, 1.0f, 0.0f, 0.0f, kE_port_function, 6},
+    {SEC_PORTS, "function", 0, FT_U8, 3, 0, 1.0f, 0.0f, 0.0f, kE_port_function, 7},
     {SEC_PORTS, "baud", 3, FT_U32, 3, FF_RANGE, 1.0f, 1200.0f, 2000000.0f, nullptr, 0},
     {SEC_PORTS, "assign", 15, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_port_assign, 2},
     {SEC_PINS, "imu_cs", 0, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
@@ -379,7 +388,11 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_CAN, "dna_server", 3, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_LED, "count", 0, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 32.0f, nullptr, 0},
     {SEC_LED, "brightness", 1, FT_U8, 1, FF_RANGE, 1.0f, 5.0f, 100.0f, nullptr, 0},
-    {SEC_LED, "layout", 2, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_led_layout, 2},
+    {SEC_LED, "layout", 2, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_led_layout, 3},
+    {SEC_LED, "fn", 3, FT_U8, 32, 0, 1.0f, 0.0f, 0.0f, kE_led_function, 12},
+    {SEC_LED, "color", 35, FT_U32, 32, FF_RANGE, 1.0f, 0.0f, 16777215.0f, nullptr, 0},
+    {SEC_LED, "warnings", 163, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_LED, "speed", 164, FT_U8, 1, FF_RANGE, 1.0f, 1.0f, 10.0f, nullptr, 0},
     {SEC_TELEMETRY, "protocol", 0, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_telemetry_protocol, 2},
     {SEC_TELEMETRY, "baud", 1, FT_U32, 1, FF_RANGE, 1.0f, 9600.0f, 2000000.0f, nullptr, 0},
     {SEC_TELEMETRY, "tx_pin", 5, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
@@ -391,5 +404,13 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_TELEMETRY, "rate_hud", 11, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 20.0f, nullptr, 0},
     {SEC_TELEMETRY, "rate_status", 12, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 10.0f, nullptr, 0},
     {SEC_TELEMETRY, "rate_rc", 13, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 20.0f, nullptr, 0},
+    {SEC_OSD, "type", 0, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_osd_type, 2},
+    {SEC_OSD, "canvas", 1, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_osd_canvas, 4},
+    {SEC_OSD, "baud", 2, FT_U32, 1, FF_RANGE, 1.0f, 9600.0f, 2000000.0f, nullptr, 0},
+    {SEC_OSD, "tx_pin", 6, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_OSD, "rx_pin", 7, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_OSD, "rate", 8, FT_U8, 1, FF_RANGE, 1.0f, 1.0f, 30.0f, nullptr, 0},
+    {SEC_OSD, "name", 9, FT_U8, 16, FF_TEXT, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_OSD, "pos", 25, FT_U16, 24, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
 };
 } // namespace wbp

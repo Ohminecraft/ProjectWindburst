@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 // ============================================================================
@@ -80,10 +81,67 @@ inline bool is_silabs(const uint8_t* d) { const uint16_t w = (uint16_t)(d[1] << 
 inline bool is_atmel(const uint8_t* d) { const uint16_t w = (uint16_t)(d[1] << 8 | d[0]); return w == 0x9307 || w == 0x930A || w == 0x930F || w == 0x940B; }
 inline bool is_arm(const uint8_t* d) { return d[1] > 0x00 && d[1] < 0x90 && d[0] == 0x06; }      // BLHeli_32 / AM32: id high 0x01..0x8F, low always 0x06
 
+// What one passthrough session did, for the boot report after the restart that ends it (the caller keeps it in memory a restart
+// does not clear: RTC memory on the ESP32). The first kFirst requests (finding the ESCs) and the last ones are kept.
+// A session that "connects but reads nothing" (AM32 Configurator, 0.18 on the board) shows which request failed and how.
+struct Trace {
+    static constexpr uint32_t kMagic = 0x59415734u;          // "4WAY"
+    static constexpr int kFirst = 12, kMax = 24;
+    struct Entry { uint8_t cmd, ah, al, n, ack, got, data[4]; };    // n: the request's byte count (0 = 256), got: bytes answered
+    uint32_t magic, total, esc_errors; uint16_t n, next; Entry e[kMax];
+
+    void start() { magic = kMagic; total = 0; esc_errors = 0; n = 0; next = kFirst; }
+    bool valid() const { return magic == kMagic && n <= kMax && next >= kFirst && next < kMax; }
+    void clear() { magic = 0; }
+    void add(uint8_t cmd, uint8_t ah, uint8_t al, uint8_t n_req, uint8_t ack, const uint8_t* out, uint16_t n_out) {
+        Entry x = {cmd, ah, al, n_req, ack, (uint8_t)(n_out > 255 ? 255 : n_out), {0, 0, 0, 0}};
+        for (int i = 0; i < 4 && i < n_out; i++) x.data[i] = out[i];
+        total++; if (ack == 0x0F) esc_errors++;
+        if (n < kMax) { e[n++] = x; return; }
+        e[next] = x; next = (uint16_t)(next + 1 < kMax ? next + 1 : kFirst);     // the later part is a ring
+    }
+    static const char* name(uint8_t cmd) {
+        switch (cmd) {
+        case CMD_TEST_ALIVE: return "ALIVE"; case CMD_PROTOCOL_GET_VERSION: return "PROTO"; case CMD_INTERFACE_GET_NAME: return "NAME";
+        case CMD_INTERFACE_GET_VERSION: return "IFVER"; case CMD_INTERFACE_EXIT: return "EXIT"; case CMD_DEVICE_RESET: return "RESET";
+        case CMD_DEVICE_INIT_FLASH: return "INIT"; case CMD_DEVICE_ERASE_ALL: return "ERASEALL"; case CMD_DEVICE_PAGE_ERASE: return "ERASE";
+        case CMD_DEVICE_READ: return "READ"; case CMD_DEVICE_WRITE: return "WRITE"; case CMD_DEVICE_READ_EEPROM: return "RDEE";
+        case CMD_DEVICE_WRITE_EEPROM: return "WREE"; case CMD_INTERFACE_SET_MODE: return "MODE"; case CMD_DEVICE_VERIFY: return "VERIFY";
+        default: return "?";
+        }
+    }
+    static const char* ack_name(uint8_t a) {
+        switch (a) { case ACK_OK: return "ok"; case ACK_I_INVALID_CMD: return "BADCMD"; case ACK_I_INVALID_CRC: return "BADCRC"; case ACK_I_VERIFY_ERROR: return "VERIFY";
+                     case ACK_I_INVALID_CHANNEL: return "BADESC"; case ACK_I_INVALID_PARAM: return "BADPARAM"; case ACK_D_GENERAL_ERROR: return "ESC-ERR"; default: return "?"; }
+    }
+    // The session as text, oldest first: a few lines of at most cap - 1 characters; returns how many lines were written.
+    int lines(char (*out)[176], int max_lines) const {
+        if (!valid() || max_lines < 1) return 0;
+        int ln = 0; size_t k = (size_t)snprintf(out[0], 176, "4way: %lu requests, %lu ESC errors:", (unsigned long)total, (unsigned long)esc_errors);
+        for (int j = 0; j < n; j++) {
+            const int i = n < kMax || j < kFirst ? j : kFirst + (next - kFirst + (j - kFirst)) % (kMax - kFirst);
+            const Entry& x = e[i];
+            // INIT#esc ok 061F6304 | READ 7C00/48 ok FF01.. | WRITE 1400/128 ESC-ERR | NAME ok
+            char item[48]; int m;
+            const bool rw = x.cmd == CMD_DEVICE_READ || x.cmd == CMD_DEVICE_WRITE || x.cmd == CMD_DEVICE_VERIFY || x.cmd == CMD_DEVICE_READ_EEPROM || x.cmd == CMD_DEVICE_WRITE_EEPROM;
+            if (x.cmd == CMD_DEVICE_INIT_FLASH || x.cmd == CMD_DEVICE_RESET) m = snprintf(item, sizeof(item), " %s#%u %s", name(x.cmd), (unsigned)x.n, ack_name(x.ack));
+            else if (rw) m = snprintf(item, sizeof(item), " %s %02X%02X/%u %s", name(x.cmd), x.ah, x.al, x.n ? (unsigned)x.n : 256u, ack_name(x.ack));
+            else m = snprintf(item, sizeof(item), " %s %s", name(x.cmd), ack_name(x.ack));
+            if (x.ack == ACK_OK && (x.cmd == CMD_DEVICE_INIT_FLASH || x.cmd == CMD_DEVICE_READ || x.cmd == CMD_DEVICE_READ_EEPROM))
+                snprintf(item + m, sizeof(item) - m, " %02X%02X%02X%02X", x.data[0], x.data[1], x.data[2], x.data[3]);
+            if (j == kFirst && n == kMax && total > (uint32_t)kMax) { const char* gap = " ..."; if (k + strlen(gap) < 175) { strcat(out[ln], gap); k += strlen(gap); } }
+            if (k + strlen(item) >= 175) { if (ln + 1 >= max_lines) return ln + 1; ln++; out[ln][0] = 0; k = (size_t)snprintf(out[ln], 176, "4way:"); }
+            strcat(out[ln], item); k += strlen(item);
+        }
+        return ln + 1;
+    }
+};
+
 template <class Port> class Interface {
 public:
     struct Stats { uint32_t frames = 0, bad_crc = 0, esc_errors = 0; };
     Interface(Port& p, int esc_count) : p_(p), count_(esc_count) {}
+    void set_trace(Trace* t) { trace_ = t; }
 
     // The ESC lines become inputs, pulled high (the bootloader's idle level), and stay so between commands.
     void begin() { for (int c = 0; c < count_; c++) { p_.esc_input(c); p_.esc_hi(c); } }
@@ -101,7 +159,7 @@ public:
 
 private:
     struct Frame { uint8_t cmd = 0, ah = 0, al = 0, n = 0; uint8_t param[256]; uint16_t len = 0; bool crc_ok = false; };
-    Port& p_; int count_; int esc_ = 0; uint8_t mode_ = MODE_ARM_BLB; uint8_t info_[4] = {0, 0, 0, 0}; Stats stats_;
+    Port& p_; int count_; int esc_ = 0; uint8_t mode_ = MODE_ARM_BLB; uint8_t info_[4] = {0, 0, 0, 0}; Stats stats_; Trace* trace_ = nullptr;
     bool connected() const { return info_[0] > 0; }
     void disconnect() { info_[0] = info_[1] = info_[2] = info_[3] = 0; }
 
@@ -138,6 +196,7 @@ private:
         stats_.frames++;
         uint8_t ack = ACK_OK, small[2] = {0, 0}; const uint8_t* out = small; uint16_t n_out = 1;
         uint8_t ah = f.ah, al = f.al; bool exit = false;
+        const uint8_t p0 = f.param[0];                                     // (a read answers into f.param: the request's first byte is kept for the trace)
         if (!f.crc_ok) { ack = ACK_I_INVALID_CRC; stats_.bad_crc++; }
         else switch (f.cmd) {
         case CMD_TEST_ALIVE:
@@ -194,6 +253,10 @@ private:
         default: ack = ACK_I_INVALID_CMD; break;
         }
         if (ack == ACK_D_GENERAL_ERROR) stats_.esc_errors++;
+        if (trace_) {                                                       // (INIT / RESET: the ESC's number; READ: how many bytes were asked for)
+            const bool by_param = f.cmd == CMD_DEVICE_INIT_FLASH || f.cmd == CMD_DEVICE_RESET || f.cmd == CMD_DEVICE_READ || f.cmd == CMD_DEVICE_READ_EEPROM;
+            trace_->add(f.cmd, f.ah, f.al, by_param ? p0 : f.n, ack, out, n_out);
+        }
         reply(f.cmd, ah, al, out, n_out, ack);
         return exit;
     }

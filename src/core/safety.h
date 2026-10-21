@@ -285,7 +285,9 @@ private:
 // ---------------------------------------------------------------------------------------------------------------------
 class Arming {
 public:
-    WB_FAST bool update(bool switch_on, bool link_ok, ArmInput in) {
+    // keep_reason: the forced-disarm reason (sticky) is not cleared by the switch being off this cycle (stick arming: the
+    // virtual switch is off whenever the sticks rest, so the reason stays until the pilot starts the next arming gesture).
+    WB_FAST bool update(bool switch_on, bool link_ok, ArmInput in, bool keep_reason = false) {
         if (!link_ok) {
             if (!armed_) seen_off_ = false;
             switch_on = armed_;                                      // not believed: as if it had not moved
@@ -302,7 +304,7 @@ public:
         if (!armed_ && switch_on) blockers_ |= AB_ARM_SWITCH_ON;
         // Why the craft was disarmed against the pilot's will stays on show until he has switched off (Betaflight keeps
         // RUNAWAY_TAKEOFF as an arming-disabled flag the same way).
-        if (link_ok && !switch_on) sticky_ = 0;
+        if (link_ok && !switch_on && !keep_reason) sticky_ = 0;
         if (!armed_) blockers_ |= sticky_;
         prev_switch_ = switch_on;
         return armed_;
@@ -316,5 +318,37 @@ public:
     uint8_t last_disarm_reason() const { return disarm_reason_; }   // 1 switch, 2 forced (failsafe / crash)
 private:
     bool armed_ = false, prev_switch_ = false, seen_off_ = false; uint32_t blockers_ = 0, refused_ = 0, sticky_ = 0; uint8_t disarm_reason_ = 0;
+};
+// ---------------------------------------------------------------------------------------------------------------------
+// Arming with the sticks (general.stick_arm): a virtual arm switch for Arming above.
+//   the gesture  throttle down, pitch down (stick pulled back), yaw and roll to OPPOSITE sides: yaw left + roll right, or yaw
+//                right + roll left (on a mode 2 transmitter both sticks down and out, or down and in - DJI's "combination stick")
+//   arm          the gesture held arm_s while disarmed: the switch turns on (Arming arms on that edge, or refuses it)
+//   disarm       the gesture held disarm_s while armed AND on the ground (never in the air: the same sticks can be flown)
+// The gesture must be released between two of them (and after power-up). A switch that turned on but did not arm (refused,
+// forced off later) goes off when the sticks are released, so the next gesture is a new edge. enable = false (an ARM switch
+// is assigned and off) holds the switch off: Arming disarms at once. Without a link nothing changes (the failsafe's business).
+// ---------------------------------------------------------------------------------------------------------------------
+class StickArm {
+public:
+    struct Config { float arm_s = 1.0f, disarm_s = 1.0f, threshold = 0.8f; } cfg;
+    static bool gesture(float roll, float pitch, float yaw, bool throttle_low, float k) {
+        return throttle_low && pitch <= -k && ((yaw <= -k && roll >= k) || (yaw >= k && roll <= -k));
+    }
+    WB_FAST bool update(bool gesture_now, bool link_ok, bool enable, bool armed, bool on_ground, float dt) {
+        if (!link_ok) { t_ = 0.0f; return sw_; }
+        if (!enable) { sw_ = false; t_ = 0.0f; held_ = gesture_now; return false; }
+        if (!gesture_now) { t_ = 0.0f; held_ = false; if (!armed) sw_ = false; return sw_; }
+        if (held_) return sw_;
+        if (armed && !on_ground) { t_ = 0.0f; return sw_; }          // in the air these sticks are flying, never a disarm
+        t_ += dt;
+        if (!armed && t_ >= cfg.arm_s) { sw_ = true; held_ = true; t_ = 0.0f; }
+        else if (armed && t_ >= cfg.disarm_s) { sw_ = false; held_ = true; t_ = 0.0f; }
+        return sw_;
+    }
+    bool holding() const { return t_ > 0.0f; }          // the gesture is being held towards an arm / disarm
+    float held_s() const { return t_; }
+private:
+    bool sw_ = false, held_ = true; float t_ = 0.0f;      // held_: released first (a gesture held at power-up does nothing)
 };
 } // namespace fc

@@ -85,7 +85,9 @@ static void t_pulse() {
         CHECK(1e6f / default_pulse_hz(p) >= pulse_period_min_us(p), "default frame rate leaves room for the longest pulse (%d)", (int)p);
     PulseEndpoints pe;    // app defaults 0 / 1000 / 2000
     Endpoints e = endpoints(PROTO_PWM, pe, 0.055f, 1.0f);
-    CHECK(e.disarm == 0 && fabsf(e.low - 1055) < 0.01f && fabsf(e.high - 2000) < 0.01f, "PWM idle 5.5%%: low=%f", e.low);
+    CHECK(e.disarm == 1000 && fabsf(e.low - 1055) < 0.01f && fabsf(e.high - 2000) < 0.01f, "PWM idle 5.5%%: low=%f; disarmed 1000 us (pulse_disarmed 0 = Betaflight's mincommand)", e.low);
+    { PulseEndpoints q; q.disarmed = 1050; CHECK(endpoints(PROTO_PWM, q, 0, 1).disarm == 1050, "pulse_disarmed set: that pulse");
+      q.disarmed = 0; q.armed = 900; CHECK(endpoints(PROTO_ONESHOT125, q, 0, 1).disarm == 900, "an armed minimum below 1000: disarmed never above it"); }
     e = endpoints(PROTO_PWM, pe, 0.055f, 0.8f);
     CHECK(fabsf(e.high - (2000 - (2000 - 1055) * 0.2f)) < 0.01f, "PWM output limit 80%%: %f", e.high);
     e = endpoints(PROTO_DSHOT300, pe, 0.055f, 1.0f);
@@ -115,6 +117,16 @@ static void t_manager() {
     f = run_once(m, 300, {1.0f, 0.0f, 0.0f, 0.0f}, true);
     CHECK(f.value[2] == 2047 && f.value[0] == low, "motor 1 -> slot 2");
     m.cfg.order[1] = 2; CHECK(!m.order_valid(), "duplicate slot rejected"); m.fix_order(); CHECK(m.cfg.order[1] == 1 && m.order_valid(), "invalid order falls back to identity");
+    {   // the motor wizard: a new order while running
+        MotorOutputManager w; w.cfg.protocol = PROTO_DSHOT300; w.begin();
+        const uint8_t dup[8] = {1, 1, 2, 3, 4, 5, 6, 7}, out_of_range[8] = {4, 1, 2, 3, 0, 5, 6, 7}, good[8] = {3, 2, 1, 0, 4, 5, 6, 7};
+        CHECK(!w.set_order(dup) && !w.set_order(out_of_range) && w.cfg.order[0] == 0 && w.cfg.order[1] == 1 && w.order_valid(), "not a permutation of the 4 motors: refused, the old order stays");
+        w.test_motor(0, 0.4f, 1000); CHECK(w.request_direction(2, true) && w.commands_pending(), "(a test and a direction command under way)");
+        const uint8_t same[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+        CHECK(w.set_order(same) && w.commands_pending() && w.testing(1100), "the same order again (a reversed toggle writes the section too): the command and the test go on");
+        CHECK(w.set_order(good) && w.cfg.order[0] == 3 && w.cfg.order[3] == 0 && !w.commands_pending() && !w.testing(1100), "a new order: taken; the test and the queued command (aimed at the old slots) dropped");
+        f = run_once(w, 2000, {1.0f, 0.0f, 0.0f, 0.0f}, true); CHECK(f.value[3] == 2047 && f.value[0] != 2047, "motor 1 -> slot 4 from the next frame on");
+    }
     // test sliders
     f = run_once(m, 1000000, {0, 0, 0, 0}, false); CHECK(f.value[1] == 0, "no test => 0");
     m.test_motor(1, 0.3f, 1000000);
@@ -125,7 +137,7 @@ static void t_manager() {
     f = run_once(m, 2000200, {0, 0, 0, 0}, false); CHECK(f.value[1] == 0, "arming cancels any test");
     // pulse protocol
     MotorOutputManager p; p.cfg.protocol = PROTO_ONESHOT125; p.cfg.pulse.disarmed = 0; p.begin();
-    f = run_once(p, 0, {1, 1, 1, 1}, false); CHECK(f.value[0] == 0, "pulse disarmed = 0 (no pulse)");
+    f = run_once(p, 0, {1, 1, 1, 1}, false); CHECK(f.value[0] == 1000 && f.value[3] == 1000, "disarmed: 1000 us on every motor (an ESC arms only after it has seen its zero throttle)");
     f = run_once(p, 10, {0, 0.5f, 1, 0}, true);
     CHECK(f.value[0] == 1055 && f.value[1] == 1500 && f.value[2] == 2000, "pulse scale values idle/mid/max: %u %u %u", f.value[0], f.value[1], f.value[2]);
     p.cfg.pulse.armed = 1100; p.cfg.pulse.max = 1900; p.begin();
@@ -152,12 +164,15 @@ static void t_commands() {
     CHECK(other_zero && telem, "only the addressed hw slot carries the command, telemetry bit set");
     CHECK(slots[0] == 1, "logical motor 0 -> hw slot 1");
     CHECK(!m.commands_pending(), "sequence finished");
-    // extended direction commands and arming cancels
+    // the old "extended" setting: still 7 / 8 + save - 20 / 21 are relative to the stored direction and never saved (AM32 forgot the
+    // reversed motor at its next restart, which a flight controller reboot causes)
     m.cfg.dir_cmd_extended = true; m.request_direction(1, false);
     Frame f; for (uint32_t u = t; u < t + 40000; u += 250) { f = run_once(m, u, {0, 0, 0, 0}, false); }
-    bool saw21 = false, saw20 = false; { MotorOutputManager q; q.cfg.protocol = PROTO_DSHOT300; q.cfg.dir_cmd_extended = true; q.begin(); q.request_direction(0, true); q.request_direction(1, false);
-        for (uint32_t u = 0; u < 300000; u += 250) { Frame g = run_once(q, u, {0, 0, 0, 0}, false); for (int s = 0; s < 4; s++) if (g.send) { if (g.value[s] == 21) saw21 = true; if (g.value[s] == 20) saw20 = true; } } }
-    CHECK(saw21 && saw20, "extended 20/21 direction commands");
+    bool saw21 = false, saw20 = false; int n7 = 0, n8 = 0, n12 = 0;
+    { MotorOutputManager q; q.cfg.protocol = PROTO_DSHOT300; q.cfg.dir_cmd_extended = true; q.begin(); q.request_direction(0, true); q.request_direction(1, false);
+        for (uint32_t u = 0; u < 300000; u += 250) { Frame g = run_once(q, u, {0, 0, 0, 0}, false); for (int s = 0; s < 4; s++) if (g.send) {
+            const uint16_t v = g.value[s]; saw21 |= v == 21; saw20 |= v == 20; n7 += v == 7; n8 += v == 8; n12 += v == 12; } } }
+    CHECK(!saw21 && !saw20 && n8 == 10 && n7 == 10 && n12 == 20, "dir_cmd_extended on: still DShot 8 / 7 + save (the stored direction), never 20 / 21 (%d %d %d)", n8, n7, n12);
     MotorOutputManager a; a.cfg.protocol = PROTO_DSHOT300; a.begin(); a.beacon(2, 3); run_once(a, 0, {0, 0, 0, 0}, false);
     run_once(a, 20000, {0, 0, 0, 0}, true);
     CHECK(!a.commands_pending(), "arming discards queued commands (motors must never see a command in flight)");
@@ -220,6 +235,22 @@ static void t_telemetry() {
     for (int k = 0; k < 20; k++) m.feed_reply(0, k % 4 == 0 ? kGcrInvalid : esc_reply(12000, 14), 2000 + k);
     auto t = m.telemetry(0, 2020); CHECK(t.error_pct >= 20 && t.error_pct <= 30, "error %% ~ 25%% (%u)", t.error_pct);
     CHECK(fabsf(m.telemetry(1, 1005).error_pct) < 1, "clean motor 0 %%");
+    { MotorOutputManager c; c.cfg.protocol = PROTO_DSHOT600; c.cfg.bidirectional = true; c.cfg.pole_count = 14; c.begin();
+      c.feed_reply(0, kGcrInvalid, 100); CHECK(c.reply_crc_errors() == 0, "a capture the receiver already rejected is not a checksum error");
+      c.feed_reply(0, esc_reply(12000, 14) ^ 0x00400, 100); c.feed_reply(1, esc_reply(12000, 14) ^ 0x80000, 100);
+      CHECK(c.reply_crc_errors() == 2 && !c.telemetry(0, 101).rpm_valid, "clean bits with a wrong checksum: counted (%u), no rpm", (unsigned)c.reply_crc_errors());
+      c.feed_reply(0, esc_reply(12000, 14), 100); c.feed_reply(3, esc_reply(9000, 14), 100);
+      CHECK(c.reply_crc_errors() == 2 && c.rpm_valid_mask(150) == 0x09 && c.rpm_valid_mask(250) == 0, "rpm mask: motors 1 and 4 fresh (0x%02x), none after 100 ms", c.rpm_valid_mask(150)); }
+    { // AM32: extended telemetry frames between the eRPM frames - the rpm stays valid and right
+      MotorOutputManager a; a.cfg.protocol = PROTO_DSHOT300; a.cfg.bidirectional = true; a.cfg.edt = true; a.cfg.pole_count = 14; a.begin();
+      bool ok = true;
+      for (int k = 0; k < 400; k++) {
+          const uint32_t ms = 1000 + k / 4;
+          a.feed_reply(0, k % 10 == 3 ? gcr_encode(0x0400 | 64) : k % 10 == 7 ? gcr_encode(0x0200 | 41) : esc_reply(18000, 14), ms);
+          const MotorTelemetry t = a.telemetry(0, ms);
+          if (k > 0 && (!t.rpm_valid || fabsf(t.rpm - 18000) > 360)) ok = false;
+      }
+      CHECK(ok && a.telemetry(0, 1100).volt == 16.0f && a.telemetry(0, 1100).temp_c == 41 && a.telemetry(0, 1100).error_pct == 0, "eRPM + voltage + temperature interleaved: rpm always valid, 16 V, 41 C, 0 %% errors"); }
     MotorOutputManager e; e.cfg.protocol = PROTO_DSHOT600; e.cfg.bidirectional = true; e.cfg.edt = true; e.begin();
     e.feed_reply(0, gcr_encode(0x0400 | 66), 5000); e.feed_reply(1, gcr_encode(0x0400 | 68), 5000); e.feed_reply(0, gcr_encode(0x0200 | 55), 5001); e.feed_reply(0, gcr_encode(0x0600 | 12), 5002);
     CHECK(fabsf(e.esc_voltage(5100) - 17.0f) < 0.01f, "ESC pack voltage = highest reading 68*0.25 = 17 V (%f)", e.esc_voltage(5100));
@@ -272,7 +303,7 @@ static void t_proshot_brushed() {
     CHECK(brushed_duty(0) == 0 && brushed_duty(1000) == 0 && fabsf(brushed_duty(1500) - 0.5f) < 1e-6f && brushed_duty(2000) == 1 && brushed_duty(2500) == 1, "brushed: 1000..2000 = 0..100 %% duty");
     CHECK(default_pulse_hz(PROTO_BRUSHED) == 16000 && pulse_period_min_us(PROTO_BRUSHED) == 0, "brushed at 16 kHz (Betaflight's default for brushed motors)");
     PulseEndpoints pe; Endpoints e = endpoints(PROTO_BRUSHED, pe, 0.05f, 1.0f);
-    CHECK(e.disarm == 0 && fabsf(e.low - 1050) < 0.01f && e.high == 2000, "brushed endpoints: off, idle 5 %% duty, full");
+    CHECK(brushed_duty(e.disarm) == 0 && fabsf(e.low - 1050) < 0.01f && e.high == 2000, "brushed endpoints: off (0 %% duty disarmed), idle 5 %% duty, full");
     e = endpoints(PROTO_PROSHOT1000, pe, 0.055f, 1.0f);
     CHECK(fabsf(e.low - (48 + 0.055f * 1999)) < 0.01f && e.high == 2047, "ProShot uses the DShot values");
     MotorOutputManager m; m.cfg.protocol = PROTO_PROSHOT1000; m.cfg.count = 4; m.begin();

@@ -11,6 +11,7 @@
 //
 //  request                         reply
 //  HELLO                           DEVICE_INFO  [proto u8][role u8][maj][min][patch][schema_hash u32][features u32][name...]
+//                                               and, when set_chip() was called: [0][mcu name...][0][pin mask, 32 bytes: bit n = pin n exists]
 //  SECTION_GET [id]                SECTION      [id][size u16][data]      (ACK with an error if the id is unknown)
 //  SECTION_SET [id][data]          SECTION      the values ACTUALLY stored (range-validated, and with the rules of settings_rules.h
 //                                               applied: the app sees what was clamped or computed)
@@ -28,7 +29,7 @@ namespace wbp {
 
 enum Role : uint8_t { ROLE_RX = 0, ROLE_TX = 1 };
 enum Feature : uint32_t { FEAT_STREAMS = 1u << 0, FEAT_CALIBRATION = 1u << 1, FEAT_MOTOR_TEST = 1u << 2, FEAT_GPS = 1u << 3, FEAT_BLACKBOX = 1u << 4, FEAT_BATTERY = 1u << 5, FEAT_BEEPER = 1u << 6,
-                         FEAT_STM32 = 1u << 7, FEAT_WIFI = 1u << 8 };   // STM32: pin numbers are port * 16 + pin (PA0 = 0, PB3 = 19: src/port/pin_names.h), not GPIO numbers
+                         FEAT_STM32 = 1u << 7, FEAT_WIFI = 1u << 8, FEAT_USB_NAME = 1u << 9 };     // USB_NAME: general.usb_name is the board's name on USB   // STM32: pin numbers are port * 16 + pin (PA0 = 0, PB3 = 19: src/port/pin_names.h), not GPIO numbers
 enum SettingsFlags : uint8_t { SF_DIRTY = SETTINGS_FLAGS_DIRTY, SF_REBOOT_REQUIRED = SETTINGS_FLAGS_REBOOT_REQUIRED };
 
 class Transport {
@@ -65,6 +66,9 @@ public:
     Server(Settings& live, SettingsStore* store, Host& host, Transport& tx, Role role, uint8_t maj, uint8_t min, uint8_t patch, const char* name, uint32_t features)
         : s_(live), store_(store), host_(host), tx_(tx), role_(role), maj_(maj), min_(min), patch_(patch), name_(name), features_(features) {}
     void set_features(uint32_t f) { features_ = f; }                 // (the simulator plays an STM32 board with wb_sim --stm32)
+    // The chip by name (port/chip.h WB_MCU_NAME) and the pin numbers it has (32 bytes, bit n = pin n): sent with DEVICE_INFO, so
+    // the app shows which MCU it talks to and offers only pins that exist on it.
+    void set_chip(const char* mcu, const uint8_t* pin_mask) { mcu_ = mcu; memcpy(pins_, pin_mask, sizeof(pins_)); }
 
     void on_byte(uint8_t c) { Frame f; if (parser_.feed(c, f)) { handle(f); while (parser_.pump(f)) handle(f); } }
     void on_bytes(const uint8_t* d, size_t n) { for (size_t i = 0; i < n; i++) on_byte(d[i]); }
@@ -133,10 +137,15 @@ private:
         host_.on_frame();
         switch (f.type) {
         case MSG_HELLO: {
-            uint8_t b[40]; size_t n = 0; b[n++] = kProtocolVersion; b[n++] = role_; b[n++] = maj_; b[n++] = min_; b[n++] = patch_;
+            uint8_t b[128]; size_t n = 0; b[n++] = kProtocolVersion; b[n++] = role_; b[n++] = maj_; b[n++] = min_; b[n++] = patch_;
             for (int i = 0; i < 4; i++) b[n++] = (uint8_t)(kSchemaHash >> (8 * i));
             for (int i = 0; i < 4; i++) b[n++] = (uint8_t)(features_ >> (8 * i));
-            for (const char* c = name_; *c && n < sizeof(b); c++) b[n++] = (uint8_t)*c;
+            for (const char* c = name_; *c && n < 13 + 40; c++) b[n++] = (uint8_t)*c;
+            if (mcu_) {
+                b[n++] = 0;
+                for (const char* c = mcu_; *c && n < sizeof(b) - 33; c++) b[n++] = (uint8_t)*c;
+                b[n++] = 0; memcpy(b + n, pins_, sizeof(pins_)); n += sizeof(pins_);
+            }
             send(MSG_DEVICE_INFO, f.seq, b, (uint16_t)n, false); break; }
         case MSG_SECTION_GET:
             if (f.len != 1 || !find_section(f.payload[0])) { ack(f.type, f.seq, ERR_BAD_SECTION); break; }
@@ -186,6 +195,7 @@ private:
     }
 
     Settings& s_; SettingsStore* store_; Host& host_; Transport& tx_; Role role_; uint8_t maj_, min_, patch_; const char* name_; uint32_t features_;
+    const char* mcu_ = nullptr; uint8_t pins_[32] = {};
     Parser parser_; uint16_t rate_[kStreamCount] = {}; uint32_t next_[kStreamCount] = {}; uint8_t stream_seq_ = 0, log_seq_ = 0;
     bool dirty_ = false, reboot_required_ = false; uint32_t dropped_streams_ = 0, autosaved_ = 0;
 };

@@ -32,6 +32,7 @@
 #include "../proto/settings_apply.h"
 #include "telemetry.h"
 #include "../telemetry/mavlink_telemetry.h"
+#include "../osd/osd.h"
 #include "../proto/wbp_fields.h"
 #include "exchange.h"
 #include "sync.h"
@@ -105,7 +106,7 @@ public:
         s_ = &s;
         wbp::apply_core(s, core.cfg, core.rc);
         ekf_mode_ = s.nav.ekf; ekf_.cfg.gps_delay_s = core.cfg.horizontal.gps_delay_s;
-        wbp::apply_motors(s, motors.cfg());
+        wbp::apply_motors(s, motors.cfg()); motors_run_ = s.motors;
         wbp::apply_gps(s, gnss.config());
         apply_battery(); apply_beeper(); apply_servo();
         baro.setEnabled(s.sensors.baro_enabled != 0); baro.setModel((BaroSensor::Model)s.sensors.baro_model); sonar.setEnabled(s.sensors.range_enabled != 0);
@@ -252,7 +253,8 @@ public:
             } else if (plan.rx >= 0) {
                 uint8_t rxp[3]; hw.getSerialRxPins(rxp);
                 status.rx = rc.begin(rp, *uarts[plan.rx], rxp[0], rxp[1]);
-                say(status.rx, "rx", rc.name(), rc.failReason(), "%s on %s%s", rc.name(), uname[plan.rx], rc.telemetryPossible() ? ", telemetry on its TX pin" : "");
+                rx_tlm_on_ = s.receiver.telemetry != 0;
+                say(status.rx, "rx", rc.name(), rc.failReason(), "%s on %s%s", rc.name(), uname[plan.rx], !rc.telemetryPossible() ? "" : rx_tlm_on_ ? ", telemetry on its TX pin" : ", telemetry off (receiver.telemetry)");
                 crsf_tlm_.reset();
             } else { status.rx = false; say(false, "rx", "", "no UART has the function SERIAL_RX in the serial ports table (Pins and ports tab)", ""); }
         }
@@ -287,6 +289,32 @@ public:
             else { esc_uart_ = uarts[u]; esc_u = u; say(true, "esc tlm", "", "", "KISS telemetry on %s RX %s, 115200 baud (the first request after 5 s)", uname[u], pin_str(s.pins.esc_tlm, pb)); }
         }
 
+        // ---- OSD (section osd, osd/osd.h): MSP DisplayPort to the video transmitter of a digital FPV system, on the UART that is
+        //      left (AUTO) or the one with the function DISPLAYPORT (TABLE); it talks back on the same UART (armed state, canvas)
+        osd_uart_ = nullptr; int osd_u = -1; osd_fly_ms_ = 0; osd_last_ms_ = 0;
+        if (s.osd.type == wbp::OSD_TYPE_MSP_DISPLAYPORT) {
+            const int u = port_table ? plan.osd : app::telemetry_uart(status.gps, status.rx && !use_external_rc && rc.onUart(), uart0 != nullptr, flow_u, esc_u);
+            const char* why = s.osd.tx_pin == 255 ? "no TX pin (osd.tx_pin)"
+                            : u < 0 ? (port_table ? "no UART has the function DISPLAYPORT in the serial ports table" : "no UART left (GPS, receiver, flow sensor and ESC wire have them)") : nullptr;
+            if (!why) {
+#if !WB_PLATFORM_STM32
+                uarts[u]->setTxBufferSize(2048);                 // (a screen is ~0.5 kB; poll() never hands over more than the room)
+#endif
+                if (!port::uart_begin(*uarts[u], s.osd.baud, SERIAL_8N1, s.osd.rx_pin, s.osd.tx_pin, false, 256)) why = WB_PLATFORM_STM32 ? "the UART did not start on those pins (an STM32 needs osd.rx_pin as well)" : "the UART did not start on those pins";
+            }
+            if (why) say(false, "osd", "", why, "");
+            else {
+                osd_uart_ = uarts[u]; osd_u = u;
+                osd_.configure(s.osd.canvas, s.osd.rate);
+                memcpy(osd_layout_.pos, s.osd.pos, sizeof(osd_layout_.pos));
+                size_t k = 0; for (; k < sizeof(s.osd.name) && s.osd.name[k]; k++) { const char c = (char)s.osd.name[k]; osd_layout_.name[k] = c >= 'a' && c <= 'z' ? (char)(c - 32) : (c >= 0x20 && c < 0x7F ? c : ' '); }   // (Betaflight shows the name in capitals)
+                osd_layout_.name[k] = 0;
+                char tb[8], rb[8];
+                say(true, "osd", "", "", "MSP DisplayPort on %s TX %s RX %s, %lu baud, %u x %u%s, %u screens/s", uname[u], pin_str(s.osd.tx_pin, tb), pin_str(s.osd.rx_pin, rb), (unsigned long)s.osd.baud,
+                    (unsigned)osd_.cols(), (unsigned)osd_.rows(), s.osd.canvas == osd::DisplayPort::CANVAS_AUTO ? " (or what the video transmitter asks for)" : "", (unsigned)s.osd.rate);
+            }
+        }
+
         // ---- MAVLink telemetry (section telemetry, telemetry/mavlink_telemetry.h): a UART TX (AUTO: the UART left; TABLE: the one with
         //      the function TELEMETRY) and / or WiFi (the link task sends the frames as UDP broadcasts to port 14550)
         mav_uart_ = nullptr; mav_on_ = mav_wifi_ = false; mav_report_i_ = 0; mav_blk_sent_ = kMavNeverSent; mav_blk_ms_ = 0; mav_armed_ = false;
@@ -299,8 +327,8 @@ public:
             mav_wifi_ = !WB_PLATFORM_STM32 && tc.wifi && s.wifi.mode != wbp::WIFI_MODE_OFF;
             const char* why = nullptr; int u = -1; char wire[64] = "";
             if (tc.tx_pin != 255) {
-                u = port_table ? plan.tlm : app::telemetry_uart(status.gps, status.rx && !use_external_rc && rc.onUart(), uart0 != nullptr, flow_u, esc_u);
-                if (u < 0) why = port_table ? "no UART has the function TELEMETRY in the serial ports table" : "no UART left (GPS, receiver, flow sensor and ESC wire have them)";
+                u = port_table ? plan.tlm : app::telemetry_uart(status.gps, status.rx && !use_external_rc && rc.onUart(), uart0 != nullptr, flow_u, esc_u, osd_u);
+                if (u < 0) why = port_table ? "no UART has the function TELEMETRY in the serial ports table" : "no UART left (GPS, receiver, flow sensor, ESC wire and OSD have them)";
                 else {
 #if !WB_PLATFORM_STM32
                     uarts[u]->setTxBufferSize(1024);                 // (frames wait there, the sensor thread never does: poll() only fills the room it has)
@@ -329,7 +357,9 @@ public:
             if (motor::is_can(mc.protocol) && !status.can) snprintf(why, sizeof(why), "motors.protocol is DRONECAN but the CAN bus is not running (section can)");
             for (int i = 0; i < mc.count && !why[0] && !motor::is_can(mc.protocol); i++) if (mp[i] == GPIO_UNUSED) snprintf(why, sizeof(why), "the pin of motor slot %d is not set (Pins tab)", i + 1);
             if (!why[0] && motor::is_dshot(mc.protocol) && mc.count > 4)
-                snprintf(why, sizeof(why), "DShot / ProShot drive at most 4 motors on the ESP32-S3 (4 RMT transmitters); this frame has %d: use PWM, Oneshot or Multishot", (int)mc.count);
+                snprintf(why, sizeof(why), WB_PLATFORM_STM32 ? "DShot drives at most 4 motors here; this frame has %d: use PWM, Oneshot or Multishot"
+                                                             : "DShot / ProShot drive at most 4 motors on the ESP32-S3 (4 RMT transmitters); this frame has %d: use PWM, Oneshot or Multishot", (int)mc.count);
+            if (!why[0] && motors.failure()) snprintf(why, sizeof(why), "%s: %s", motors.backend(), motors.failure());
             if (!why[0]) snprintf(why, sizeof(why), "output driver failed: %s", motors.backend());
             if (motor::is_can(mc.protocol)) say(status.motors, "motors", motors.backend(), why, "DroneCAN x%d (esc.RawCommand, ESC index = motor slot)", (int)mc.count);
             else say(status.motors, "motors", motors.backend(), why, "%s x%d", motors.backend(), (int)mc.count);
@@ -370,8 +400,15 @@ public:
             if (!why && !led_strip_.begin(s.pins.led)) why = "the SPI bus did not start";
 #endif
             status.led = !why;
+            static_assert((int)app::LedLogic::MANUAL == (int)wbp::LED_LAYOUT_MANUAL && (int)app::LedLogic::F_THROTTLE == (int)wbp::LED_FUNCTION_THROTTLE && app::LedLogic::kMax == 32, "led_logic.h follows the schema");
             led_logic_.configure(s.led.count, s.led.brightness, (app::LedLogic::Layout)s.led.layout);
-            char pb[8]; say(status.led, "led", "", why, "%u LEDs on %s, %u %% brightness%s", (unsigned)s.led.count, pin_str(s.pins.led, pb), (unsigned)s.led.brightness, s.led.layout ? ", navigation lights" : "");
+            { uint32_t col[app::LedLogic::kMax]; memcpy(col, s.led.color, sizeof(col)); led_logic_.manual(s.led.fn, col, s.led.warnings != 0, s.led.speed); }   // (copied: the packed record's u32s may be unaligned)
+            const char* look = s.led.layout == wbp::LED_LAYOUT_NAV ? ", navigation lights" : s.led.layout == wbp::LED_LAYOUT_MANUAL ? ", manual" : "";
+            char pb[8]; say(status.led, "led", "", why, "%u LEDs on %s, %u %% brightness%s", (unsigned)s.led.count, pin_str(s.pins.led, pb), (unsigned)s.led.brightness, look);
+        }
+        if (s.general.stick_arm) {                           // arming with the sticks (safety.h StickArm)
+            bool arm_switch = false; for (int i = 0; i < 16; i++) if (s.modes.mode[i] == wbp::MODE_ARM && s.modes.hi[i] > s.modes.lo[i]) arm_switch = true;
+            say(true, "arming", "", nullptr, "sticks: throttle + pitch down, yaw and roll to opposite sides, 1 s (disarm: the same, on the ground)%s", arm_switch ? "; the ARM switch must be on" : "");
         }
         { char line[kReportLen]; sys::Memory m = sys::memory();
           snprintf(line, sizeof(line), "memory: %lu kB internal RAM free of %lu, PSRAM %lu kB", (unsigned long)(m.heap_free / 1024u), (unsigned long)(m.heap_total / 1024u), (unsigned long)(m.psram_total / 1024u));
@@ -530,8 +567,9 @@ public:
         { app::Guard g(*sync_); fill_slow(now_ms); }
         {
             app::Guard g(*sync_);
-            if (rc.telemetryPossible() && rc_link_) tlm_n_ = crsf_tlm_.next(now_us, crsf_in(), tlm_buf_);     // (only while the receiver is there to take it)
+            if (rx_tlm_on_ && rc.telemetryPossible() && rc_link_) tlm_n_ = crsf_tlm_.next(now_us, crsf_in(), tlm_buf_);     // (only while the receiver is there to take it)
             if (mav_on_) { mav_st_ = mav_in(now_ms); mav_blk_ = tel_.blockers; }
+            if (osd_uart_) { osd_st_ = osd_in(now_ms); app::msp_info_of(tel_, s_, osd_info_); }
             if ((uint32_t)(now_ms - bb_slow_ms_) >= 1000u / bb::kSlowHz) { bb_slow_ms_ = now_ms; blackbox.log_slow(now_us, tel_); }
         }
         if (ekf_due_) { ekf_due_ = false; ekf_step(now_ms); }  // (outside the lock: the EKF is this thread's alone, ~30 - 60 us)
@@ -544,6 +582,7 @@ public:
         servos.update(servo_rc_, servo_have_rc_);              // (outside the lock: it writes the PWM peripheral; the channels were copied under it)
         if (tlm_n_) { rc.sendTelemetry(tlm_buf_, tlm_n_); tlm_n_ = 0; }                  // (outside the lock: a UART write)
         if (mav_on_) mav_send(now_ms);                                                     // (outside the lock: the state was copied under it)
+        if (osd_uart_) osd_send(now_ms);
         if (restart) {
             delay(20);
 #if WB_PLATFORM_STM32
@@ -789,6 +828,9 @@ private:
           auto d16 = [](uint32_t now, uint32_t was) { const uint32_t d = now - was; return (uint16_t)(d > 65535u ? 65535u : d); };
           tel_.rc_bad = d16(bad, rc_mark_[0]); tel_.rc_ovf = d16(ovf, rc_mark_[1]); tel_.rc_line = d16(line, rc_mark_[2]);
           rc_mark_[0] = bad; rc_mark_[1] = ovf; rc_mark_[2] = line; }
+        tel_.hw_no_start = (uint16_t)(hs.no_start - hw_mark_.no_start > 65535u ? 65535u : hs.no_start - hw_mark_.no_start);
+        tel_.hw_bad_bits = (uint16_t)(hs.bad_bits - hw_mark_.bad_bits > 65535u ? 65535u : hs.bad_bits - hw_mark_.bad_bits);
+        { const uint32_t crc = motors.manager().reply_crc_errors(); tel_.hw_bad_crc = (uint16_t)(crc - crc_mark_ > 65535u ? 65535u : crc - crc_mark_); crc_mark_ = crc; }
         hw_mark_ = hs;
     }
 
@@ -915,8 +957,21 @@ private:
         case wbp::SEC_SERVO: apply_servo(); return true;
         case wbp::SEC_ALTHOLD: wbp::apply_althold(s, core.cfg.alt); core.apply_althold(); return true;
         case wbp::SEC_BLACKBOX: return true;                                      // used by bb::Service (link task), nothing to do in the flight loop
+        case wbp::SEC_MOTORS: return apply_motor_order();
         default: return false;
         }
+    }
+    // The motor wizard (app, Motor tab) changes motors.order / reversed_mask and wants the result at once: the next step spins
+    // the motors in the new order. Only those two fields take effect live (disarmed: the gate); any other change of the section
+    // since the outputs started (protocol, layout, pulses ...) still needs the restart - then nothing is applied.
+    bool apply_motor_order() {
+        wbp::S_motors want = s_->motors, run = motors_run_;
+        memcpy(want.order, run.order, sizeof(want.order)); want.reversed_mask = run.reversed_mask;
+        if (!status.motors || memcmp(&want, &run, sizeof(run)) != 0) return false;
+        motor::MotorOutputManager& mm = motors.manager();
+        if (!mm.set_order(s_->motors.order)) return false;                      // not a permutation of the motors: the old order stays
+        for (int i = 0; i < motor::kMaxMotors; i++) mm.cfg.reversed[i] = ((s_->motors.reversed_mask >> i) & 1) != 0;
+        return true;
     }
 
     // anything the app is doing with the craft right now: arming is refused meanwhile
@@ -984,6 +1039,7 @@ private:
         if (s.flow.type == FlowSensor::MSP) { add(s.pins.flow_rx, "flow_rx"); add(s.pins.flow_tx, "flow_tx"); }
         if (s.motors.esc_sensor) add(s.pins.esc_tlm, "esc_tlm");
         if (s.telemetry.protocol == wbp::TELEMETRY_PROTOCOL_MAVLINK) { add(s.telemetry.tx_pin, "telemetry_tx"); add(s.telemetry.rx_pin, "telemetry_rx"); }
+        if (s.osd.type != wbp::OSD_TYPE_NONE) { add(s.osd.tx_pin, "osd_tx"); add(s.osd.rx_pin, "osd_rx"); }
         if (s.led.count) add(s.pins.led, "led");
         if (s.blackbox.device == bb::DEV_SDCARD) { hw.getSdCardPins(p); if (s.blackbox.sd_mode == wbp::SD_MODE_SPI) add(p[0], "sd_cs"); add(p[1], "sd_clk"); add(p[2], "sd_cmd"); add(p[3], "sd_d0"); }
         const pins::Conflict c = pins::find_conflict(use, n);
@@ -1040,6 +1096,45 @@ private:
     }
     // Texts for the ground station: the boot report (one line whenever the queue is empty), why the craft cannot arm (when it changes,
     // at most every 2 s, and again every 10 s), armed / disarmed. Then the frames that are due and fit the UART's room.
+    // ---- OSD (osd/osd.h): what the goggles show, in Betaflight's conventions (called with the lock held)
+    osd::State osd_in(uint32_t now_ms) {
+        const app::Telemetry& t = tel_; osd::State o;
+        if (t.armed && osd_last_ms_) osd_fly_ms_ += now_ms - osd_last_ms_;
+        osd_last_ms_ = now_ms;
+        o.armed = t.armed; o.failsafe = t.failsafe != 0; o.fly_s = osd_fly_ms_ / 1000u; o.on_s = now_ms / 1000u;
+        const uint32_t m = t.modes;
+        o.mode = (m >> fc::M_RESCUE) & 1u ? osd::MODE_RESCUE : (m >> fc::M_POSHOLD) & 1u ? osd::MODE_POSHOLD : (m >> fc::M_ALTHOLD) & 1u ? osd::MODE_ALTHOLD
+               : (m >> fc::M_STABILIZE) & 1u ? osd::MODE_STAB : (m >> fc::M_ANGLE) & 1u ? osd::MODE_ANGLE : osd::MODE_ACRO;
+        o.rc_link = t.rc_link; o.rssi_pct = t.rssi;
+        o.batt = status.battery && t.batt_v > 0.5f; o.volts = t.batt_v; o.cells = t.batt_cells;
+        o.batt_level = t.batt_state == wbp::BATT_STATE_CRITICAL ? 2 : t.batt_state == wbp::BATT_STATE_WARNING ? 1 : 0;
+        o.cell_min = battery.monitor.cfg.cell_min_v; o.cell_max = battery.monitor.cfg.cell_max_v;
+        o.have_current = t.curr_source == batt::CUR_ADC || t.curr_source == batt::CUR_ESC || t.curr_source == batt::CUR_DRONECAN; o.amps = t.batt_amps; o.mah = t.batt_mah;
+        o.gps = status.gps; o.sats = t.gps_sats; o.fix = t.gps_fix; o.speed_ms = t.gs_cms * 0.01f;
+        o.home = gnss.home().has_home(); o.home_dist_m = gnss.home().distance_to_home_cm() * 0.01f; o.home_dir_deg = t.home_dir_ddeg * 0.1f;
+        o.alt_valid = t.alt_valid; o.alt_m = t.z; o.vz_ms = t.vz; o.throttle = t.throttle;
+        o.roll_deg = t.roll; o.pitch_deg = t.pitch; o.heading_deg = app::heading360(t.yaw);
+        for (int i = 0; i < 8; i++) if (t.esc_temp[i] > o.esc_temp_c) o.esc_temp_c = t.esc_temp[i];
+        // the warning: the most important one only (Betaflight's order, roughly)
+        const char* w = o.failsafe ? "FAILSAFE" : o.batt_level == 2 ? "LAND NOW" : o.batt_level == 1 ? "LOW BATTERY" : !t.rc_link ? "RXLOSS" : nullptr;
+        if (w) snprintf(o.warning, sizeof(o.warning), "%s", w);
+        else if (!t.armed && t.blockers) {
+            for (int b = 0; b < 32; b++) if ((t.blockers >> b) & 1u) {
+                const char* name = b < (int)(sizeof(wbp::kB_arm_blocker) / sizeof(wbp::kB_arm_blocker[0])) ? wbp::kB_arm_blocker[b] : "?";
+                size_t k = 0; for (; name[k] && k < sizeof(o.warning) - 1; k++) o.warning[k] = name[k] == '_' ? ' ' : name[k];
+                o.warning[k] = 0; break;
+            }
+        }
+        return o;
+    }
+    // The video transmitter's requests in, the screen out - never more than the UART has room for (sensor thread, outside the lock)
+    void osd_send(uint32_t now_ms) {
+        for (int k = 0; k < 64 && osd_uart_->available() > 0; k++) osd_.feed((uint8_t)osd_uart_->read(), osd_info_, osd_layout_.name);
+        size_t room = port::uart_room(*osd_uart_); if (room > sizeof(osd_buf_)) room = sizeof(osd_buf_);
+        const size_t n = osd_.poll(now_ms, osd_st_, osd_layout_, osd_buf_, room);
+        if (n) osd_uart_->write(osd_buf_, n);
+    }
+
     void mav_send(uint32_t now_ms) {
         if (mav_.queued_texts() == 0 && mav_report_i_ < n_report_) {
             const char* l = report_ptr_[mav_report_i_++];
@@ -1187,6 +1282,7 @@ private:
         if (battery.monitor.present()) h |= wbp::HEALTH_BATTERY;
         tel_.health = h;
         tel_.esc_volt = mm.esc_voltage(now_ms); tel_.dyn_idle = mm.dyn_idle_increase();
+        tel_.rpm_ok = mm.rpm_valid_mask(now_ms);
         tel_.bidir_state = !(mm.cfg.bidirectional && motor::is_dshot_wire(mm.cfg.protocol)) ? wbp::BIDIR_STATE_OFF : motors.bidirectionalActive() ? wbp::BIDIR_STATE_ACTIVE : wbp::BIDIR_STATE_UNAVAILABLE;
         { uint8_t ans = 0; for (int i = 0; i < mm.cfg.count; i++) if (motors.escAnswers(mm.cfg.order[i])) ans |= (uint8_t)(1u << i); tel_.esc_answers = ans; }
         tel_.batt_v = battery.monitor.voltage(); tel_.cell_v = battery.monitor.cell_voltage(); tel_.batt_cells = battery.monitor.cells();
@@ -1231,7 +1327,7 @@ private:
         (void)name;
     }
 
-    static constexpr int kReportLines = 32, kReportLen = 176;      // (the longest boot: 16 devices, 3 pin lines, SD card, WiFi, loop, link, settings)
+    static constexpr int kReportLines = 40, kReportLen = 176;      // (the longest boot: 16 devices, 3 pin lines, SD card, WiFi, loop, link, settings)
     char report_[kReportLines][kReportLen] = {}; const char* report_ptr_[kReportLines] = {}; int n_report_ = 0;
 
     wbp::Settings* s_ = nullptr;
@@ -1245,6 +1341,10 @@ private:
     static constexpr uint32_t kMavNeverSent = 0xFFFFFFFFu;     // (mav_blk_sent_ before the first text: 'Ready to arm' is news as well)
     uint8_t mav_buf_[512] = {}; int mav_report_i_ = 0; uint32_t mav_blk_ = 0, mav_blk_sent_ = kMavNeverSent, mav_blk_ms_ = 0;
     crsf::Scheduler crsf_tlm_; uint8_t tlm_buf_[crsf::kMaxFrame] = {}; size_t tlm_n_ = 0;
+public:
+    osd::DisplayPort osd_;                                // (public for the tests: what the video transmitter asked)
+private:
+    osd::Layout osd_layout_; osd::State osd_st_; msp::Info osd_info_; port::SerialPort* osd_uart_ = nullptr; uint8_t osd_buf_[512] = {}; uint32_t osd_fly_ms_ = 0, osd_last_ms_ = 0;
     beep::Conditions beep_cond_; uint32_t beacons_ = 0, start_us_ = 0, gap_max_ = 0, cycle_gap_ = 0, bb_slow_ms_ = 0;
     uint32_t last_us_ = 0, next_us_ = 0, slow_us_ = 0, period_us_ = 250, stat_ms_ = 0, test_until_ms_ = 0, reboot_at_ms_ = 0, imu_errors_ = 0, imu_fail_streak_ = 0, slot_ = 0, loops_ = 0, loops_mark_ = 0;
     uint16_t pub_div_ = 4, pub_n_ = 0, loop_max_ = 0;
@@ -1275,6 +1375,8 @@ private:
         in.batt_warning = batt_state_ == wbp::BATT_STATE_WARNING; in.batt_critical = batt_state_ == wbp::BATT_STATE_CRITICAL;
         in.calibrating = gyro_cal_state() == CalState::RUNNING || acc_cal_.running() || mag.calibrating() || mag_auto_.active();
         in.stall = (o.arm_blockers & (fc::AB_MOTOR_STALL | fc::AB_RUNAWAY_TAKEOFF)) != 0;
+        in.batt_pct = tel_.batt_cells ? tel_.batt_remaining : 255;
+        const float thr = o.stick[3] * 100.0f; in.throttle = (uint8_t)(thr <= 0.0f ? 0 : thr >= 100.0f ? 100 : thr + 0.5f);
         in.mode = o.rescue_active ? app::LedInput::RESCUE : o.poshold_active ? app::LedInput::POSHOLD : o.althold_active ? app::LedInput::ALTHOLD
                 : ((o.modes >> fc::M_ANGLE) & 1u) ? app::LedInput::ANGLE : ((o.modes >> fc::M_STABILIZE) & 1u) ? app::LedInput::STABILIZE : app::LedInput::ACRO;
         return in;
@@ -1285,7 +1387,9 @@ private:
     WB_FAST static uint16_t peak16(uint16_t was, uint32_t us) { return us > 65535u ? (uint16_t)65535 : us > was ? (uint16_t)us : was; }
     bool loop_slow_ = false, busy_other_ = false, busy_seen_ = false; uint8_t slow_seconds_ = 0, batt_state_ = 0, flow_quality_ = 0; uint32_t flow_tel_ms_ = 0;
     uint16_t servo_rc_[16] = {}; bool servo_have_rc_ = false;
-    fc::Health health_; motor::HwStats hw_mark_; uint32_t rc_mark_[3] = {};
+    fc::Health health_; motor::HwStats hw_mark_; uint32_t crc_mark_ = 0; uint32_t rc_mark_[3] = {};
+    bool rx_tlm_on_ = true;                               // receiver.telemetry: CRSF telemetry back through the receiver
+    wbp::S_motors motors_run_ = {};                       // the motors section the outputs run with (apply_motor_order)
     escs::Poller esc_poll_; port::SerialPort* esc_uart_ = nullptr; uint32_t esc_mark_[3] = {};      // ESC telemetry wire
     fc::CoreOutput last_out_;
     uint32_t trim_ms_ = 0;
