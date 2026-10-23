@@ -1,4 +1,5 @@
 // Sensors: calibration (gyro, 6-face accelerometer, level, compass), board alignment, module switches, GPS.
+import { satellitesView } from '../gfx/instruments.js';
 import { store } from '../store.js';
 import { h, block, fields, form, row, listen, note, cmdButton, toast, readout, kv, canvas, token, errorText } from '../ui.js';
 import { ENUM_LABELS } from '../labels.js';
@@ -159,7 +160,7 @@ export default {
   id: 'sensors',
   title: tr('Cảm biến'),
   lead: tr('Hiệu chuẩn, hướng lắp chip và bật tắt từng module.'),
-  streams: { calibration: 15, sensors: 10, gps: 2, status: 10, can: 2 },
+  streams: { calibration: 15, sensors: 10, gps: 2, status: 10, can: 2, satellites: 1 },
   mount(view) {
     const f = (v, d) => (v === undefined || v === null ? '–' : Number(v).toFixed(d));
     view.append(h('div', { class: 'cols' },
@@ -172,7 +173,7 @@ export default {
             [tr('Đang chạy'), h('span', { id: 'rates-now' }, readout('status', (s) => (s.pid_target ? tr('gyro {gyro} Hz, PID {pid} Hz', { gyro: s.loop_target, pid: s.pid_target }) : '–')))]]),
           note(tr('Các mục này có hiệu lực sau khi lưu và khởi động lại.'))),
         block('Module',
-          fields('sensors', ['baro_enabled', 'baro_model', 'range_enabled', 'range_model', 'range_l1x_mode', 'mag_enabled', 'mag_model', 'mag_align', 'mag_trim_roll', 'mag_trim_pitch', 'mag_trim_yaw', 'mag_declination', 'gps_enabled']),
+          fields('sensors', ['baro_enabled', 'baro_model', 'baro_primary', 'range_enabled', 'range_model', 'range_l1x_mode', 'mag_enabled', 'mag_model', 'mag_align', 'mag_trim_roll', 'mag_trim_pitch', 'mag_trim_yaw', 'mag_declination', 'gps_enabled']),
           note(tr('Bật hoặc tắt module cần lưu và khởi động lại. Module bật mà firmware không tìm thấy sẽ hiện "Không có" ở tab Tổng quan kèm lý do.'))),
         block('GPS',
           kv([
@@ -186,6 +187,7 @@ export default {
             done: () => toast(tr('Đã đặt home.'), 'ok'),
             fail: (e) => toast(e.code === 'NO_SENSOR' ? tr('GPS chưa có fix đủ tốt để đặt home.') : errorText(e), 'bad') })),
           fields('gps', ['provider', 'baud', 'rate_hz', 'auto_baud', 'auto_config', 'min_sats', 'sbas', 'sbas_integrity', 'use_galileo', 'acquire_model', 'flight_model', 'utc_standard', 'set_home_once', 'use_3d_speed'], { baud: { choices: [9600, 19200, 38400, 57600, 115200, 230400] } })),
+        (store.settings.sensors || {}).gps_enabled && store.schema.streams.find((x) => x.name === 'satellites') ? block(tr('Vệ tinh GPS'), satellitesView()) : null,
         store.schema.sections.find((x) => x.name === 'can') ? block(tr('CAN bus (DroneCAN)'),
           fields('can', ['mode', 'bitrate', 'node_id', 'dna_server']),
           h('div', { id: 'can-state' }, readout('can', (c) => canText(c))),

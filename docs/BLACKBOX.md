@@ -118,9 +118,60 @@ Bảng phân vùng mặc định của Arduino-ESP32 (4 MB) chỉ có phân vùn
 - *Ghi gì, khi nào*: nơi ghi, điều kiện, tốc độ, các nhóm trường, ước tính dung lượng.
 - *Bộ nhớ log trên mạch*: trạng thái, phần đã dùng, danh sách phiên, tải từng phiên hoặc tất cả (có tiến độ), xoá (hỏi lại trước). Khóa khi đang arm.
 - *Ghi trực tiếp qua cáp*: đồ thị chạy theo dữ liệu mới ("Bám theo dữ liệu mới"); dừng thì thành một file trong thư viện.
+  - Từ 0.31 cửa sổ đồ thị trôi theo đồng hồ, khoảng 30 hình/giây (`web/js/gfx/follow.js`), không nhảy theo nhịp dữ liệu về. Trước đó, dữ liệu qua cầu UART / driver USB của máy tính về thành từng cục nên đồ thị nhảy khoảng 1 lần/giây.
+  - Cửa sổ kết thúc hơi lùi sau bản ghi mới nhất (`lag`): lag tự chỉnh theo khoảng cách giữa hai đợt dữ liệu (×1,25), nhỏ nhất 0,1 s, lớn nhất 2 s. Nhờ vậy mép phải không bao giờ chạy vào chỗ chưa có dữ liệu.
+  - Tốc độ trôi chỉ được chỉnh ±40 % để bám mục tiêu: không bao giờ nhảy, không bao giờ lùi.
+  - App lấy dữ liệu mới 5 lần/giây.
+  - Firmware: test FIL `test_fw` nhóm `[blackbox] live stream over a 230400 baud UART` mô phỏng UART 230400 baud sau hàng đợi 8 kB. Khung đi đều, cách nhau tối đa khoảng 20–30 ms, kể cả khi có thêm telemetry 50 Hz; không mất khung nào; bản ghi mới nhất cũ chưa tới 80 ms khi đến app. Như vậy chỗ dồn cục không nằm ở firmware.
 - *Log trên máy tính*: thư mục `~/Windburst/logs` (đổi bằng `gui --logs THƯ_MỤC` hoặc biến môi trường `WBCLIENT_LOG_DIR`); xem, lưu file, xoá, thêm file `.wblog` có sẵn. **Xem log không cần nối mạch.**
 - *Đồ thị*: nhiều khung xếp chồng chung trục thời gian, mỗi khung một đơn vị (gyro và setpoint từng trục, PID, motor, cần điều khiển, góc, gyro trước / sau lọc, vòng lặp, độ cao, pin, GPS, vị trí (vận tốc ước lượng và của flow, vị trí và điểm đang giữ, góc nghiêng autopilot, chất lượng bề mặt), receiver, la bàn — chỉ hiện nhóm mà log có trường). Nhóm PID vẽ theo đơn vị PID sum (khung nhỏ nhất ±20); nhóm "Vòng lặp" có hai khung: thời gian chạy / khoảng cách giữa hai vòng, và từng khâu của một chu kỳ (log từ 0.6.2). Kéo chuột để phóng to, bấm đúp để xem cả log, Ctrl + lăn chuột, Shift + kéo để dịch; con trỏ đọc giá trị ở mọi khung; sự kiện là vạch đứt có tên; xuất CSV; tải settings của chuyến bay dưới dạng file sao lưu (khôi phục được ở tab Hệ thống).
 - Log dài hơn số điểm ảnh: server gửi **giá trị thấp nhất và cao nhất của từng cột điểm ảnh**, nên một gai rộng một mẫu vẫn hiện ở mọi mức thu phóng; phóng to đủ thì gửi chính các mẫu. Chỗ log thiếu dữ liệu thì đường vẽ đứt, không nối qua. "Thiếu" = khoảng cách giữa hai mẫu lớn hơn 2,5 lần **nhịp thật của log** (trung vị khoảng cách các mẫu), không phải nhịp cấu hình: vòng lặp chạy chậm hơn tần số đặt thì log thưa đều, không phải thủng (bản 0.5 vẽ log như vậy thành toàn chấm rời).
+
+**Phát lại kiểu Blackbox Explorer (0.31)** (`web/js/gfx/playback.js`, `logplot.js`):
+- Hàng nút phát:
+  - về đầu log;
+  - lùi / tới một bản ghi;
+  - phát / dừng;
+  - tốc độ 5 % … 400 %.
+- Thanh tổng quan cả chuyến bay: vẽ cần ga (hoặc ga ra motor, hoặc gyro roll), có vạch sự kiện, đánh dấu vùng đang xem và vạch phát.
+  - Bấm hoặc kéo trên thanh để nhảy tới chỗ đó.
+- Vạch phát (đỏ) đi xuyên mọi khung. Khi phát, cửa sổ luôn giữ vạch phát ở giữa, và chú thích hiện giá trị tại vạch phát.
+- Dữ liệu được tải trước một khung phía trước, nửa khung phía sau.
+- Phím:
+  - Space: phát / dừng;
+  - ← →: từng bản ghi (Shift: mười bản ghi);
+  - + −: đổi tốc độ;
+  - Home / End: về đầu / cuối log.
+- Bấm vào đồ thị (không kéo) để đặt vạch phát tại đó.
+- Khung trạng thái máy tại vạch phát (lấy dữ liệu riêng, không phụ thuộc nhóm đồ thị đang chọn):
+  - hai cần mode 2;
+  - cột motor;
+  - roll / pitch / yaw;
+  - ga ra motor.
+- Test: `tests/test_gui_playback.py` (node) và `tests/test_gui_viewer.py` (trình duyệt thật, không cần mạch).
+
+**Phân tích PID từ log (0.31)** (`wbclient/tune.py`, `/api/log/tune`, nút "Phân tích PID từ log này", dòng lệnh `python -m wbclient blackbox tune flight.wblog`):
+- **Đáp ứng bước** từng trục, như PIDtoolbox:
+  - lấy các cửa sổ 2 s có đánh cần trên 20 °/s, nhiều nhất 12 cửa sổ mạnh nhất;
+  - nhân cửa sổ Hann rồi deconvolution Wiener: h = IFFT(G·S̄ / (|S|² + λ)), λ = 1e-5·max|S|²; đáp ứng bước là tổng cộng dồn của h trong 500 ms;
+  - bỏ các cửa sổ cho giá trị cuối ngoài khoảng 0,5–1,5, rồi lấy trung bình.
+  - Trên hệ bậc hai biết trước (test), sai số dưới 0,04, có nhiễu gyro 4 °/s thì dưới 0,1.
+- **Các số đo:**
+  - đỉnh (1,0 = không vọt lố);
+  - thời gian tới nửa bước;
+  - giá trị cuối (200–500 ms);
+  - số lần dao động qua 1,0;
+  - nhiễu gyro trên khoảng 80 Hz;
+  - phần của D trong tổng PID.
+- **Gợi ý** (mỗi lần tối đa ±25 %):
+  - vọt lố trên 10 % → thêm D và D max; nếu D đã nhiễu thì bớt P;
+  - chậm (tới nửa bước sau hơn 18 ms) mà không vọt lố → thêm P / FF;
+  - dao động từ 3 lần trở lên → bớt P;
+  - giá trị cuối dưới 0,95 → thêm I;
+  - nhiễu → không tăng D.
+- Nút "Đưa gợi ý vào cấu hình (chưa lưu)": chỉ hiện khi đang nối mạch và cấu hình của chuyến bay không dùng slider.
+- Cần log có nhóm "Gyro và setpoint", tốt nhất ghi từ 1000 bản ghi/giây.
+- Không cần numpy; nếu có numpy thì dùng cho nhanh hơn.
 
 **Thư viện**
 ```python

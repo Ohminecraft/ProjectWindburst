@@ -130,7 +130,24 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Stabilize (ArduPilot)
+// Stabilize (ArduPilot) - since 0.29 the quaternion attitude controller of AC_AttitudeControl:
+//   input_euler_angle_roll_pitch_euler_rate_yaw   the sticks give roll / pitch ANGLES and a yaw RATE; each is shaped
+//                                                 (attitude_command_model: acceleration-limited, input time constant) into an
+//                                                 Euler target with its Euler rate and acceleration
+//   attitude_controller_run_quat                  target and craft as quaternions; the error between them is split the way
+//                                                 thrust_vector_rotation_angles does it - FIRST the rotation that brings the
+//                                                 thrust vector (the craft's "up") onto the target's, THEN the heading about it.
+//                                                 A tilt error is never traded against a heading error; the heading error is
+//                                                 limited (45 deg) and the target pulled along when the craft cannot follow.
+//   update_ang_vel_target_from_att_error          per body axis a square-root controller (Stabilize P, half the acceleration
+//                                                 limit) on that error vector
+//   feed-forward                                  the target's own Euler rates turned into body rates (euler_rate_to_ang_vel,
+//                                                 at the TARGET attitude) and rotated into the craft's frame; faded out between
+//                                                 30 and 60 deg of thrust error, beyond that the yaw is left as it is (gyro)
+// Before 0.29 the error was taken per Euler angle (target roll - roll ...), which is right only for small tilts: banked and
+// pitched together, or close to vertical, the axes mix and a heading error could pull the craft off its tilt.
+// Internally ArduPilot's frame (NED body: roll + right wing down, pitch + NOSE UP, yaw + nose right); the interface keeps the
+// firmware's user convention (pitch + = nose down).
 // ---------------------------------------------------------------------------------------------------------------------
 struct StabilizeConfig {
     float limit_deg = 45.0f;                       // tilt at full stick (ANGLE_MAX)
@@ -141,56 +158,150 @@ struct StabilizeConfig {
     bool rate_ff = true;                           // ATC_RATE_FF_ENAB: shaped target + rate feedforward; off = the target jumps with the stick
 };
 
+// A unit quaternion (w, x, y, z), the rotation from a body frame to the earth (NED) frame - ArduPilot's Quaternion, the part used here.
+struct Quatf {
+    float w = 1, x = 0, y = 0, z = 0;
+    static WB_FAST Quatf from_euler(float r, float p, float yw) {      // radians, 3-2-1
+        const float cr = cosf(r * 0.5f), sr = sinf(r * 0.5f), cp = cosf(p * 0.5f), sp = sinf(p * 0.5f), cy = cosf(yw * 0.5f), sy = sinf(yw * 0.5f);
+        Quatf q; q.w = cr * cp * cy + sr * sp * sy; q.x = sr * cp * cy - cr * sp * sy; q.y = cr * sp * cy + sr * cp * sy; q.z = cr * cp * sy - sr * sp * cy; return q;
+    }
+    WB_FAST void to_euler(float& r, float& p, float& yw) const {
+        r = atan2f(2.0f * (w * x + y * z), 1.0f - 2.0f * (x * x + y * y));
+        p = asinf(clampf(2.0f * (w * y - z * x), -1.0f, 1.0f));
+        yw = atan2f(2.0f * (w * z + x * y), 1.0f - 2.0f * (y * y + z * z));
+    }
+    static WB_FAST Quatf from_axis_angle(const float v[3], float angle) {    // v: a unit axis
+        Quatf q; const float h = 0.5f * angle, s = sinf(h); q.w = cosf(h); q.x = v[0] * s; q.y = v[1] * s; q.z = v[2] * s; return q;
+    }
+    static WB_FAST Quatf from_rotation_vector(const float rv[3]) {          // axis x angle
+        const float a = sqrtf(rv[0] * rv[0] + rv[1] * rv[1] + rv[2] * rv[2]);
+        if (a < 1e-9f) return Quatf();
+        const float u[3] = {rv[0] / a, rv[1] / a, rv[2] / a}; return from_axis_angle(u, a);
+    }
+    WB_FAST void to_axis_angle(float v[3]) const {                            // -> rotation vector (the shorter way round)
+        const float l = sqrtf(x * x + y * y + z * z);
+        v[0] = v[1] = v[2] = 0.0f;
+        if (l < 1e-9f) return;
+        float a = 2.0f * atan2f(l, w);
+        if (a > kPi) a -= 2.0f * kPi; else if (a < -kPi) a += 2.0f * kPi;
+        v[0] = x / l * a; v[1] = y / l * a; v[2] = z / l * a;
+    }
+    WB_FAST Quatf inverse() const { Quatf q; q.w = w; q.x = -x; q.y = -y; q.z = -z; return q; }
+    WB_FAST Quatf operator*(const Quatf& b) const {
+        Quatf q; q.w = w * b.w - x * b.x - y * b.y - z * b.z; q.x = w * b.x + x * b.w + y * b.z - z * b.y;
+        q.y = w * b.y - x * b.z + y * b.w + z * b.x; q.z = w * b.z + x * b.y - y * b.x + z * b.w; return q;
+    }
+    WB_FAST void rotate(const float v[3], float out[3]) const {                // q v q*
+        const float tx = 2.0f * (y * v[2] - z * v[1]), ty = 2.0f * (z * v[0] - x * v[2]), tz = 2.0f * (x * v[1] - y * v[0]);
+        out[0] = v[0] + w * tx + (y * tz - z * ty); out[1] = v[1] + w * ty + (z * tx - x * tz); out[2] = v[2] + w * tz + (x * ty - y * tx);
+    }
+};
+
+// AC_AttitudeControl::thrust_vector_rotation_angles: the error between the craft (body) and the target, as a rotation vector in
+// the body frame whose x / y bring the thrust vector onto the target's and whose z is the heading left after that.
+// thrust_correction: that first rotation; thrust_angle / thrust_error: the craft's tilt and the angle between the two thrust vectors.
+inline WB_FAST void thrust_vector_rotation_angles(const Quatf& target, const Quatf& body, Quatf& thrust_correction, float err[3], float& thrust_angle, float& thrust_error) {
+    const float up[3] = {0.0f, 0.0f, -1.0f};
+    float tt[3], bt[3]; target.rotate(up, tt); body.rotate(up, bt);
+    thrust_angle = acosf(clampf(-bt[2], -1.0f, 1.0f));
+    float cr[3] = {bt[1] * tt[2] - bt[2] * tt[1], bt[2] * tt[0] - bt[0] * tt[2], bt[0] * tt[1] - bt[1] * tt[0]};
+    thrust_error = acosf(clampf(bt[0] * tt[0] + bt[1] * tt[1] + bt[2] * tt[2], -1.0f, 1.0f));
+    const float len = sqrtf(cr[0] * cr[0] + cr[1] * cr[1] + cr[2] * cr[2]);
+    if (len < 1e-9f || thrust_error < 1e-9f) { cr[0] = up[0]; cr[1] = up[1]; cr[2] = up[2]; }
+    else { cr[0] /= len; cr[1] /= len; cr[2] /= len; }
+    float axis_b[3]; body.inverse().rotate(cr, axis_b);                           // the axis, in the body frame
+    thrust_correction = Quatf::from_axis_angle(axis_b, thrust_error);
+    float rv[3]; thrust_correction.to_axis_angle(rv);
+    err[0] = rv[0]; err[1] = rv[1];
+    const Quatf heading = thrust_correction.inverse() * body.inverse() * target;
+    heading.to_axis_angle(rv);
+    err[2] = rv[2];
+}
+
 class StabilizeController {
 public:
     static constexpr float kYawErrorMaxDeg = 45.0f;        // AC_ATTITUDE_YAW_MAX_ERROR_ANGLE: the heading target never leads by more
+    static constexpr float kThrustErrorDeg = 30.0f;        // AC_ATTITUDE_THRUST_ERROR_ANGLE: from here on the feed-forward fades out
 
     void configure(const StabilizeConfig& c) { cfg_ = c; }
-    // Not flying (disarmed / on the ground): the target is where the craft is, nothing is moving.
+    // Not flying (disarmed / on the ground): the target is where the craft is, nothing is moving. (degrees, user convention)
     void reset(float roll_deg, float pitch_deg, float yaw_deg) {
-        target_[ROLL] = roll_deg; target_[PITCH] = pitch_deg; target_[YAW] = yaw_deg;
-        for (int a = 0; a < 3; a++) rate_[a] = accel_[a] = 0.0f;
+        tgt_[0] = roll_deg * kDeg2Rad; tgt_[1] = -pitch_deg * kDeg2Rad; tgt_[2] = yaw_deg * kDeg2Rad;
+        for (int a = 0; a < 3; a++) erate_[a] = eaccel_[a] = body_accel_[a] = 0.0f;
     }
     // On the ground with the motors idling the heading target follows the craft (ArduPilot reset_yaw_target_and_rate()).
-    void hold_yaw(float yaw_deg) { target_[YAW] = yaw_deg; rate_[YAW] = accel_[YAW] = 0.0f; }
+    void hold_yaw(float yaw_deg) { tgt_[2] = yaw_deg * kDeg2Rad; erate_[2] = eaccel_[2] = 0.0f; }
 
-    // stick[2]: roll / pitch -1..1; yaw_rate_cmd: deg/s from the yaw stick. att: roll, pitch, yaw in degrees. sp[3] out.
-    WB_FAST void update(const float stick[2], float yaw_rate_cmd, const float att[3], float dt, float sp[3]) {
+    // stick[2]: roll / pitch -1..1; yaw_rate_cmd: deg/s from the yaw stick. att: roll, pitch, yaw in degrees (user convention).
+    // gyro_dps: the craft's body rates (user convention), for the yaw when the thrust error is large; nullptr: not used. sp[3] out.
+    WB_FAST void update(const float stick[2], float yaw_rate_cmd, const float att[3], float dt, float sp[3], const float* gyro_dps = nullptr) {
         if (dt <= 0.0f) return;
-        const float accel[3] = {cfg_.accel_rp_dss, cfg_.accel_rp_dss, cfg_.accel_yaw_dss};
-        // ---- the attitude target moves with the rates decided in the previous cycle
-        for (int a = 0; a < 3; a++) target_[a] += rate_[a] * dt;
-        target_[YAW] = wrap180(target_[YAW]);
-        // ---- shape the pilot's input into target rates
-        const float desired[2] = {clampf(stick[ROLL], -1.0f, 1.0f) * cfg_.limit_deg, clampf(stick[PITCH], -1.0f, 1.0f) * cfg_.limit_deg};
+        const float acc_rp = cfg_.accel_rp_dss * kDeg2Rad, acc_y = cfg_.accel_yaw_dss * kDeg2Rad;
+        // ---- the Euler target moves with its rate, then the pilot's input is shaped (input_euler_angle_roll_pitch_euler_rate_yaw)
+        for (int a = 0; a < 3; a++) tgt_[a] += erate_[a] * dt;
+        tgt_[2] = wrap_pi(tgt_[2]);
+        const float lim = cfg_.limit_deg * kDeg2Rad;
+        const float want_r = clampf(stick[ROLL], -1.0f, 1.0f) * lim, want_p = -clampf(stick[PITCH], -1.0f, 1.0f) * lim;
         if (cfg_.rate_ff) {
-            for (int a = 0; a < 2; a++) attitude_command_model(wrap180(desired[a] - target_[a]), 0.0f, rate_[a], accel_[a], 0.0f, accel[a], cfg_.input_tc, dt);
-            attitude_command_model(0.0f, yaw_rate_cmd, rate_[YAW], accel_[YAW], 0.0f, accel[YAW], 0.0f, dt);      // (PILOT_Y_RATE_TC 0)
+            attitude_command_model(wrap_pi(want_r - tgt_[0]), 0.0f, erate_[0], eaccel_[0], 0.0f, acc_rp, cfg_.input_tc, dt);
+            attitude_command_model(wrap_pi(want_p - tgt_[1]), 0.0f, erate_[1], eaccel_[1], 0.0f, acc_rp, cfg_.input_tc, dt);
+            attitude_command_model(0.0f, yaw_rate_cmd * kDeg2Rad, erate_[2], eaccel_[2], 0.0f, acc_y, 0.0f, dt);       // (PILOT_Y_RATE_TC 0)
         } else {
-            target_[ROLL] = desired[ROLL]; target_[PITCH] = desired[PITCH]; target_[YAW] = wrap180(target_[YAW] + yaw_rate_cmd * dt);
-            for (int a = 0; a < 3; a++) rate_[a] = accel_[a] = 0.0f;
+            tgt_[0] = want_r; tgt_[1] = want_p; tgt_[2] = wrap_pi(tgt_[2] + yaw_rate_cmd * kDeg2Rad * dt);
+            for (int a = 0; a < 3; a++) erate_[a] = eaccel_[a] = 0.0f;
         }
-        // ---- a heading target far ahead of the craft (it cannot follow: saturated, held) is pulled back
-        float yaw_err = wrap180(target_[YAW] - att[YAW]);
-        if (fabsf(yaw_err) > kYawErrorMaxDeg) { yaw_err = clampf(yaw_err, -kYawErrorMaxDeg, kYawErrorMaxDeg); target_[YAW] = wrap180(att[YAW] + yaw_err); }
-        // ---- attitude error -> rate: square-root controller with half the acceleration limit, plus the target's own rate
-        const float err[3] = {wrap180(target_[ROLL] - att[ROLL]), target_[PITCH] - att[PITCH], yaw_err};
-        float e[3];                                              // rates of the Euler angles (roll, pitch, heading)
+        Quatf target = Quatf::from_euler(tgt_[0], tgt_[1], tgt_[2]);
+        const Quatf body = Quatf::from_euler(att[ROLL] * kDeg2Rad, -att[PITCH] * kDeg2Rad, att[YAW] * kDeg2Rad);
+        // ---- the error: thrust vector first, then the heading; the heading error limited, the target pulled along
+        Quatf tc; float err[3], tilt, terr;
+        thrust_vector_rotation_angles(target, body, tc, err, tilt, terr);
+        const float hmax = kYawErrorMaxDeg * kDeg2Rad;
+        if (fabsf(err[2]) > hmax) {
+            err[2] = clampf(err[2], -hmax, hmax);
+            const float hz[3] = {0.0f, 0.0f, err[2]};
+            target = body * tc * Quatf::from_rotation_vector(hz);
+            target.to_euler(tgt_[0], tgt_[1], tgt_[2]);
+        }
+        thrust_error_ = terr;
+        // ---- error -> body rates: a square-root controller per axis with half the acceleration limit (update_ang_vel_target_from_att_error)
+        float w[3];
         for (int a = 0; a < 3; a++) {
-            const float lim = a == YAW ? clampf(accel[a] * 0.5f, 10.0f, 120.0f) : clampf(accel[a] * 0.5f, 40.0f, 720.0f);
-            e[a] = sqrt_controller(err[a], cfg_.kp[a], accel[a] > 0.0f ? lim : 0.0f, dt) + rate_[a];
+            const float acc = a == 2 ? acc_y : acc_rp;
+            const float l2 = a == 2 ? clampf(acc * 0.5f, 10.0f * kDeg2Rad, 120.0f * kDeg2Rad) : clampf(acc * 0.5f, 40.0f * kDeg2Rad, 720.0f * kDeg2Rad);
+            w[a] = sqrt_controller(err[a], cfg_.kp[a], acc > 0.0f ? l2 : 0.0f, dt);
         }
-        // ---- Euler rates -> body rates: a heading change of a tilted craft is partly roll and pitch for the airframe
-        const float sr = sin_approx(att[ROLL] * kDeg2Rad), cr = cos_approx(att[ROLL] * kDeg2Rad), sp_ = sin_approx(att[PITCH] * kDeg2Rad), cp = cos_approx(att[PITCH] * kDeg2Rad);
-        sp[ROLL] = e[ROLL] + e[YAW] * sp_;
-        sp[PITCH] = e[PITCH] * cr - e[YAW] * cp * sr;
-        sp[YAW] = e[PITCH] * sr + e[YAW] * cp * cr;
+        // ---- feed-forward: the target's Euler rates as body rates at the target, rotated into the craft's frame
+        float ff_t[3], acc_t[3], ff[3], accb[3];
+        euler_to_body(tgt_, erate_, ff_t); euler_to_body(tgt_, eaccel_, acc_t);
+        const Quatf t2b = body.inverse() * target;
+        t2b.rotate(ff_t, ff); t2b.rotate(acc_t, accb);
+        const float te = kThrustErrorDeg * kDeg2Rad;
+        if (terr > 2.0f * te) { if (gyro_dps) w[2] = gyro_dps[YAW] * kDeg2Rad; }
+        else if (terr > te) {
+            const float k = 1.0f - (terr - te) / te;
+            w[0] += ff[0] * k; w[1] += ff[1] * k; w[2] += ff[2];
+            if (gyro_dps) w[2] = gyro_dps[YAW] * kDeg2Rad * (1.0f - k) + w[2] * k;
+        } else for (int a = 0; a < 3; a++) w[a] += ff[a];
+        // ---- back to the firmware's convention (pitch + = nose down), deg/s
+        sp[ROLL] = w[0] * kRad2Deg; sp[PITCH] = -w[1] * kRad2Deg; sp[YAW] = w[2] * kRad2Deg;
+        body_accel_[ROLL] = accb[0] * kRad2Deg; body_accel_[PITCH] = -accb[1] * kRad2Deg; body_accel_[YAW] = accb[2] * kRad2Deg;
     }
-    float target_deg(int axis) const { return target_[axis]; }
-    float target_rate(int axis) const { return rate_[axis]; }
+    // the attitude target, degrees in the user convention
+    float target_deg(int axis) const { return axis == PITCH ? -tgt_[1] * kRad2Deg : tgt_[axis] * kRad2Deg; }
+    float target_rate(int axis) const { return axis == PITCH ? -erate_[1] * kRad2Deg : erate_[axis] * kRad2Deg; }     // Euler rate of the target, deg/s
     const StabilizeConfig& config() const { return cfg_; }
-    float target_accel(int axis) const { return accel_[axis]; }       // deg/s^2: how fast the shaped target's rate is changing (the rate loop's feedforward)
+    float target_accel(int axis) const { return body_accel_[axis]; }  // deg/s^2: how fast the target's BODY rate is changing (the rate loop's feedforward)
+    float thrust_error_deg() const { return thrust_error_ * kRad2Deg; }
 private:
-    StabilizeConfig cfg_; float target_[3] = {0, 0, 0}, rate_[3] = {0, 0, 0}, accel_[3] = {0, 0, 0};
+    static WB_FAST float wrap_pi(float a) { while (a > kPi) a -= 2.0f * kPi; while (a < -kPi) a += 2.0f * kPi; return a; }
+    // AC_AttitudeControl::euler_rate_to_ang_vel (also used for the accelerations, as euler_derivative_to_body does)
+    static WB_FAST void euler_to_body(const float e[3], const float d[3], float out[3]) {
+        const float sr = sinf(e[0]), cr = cosf(e[0]), sp = sinf(e[1]), cp = cosf(e[1]);
+        out[0] = d[0] - sp * d[2];
+        out[1] = cr * d[1] + sr * cp * d[2];
+        out[2] = -sr * d[1] + cr * cp * d[2];
+    }
+    StabilizeConfig cfg_;
+    float tgt_[3] = {0, 0, 0}, erate_[3] = {0, 0, 0}, eaccel_[3] = {0, 0, 0}, body_accel_[3] = {0, 0, 0}, thrust_error_ = 0.0f;     // ArduPilot frame, radians
 };
 } // namespace fc

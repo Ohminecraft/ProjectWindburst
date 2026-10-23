@@ -2,10 +2,10 @@
 // the cable; the logs kept on this computer; and the charts. The charts also work with no flight controller connected.
 import { api } from '../api.js';
 import { store, setField, command } from '../store.js';
-import { h, clear, block, fields, listen, note, toast, showError, track } from '../ui.js';
+import { h, clear, block, fields, listen, note, toast, showError, track, token } from '../ui.js';
 import { ENUM_LABELS, BB_FIELDS, LOG_END_REASONS, AXES } from '../labels.js';
 import { tr } from '../i18n.js';
-import { logPlot } from '../gfx/logplot.js';
+import { logPlot, sampleAt } from '../gfx/logplot.js';
 
 const LIVE = '@live';
 const STATE_PILL = { OFF: 'off', NO_STORAGE: 'bad', NEEDS_ERASE: 'warn', IDLE: 'ok', LOGGING: 'ok', STREAMING: 'ok', ERASING: 'warn', FULL: 'warn' };
@@ -341,6 +341,134 @@ function viewerBlock(ctx) {
     source: (names, t0, t1, px, tail) => api.query('/api/log/view', { file, session: index, fields: names.join(','), px,
       ...(tail ? { tail } : (t0 === null ? {} : { t0: t0.toFixed(5), t1: t1.toFixed(5) })) }),
   });
+
+  // ---- the craft at the playhead (Blackbox Explorer's sticks and motors): fetched on its own, whatever panels are shown
+  const stickL = h('canvas', { id: 'hud-left', role: 'img', 'aria-label': tr('Cần trái: yaw và ga') });
+  const stickR = h('canvas', { id: 'hud-right', role: 'img', 'aria-label': tr('Cần phải: roll và pitch') });
+  const motorsBox = h('div', { class: 'hud-motors', id: 'hud-motors' });
+  const hudInfo = h('dl', { class: 'kv', id: 'hud-info' });
+  const hud = h('div', { class: 'bb-hud', id: 'log-hud', hidden: true }, stickL, stickR, motorsBox, hudInfo);
+  let hudFields = [], hudBusy = false, hudWant = null;
+  function setupHud() {
+    const s = session(), all = [...s.fields, ...s.slow_fields];
+    const motors = all.filter((n) => /^motor\[\d+\]$/.test(n));
+    hudFields = ['stick[0]', 'stick[1]', 'stick[2]', 'stick[3]', 'roll', 'pitch', 'yaw', 'throttle'].filter((n) => all.includes(n)).concat(motors);
+    clear(motorsBox);
+    motors.forEach((m, i) => motorsBox.append(h('div', { class: 'hud-motor', 'data-motor': String(i) }, h('i', { style: { height: '0%' } }), h('b', {}, String(i + 1)))));
+    stickL.hidden = !all.includes('stick[2]') && !all.includes('stick[3]'); stickR.hidden = !all.includes('stick[0]');      // (a log without the stick group)
+    hud.hidden = !hudFields.length || file === LIVE;
+  }
+  function drawStick(cv, x, y) {
+    const w = cv.clientWidth, hh = cv.clientHeight;
+    if (!w || !hh) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(hh * dpr); }
+    const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, hh);
+    c.strokeStyle = token('--line'); c.lineWidth = 1;
+    c.beginPath(); c.moveTo(w / 2, 6); c.lineTo(w / 2, hh - 6); c.moveTo(6, hh / 2); c.lineTo(w - 6, hh / 2); c.stroke();
+    if (x === null || y === null) return;
+    const px = w / 2 + Math.max(-1, Math.min(1, x)) * (w / 2 - 8), py = hh / 2 - Math.max(-1, Math.min(1, y)) * (hh / 2 - 8);
+    c.fillStyle = token('--blue'); c.beginPath(); c.arc(px, py, 6, 0, 7); c.fill();
+    cv.dataset.x = x.toFixed(3); cv.dataset.y = y.toFixed(3);
+  }
+  function paintHud(series, t) {
+    const v = (f) => { const a = sampleAt(series[f], t); return a ? (a.lo + a.hi) / 2 : null; };
+    const thr = v('stick[3]');
+    drawStick(stickL, v('stick[2]'), thr === null ? null : thr * 2 - 1);            // mode 2: yaw and throttle (0..1) on the left
+    drawStick(stickR, v('stick[0]'), v('stick[1]'));                                  // roll, pitch (+ = nose down = stick forward = up)
+    for (const bar of motorsBox.children) {
+      const m = v(`motor[${bar.dataset.motor}]`);
+      bar.firstChild.style.height = m === null ? '0%' : `${Math.round(Math.max(0, Math.min(1, m)) * 100)}%`;
+      bar.title = m === null ? '' : `${Math.round(m * 100)} %`;
+    }
+    const deg = (f) => { const x = v(f); return x === null ? '–' : `${x.toFixed(1)}°`; };
+    clear(hudInfo);
+    hudInfo.append(...[[tr('Lúc'), `${t.toFixed(3)} s`], ['Roll', deg('roll')], ['Pitch', deg('pitch')], ['Yaw', deg('yaw')],
+      [tr('Ga ra motor'), v('throttle') === null ? '–' : `${Math.round(v('throttle') * 100)} %`]].flatMap(([k, x]) => [h('dt', {}, k), h('dd', { class: 'num' }, x)]));
+    hud.dataset.t = t.toFixed(4);
+  }
+  async function hudAt(t) {
+    hudWant = t;
+    if (hudBusy || !hudFields.length || hud.hidden) return;
+    hudBusy = true;
+    try {
+      while (hudWant !== null) {                     // the newest wish only: a playhead that runs ahead skips the steps in between
+        const at = hudWant; hudWant = null;
+        const res = await api.query('/api/log/view', { file, session: index, fields: hudFields.join(','), px: 16, t0: (at - 0.05).toFixed(5), t1: (at + 0.05).toFixed(5) });
+        paintHud(res.series, at);
+      }
+    } catch (e) { /* the log was closed meanwhile */ } finally { hudBusy = false; }
+  }
+  plot.onPlayhead((t) => hudAt(t));
+  // ---- PID tuning from this log (wbclient/tune.py): step response per axis, noise, what to change
+  const TUNE_WHY = {
+    OVERSHOOT: tr('vọt lố: thêm D để hãm'), OVERSHOOT_NOISY_D: tr('vọt lố nhưng D đã nhiễu: bớt P thay vì thêm D'), SLOW: tr('đáp ứng chậm, không vọt lố: thêm P (và feed-forward)'),
+    RINGING: tr('dao động quanh đích sau đỉnh: bớt P'), STEADY_LOW: tr('không tới hết mức được yêu cầu: thêm I'), NOISE_NO_MORE_D: tr('gyro / D nhiễu: đừng tăng D, xem lại bộ lọc trước'),
+  };
+  const TUNE_NOTE = {
+    TOO_SHORT: tr('Log quá ngắn để phân tích.'), RATE_LOW: tr('Tốc độ ghi dưới 250 bản ghi/giây: đáp ứng tính ra thô. Nên ghi từ 1000 bản ghi/giây.'),
+    NO_SETPOINT_GYRO: tr('Log không có nhóm "Gyro và setpoint": bật nhóm này trong cài đặt blackbox rồi bay lại.'),
+    NO_STICK_MOVES: tr('Trong log không có đoạn đánh cần đủ mạnh (trên 20 °/s): bay vài cú lật / đánh cần dứt khoát rồi ghi lại.'),
+    NO_SETTINGS: tr('Log không đọc được cấu hình PID (firmware khác phiên bản): chỉ có đáp ứng, không có gợi ý số.'),
+  };
+  const PARAM = { p: 'P', i: 'I', d: 'D', d_max: 'D max', f: 'FF' };
+  const tuneOut = h('div', { id: 'tune-out' });
+  const tuneBtn = h('button', { type: 'button', class: 'btn', id: 'log-tune' }, tr('Phân tích PID từ log này'));
+  const tuneBox = h('section', { class: 'bb-tune', id: 'log-tune-box' }, h('h3', {}, tr('Phân tích PID')),
+    h('p', { class: 'help' }, tr('Như PIDtoolbox: đáp ứng bước của từng trục được tính lại từ các lần đánh cần trong log (đỉnh 1,0 = không vọt lố), kèm độ nhiễu, rồi gợi ý chỉnh P / I / D / FF. Mỗi lần chỉnh tối đa 25 %: bay, ghi log, phân tích lại.')),
+    tuneBtn, tuneOut);
+  function drawStep(cv, step) {
+    const w = cv.clientWidth, hh = cv.clientHeight;
+    if (!w || !hh) return;
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(w * dpr); cv.height = Math.round(hh * dpr);
+    const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, hh);
+    const tmax = step.t[step.t.length - 1] || 0.5, X = (t) => 4 + (t / tmax) * (w - 8), Y = (v) => hh - 4 - (Math.max(0, Math.min(1.6, v)) / 1.6) * (hh - 8);
+    c.strokeStyle = token('--line'); c.lineWidth = 1; c.setLineDash([4, 3]); c.beginPath(); c.moveTo(4, Y(1)); c.lineTo(w - 4, Y(1)); c.stroke(); c.setLineDash([]);
+    c.strokeStyle = token('--blue'); c.lineWidth = 2; c.beginPath();
+    step.t.forEach((t, k) => { if (k) c.lineTo(X(t), Y(step.y[k])); else c.moveTo(X(t), Y(step.y[k])); }); c.stroke();
+  }
+  function showTune(r) {
+    clear(tuneOut);
+    const axes = h('div', { class: 'bb-tune-axes' });
+    for (const [ax, v] of Object.entries(r.axes)) {
+      const m = v.metrics, cv = h('canvas', { class: 'tune-step', 'data-axis': ax });
+      axes.append(h('div', { class: 'tune-axis', 'data-axis': ax }, h('strong', {}, ax[0].toUpperCase() + ax.slice(1)), cv,
+        h('dl', { class: 'kv' }, ...(m ? [[tr('Đỉnh'), m.peak.toFixed(2)], [tr('Tới nửa bước'), m.latency_ms === null ? '–' : `${m.latency_ms} ms`], [tr('Giá trị cuối'), m.steady.toFixed(2)],
+          [tr('Nhiễu gyro trên 80 Hz'), v.gyro_noise === null ? '–' : `${v.gyro_noise} °/s`], [tr('Phần của D'), v.d_share === null ? '–' : `${Math.round(v.d_share * 100)} %`]]
+          : [[tr('Đáp ứng'), tr('không tính được')]]).flatMap(([k, x]) => [h('dt', {}, k), h('dd', { class: 'num' }, x)]))));
+      if (v.step) requestAnimationFrame(() => drawStep(cv, v.step));
+    }
+    tuneOut.append(axes);
+    for (const n of r.notes) tuneOut.append(note(TUNE_NOTE[n] || n, 'todo'));
+    if (r.suggestions.length) {
+      const body = h('tbody', {});
+      for (const s of r.suggestions) body.append(h('tr', { 'data-param': `${s.axis}.${s.param}` }, h('td', {}, s.axis), h('td', {}, PARAM[s.param] || s.param),
+        h('td', { class: 'num' }, s.new === null ? String(s.now) : `${s.now} → ${s.new}`), h('td', {}, TUNE_WHY[s.why] || s.why)));
+      tuneOut.append(h('table', { class: 'grid', id: 'tune-suggestions' }, h('thead', {}, h('tr', {}, h('th', {}, tr('Trục')), h('th', {}, tr('Tham số')), h('th', {}, tr('Gợi ý')), h('th', {}, tr('Vì sao')))), body));
+      const apply = r.suggestions.filter((s) => s.new !== null);
+      if (r.sliders) tuneOut.append(note(tr('Cấu hình của chuyến bay này dùng thanh trượt (slider) để tính PID: chỉnh bằng thanh trượt ở tab Tuning theo hướng gợi ý, hoặc tắt thanh trượt trước khi nhập số.')));
+      else if (apply.length && store.conn.connected && store.settings.pid) {
+        const b = h('button', { type: 'button', class: 'btn primary', id: 'tune-apply' }, tr('Đưa gợi ý vào cấu hình (chưa lưu)'));
+        b.addEventListener('click', () => {
+          const idx = { roll: 0, pitch: 1, yaw: 2 };
+          for (const s of apply) setField('pid', s.param, s.new, idx[s.axis]);
+          toast(tr('Đã đưa {n} giá trị vào cấu hình. Bấm Lưu để giữ lại.', { n: apply.length }));
+        });
+        tuneOut.append(h('div', { class: 'btn-row' }, b));
+      }
+    } else if (!r.notes.length) tuneOut.append(note(tr('Đáp ứng tốt: không cần chỉnh gì.')));
+    tuneOut.dataset.done = '1';
+  }
+  tuneBtn.addEventListener('click', async () => {
+    tuneBtn.disabled = true; clear(tuneOut); tuneOut.dataset.done = ''; tuneOut.append(h('p', { class: 'help' }, tr('Đang tính…')));
+    try { showTune(await api.query('/api/log/tune', { file, session: index })); } catch (e) { clear(tuneOut); showError(e); } finally { tuneBtn.disabled = false; }
+  });
+
+  function overviewField() {
+    const s = session(), all = [...s.fields, ...s.slow_fields];
+    return ['stick[3]', 'throttle', 'gyro[0]'].find((n) => all.includes(n)) || s.fields.find((n) => n !== 't') || null;
+  }
   follow.firstChild.addEventListener('change', () => { if (follow.firstChild.checked) plot.follow(FOLLOW_SECONDS); else plot.setRange(null, true); });
 
   function session() { return meta.sessions[index]; }
@@ -402,14 +530,15 @@ function viewerBlock(ctx) {
     holder.hidden = false; idle.hidden = true; holder.dataset.file = name;
     follow.hidden = name !== LIVE; follow.firstChild.checked = name === LIVE;
     plot.clear();
-    paintInfo(); buildPanels();
+    paintInfo(); buildPanels(); setupHud(); clear(tuneOut); tuneBox.hidden = name === LIVE;
+    plot.setOverview(name === LIVE ? null : overviewField());
     if (name === LIVE) plot.follow(FOLLOW_SECONDS);
     lastOpen = name === LIVE ? null : { file: name, index };
     ctx.markOpen();
     return true;
   }
   function close() { lastOpen = null; file = null; meta = null; holder.hidden = true; idle.hidden = false; holder.dataset.file = ''; title.textContent = tr('Đồ thị'); plot.clear(); plot.setPanels([]); ctx.markOpen(); }
-  sessionSel.addEventListener('change', () => { index = Number(sessionSel.value); lastOpen = { file, index }; plot.clear(); paintInfo(); buildPanels(); });
+  sessionSel.addEventListener('change', () => { index = Number(sessionSel.value); lastOpen = { file, index }; plot.clear(); paintInfo(); buildPanels(); setupHud(); plot.setOverview(overviewField()); });
 
   // a live recording: open it as soon as its header is there, keep the chart moving, and show the saved file when it stops
   let opening = false, wasOn = false;
@@ -428,13 +557,14 @@ function viewerBlock(ctx) {
     } else if (stopped && rec.file) ctx.refreshLibrary();
   }
   listen('rec', onRec);
-  liveTimer = setInterval(() => { if (file === LIVE && store.rec && store.rec.on && plot.following()) plot.refresh(); }, 350);
+  // (new records are fetched five times a second; between two fetches the window keeps moving by itself - gfx/follow.js)
+  liveTimer = setInterval(() => { if (file === LIVE && store.rec && store.rec.on && plot.following()) plot.refresh(); }, 200);
   track(() => clearInterval(liveTimer));
   if (store.rec && store.rec.on) onRec(store.rec);
   else if (lastOpen) open(lastOpen.file, lastOpen.index, true);
 
   ctx.open = open; ctx.close = close; ctx.current = () => file;
-  holder.append(h('div', { class: 'bb-viewer-head' }, sessionSel, follow), info, warn, presetRow, plot.el, exports, evBox);
+  holder.append(h('div', { class: 'bb-viewer-head' }, sessionSel, follow), info, warn, presetRow, hud, plot.el, exports, evBox, tuneBox);
   return h('section', { class: 'block', id: 'viewer-block' }, title, idle, holder);
 }
 

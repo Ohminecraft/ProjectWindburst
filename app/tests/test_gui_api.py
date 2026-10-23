@@ -237,7 +237,8 @@ def test_losing_the_port(linked, sim):
     sim.stop()                            # the cable is pulled
     t.join()
     conns = [e["conn"] for e in got if "conn" in e]
-    assert conns[0]["connected"] and conns[-1]["connected"] is False and conns[-1]["note"] == {"code": "PORT_LOST", "port": sim.url}, conns
+    # (the app waits a while for the port to come back - a board on native USB leaves the bus while it restarts)
+    assert conns[0]["connected"] and conns[-1]["connected"] is False and conns[-1]["note"] == {"code": "PORT_LOST", "port": sim.url, "waiting": True}, conns
     code, doc = gui.raw("POST", "/api/save", {})
     assert code == 409 and doc["error"] == "NOT_CONNECTED"
 

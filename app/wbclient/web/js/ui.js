@@ -254,5 +254,7 @@ export function token(name) { return getComputedStyle(document.documentElement).
 export function failsafeText(st) {
   const stage = ENUM_LABELS.failsafe[st.failsafe] ? tr(ENUM_LABELS.failsafe[st.failsafe]) : st.failsafe;
   const why = (st.fs_cause || []).map((c) => (ENUM_LABELS.fs_cause[c] ? tr(ENUM_LABELS.fs_cause[c]) : c)).join(', ');
-  return 'Failsafe: ' + stage + (why ? ` (${why})` : '');
+  // (0.32: what it does - hold, fly home, land, motors off - when that is more than its stage says)
+  const act = st.fs_action && st.fs_action !== 'NONE' && st.fs_action !== 'WARN' && ENUM_LABELS.fs_action[st.fs_action] ? tr(ENUM_LABELS.fs_action[st.fs_action]) : '';
+  return 'Failsafe: ' + stage + (act && st.failsafe === 'DESCENT' ? ` - ${act}` : '') + (why ? ` (${why})` : '');
 }

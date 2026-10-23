@@ -137,9 +137,10 @@ def test_connect_and_overview(gui):
     assert "Tắt" in rows["mag"], "a module switched off in the settings is shown as off, not as broken"
     assert "Không còn gì chặn" in pg.inner_text("#blockers")
     # load and memory as the firmware reports them (simulated module: N16R8, 320 kB of heap, 8 MB of PSRAM)
-    pg.wait_for_function("/^\\d+ %$/.test(document.getElementById('cpu-load').textContent)", timeout=6000)
-    assert pg.inner_text("#ram-use") == "25 % đang dùng, còn 240 kB" and pg.inner_text("#psram-use") == "còn 7680 trên 8192 kB"
-    assert 0 <= int(pg.inner_text("#cpu-load").split()[0]) <= 100
+    pg.wait_for_function("/^\\d+ %/.test(document.getElementById('cpu-load').textContent)", timeout=6000)
+    ram, psram = pg.text_content("#ram-use"), pg.text_content("#psram-use")
+    assert "25 %" in ram and "còn 240 kB" in ram and "6 %" in psram and "còn 7680 trên 8192 kB" in psram, (ram, psram)      # bars: the percentage at the end of the fill
+    assert 0 <= int(pg.text_content("#cpu-load").split()[0]) <= 100
     gui.sim.do("pose 20 -10 0")
     pg.wait_for_function("() => { const t = document.querySelector('.big-read').innerText; return /20\\.\\d°/.test(t) && /-10\\.\\d°|-9\\.\\d°/.test(t); }", timeout=6000)
     gui.sim.do("pose 60 0 0")                                  # steeper than max_arm_angle
@@ -230,7 +231,7 @@ def test_osd_tab(gui):
     pg = gui.connect().page
     gui.tab("osd")
     pg.wait_for_selector("#osd-canvas .osd-item", timeout=8000)
-    assert pg.locator("#osd-canvas .osd-item").count() == 24
+    assert pg.locator("#osd-canvas .osd-item").count() == 32
     pos = gui.setting("osd", "pos")
     assert not pos[17] & 0x800, "the artificial horizon starts hidden"
     pg.check('[data-show="HORIZON"]')
@@ -396,6 +397,26 @@ def test_accelerometer_calibration_flow(gui):
     pg.click('[data-cmd="LEVEL_TRIM"]')
     gui.wait(lambda: abs(gui.hub.fc.get("calibration")["acc_trim_roll"]) > 1.0, what="level trim stored")
     pg.wait_for_function("Math.abs(Number(document.querySelector('[data-field=\"calibration.acc_trim_roll\"]').value)) > 1")
+
+
+def test_spi_sensor_pins_and_primary_barometer(gui):
+    """0.28: a barometer / compass on the IMU's SPI bus (pins.baro_cs, pins.mag_cs) and the choice of the primary barometer."""
+    pg = gui.connect().page
+    gui.tab("pins")
+    assert gui.field("pins.baro_cs").input_value() == "" and gui.field("pins.mag_cs").input_value() == ""
+    gui.type_into("pins.baro_cs", "35")
+    gui.wait(lambda: gui.setting("pins", "baro_cs") == 35, what="barometer CS reached the firmware")
+    gui.type_into("pins.mag_cs", "10")                          # the IMU's own CS
+    pg.wait_for_function("/GPIO10 đang gán cho cả/.test(document.getElementById('pin-warnings').textContent)")
+    gui.type_into("pins.mag_cs", "")
+    gui.wait(lambda: gui.setting("pins", "mag_cs") == 255, what="compass CS cleared")
+    gui.type_into("pins.baro_cs", "")
+    gui.wait(lambda: gui.setting("pins", "baro_cs") == 255, what="barometer CS cleared")
+    gui.tab("sensors")
+    gui.field("sensors.baro_primary").select_option("SECOND")
+    gui.wait(lambda: gui.setting("sensors", "baro_primary") == "SECOND", what="primary barometer reached the firmware")
+    gui.field("sensors.baro_primary").select_option("FIRST")
+    gui.wait(lambda: gui.setting("sensors", "baro_primary") == "FIRST", what="back to the first one")
 
 
 def test_pins_tab(gui):
@@ -806,7 +827,7 @@ def test_position_tab(gui):
     gui.type_into("pins.flow_rx", "16")                          # the receiver's RX pin
     pg.wait_for_function("/GPIO16 đang gán cho cả/.test(document.getElementById('pin-warnings').textContent)")
     gui.type_into("pins.flow_rx", "")
-    pg.wait_for_function("/Optical flow qua UART: chưa có chân RX/.test(document.getElementById('pin-warnings').textContent)")
+    pg.wait_for_function("/Cổng MSP: chưa có chân RX/.test(document.getElementById('pin-warnings').textContent)")
     gui.type_into("pins.flow_rx", "44")
     pg.wait_for_function("/Không thấy chân trùng/.test(document.getElementById('pin-warnings').textContent)")
     # ---- the pins of the sensor that is NOT selected do not count; choosing the other sensor redoes the check at once
@@ -1019,8 +1040,21 @@ def test_betaflight_frames_and_protocols_on_the_motor_tab(gui):
     assert "Octo X8 (đồng trục)" in opts and "Hexa H" in opts and "Quad X (thứ tự 1234)" in opts and len(opts) == 14, opts
     assert "ProShot1000" in pg.locator('[data-field="motors.protocol"] option').all_inner_texts()
     pg.select_option('[data-field="motors.layout"]', "OCTO_X8")
-    pg.wait_for_function("document.querySelectorAll('#view [data-motor]').length === 8")
-    assert pg.locator('#view [data-motor][data-under="1"]').count() == 4, "the lower motor of each coaxial pair is marked"
+    pg.wait_for_function("document.querySelectorAll('#frame [data-motor]').length === 8")
+    assert pg.locator('#frame [data-motor][data-under="1"]').count() == 4, "the lower motor of each coaxial pair is marked"
+    # every layout: no motor disc covers another (a coaxial pair is drawn side by side across its arm)
+    overlap = """() => {
+      const c = [...document.querySelectorAll('#frame [data-motor] circle.disc')].map((e) => { const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2, r.width / 2]; });
+      const bad = [];
+      for (let i = 0; i < c.length; i++) for (let j = i + 1; j < c.length; j++) if (Math.hypot(c[i][0] - c[j][0], c[i][1] - c[j][1]) < c[i][2] + c[j][2]) bad.push([i + 1, j + 1]);
+      return bad;
+    }"""
+    for lay in pg.eval_on_selector_all('[data-field="motors.layout"] option', "os => os.map(o => o.value)"):
+        pg.select_option('[data-field="motors.layout"]', lay)
+        pg.wait_for_function("n => document.querySelectorAll('#frame [data-motor]').length === n", arg=8 if "OCTO" in lay else 6 if lay.startswith(("HEX", "Y6")) else 4)
+        assert pg.evaluate(overlap) == [], "%s: motors drawn on top of each other" % lay
+    pg.select_option('[data-field="motors.layout"]', "OCTO_X8")
+    pg.wait_for_function("document.querySelectorAll('#frame [data-motor]').length === 8")
     assert pg.is_visible("#dshot-count") and "8 motor" in pg.inner_text("#dshot-count"), "DShot cannot drive 8 motors: said before saving"
     pg.select_option('[data-field="motors.protocol"]', "ONESHOT125")
     pg.wait_for_function("document.getElementById('dshot-count').hidden")
@@ -1029,7 +1063,7 @@ def test_betaflight_frames_and_protocols_on_the_motor_tab(gui):
     pg.wait_for_function("!document.getElementById('dshot-count').hidden && !document.getElementById('dshot-fields').hidden")
     gui.wait(lambda: gui.setting("motors", "layout") == "OCTO_X8" and gui.setting("motors", "protocol") == "PROSHOT1000", what="stored")
     pg.select_option('[data-field="motors.layout"]', "Y4")
-    pg.wait_for_function("document.querySelectorAll('#view [data-motor]').length === 4 && document.getElementById('dshot-count').hidden")
+    pg.wait_for_function("document.querySelectorAll('#frame [data-motor]').length === 4 && document.getElementById('dshot-count').hidden")
     # ESCs on the CAN bus: no pulse or DShot settings, the motor idle stays, a note says how it works
     pg.select_option('[data-field="motors.protocol"]', "DRONECAN")
     pg.wait_for_function("!document.getElementById('can-esc-note').hidden")
@@ -1193,7 +1227,7 @@ def test_english_page_every_tab(gui_en):
     gui.connect()
     assert pg.inner_text("#arm-pill") == "Ready to arm" and pg.inner_text("#connect") == "Disconnect"
     titles = {"overview": "Overview", "receiver": "Receiver", "modes": "Modes", "sensors": "Sensors", "motors": "Motors", "tuning": "PID", "rates": "Rate", "filters": "Filters",
-              "nav": "Position", "power": "Battery and beeper", "blackbox": "Blackbox", "pins": "Pins and ports", "system": "System"}
+              "nav": "Position", "power": "Battery and beeper", "osd": "OSD", "blackbox": "Blackbox", "pins": "Pins and ports", "system": "System"}
     assert [a.inner_text() for a in pg.locator("#rail a").all()] == list(titles.values())
     for tab, title in titles.items():
         gui.tab(tab)
@@ -1824,3 +1858,46 @@ def test_wifi_settings_text_fields(gui):
     gui.wait(lambda: not any(gui.hub.fc.get("wifi")["ssid"]) and not any(gui.hub.fc.get("wifi")["pass"]), timeout=5.0, what="emptied again")
     if pg.locator("#revert").is_visible():
         pg.click("#revert")
+
+
+def test_theme_picker_switches_and_is_remembered(gui):
+    """Themes (js/theme.js): the picker at the foot of the rail sets data-theme on <html> at once, and a reload keeps it
+    (index.html applies it before the first paint). Carbon is the default and follows the system."""
+    pg = gui.page
+    pg.goto(gui.srv.url)
+    pg.wait_for_selector("#theme")
+    assert pg.evaluate("document.documentElement.dataset.theme") is None and pg.input_value("#theme") == ""
+    assert pg.eval_on_selector_all("#theme option", "os => os.map(o => o.value)") == ["", "carbon-light", "carbon-dark", "hud", "glass", "swiss", "field"]
+    bg = pg.evaluate("getComputedStyle(document.body).backgroundColor")
+    pg.select_option("#theme", "swiss")
+    assert pg.evaluate("document.documentElement.dataset.theme") == "swiss"
+    assert pg.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(255, 255, 255)" != bg
+    pg.reload()
+    pg.wait_for_selector("#theme")
+    assert pg.evaluate("document.documentElement.dataset.theme") == "swiss" and pg.input_value("#theme") == "swiss"
+    pg.select_option("#theme", "")
+    assert pg.evaluate("document.documentElement.dataset.theme") is None
+
+
+def test_readings_tabs_usage_bars_compass_tape_and_satellites(gui):
+    """Overview: the readings in two tabs (sensors / loop and system), CPU / RAM / PSRAM as bars with the percentage at the end
+    of the fill, a compass tape once a compass is switched on. Sensors tab: the GPS module's satellites (satellites stream)."""
+    pg = gui.connect().page
+    gui.tab("overview")
+    pg.wait_for_selector("#readings")
+    assert pg.is_visible("#readings-0") and pg.is_hidden("#readings-1"), "the sensors tab shows first"
+    assert pg.locator("#compass-tape").count() == 0, "no compass switched on: no compass tape"
+    pg.click("#readings .seg-btn[data-pane='1']")
+    assert pg.is_hidden("#readings-0") and pg.is_visible("#readings-1") and pg.get_attribute("#readings .seg-btn[data-pane='1']", "aria-selected") == "true"
+    pg.wait_for_function("document.querySelector('#ram-use .usage-track i').style.width === '25%'")
+    assert pg.inner_text("#ram-use b") == "25 %" and pg.get_attribute("#ram-use", "data-level") == "ok"
+    gui.tab("sensors")
+    pg.wait_for_function("document.querySelectorAll('#sat-bars .sat-bar').length === 6", timeout=8000)
+    assert pg.locator("#sat-bars .sat-bar.used").count() == 6 and pg.locator("#satellites .skyplot .sat").count() == 6
+    assert "6 vệ tinh dùng cho fix" in pg.inner_text("#sat-sum")
+    if not pg.is_checked('[data-field="sensors.mag_enabled"]'):
+        pg.click('[data-field="sensors.mag_enabled"]')
+    gui.wait(lambda: gui.setting("sensors", "mag_enabled") == 1, what="compass on")
+    gui.tab("overview")
+    pg.wait_for_selector("#compass-tape")
+    pg.wait_for_function("/^\d+°$/.test(document.querySelector('#compass-tape .tape-value').textContent)")

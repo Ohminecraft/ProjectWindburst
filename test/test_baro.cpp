@@ -19,7 +19,9 @@ static struct { bool active = false; int idx = 0; bool rd = false; uint8_t reg =
 void digitalWrite(uint8_t pin, uint8_t val) {
     if (pin != g_cs_pin) return;
     if (val == LOW) { t.active = true; t.idx = 0; return; }
-    if (t.active && g_sim) {
+    if (t.active && g_sim && g_sim->raw()) {                     // command chip: one byte = a command, more = a read after it
+        if (t.idx == 1) g_sim->cmd(t.reg); else if (t.idx > 1) g_sim->read_done(t.reg, t.idx - 1);
+    } else if (t.active && g_sim) {
         if (t.rd) { if (t.idx > 1) g_sim->read_done(t.reg, t.idx - 1); }
         else for (int i = 0; i < t.idx - 1; i++) g_sim->wr((uint8_t)(t.reg + i), t.w[i]);
     }
@@ -28,13 +30,20 @@ void digitalWrite(uint8_t pin, uint8_t val) {
 uint8_t stub_spi_transfer(uint8_t v) {
     if (!t.active) return 0xFF;
     uint8_t out = 0xFF;
-    if (t.idx == 0) { t.rd = (v & 0x80) != 0; t.reg = g_sim ? g_sim->spi_addr(v & 0x7F) : (v & 0x7F); out = 0x00; }
+    if (t.idx == 0 && g_sim && g_sim->raw()) { t.rd = true; t.reg = v; out = 0x00; }
+    else if (t.idx == 0) { t.rd = (v & 0x80) != 0; t.reg = g_sim ? g_sim->spi_addr(v & 0x7F) : (v & 0x7F); out = 0x00; }
     else if (t.rd) out = g_sim ? g_sim->byte_at(t.reg, t.idx - 1) : 0xFF;
     else if (t.idx - 1 < 8) t.w[t.idx - 1] = v;
     t.idx++; return out;
 }
 bool stub_i2c_probe(uint8_t) { return true; }
-int stub_i2c_tx(uint8_t addr, const uint8_t* d, size_t n, bool) { if (!g_sim || addr != g_i2c_addr || n == 0) return 2; i2c_reg = d[0]; if (n == 2 && !g_sim->write(d[0], d[1])) return 2; return 0; }
+int stub_i2c_tx(uint8_t addr, const uint8_t* d, size_t n, bool) {
+    if (!g_sim || addr != g_i2c_addr || n == 0) return 2;
+    i2c_reg = d[0];
+    if (n == 1 && !g_sim->command(d[0])) return 2;                  // (a register chip ignores it: the register address of a read)
+    if (n == 2 && !g_sim->write(d[0], d[1])) return 2;
+    return 0;
+}
 int stub_i2c_rx(uint8_t addr, uint8_t* d, size_t n) { if (!g_sim || addr != g_i2c_addr || n > 64) return 0; if (!g_sim->read(i2c_reg, d, n)) return 0; return (int)n; }
 
 static bool near_(double a, double b, double ab) { return fabs(a - b) <= ab; }
@@ -89,6 +98,51 @@ static void t_bmp280_faults() {
     { Bmp280Sim s; s.set_env(101325, 20); Bmp280Baro d(s); d.init(cfg); s.stuck_busy = true; BaroSample q; uint32_t us = 0; bool got = false;
       for (int i = 0; i < 2000; i++) { us += 1000; got |= d.update(us, q); }
       CHECK(!got && !d.healthy(), "conversion that never finishes => no fake samples, unhealthy"); }
+}
+
+static void t_ms5611() {
+    printf("[ms5611] datasheet known answer, AN520 CRC, second order below 20 C, random environments, faults\n");
+    BaroInitConfig cfg;
+    Ms5611Sim sim; Ms5611Baro d(sim);
+    CHECK(d.init(cfg), "init");
+    CHECK(sim.resets == 1 && d.prom().w[1] == 40127 && d.prom().w[6] == 28312, "reset, PROM read big-endian");
+    BaroSample s; uint32_t us = 0;
+    CHECK(pump(d, s, us), "a sample arrives");
+    CHECK(near_(s.temp_c, 20.07, 0.005) && near_(s.pressure_pa, 100009, 0.5), "datasheet example: %.2f C %.1f Pa (20.07, 100009)", s.temp_c, s.pressure_pa);
+    CHECK(sim.osr_p == 4 && sim.osr_t == 4, "both conversions at OSR 4096 (0x48 / 0x58)");
+    { ms5611::Prom p{}; for (int i = 0; i < 8; i++) p.w[i] = sim.prom_word(i);
+      CHECK(ms5611::prom_ok(p) && ms5611::crc4(p) == (sim.prom_word(7) & 0x0F), "CRC-4 the same as AN520's code");
+      for (int k = 0; k < 16; k++) { sim.w7_hi = (uint16_t)(k * 0x1110 + 0x0F00); sim.w0 = (uint16_t)(k * 977); ms5611::Prom q{}; for (int i = 0; i < 8; i++) q.w[i] = sim.prom_word(i);
+        CHECK(ms5611::prom_ok(q), "AN520 CRC agrees for PROM %d", k); }
+      sim.w7_hi = 0; sim.w0 = 0x0050; }
+    { int32_t t, p; ms5611::Prom q{}; for (int i = 0; i < 8; i++) q.w[i] = sim.prom_word(i); ms5611::compensate(q, 9085466, 8569150, t, p);
+      CHECK(t == 2007 && p == 100009, "integer compensation: %d %d", (int)t, (int)p); }
+    double maxe = 0, maxt = 0; int lost = 0;
+    for (int k = 0; k < 40; k++) {
+        const double p = 55000 + k * 1500.0 + 13, tc = -30 + k * 2.1;           // down to -30 C: both second-order ranges
+        sim.set_env(p, tc);
+        BaroSample q; int got = 0;
+        for (int i = 0; i < 6 && got < 5; i++) if (pump(d, q, us)) got++;      // past the next temperature conversion
+        if (got < 5) { lost++; continue; }
+        maxe = fmax(maxe, fabs(q.pressure_pa - p)); maxt = fmax(maxt, fabs(q.temp_c - tc));
+    }
+    CHECK(lost == 0 && maxe < 2.0 && maxt < 0.02, "driver vs datasheet-double model: max |dP| %.2f Pa, max |dT| %.3f C (lost %d)", maxe, maxt, lost);
+    { Ms5611Sim s2; s2.set_env(101325, 20); Ms5611Baro d2(s2); d2.init(cfg); BaroSample q; uint32_t u = 0; int n = 0, first = -1;
+      const int t0 = s2.conv_t, p0 = s2.conv_p;
+      for (int i = 0; i < 1000; i++) { u += 1000; if (d2.update(u, q)) { n++; if (first < 0) first = i; } }
+      CHECK(first >= 18 && n >= 70 && n <= 90, "non-blocking: the first sample after two 9.5 ms conversions (%d ms), %d samples a second (nominal %.0f)", first, n, d2.nominal_rate_hz());
+      CHECK((s2.conv_t - t0) * 4 >= s2.conv_p - p0 - 4 && (s2.conv_t - t0) * 4 <= s2.conv_p - p0 + 4, "a temperature every 4th pressure (%d / %d)", s2.conv_t - t0, s2.conv_p - p0); }
+    { Ms5611Sim b; b.bad_crc = true; Ms5611Baro x(b); CHECK(!x.init(cfg), "bad CRC rejected"); }
+    { Ms5611Sim b; b.blank = true; Ms5611Baro x(b); CHECK(!x.init(cfg), "PROM all 0 (nothing on the bus) rejected"); }
+    { Ms5611Sim b; b.dead = true; Ms5611Baro x(b); CHECK(!x.init(cfg), "dead bus"); }
+    { Ms5611Sim b; b.zero_adc = true; Ms5611Baro x(b); CHECK(!x.init(cfg), "ADC reading 0 at init rejected"); }
+    { Ms5611Sim b; b.set_env(9000, 20); Ms5611Baro x(b); CHECK(!x.init(cfg), "implausible pressure rejected"); }
+    { Ms5611Sim b; Ms5611Baro x(b); x.init(cfg); BaroSample q; uint32_t u = 0; pump(x, q, u);
+      b.zero_adc = true; bool got = false; for (int i = 0; i < 30; i++) { u += 1000; x.update(u, q); }      // (a conversion already started still ends)
+      for (int i = 0; i < 400; i++) { u += 1000; got |= x.update(u, q); }
+      CHECK(!got && !x.healthy(), "ADC giving 0 (conversion lost): no fake samples, unhealthy");
+      b.zero_adc = false; for (int i = 0; i < 100; i++) { u += 1000; got |= x.update(u, q); }
+      CHECK(got && x.healthy(), "and back when it answers again"); }
 }
 
 static void t_bmp388() {
@@ -185,6 +239,37 @@ static void t_manager() {
         pumpM(b, 2000, false, us, got);
         CHECK(got > 10 && fabsf(b.pressurePa() - 101000) < 2.0f && b.valid(us / 1000), "SPI samples %d, %.1f Pa", got, b.pressurePa());
     }
+    { Ms5611Sim sim; sim.set_env(100200, 16); g_sim = &sim; g_i2c_addr = 0x77;
+      BaroSensor b; b.setI2cPins(8, 9); uint32_t us = 0; int got = 0;
+      CHECK(b.BaroInit(false) && strcmp(b.name(), "MS5611") == 0, "MS5611 on I2C 0x77: %s", b.failReason());
+      pumpM(b, 1000, false, us, got);
+      CHECK(got > 30 && fabsf(b.pressurePa() - 100200) < 2.0f && fabsf(b.tempC() - 16) < 0.05f, "I2C samples %d, %.1f Pa %.2f C", got, b.pressurePa(), b.tempC()); }
+    { Ms5611Sim sim; sim.set_env(100200, 16); sim.spi = true; g_sim = &sim; g_cs_pin = 10;
+      BaroSensor b; b.setSpiPins(10, 13, 11, 12); uint32_t us = 0; int got = 0;
+      CHECK(b.BaroInit(true) && strcmp(b.name(), "MS5611") == 0, "MS5611 on SPI (commands without the read flag): %s", b.failReason());
+      pumpM(b, 1000, false, us, got);
+      CHECK(got > 30 && fabsf(b.pressurePa() - 100200) < 2.0f, "SPI samples %d, %.1f Pa", got, b.pressurePa()); }
+    { Ms5611Sim sim; sim.blank = true; g_sim = &sim; g_i2c_addr = 0x77; BaroSensor b; b.setI2cPins(8, 9);
+      CHECK(!b.BaroInit(false) && strstr(b.failReason(), "no BMP280/BMP388/MS5611"), "a PROM of zeros (its CRC is 0 too) is not taken for an MS5611: '%s'", b.failReason()); }
+    { Ms5611Sim sim; sim.bad_crc = true; g_sim = &sim; g_i2c_addr = 0x77; BaroSensor b; b.setI2cPins(8, 9);
+      CHECK(!b.BaroInit(false) && strstr(b.failReason(), "MS5611"), "a PROM with a bad CRC is not taken for an MS5611: '%s'", b.failReason()); }
+    printf("[manager] a barometer on the IMU's SPI bus (its own chip select), two barometers on I2C\n");
+    for (int kind = 0; kind < 2; kind++) {
+        std::unique_ptr<BaroSim> sim; if (kind == 0) { auto* s = new Ms5611Sim(); s->set_env(100800, 21); sim.reset(s); } else { auto* s = new Bmp280Sim(); s->set_env(100800, 21); sim.reset(s); }
+        sim->spi = true; g_sim = sim.get(); g_cs_pin = 10;
+        SPIBus host(SPI_DEVICE_0); SPIBus_config_t c; c.ioCsGpio = 9; c.ioSdoGpio = 13; c.ioSdiGpio = 11; c.ioSckGpio = 12; host.SPIInit(c);
+        BaroSensor b; uint32_t us = 0; int got = 0;
+        CHECK(b.BaroInitShared(host, 10) && strcmp(b.name(), kind == 0 ? "MS5611" : "BMP280") == 0 && b.onImuBus() && b.i2cAddress() == 0, "%s on the host's bus, CS 10: %s", kind == 0 ? "MS5611" : "BMP280", b.failReason());
+        pumpM(b, 1500, false, us, got);
+        CHECK(got > 10 && fabsf(b.pressurePa() - 100800) < 2.0f, "samples %d, %.1f Pa", got, b.pressurePa());
+        BaroSensor x; CHECK(!x.BaroInitShared(host, 9) && strstr(x.failReason(), "chip-select"), "the IMU's own chip select is refused: '%s'", x.failReason());
+    }
+    { g_sim = nullptr; SPIBus idle(SPI_DEVICE_0); BaroSensor b; CHECK(!b.BaroInitShared(idle, 10), "a host bus that never started: refused"); }
+    { Bmp280Sim sim; sim.set_env(101000, 20); g_sim = &sim; g_i2c_addr = 0x76;
+      BaroSensor a, b; a.setI2cPins(8, 9); b.setI2cPins(8, 9);
+      CHECK(a.BaroInit(false) && a.i2cAddress() == 0x76 && !a.onImuBus(), "the first one at 0x76");
+      b.skipI2cAddress(a.i2cAddress()); CHECK(!b.BaroInit(false) && strstr(b.failReason(), "0x76/0x77"), "the second one skips 0x76: nothing else there (%s)", b.failReason()); }
+
     printf("[manager] failures\n");
     { g_sim = nullptr; BaroSensor b; b.setI2cPins(8, 9); CHECK(!b.BaroInit(false) && strstr(b.failReason(), "no BMP280/BMP388"), "empty I2C: '%s'", b.failReason()); }
     { g_sim = nullptr; g_cs_pin = 10; BaroSensor b; b.setSpiPins(10, 13, 11, 12); CHECK(!b.BaroInit(true) && strstr(b.failReason(), "SPI"), "empty SPI: '%s'", b.failReason()); }
@@ -198,7 +283,44 @@ static void t_manager() {
       BaroSensor b; b.attachI2C(shared); CHECK(b.BaroInit(false) && b.available(), "shared bus: address selected per transaction: %s", b.failReason()); }
 }
 
+static void t_select() {
+    printf("[select] two barometers: the preferred one, the other while it is unhealthy, no jump, no back and forth\n");
+    using barosel::Selector;
+    Selector s; s.configure(0, true);
+    bool v[2] = {true, true}, f[2] = {true, true}; float a[2] = {1.0f, 3.0f}, sg[2] = {0.3f, 0.5f}, out = -1, so = -1; uint32_t ms = 0;
+    CHECK(s.update(v, f, a, sg, false, ms, out, so) && out == 1.0f && so == 0.3f && s.in_use() == 0, "primary 0 flies: %.2f", out);
+    f[1] = false; a[0] = 1.1f; CHECK(s.update(v, f, a, sg, true, ms += 20, out, so) && out == 1.1f, "a new sample of the one in use");
+    f[0] = false; f[1] = true; a[1] = 3.2f; CHECK(!s.update(v, f, a, sg, true, ms += 20, out, so), "a sample of the other one only: nothing new for the estimator");
+    v[0] = false; f[0] = false; f[1] = true; a[1] = 3.3f;
+    CHECK(s.update(v, f, a, sg, true, ms += 20, out, so) && s.in_use() == 1 && fabsf(out - 1.1f) < 1e-5f && so == 0.5f && s.switches() == 1, "the first one fails in flight: the second takes over, continuing at %.2f m (not 3.3)", out);
+    a[1] = 3.8f; CHECK(s.update(v, f, a, sg, true, ms += 20, out, so) && fabsf(out - 1.6f) < 1e-5f, "and follows its own changes: +0.5 m -> %.2f", out);
+    v[0] = true; f[0] = true; a[0] = 1.7f; a[1] = 3.9f;
+    CHECK(s.update(v, f, a, sg, true, ms += 20, out, so) && s.in_use() == 1 && fabsf(out - 1.7f) < 1e-5f, "the first one back: not at once (%.2f from the second)", out);
+    for (int i = 0; i < 99; i++) s.update(v, f, a, sg, true, ms += 20, out, so);
+    CHECK(s.in_use() == 1, "1.98 s valid: still the second");
+    a[0] = 1.8f; a[1] = 4.0f; s.update(v, f, a, sg, true, ms += 20, out, so);
+    CHECK(s.in_use() == 0 && s.switches() == 2 && fabsf(out - 1.7f) < 1e-4f && fabsf(s.offset(0) + 0.1f) < 1e-4f, "2 s valid: back to the first one, again without a step (%.2f, its offset %.2f)", out, s.offset(0));
+    v[0] = false; s.update(v, f, a, sg, true, ms += 20, out, so); v[0] = true; s.update(v, f, a, sg, true, ms += 20, out, so);
+    CHECK(s.in_use() == 1 && s.switches() == 3, "a flaky first one: one switch away ...");
+    for (int i = 0; i < 50; i++) { v[0] = (i % 10) != 0; s.update(v, f, a, sg, true, ms += 20, out, so); }
+    CHECK(s.in_use() == 1 && s.switches() == 3, "... and none back while it keeps dropping out (2 s without a break needed)");
+    v[0] = true; for (int i = 0; i < 120; i++) s.update(v, f, a, sg, false, ms += 20, out, so);
+    CHECK(s.in_use() == 0 && s.offset(0) == 0.0f && out == a[0], "disarmed on the preferred one: the offset is cleared (each reads its own ground 0)");
+    { Selector p; p.configure(1, true); bool vv[2] = {true, true}, ff[2] = {true, true}; float aa[2] = {5, 7}, ss[2] = {1, 1}, o = 0, oo = 0;
+      CHECK(p.update(vv, ff, aa, ss, false, 0, o, oo) && p.in_use() == 1 && o == 7.0f, "baro_primary 1: the second one flies"); }
+    { Selector p; p.configure(1, false); bool vv[2] = {true, false}, ff[2] = {true, false}; float aa[2] = {5, 0}, ss[2] = {1, 1}, o = 0, oo = 0;
+      CHECK(p.update(vv, ff, aa, ss, false, 0, o, oo) && p.in_use() == 0, "baro_primary 1 with one barometer: the one there is"); }
+    { Selector p; p.configure(0, true); bool vv[2] = {false, true}, ff[2] = {true, true}; float aa[2] = {5, 7}, ss[2] = {1, 1}, o = 0, oo = 0;
+      CHECK(p.update(vv, ff, aa, ss, false, 0, o, oo) && p.in_use() == 1 && o == 7.0f && p.switches() == 0, "the preferred one not valid at the start: the other, no offset (nothing to continue)");
+      vv[1] = false; CHECK(!p.update(vv, ff, aa, ss, false, 20, o, oo) && p.in_use() == 1, "both invalid: no altitude, the last one stays chosen"); }
+    { Selector p; p.configure(0, true); bool vv[2] = {false, true}, ff[2] = {true, true}; float aa[2] = {0.1f, 0.2f}, ss[2] = {1, 1}, o = 0, oo = 0;
+      p.update(vv, ff, aa, ss, false, 0, o, oo); vv[0] = true; p.update(vv, ff, aa, ss, false, 20, o, oo);
+      CHECK(p.in_use() == 0 && o == 0.1f, "boot: the faster chip is ready first, the preferred one takes over as soon as it is (disarmed: no 2 s wait)"); }
+    { Selector p; p.configure(0, true); bool vv[2] = {false, false}, ff[2] = {false, false}; float aa[2] = {0, 0}, ss[2] = {1, 1}, o = 0, oo = 0;
+      CHECK(!p.update(vv, ff, aa, ss, false, 0, o, oo) && p.in_use() == -1, "none valid yet: none in use"); }
+}
+
 int main() {
-    t_bmp280(); t_bmp280_faults(); t_bmp388(); t_altitude(); t_manager();
+    t_select(); t_bmp280(); t_bmp280_faults(); t_ms5611(); t_bmp388(); t_altitude(); t_manager();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

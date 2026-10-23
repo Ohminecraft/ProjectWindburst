@@ -101,6 +101,8 @@ export default {
           note(tr('Có hiệu lực sau khi lưu và khởi động lại. Điểm phát riêng (AP): mạch là 192.168.4.1, tên mặc định Windburst-XXXX, mật khẩu mặc định windburst - hãy đổi mật khẩu, ai vào được mạng này cũng điều khiển được máy (kể cả thử motor). Ở app chọn cổng "WiFi của máy bay", hoặc nhập socket://<địa chỉ>:5760 khi máy nối vào mạng nhà bạn (STA).')),
           h('p', { class: 'help' }, tr('Trên ESP32-S3 các chân ADC2 (GPIO11 đến GPIO20) không đọc được khi WiFi bật: chân đo pin và đo dòng phải nằm ở GPIO1 đến GPIO10.'))) : null),
       h('div', {},
+        block(tr('Công cụ khác qua MSP'), fields('msp', ['identity', 'writes']),
+          h('p', { class: 'help' }, tr('Cùng cổng với app này. Betaflight Configurator / SpeedyBee đọc được tư thế, receiver, GPS, pin, PID, rate, mode, map kênh, tên máy bay; ghi được các mục đó khi được phép.'))),
         block('Firmware', kv([
           [tr('Tên'), info.name || '–'], [tr('Phiên bản'), info.version || '–'], [tr('Giao thức'), String(info.protocol || '–')],
           [tr('Mã schema'), info.schema_hash || '–'], [tr('Tính năng'), (info.features || []).join(', ') || '–'], [tr('Cổng'), store.conn.port || '–'], ['Baud', String(store.conn.baud || '–')],

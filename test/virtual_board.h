@@ -55,6 +55,11 @@ struct VirtualBoard {
     static constexpr uint8_t kCanTx = 33, kCanRx = 0;
     Bmp280Sim baro;
     QmcSim mag;
+    // more barometers / a compass, fitted when has_*: an MS5611 at I2C 0x77, an MS5611 and an RM3100 on the IMU's SPI bus (CS kBaroCs / kMagCs)
+    Ms5611Sim baro2, spi_baro; Rm3100Sim spi_mag;
+    bool has_baro2 = false, has_spi_baro = false, has_spi_mag = false;
+    double baro2_offset_pa = 0;                                     // the second barometer reads this much more (its own error)
+    static constexpr uint8_t kBaroCs = 35, kMagCs = 36;
     SimGps gps;
     FlowTruth flow_truth; Pmw3901Sim pmw; MspFlowSim mtf;          // what a downward camera sees; the two kinds of sensor that report it (fitted or not: has_pmw / mtf.present)
     bool has_pmw = false;
@@ -195,7 +200,7 @@ struct VirtualBoard {
         if (has_imu2) { float c[3], d[3]; chip2(ac, c); chip2(gc, d); for (int k = 0; k < 3; k++) { imu2.ta[k] = c[k] + acc_noise * n(r); imu2.tg[k] = d[k] + gyro2_bias[k] + gyro2_dps_err[k] + gyro_noise * n(r); } }
     }
     void refresh_slow(uint32_t now_ms) {
-        baro.set_env(ground_pa * pow(1.0 - plant.z / 44330.0, 5.255) + noise(baro_noise_pa), temp_c);
+        set_baros(ground_pa * pow(1.0 - plant.z / 44330.0, 5.255));
         const double B[3] = {0.30, 0.0, 0.38}; double bb[3]; plant.body_from_world(B, bb);
         for (int k = 0; k < 3; k++) mag.field[k] = kChip[k] * bb[k] + mag_hard[k] + noise(mag_noise);
         if (now_ms != last_ms_) { last_ms_ = now_ms; every_ms(now_ms); }
@@ -236,20 +241,29 @@ struct VirtualBoard {
         if (pin == kFlowCs) { pmw.cs(val == LOW); return; }
         if (pin == kCs) imu_cs(t, imu, has_imu, val);
         else if (pin == kCs2) imu_cs(t2, imu2, has_imu2, val);
+        else if (pin == kMagCs) imu_cs(t4, spi_mag, has_spi_mag, val);
+        else if (pin == kBaroCs) {                                    // a command chip: one byte = a command, more = a read after it
+            if (val == LOW) { t3.active = true; t3.idx = 0; return; }
+            if (t3.active && has_spi_baro) { if (t3.idx == 1) spi_baro.cmd(t3.reg); else if (t3.idx > 1) spi_baro.read_done(t3.reg, t3.idx - 1); }
+            t3.active = false;
+        }
     }
     uint8_t spi(uint8_t v) {
         if (t.active) return imu_xfer(t, imu, has_imu, v);
         if (t2.active) return imu_xfer(t2, imu2, has_imu2, v);
+        if (t4.active) return imu_xfer(t4, spi_mag, has_spi_mag, v);
+        if (t3.active) { uint8_t out = 0x00; if (t3.idx == 0) t3.reg = v; else out = has_spi_baro ? spi_baro.byte_at(t3.reg, t3.idx - 1) : 0xFF; t3.idx++; return out; }
         return 0xFF;
     }
     // the board frame -> what the second chip reads: align_chip (firmware) maps chip -> board with a signed permutation, this is its transpose
     void chip2(const float b[3], float c[3]) const {
         for (int j = 0; j < 3; j++) { float e[3] = {0, 0, 0}; e[j] = 1.0f; accgyro::align_chip(e, (AccGyroAlign)imu2_align); c[j] = e[0] * b[0] + e[1] * b[1] + e[2] * b[2]; }
     }
-    AgRegBus* i2c_dev(uint8_t addr) { if (addr == 0x76 && has_baro) return &baro; if (addr == 0x0D && has_mag) return &mag; return nullptr; }
+    AgRegBus* i2c_dev(uint8_t addr) { if (addr == 0x76 && has_baro) return &baro; if (addr == 0x77 && has_baro2) return &baro2; if (addr == 0x0D && has_mag) return &mag; return nullptr; }
     int i2c_tx(uint8_t addr, const uint8_t* d, size_t n) {
         AgRegBus* dev = i2c_dev(addr); if (!dev || n == 0) return 2;         // NACK
         i2c_reg_ = d[0]; if (n == 2 && !dev->write(d[0], d[1])) return 2;
+        if (n == 1) dev->command(d[0]);                                      // (a command chip: MS5611; a register chip ignores it)
         return 0;
     }
     int i2c_rx(uint8_t addr, uint8_t* d, size_t n) { g_stub_us += cost_i2c_us; AgRegBus* dev = i2c_dev(addr); if (!dev || n > 64) return 0; return dev->read(i2c_reg_, d, n) ? (int)n : 0; }
@@ -305,6 +319,11 @@ private:
         const float x1 = cosf(p) * in[0] + sinf(p) * in[2], y1 = in[1], z1 = -sinf(p) * in[0] + cosf(p) * in[2];
         out[0] = x1; out[1] = cosf(r) * y1 - sinf(r) * z1; out[2] = sinf(r) * y1 + cosf(r) * z1;
     }
+    void set_baros(double pa) {
+        baro.set_env(pa + noise(baro_noise_pa), temp_c);
+        if (has_baro2) baro2.set_env(pa + baro2_offset_pa + noise(baro_noise_pa), temp_c);
+        if (has_spi_baro) spi_baro.set_env(pa + noise(baro_noise_pa), temp_c);
+    }
     void update_sensors() {
         const Vec3 a = plant.acc(), g = plant.gyro_dps();
         float ab[3] = {a.x, a.y, a.z}, gb[3] = {g.x, g.y, g.z}, ac[3], gc[3];
@@ -313,12 +332,14 @@ private:
         mount(ab, ac); mount(gb, gc);
         for (int k = 0; k < 3; k++) { imu.ta[k] = kChip[k] * ac[k] / acc_scale[k] + acc_offset[k] + noise(acc_noise); imu.tg[k] = kChip[k] * gc[k] + gyro_bias[k] + noise(gyro_noise); }
         if (has_imu2) { float c[3], d[3]; chip2(ac, c); chip2(gc, d); for (int k = 0; k < 3; k++) { imu2.ta[k] = c[k] + noise(acc_noise); imu2.tg[k] = d[k] + gyro2_bias[k] + gyro2_dps_err[k] + noise(gyro_noise); } }
-        baro.set_env(ground_pa * pow(1.0 - plant.z / 44330.0, 5.255) + noise(baro_noise_pa), temp_c);
+        set_baros(ground_pa * pow(1.0 - plant.z / 44330.0, 5.255));
         const double B[3] = {0.30, 0.0, 0.38}; double bb[3]; plant.body_from_world(B, bb);              // earth field: north + down (northern hemisphere)
         for (int k = 0; k < 3; k++) mag.field[k] = kChip[k] * bb[k] + mag_hard[k] + noise(mag_noise);   // a real compass never repeats itself exactly (the driver treats a frozen output as a fault)
+        if (has_spi_mag) for (int k = 0; k < 3; k++) spi_mag.field[k] = kChip[k] * bb[k] + noise(mag_noise);
     }
     void every_ms(uint32_t now_ms) {
         if (now_ms % 5 == 0) mag.drdy = true;                                                           // 200 Hz compass
+        if (now_ms % 7 == 0) spi_mag.drdy = true;                                                       // RM3100: 150 Hz
         { float load = 0; for (int i = 0; i < plant.n; i++) load += motor_frac[i]; load /= (float)(plant.n > 0 ? plant.n : 1);
           const double v = batt_v > 0.1 ? batt_v - batt_sag_v * load + noise((float)batt_noise_v) : 0.0;
           g_stub_adc_mv[kBattAdc] = v > 0 ? (uint32_t)lround(v / kBattDivider * 1000.0) : 0; }
@@ -422,13 +443,13 @@ public:
     void send_crsf_link() { const uint8_t p[10] = {60, 62, lq, 8, 0, 4, 2, 70, 100, 6}; crsf_frame(0x14, p, 10); }
 private:
 
-    struct Tx { bool active = false; int idx = 0; bool rd = false; uint8_t reg = 0; uint8_t cache[16]; uint8_t w[200]; } t, t2;
-    void imu_cs(Tx& x, Sim& chip, bool fitted, uint8_t val) {
+    struct Tx { bool active = false; int idx = 0; bool rd = false; uint8_t reg = 0; uint8_t cache[16]; uint8_t w[200]; } t, t2, t3, t4;
+    void imu_cs(Tx& x, AgRegBus& chip, bool fitted, uint8_t val) {
         if (val == LOW) { x.active = true; x.idx = 0; g_stub_us += cost_imu_us; return; }
         if (x.active && !x.rd && x.idx >= 2 && fitted) { const int n = x.idx - 1; if (n == 1) chip.write(x.reg, x.w[0]); else chip.write_buf(x.reg, x.w, (size_t)n); }
         x.active = false;
     }
-    uint8_t imu_xfer(Tx& x, Sim& chip, bool fitted, uint8_t v) {
+    uint8_t imu_xfer(Tx& x, AgRegBus& chip, bool fitted, uint8_t v) {
         uint8_t out = 0xFF;
         if (x.idx == 0) { x.rd = (v & 0x80) != 0; x.reg = v & 0x7F; out = 0x00; }
         else if (x.rd) {

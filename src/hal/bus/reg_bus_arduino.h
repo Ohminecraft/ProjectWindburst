@@ -23,6 +23,8 @@ public:
     bool write(uint8_t reg, uint8_t v) override { sel(); return b_->I2CWriteRegister(reg, v); }
     bool write_buf(uint8_t, const uint8_t*, size_t) override { return false; }   // no I2C chip in the list needs a burst write
     bool is_spi() const override { return false; }
+    bool command(uint8_t cmd) override { sel(); return b_->I2CWriteByte(cmd); }
+    bool command_read(uint8_t cmd, uint8_t* buf, size_t len) override { sel(); return len <= 255 && b_->I2CReadRegister(cmd, buf, (uint8_t)len); }
 private:
     void sel() { if (addr_ >= 0) b_->I2CSetAddress((uint8_t)addr_); }
     I2CBus* b_;
@@ -42,6 +44,8 @@ public:
         return b_.SPIWrite(tmp, len + 1);
     }
     bool is_spi() const override { return true; }
+    bool command(uint8_t cmd) override { return b_.SPIWrite(cmd); }
+    bool command_read(uint8_t cmd, uint8_t* buf, size_t len) override { return b_.SPIReadRegister(cmd, buf, len); }
 private:
     SPIBus& b_;
 };
@@ -54,6 +58,8 @@ public:
     bool write(uint8_t reg, uint8_t v) override { return t_ && t_->write(reg, v); }
     bool write_buf(uint8_t reg, const uint8_t* d, size_t len) override { return t_ && t_->write_buf(reg, d, len); }
     bool is_spi() const override { return t_ && t_->is_spi(); }
+    bool command(uint8_t cmd) override { return t_ && t_->command(cmd); }
+    bool command_read(uint8_t cmd, uint8_t* buf, size_t len) override { return t_ && t_->command_read(cmd, buf, len); }
 private:
     AgRegBus* t_ = nullptr;
 };

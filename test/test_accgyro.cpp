@@ -18,6 +18,7 @@
 #include "../src/hal/acc_gyro/icm456xx_accgyro.h"
 #include "../src/hal/acc_gyro/bmi160_accgyro.h"
 #include "../src/hal/acc_gyro/bmi270_accgyro.h"
+#include "../src/hal/acc_gyro/icm20948_accgyro.h"
 #include "sim_imu.h"
 
 static int g_pass = 0, g_fail = 0;
@@ -115,10 +116,24 @@ int main() {
       CHECK(s.init_ok, "microcode accepted (8192 bytes byte-exact at correct word addresses, power save off)");
       CHECK(s.ucode_hits == 8192 && !s.bad_upload, "upload hits %zu bad=%d", s.ucode_hits, (int)s.bad_upload);
       CHECK(s.r[0][0x7D] == 0x0E && s.r[0][0x7C] == 0x02, "sensors on, performance mode"); }
+    { Sim s(C_ICM20948, true); Icm20948AccGyro d(s, Icm20948AccGyro::Variant::ICM20948); run_driver("ICM20948 SPI", s, d, 9000, "ICM20948");
+      CHECK(s.bank == 0, "left in bank 0 (the data registers are in bank 0)");
+      CHECK(s.r[2][0x01] == 0x06 && s.r[2][0x14] == 0x06, "bank 2: FS 3 = 2000 dps / 16 g, FCHOICE 0 = 9 kHz (0x%02x 0x%02x)", s.r[2][0x01], s.r[2][0x14]);
+      CHECK(s.r[0][0x03] == 0x10 && s.r[0][0x06] == 0x01 && s.r[0][0x11] == 0x01, "SPI only, awake on the best clock, data-ready interrupt");
+      CHECK(d.acc_rate_hz() == 4500.0f && d.max_spi_read_hz() == 7000000u, "accel 4.5 kHz, SPI 7 MHz"); }
+    { Sim s(C_ICM20649, true); Icm20948AccGyro d(s, Icm20948AccGyro::Variant::ICM20649); run_driver("ICM20649 SPI", s, d, 9000, "ICM20649");
+      CHECK(s.r[2][0x01] == 0x04 && s.r[2][0x14] == 0x04, "ICM20649 counts from 500 dps / 4 g: FS 2 = 2000 dps / 16 g (0x%02x 0x%02x)", s.r[2][0x01], s.r[2][0x14]); }
+    { Sim s(C_ICM20948, false); Icm20948AccGyro d(s, Icm20948AccGyro::Variant::ICM20948); run_driver("ICM20948 I2C", s, d, 1125, "ICM20948");
+      CHECK(s.r[2][0x01] == 0x07 && s.r[0][0x03] == 0x00, "I2C: DLPF on (1125 Hz), I2C left enabled"); }
+    { Sim s(C_ICM20948, true); Icm20948AccGyro d(s, Icm20948AccGyro::Variant::ICM20948); run_driver("ICM20948 SPI 1k", s, d, 1125, "ICM20948", 1000); }
+    { Sim s(C_ICM20948, true); s.bank = 2; Icm20948AccGyro d(s, Icm20948AccGyro::Variant::ICM20948); AgInitConfig c; CHECK(d.init(c), "a chip left in bank 2 (warm restart) is selected back to bank 0 first"); }
 
     printf("[drivers] wrong / dead chip is rejected\n");
     { Sim s(C_MPU6500, true); Bmi270AccGyro d(s); AgInitConfig c; CHECK(!d.init(c), "BMI270 driver must refuse an MPU6500"); }
     { Sim s(C_ICM42688P, true); Icm456xxAccGyro d(s, Icm456xxAccGyro::Variant::ICM45686); AgInitConfig c; CHECK(!d.init(c), "ICM456 driver must refuse an ICM42688P"); }
+    { Sim s(C_ICM20649, true); Icm20948AccGyro d(s, Icm20948AccGyro::Variant::ICM20948); AgInitConfig c; CHECK(!d.init(c), "ICM20948 driver must refuse an ICM20649 (other ranges)"); }
+    { Sim s(C_ICM20948, true); Icm20948AccGyro d(s, Icm20948AccGyro::Variant::ICM20649); AgInitConfig c; CHECK(!d.init(c), "and the other way"); }
+    { Sim s(C_ICM20948, true); s.fail = true; Icm20948AccGyro d(s, Icm20948AccGyro::Variant::ICM20948); AgInitConfig c; CHECK(!d.init(c), "ICM20948 dead bus"); }
     { Sim s(C_BMI270, true); s.fail = true; Bmi270AccGyro d(s); AgInitConfig c; CHECK(!d.init(c), "dead bus"); }
     { Sim s(C_ICM42688P, true); Icm426xxAccGyro d(s, Icm426xxAccGyro::Variant::ICM42688P); AgInitConfig c; CHECK(d.init(c), "42688 ok"); }
     { Sim s(C_BMI270, true); s.ucode.assign(8192, 0); Bmi270AccGyro d(s); AgInitConfig c;
@@ -129,7 +144,8 @@ int main() {
     struct Row { Chip chip; IMUAccGyroDevice want; };
     const Row rows[] = {{C_MPU6000, MPU6000_SPI}, {C_MPU6500, MPU6500_SPI}, {C_MPU9250, MPU9520_SPI}, {C_ICM20601, ICM20601_SPI},
                         {C_ICM20602, ICM20602_SPI}, {C_ICM42622P, ICM42622P_SPI}, {C_ICM42686P, ICM42686P_SPI}, {C_ICM42688P, ICM42688P_SPI},
-                        {C_ICM45605, ICM45605_SPI}, {C_ICM45686, ICM45686_SPI}, {C_BMI160, BMI160_SPI}, {C_BMI270, BMI270_SPI}};
+                        {C_ICM45605, ICM45605_SPI}, {C_ICM45686, ICM45686_SPI}, {C_BMI160, BMI160_SPI}, {C_BMI270, BMI270_SPI},
+                        {C_ICM20948, ICM20948_SPI}, {C_ICM20649, ICM20649_SPI}};
     for (const Row& row : rows) {
         Sim s(row.chip, true);
         uint8_t d2[2] = {0, 0}, r00 = 0, r72 = 0, r75 = 0;
@@ -138,6 +154,8 @@ int main() {
         CHECK(got == row.want, "chip %d classified as %d, want %d", (int)row.chip, (int)got, (int)row.want);
     }
     CHECK(accgyro::classify_i2c(0x68) == MPU6050_I2C && accgyro::classify_i2c(0x70) == MPU6500_I2C && accgyro::classify_i2c(0x00) == NONE, "i2c ids");
+    CHECK(accgyro::classify_i2c(0x00, 0xEA) == ICM20948_I2C && accgyro::classify_i2c(0x00, 0xE1) == ICM20649_I2C && accgyro::classify_i2c(0x70, 0xEA) == MPU6500_I2C, "i2c ICM-209xx from reg 0x00, an MPU first");
+    CHECK(accgyro::classify_spi(0, 0xEA, 0, 0x70) == MPU6500_SPI && accgyro::classify_spi(0, 0xE1, 0, 0x47) == ICM42688P_SPI, "an MPU / ICM426xx whose reg 0x00 happens to read 0xEA / 0xE1 stays itself");
     CHECK(accgyro::classify_spi(0xFF, 0xFF, 0xFF, 0xFF) == NONE && accgyro::classify_spi(0, 0, 0, 0) == NONE, "floating / dead MISO is NONE");
 
     printf("[align] Betaflight-compatible mounting\n");

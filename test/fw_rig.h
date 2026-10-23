@@ -22,8 +22,23 @@ struct MemStorage : wbp::Storage {
 };
 struct MemTransport : wbp::Transport {
     std::vector<uint8_t> out; size_t room = 100000;
-    size_t write(const uint8_t* d, size_t n) override { out.insert(out.end(), d, d + n); return n; }
-    size_t writable() override { return room; }
+    // uart_bps > 0: the link is a UART of that many bytes per second behind the firmware's 8 kB transmit queue
+    // (app::QueuedTransport): what is written waits in `queued` and reaches `out` at the line's speed (drain(), every millisecond)
+    uint32_t uart_bps = 0; std::vector<uint8_t> queued; double credit = 0; uint32_t last_us = 0; size_t queue_cap = 8192;
+    size_t write(const uint8_t* d, size_t n) override {
+        if (!uart_bps) { out.insert(out.end(), d, d + n); return n; }
+        if (queued.size() + n > queue_cap) return 0;
+        queued.insert(queued.end(), d, d + n); return n;
+    }
+    size_t writable() override { return uart_bps ? queue_cap - queued.size() : room; }
+    uint32_t bytes_per_second() override { return uart_bps; }
+    void drain(uint32_t now_us) {
+        if (!uart_bps) return;
+        credit += (double)(uint32_t)(now_us - last_us) * 1e-6 * uart_bps; last_us = now_us;
+        const size_t n = queued.size() < (size_t)credit ? queued.size() : (size_t)credit;
+        if (n) { out.insert(out.end(), queued.begin(), queued.begin() + (long)n); queued.erase(queued.begin(), queued.begin() + (long)n); credit -= (double)n; }
+        if (queued.empty() && credit > 64) credit = 64;          // (an idle line does not save up)
+    }
 };
 
 inline bool g_rig_usb_link = false;      // this build's app link is the chip's USB socket (main.cpp: ARDUINO_USB_CDC_ON_BOOT)
@@ -135,6 +150,7 @@ struct Rig {
             const uint32_t ms = millis();
             if (ms != last_ms_) {
                 last_ms_ = ms; if ((int32_t)(ms - streams_off_until_ms) >= 0) fw->server.tick(ms);
+                tx.drain(micros());
                 // the SD writer task: a lower-priority task that runs whenever the card is not keeping it waiting
                 if (card_busy && (int32_t)(micros() - card_busy_until_us) >= 0) card_busy = false;
                 if (fw->card && !card_busy) fw->card->work(ms);

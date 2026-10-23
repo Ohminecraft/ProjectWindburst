@@ -19,6 +19,7 @@
 #include "../hal/range/range_base.h"
 #include "../hal/gps/gps_base.h"
 #include "../hal/flow/flow_sensor.h"
+#include "../hal/msp_sensors.h"
 #include "../hal/servo/servo_out.h"
 #include "../hal/mag/mag_base.h"
 #include "../hal/rx/rx_base.h"
@@ -43,6 +44,10 @@
 #include "../port/platform.h"
 #include "../port/pin_names.h"
 #include "sysload.h"
+// the enums the settings select drivers by (cast straight from the schema)
+static_assert((int)wbp::RX_PROTOCOL_MSP == (int)rx::PROTO_MSP && (int)wbp::RX_PROTOCOL_SPEKTRUM1024 == (int)rx::PROTO_SPEKTRUM1024, "rx_protocol");
+static_assert((int)wbp::MAG_MODEL_MSP == (int)MagSensor::Model::MSP && (int)wbp::MAG_MODEL_RM3100 == (int)MagSensor::Model::RM3100, "mag_model");
+static_assert((int)wbp::BARO_MODEL_MSP == (int)BaroSensor::Model::MSP && (int)wbp::BARO_MODEL_DRONECAN == (int)BaroSensor::Model::DRONECAN, "baro_model");
 
 // ============================================================================
 // FlightApp: the body of the RX firmware = drivers + flight core + the flight-loop end of the app link.
@@ -67,13 +72,16 @@ inline const char* pin_str(uint8_t p, char (&b)[8]) { port::pin_name(p, WB_PLATF
 
 class FlightApp {
 public:
-    struct Status { bool imu = false, motors = false, baro = false, range = false, gps = false, mag = false, rx = false, battery = false, buzzer = false, motor_beep = false, pin_conflict = false, flow = false, servo = false, imu2 = false, can = false, led = false; } status;
+    struct Status { bool imu = false, motors = false, baro = false, range = false, gps = false, mag = false, rx = false, battery = false, buzzer = false, motor_beep = false, pin_conflict = false, flow = false, servo = false, imu2 = false, can = false, led = false, baro2 = false; } status;
 
     fc::FlightCore core;
     IMUAccGyro imu;
     IMUAccGyro imu2;                                      // a second IMU on imu's SPI bus (pins.imu2_cs, sensors.gyro_use): imu_sel_ picks
     MotorSystem motors;
     BaroSensor baro;
+    BaroSensor baro2;                                     // a second barometer (SPI on pins.baro_cs and / or I2C 0x76 / 0x77): baro_sel_ picks
+    int baroInUse() const { return baro_sel_.in_use(); }  // -1 none yet, 0 = baro, 1 = baro2
+    uint16_t baroSwitches() const { return baro_sel_.switches(); }
     RangeFinder sonar;
     GpsSensor gnss;
     FlowSensor flow;
@@ -110,6 +118,7 @@ public:
         wbp::apply_gps(s, gnss.config());
         apply_battery(); apply_beeper(); apply_servo();
         baro.setEnabled(s.sensors.baro_enabled != 0); baro.setModel((BaroSensor::Model)s.sensors.baro_model); sonar.setEnabled(s.sensors.range_enabled != 0);
+        baro2.setEnabled(s.sensors.baro_enabled != 0 && s.sensors.baro_model != wbp::BARO_MODEL_DRONECAN && s.sensors.baro_model != wbp::BARO_MODEL_MSP);
         mag.setEnabled(s.sensors.mag_enabled != 0); gnss.setEnabled(s.sensors.gps_enabled != 0);
         mag.setModel((MagSensor::Model)s.sensors.mag_model);
         sonar.setModel((RangeFinder::Model)s.sensors.range_model); sonar.setL1xMode(s.sensors.range_l1x_mode);
@@ -187,10 +196,10 @@ public:
         // ---- shared sensor I2C bus: barometer, lidar, compass
         if (bus[0] != GPIO_UNUSED && bus[1] != GPIO_UNUSED) {
             I2CBus_config_t c; c.bus_clock_speed = 400000; c.ioSdaGpio = bus[0]; c.ioSclGpio = bus[1]; c.addr = 0x76; sensorBus.I2CInit(c);
-            baro.attachI2C(sensorBus); sonar.attachI2C(sensorBus); mag.attachI2C(sensorBus);
+            baro.attachI2C(sensorBus); baro2.attachI2C(sensorBus); sonar.attachI2C(sensorBus); mag.attachI2C(sensorBus);
         }
         const bool can_baro = s.sensors.baro_model == wbp::BARO_MODEL_DRONECAN;
-        if (!can_baro) { status.baro = baro.BaroInit(false); say(status.baro, "baro", baro.name(), baro.failReason(), "%s", baro.name()); }
+        if (!can_baro) init_baros(s); else baro_sel_.configure(0, false);
         status.range = sonar.RangeInit();
         // the lidar may be the one inside an MSP flow sensor (asked for, or nothing else answered): that is known after the UARTs
         const bool range_from_flow = app::lidar_of_flow(s.sensors.range_enabled, s.flow.type == FlowSensor::MSP, s.sensors.range_model == wbp::RANGE_MODEL_MSP,
@@ -220,8 +229,17 @@ public:
             say(status.baro, "baro", "DroneCAN", status.can ? baro.failReason() : "sensors.baro_model is DRONECAN but the CAN bus is not running (section can)", "DroneCAN (the first node on the bus that sends StaticPressure)");
         }
         mag.attachImuBus(imu.regBus(), imu.detected());
-        status.mag = mag.MagInit();
-        say(status.mag, "mag", mag.name(), mag.failReason(), "%s%s", mag.name(), mag.calibrated() ? "" : " (not calibrated)");
+        {   // a compass on the IMU's SPI bus (pins.mag_cs: an RM3100); not there: the I2C ones / the MPU9250's
+            const uint8_t mcs = s.pins.mag_cs; const char* spi_why = nullptr; char spi_txt[24] = "";
+            if (mcs != GPIO_UNUSED && s.sensors.mag_model != wbp::MAG_MODEL_DRONECAN) {
+                SPIBus* host = imu.spiHost();
+                status.mag = host && mag.MagInitShared(*host, mcs);
+                spi_why = !host ? "the IMU is not on SPI (pins.mag_cs is a chip select on the IMU's SPI bus)" : mag.failReason();
+                char pb[8]; if (status.mag) snprintf(spi_txt, sizeof(spi_txt), " on SPI CS %s", pin_str(mcs, pb));
+            }
+            if (!status.mag) status.mag = mag.MagInit();
+            say(status.mag, "mag", mag.name(), spi_why && !status.mag ? spi_why : mag.failReason(), "%s%s%s", mag.name(), spi_txt, mag.calibrated() ? "" : " (not calibrated)");
+        }
         core.cfg.use_mag = core.cfg.use_mag && status.mag;                         // the compass is used only when it exists AND is switched on
 
         // ---- UARTs: which one serves the GPS, the serial receiver and an MSP flow sensor (section ports: AUTO = GPS on UART1,
@@ -229,15 +247,19 @@ public:
         port::SerialPort* const uarts[3] = {uart0, uart1, uart2};
         static const char* const uname[3] = {"UART0", "UART1", "UART2"};
         const rx::Protocol rxp_ = (rx::Protocol)s.receiver.protocol;
-        const bool serial_rx = !use_external_rc && rxp_ != rx::PROTO_PPM && rxp_ != rx::PROTO_PWM;
+        const bool serial_rx = !use_external_rc && rxp_ != rx::PROTO_PPM && rxp_ != rx::PROTO_PWM && rxp_ != rx::PROTO_MSP;
+        msp_gps_ = s.sensors.gps_enabled && s.gps.provider == wbp::GPS_PROVIDER_MSP; msp_rc_ = !use_external_rc && rxp_ == rx::PROTO_MSP;
+        msp_mag_ = s.sensors.mag_enabled && s.sensors.mag_model == wbp::MAG_MODEL_MSP; msp_baro_ = s.sensors.baro_enabled && s.sensors.baro_model == wbp::BARO_MODEL_MSP;
+        const bool msp_port = msp_port_wanted(s, use_external_rc);
         const bool port_table = s.ports.assign == wbp::PORT_ASSIGN_TABLE;
         uint8_t pfn[3]; for (int i = 0; i < 3; i++) pfn[i] = s.ports.function[i];
         const bool gps_uart = s.sensors.gps_enabled && gps::uses_uart((gps::Provider)s.gps.provider);        // (a DroneCAN GPS needs no UART)
-        const app::UartPlan plan = app::plan_uarts(port_table, pfn, gps_uart, serial_rx, s.flow.type == FlowSensor::MSP, uart0 != nullptr, false, false);
+        const app::UartPlan plan = app::plan_uarts(port_table, pfn, gps_uart, serial_rx, msp_port, uart0 != nullptr, false, false);
         if (*plan.why) { char line[kReportLen]; snprintf(line, sizeof(line), "ports: WARNING - %s", plan.why); add_report(line); }
         if (s.sensors.gps_enabled && s.gps.provider == wbp::GPS_PROVIDER_DRONECAN) {
             status.gps = status.can && gnss.beginExternal();
             say(status.gps, "gps", "DroneCAN", status.can ? gnss.failReason() : "gps.provider is DRONECAN but the CAN bus is not running (section can)", "DroneCAN (the first node on the bus that sends a fix)");
+        } else if (msp_gps_) {                                               // (the MSP port is opened below; the GPS starts with it)
         } else if (plan.gps >= 0 || !s.sensors.gps_enabled) {
             status.gps = gnss.begin(*uarts[plan.gps >= 0 ? plan.gps : 1]);        // (disabled: begin() only says so)
             say(status.gps, "gps", "started", gnss.failReason(), "%s %lu baud", uname[plan.gps >= 0 ? plan.gps : 1], (unsigned long)gnss.config().baud);
@@ -250,6 +272,7 @@ public:
                 status.rx = rc.beginPulse(rp, pp, RcReceiver::kMaxPulsePins);
                 if (rp == rx::PROTO_PPM) { char pb[8]; say(status.rx, "rx", rc.name(), rc.failReason(), "PPM on %s", pin_str(pp[0], pb)); }
                 else { char pb[8]; say(status.rx, "rx", rc.name(), rc.failReason(), "PWM, %d channel%s from %s", wired, wired == 1 ? "" : "s", pin_str(pp[0], pb)); }
+            } else if (rp == rx::PROTO_MSP) {                                  // (MSP_SET_RAW_RC on the MSP port, opened below)
             } else if (plan.rx >= 0) {
                 uint8_t rxp[3]; hw.getSerialRxPins(rxp);
                 status.rx = rc.begin(rp, *uarts[plan.rx], rxp[0], rxp[1]);
@@ -258,17 +281,46 @@ public:
                 crsf_tlm_.reset();
             } else { status.rx = false; say(false, "rx", "", "no UART has the function SERIAL_RX in the serial ports table (Pins and ports tab)", ""); }
         }
-        // ---- optical flow: PMW3901 on the second SPI bus, or an MSP sensor on whichever UART is left (UART1 without a GPS,
-        //      UART2 without a serial receiver, UART0 when the app is on USB)
+        // ---- the MSP port (hal/msp_sensors.h): one UART that MSP devices send to - an optical flow sensor with its lidar, a GPS,
+        //      a compass, a barometer, MSP_SET_RAW_RC. Whichever UART is left (UART1 without a UART GPS, UART2 without a serial
+        //      receiver, UART0 when the app is on USB), or the one with the function FLOW_MSP (TABLE); pins flow_rx / flow_tx, flow.baud.
         int flow_u = -1;
+        msp_on_ = false; msp_why_ = "";
+        if (msp_port) {
+            const int u = port_table ? plan.flow : app::flow_uart(status.gps && gps_uart, status.rx && !use_external_rc && rc.onUart(), uart0 != nullptr);
+            flow_u = u;
+            char rb[8], tb[8];
+            msp_why_ = u < 0 ? (port_table ? "no UART has the function FLOW_MSP (MSP) in the serial ports table (Pins and ports tab)" : "no UART left for the MSP port: the GPS, the receiver and the app's link use all of them")
+                     : s.pins.flow_rx == 255 ? "MSP port: pin flow_rx (the RX pin of the MSP UART) not set"
+                     : !port::uart_begin(*uarts[u], s.flow.baud, SERIAL_8N1, s.pins.flow_rx, s.pins.flow_tx, false, 512) ? "MSP port: the UART did not start on these pins" : "";
+            if (*msp_why_) say(false, "msp", "", msp_why_, "");
+            else {
+                msp_bytes_.attach(*uarts[u]); msp_port_.attach(&msp_bytes_); msp_on_ = true;
+                char what[64]; snprintf(what, sizeof(what), "%s%s%s%s%s", s.flow.type == FlowSensor::MSP ? " flow" : "", msp_gps_ ? " GPS" : "", msp_mag_ ? " compass" : "",
+                                         msp_baro_ ? " barometer" : "", msp_rc_ ? " receiver" : "");
+                say(true, "msp", "", "", "MSP port on %s RX %s TX %s, %lu baud, for:%s", uname[u], pin_str(s.pins.flow_rx, rb), pin_str(s.pins.flow_tx, tb), (unsigned long)s.flow.baud, what);
+            }
+        }
+        msp_port_.setFlow(nullptr, nullptr);
+        if (msp_gps_) {
+            status.gps = msp_on_ && gnss.beginExternal();
+            say(status.gps, "gps", "MSP", msp_on_ ? gnss.failReason() : msp_why_, "MSP (MSP2_SENSOR_GPS on the MSP port)");
+        }
+        if (msp_rc_) {
+            status.rx = msp_on_;
+            say(status.rx, "rx", "MSP", msp_why_, "MSP (MSP_SET_RAW_RC on the MSP port)");
+        }
+        // ---- optical flow: PMW3901 on the second SPI bus, or an MSP sensor on the MSP port
         if (s.flow.type != FlowSensor::NONE) {
-            const int u = port_table ? plan.flow : app::flow_uart(status.gps, status.rx && !use_external_rc && rc.onUart(), uart0 != nullptr);
-            if (s.flow.type == FlowSensor::MSP) flow_u = u;
-            flow.setUart(u >= 0 ? uarts[u] : nullptr, u >= 0 ? uname[u] : "", s.pins.flow_rx, s.pins.flow_tx, s.flow.baud);
+            flow.setMspShared(true);
             flow.setSpiPins(s.pins.flow_cs, s.pins.flow_sck, s.pins.flow_miso, s.pins.flow_mosi);
             flow.setSpiBusTaken(s.blackbox.device == bb::DEV_SDCARD && s.blackbox.sd_mode == wbp::SD_MODE_SPI);
-            status.flow = flow.begin();
-            say(status.flow, "flow", flow.name(), flow.failReason(), "%s%s%s", flow.name(), flow.type() == FlowSensor::MSP ? " on " : " on its own SPI bus", flow.type() == FlowSensor::MSP ? flow.uartName() : "");
+            if (s.flow.type == FlowSensor::MSP && !msp_on_) { status.flow = false; say(false, "flow", "", msp_why_, ""); }
+            else {
+                status.flow = flow.begin();
+                if (status.flow && flow.type() == FlowSensor::MSP) msp_port_.setFlow([](void* c, uint16_t cmd, const uint8_t* p, uint16_t n, uint32_t t) { return ((FlowSensor*)c)->mspFrame(cmd, p, n, t); }, &flow);
+                say(status.flow, "flow", flow.name(), flow.failReason(), "%s%s%s", flow.name(), flow.type() == FlowSensor::MSP ? " on " : " on its own SPI bus", flow.type() == FlowSensor::MSP ? uname[flow_u] : "");
+            }
         }
         if (range_from_flow) {
             if (status.flow && flow.rangeDriver()) status.range = sonar.useDriver(flow.rangeDriver());
@@ -308,7 +360,7 @@ public:
                 osd_.configure(s.osd.canvas, s.osd.rate);
                 memcpy(osd_layout_.pos, s.osd.pos, sizeof(osd_layout_.pos));
                 size_t k = 0; for (; k < sizeof(s.osd.name) && s.osd.name[k]; k++) { const char c = (char)s.osd.name[k]; osd_layout_.name[k] = c >= 'a' && c <= 'z' ? (char)(c - 32) : (c >= 0x20 && c < 0x7F ? c : ' '); }   // (Betaflight shows the name in capitals)
-                osd_layout_.name[k] = 0;
+                osd_layout_.name[k] = 0; osd_layout_.stats = s.osd.stats != 0;
                 char tb[8], rb[8];
                 say(true, "osd", "", "", "MSP DisplayPort on %s TX %s RX %s, %lu baud, %u x %u%s, %u screens/s", uname[u], pin_str(s.osd.tx_pin, tb), pin_str(s.osd.rx_pin, rb), (unsigned long)s.osd.baud,
                     (unsigned)osd_.cols(), (unsigned)osd_.rows(), s.osd.canvas == osd::DisplayPort::CANVAS_AUTO ? " (or what the video transmitter asks for)" : "", (unsigned)s.osd.rate);
@@ -390,14 +442,16 @@ public:
         { bool any = false; for (int i = 0; i < servo::kServos; i++) any |= s.pins.servo[i] != 255;
           if (any) { status.servo = servos.begin(s.pins.servo, s.servo.rate_hz);
                      say(status.servo, "servo", "", servos.failReason(), "%d output%s at %u Hz", servos.count(), servos.count() == 1 ? "" : "s", (unsigned)servos.rateHz()); } }
-        // ---- LED strip (WS2812 on pins.led, through the second SPI bus)
+        // ---- LED strip (WS2812 on pins.led: the ESP32 through the second SPI bus, an STM32 on the pin's timer channel + DMA)
         status.led = false;
         if (s.led.count) {
-            const bool spi2_taken = (s.blackbox.device == bb::DEV_SDCARD && s.blackbox.sd_mode == wbp::SD_MODE_SPI) || s.flow.type == FlowSensor::PMW3901;
-            const char* why = s.pins.led == GPIO_UNUSED ? "no pin for the LED strip (Pins tab: LED)" : WB_PLATFORM_STM32 ? "not on the STM32 yet"
+            const bool spi2_taken = !WB_PLATFORM_STM32 && ((s.blackbox.device == bb::DEV_SDCARD && s.blackbox.sd_mode == wbp::SD_MODE_SPI) || s.flow.type == FlowSensor::PMW3901);
+            const char* why = s.pins.led == GPIO_UNUSED ? "no pin for the LED strip (Pins tab: LED)"
                             : spi2_taken ? "the second SPI bus is taken (SD card on SPI, or a PMW3901)" : nullptr;
 #if WB_HAS_LED_STRIP
-            if (!why && !led_strip_.begin(s.pins.led)) why = "the SPI bus did not start";
+            if (!why && !led_strip_.begin(s.pins.led)) why = led_strip_.why() ? led_strip_.why() : "the SPI bus did not start";
+#else
+            if (!why && !WB_PLATFORM_HOST) why = "no LED strip driver on this chip";      // (the PC: the virtual board shows the colors)
 #endif
             status.led = !why;
             static_assert((int)app::LedLogic::MANUAL == (int)wbp::LED_LAYOUT_MANUAL && (int)app::LedLogic::F_THROTTLE == (int)wbp::LED_FUNCTION_THROTTLE && app::LedLogic::kMax == 32, "led_logic.h follows the schema");
@@ -471,6 +525,13 @@ public:
 
         bool rc_new = false;
         if (!use_external_rc) rc_new = rc.update(now_us, now_ms);
+        if (msp_on_) {                                       // the MSP port: what its devices sent (before the GPS, the flow sensor and the compass are read)
+            msp_port_.poll(now_us, now_ms);
+            if (msp_rc_) rc_new = msp_port_.take_rc();
+            gps::Solution g; if (msp_gps_ && msp_port_.take_gps(g)) gnss.inject(g, now_ms);
+            mspdev::MagSample m; if (msp_mag_ && msp_port_.take_mag(m)) mag.pushExternal(m.frd_ga, now_us);
+            mspdev::BaroSample b; if (msp_baro_ && msp_port_.take_baro(b)) baro.pushExternal(b.pa, b.temp_c, now_us);
+        }
         if (status.can) {                                    // DroneCAN: what came in on the bus; a fix / a field for the GPS / the compass
             can_port->service(now_ms); can_node.update(now_ms);
             dcan::Fix2 fx; dcan::GnssAux aux; bool aux_ok = false;
@@ -492,18 +553,24 @@ public:
             esc_new = esc_poll_.take(esc_m, esc_r);
             esc_ask = esc_poll_.ask_now(now_ms);
         }
-        bool baro_new = false, range_new = false, mag_new = false;
-        switch (slot_++ % 3) {                               // one I2C device per pass
-        case 0: baro_new = baro.update(now_us, now_ms, armed); break;
+        bool baro_new[2] = {false, false}, range_new = false, mag_new = false;
+        switch (slot_++ % (status.baro2 ? 4 : 3)) {          // one sensor per pass (a chip on the IMU's SPI bus: under the lock, between two IMU reads)
+        case 0: baro_new[0] = poll_baro(baro, now_us, now_ms, armed); break;
         case 1: range_new = sonar.update(now_us, now_ms, up_cos, armed); break;
-        default: mag_new = mag.update(now_us, now_ms); break;
+        case 2: if (mag.onImuBus()) { app::Guard g(*sync_); mag_new = mag.update(now_us, now_ms); } else mag_new = mag.update(now_us, now_ms); break;
+        default: baro_new[1] = poll_baro(baro2, now_us, now_ms, armed); break;
         }
+        float baro_alt = 0, baro_sig = 0;                    // the barometer that flies (two of them: barosel::Selector)
+        bool baro_out;
+        { const bool v[2] = {baro.valid(now_ms), baro2.valid(now_ms)}; const float a[2] = {baro.altitudeM(), baro2.altitudeM()}, sg[2] = {baro.sigmaM(), baro2.sigmaM()};
+          baro_out = baro_sel_.update(v, baro_new, a, sg, armed, now_ms, baro_alt, baro_sig);
+          if (baro_out) baro_alt_ = baro_alt; }
         if (mag_auto_.active()) { if (mag_new) mag_auto_.feed(mag.rawGauss(), gyro_rate, now_ms); else mag_auto_.tick(now_ms); }     // (this thread's alone)
         const uint32_t io_us = micros() - now_us;
         // (the EKF's measurements wait here for its next step: this thread only)
         if (ekf_mode_) {
             if (gps_new) { ekf_gm_ = gm; ekf_gps_pend_ = true; }
-            if (baro_new) { ekf_baro_ = baro.altitudeM(); ekf_baro_pend_ = true; }
+            if (baro_out) { ekf_baro_ = baro_alt; ekf_baro_pend_ = true; }
             if (mag_new && mag.readyForFusion(now_ms)) { const float* b = mag.board(); ekf_mag_ = {b[0], b[1], b[2]}; ekf_mag_pend_ = true; }
         }
 
@@ -519,11 +586,15 @@ public:
                 core.on_ekf(ekf_nav_, now_ms);                                  // (the result of the last step)
             }
 
-            if (!use_external_rc) { if (rc_new) rc_seq_++; rc_link_ = rc.linkOk(now_ms); const uint16_t* c = rc.channels(); for (int i = 0; i < 16; i++) rc_[i] = c[i]; }
+            if (!use_external_rc) {
+                if (rc_new) rc_seq_++;
+                rc_link_ = msp_rc_ ? msp_port_.rc().ok(now_ms) : rc.linkOk(now_ms);
+                const uint16_t* c = msp_rc_ ? msp_port_.rc().channels() : rc.channels(); for (int i = 0; i < 16; i++) rc_[i] = c[i];
+            }
             for (int i = 0; i < 16; i++) servo_rc_[i] = rc_[i];                      // (the servos keep the last channels when the link drops)
             servo_have_rc_ = rc_seq_ != 0;
             if (gps_new) core.on_gps(gm, now_ms);
-            if (baro_new) core.on_baro(baro.altitudeM(), baro.sigmaM(), now_ms);
+            if (baro_out) core.on_baro(baro_alt, baro_sig, now_ms);
             if (range_new) core.on_range(sonar.heightM(), sonar.sigmaM(), now_ms);
             if (flow_new) { const flow::Reading& r = flow.reading(); fc::FlowSample f; f.x = r.x; f.y = r.y; f.dt = r.dt; f.age_s = r.age_s; f.quality = r.quality; core.on_flow(f, now_ms); flow_quality_ = r.quality; }
             if (mag_new) { const float* b = mag.board(); core.on_mag({b[0], b[1], b[2]}, mag.readyForFusion(now_ms), now_ms); }
@@ -979,7 +1050,7 @@ private:
     fc::Health health(uint32_t now_ms) {
         fc::Health h;
         h.imu_ok = imu_sel_.in_use() != 0; h.gyro_calibrated = gyro_calibrated();      // (`calibrating` is filled in by the flight loop, see fill_fast)
-        h.baro_ok = baro.valid(now_ms); h.range_ok = sonar.valid(now_ms); h.gps_ok = gnss.usable(); h.flow_ok = status.flow && flow.healthy(now_ms) && sonar.available();      // (flow without a range sensor gives no speed: not something to hold a position with)
+        h.baro_ok = baro.valid(now_ms) || baro2.valid(now_ms); h.range_ok = sonar.valid(now_ms); h.gps_ok = gnss.usable(); h.flow_ok = status.flow && flow.healthy(now_ms) && sonar.available();      // (flow without a range sensor gives no speed: not something to hold a position with)
         h.mag_calibrated = mag.calibrated(); h.mag_ok = mag.readyForFusion(now_ms);
         h.batt_low = battery.monitor.low(); h.batt_critical = land_on_critical_ && battery.monitor.critical();
         h.pin_conflict = status.pin_conflict; h.loop_slow = loop_slow_;
@@ -1013,10 +1084,10 @@ private:
     // Every pin that is really in use, checked once at boot: two functions on one GPIO, or a pin the module needs for itself.
     void check_pins() {
         wbp::Settings& s = *s_; HardwareConfig hw;
-        pins::Use use[48]; int n = 0;
-        auto add = [&](uint8_t pin, const char* what) { if (n < 48) use[n++] = {pin, what}; };
+        pins::Use use[56]; int n = 0;
+        auto add = [&](uint8_t pin, const char* what) { if (n < 56) use[n++] = {pin, what}; };
         uint8_t p[8];
-        add(s.pins.imu2_cs, "imu2_cs");
+        add(s.pins.imu2_cs, "imu2_cs"); add(s.pins.baro_cs, "baro_cs"); add(s.pins.mag_cs, "mag_cs");
         hw.getSPIAccGyroSensorPins(p); add(p[0], "imu_cs"); add(p[1], "imu_miso"); add(p[2], "imu_mosi"); add(p[3], "imu_sck");
         hw.getI2CBaroSensorPins(p); add(p[0], "i2c_sda"); add(p[1], "i2c_scl");
         if (s.sensors.gps_enabled && gps::uses_uart((gps::Provider)s.gps.provider)) { hw.getGpsPins(p); add(p[0], "gps_rx"); add(p[1], "gps_tx"); }
@@ -1036,7 +1107,7 @@ private:
         static const char* const sname[servo::kServos] = {"servo 1", "servo 2", "servo 3", "servo 4"};
         for (int i = 0; i < servo::kServos; i++) add(s.pins.servo[i], sname[i]);
         if (s.flow.type == FlowSensor::PMW3901) { add(s.pins.flow_cs, "flow_cs"); add(s.pins.flow_sck, "flow_sck"); add(s.pins.flow_miso, "flow_miso"); add(s.pins.flow_mosi, "flow_mosi"); }
-        if (s.flow.type == FlowSensor::MSP) { add(s.pins.flow_rx, "flow_rx"); add(s.pins.flow_tx, "flow_tx"); }
+        if (msp_port_wanted(s, use_external_rc)) { add(s.pins.flow_rx, "flow_rx"); add(s.pins.flow_tx, "flow_tx"); }
         if (s.motors.esc_sensor) add(s.pins.esc_tlm, "esc_tlm");
         if (s.telemetry.protocol == wbp::TELEMETRY_PROTOCOL_MAVLINK) { add(s.telemetry.tx_pin, "telemetry_tx"); add(s.telemetry.rx_pin, "telemetry_rx"); }
         if (s.osd.type != wbp::OSD_TYPE_NONE) { add(s.osd.tx_pin, "osd_tx"); add(s.osd.rx_pin, "osd_rx"); }
@@ -1114,6 +1185,11 @@ private:
         o.home = gnss.home().has_home(); o.home_dist_m = gnss.home().distance_to_home_cm() * 0.01f; o.home_dir_deg = t.home_dir_ddeg * 0.1f;
         o.alt_valid = t.alt_valid; o.alt_m = t.z; o.vz_ms = t.vz; o.throttle = t.throttle;
         o.roll_deg = t.roll; o.pitch_deg = t.pitch; o.heading_deg = app::heading360(t.yaw);
+        o.lat = t.lat; o.lon = t.lon; o.g_force = sqrtf(t.acc[0] * t.acc[0] + t.acc[1] * t.acc[1] + t.acc[2] * t.acc[2]);
+        o.batt_remaining = o.batt && s_->battery.capacity_mah ? t.batt_remaining : 255;
+        if (t.armed && !osd_was_armed_) osd_dist_m_ = 0;                // the distance flown: from this arming on, along the ground track
+        if (t.armed && osd_dt_ms_ && o.gps && o.fix >= 3) osd_dist_m_ += o.speed_ms * (float)(now_ms - osd_dt_ms_) * 0.001f;
+        osd_was_armed_ = t.armed; osd_dt_ms_ = now_ms; o.dist_m = osd_dist_m_;
         for (int i = 0; i < 8; i++) if (t.esc_temp[i] > o.esc_temp_c) o.esc_temp_c = t.esc_temp[i];
         // the warning: the most important one only (Betaflight's order, roughly)
         const char* w = o.failsafe ? "FAILSAFE" : o.batt_level == 2 ? "LAND NOW" : o.batt_level == 1 ? "LOW BATTERY" : !t.rc_link ? "RXLOSS" : nullptr;
@@ -1217,7 +1293,7 @@ private:
     WB_FAST void fill_fast() {
         const fc::Estimate& e = last_out_.est;
         tel_.roll = e.att.roll; tel_.pitch = e.att.pitch; tel_.yaw = e.att.yaw;
-        tel_.armed = last_out_.armed; tel_.blockers = last_out_.arm_blockers; tel_.failsafe = (uint8_t)last_out_.failsafe; tel_.fs_cause = last_out_.fs_cause; tel_.modes = last_out_.modes;
+        tel_.armed = last_out_.armed; tel_.blockers = last_out_.arm_blockers; tel_.failsafe = (uint8_t)last_out_.failsafe; tel_.fs_cause = last_out_.fs_cause; tel_.fs_action = last_out_.fs_action; tel_.modes = last_out_.modes;
         tel_.ah_state = (uint8_t)last_out_.ah_state; tel_.throttle = last_out_.throttle;
         for (int i = 0; i < 8; i++) tel_.motor_cmd[i] = motors.manager().output(i);
         for (int i = 0; i < servo::kServos; i++) tel_.servo_us[i] = servos.pulse(i);        // what really goes to the ESC (also during a motor test)
@@ -1268,7 +1344,7 @@ private:
         if (status.can && can_port->state() == CanPort::RUNNING) h |= wbp::HEALTH_CAN;
         tel_.imu2 = !imu2_cfg_ ? imusel::NONE : !status.imu2 ? imusel::FAILED : imu_sel_.lost(1) ? imusel::LOST : imusel::OK;
         { const AgSample& b = imu_sel_.last2(); tel_.gyro2[0] = b.gyro_dps[0]; tel_.gyro2[1] = -b.gyro_dps[1]; tel_.gyro2[2] = b.gyro_dps[2]; }
-        if (baro.valid(now_ms)) h |= wbp::HEALTH_BARO;
+        if (baro.valid(now_ms) || baro2.valid(now_ms)) h |= wbp::HEALTH_BARO;
         if (sonar.valid(now_ms)) h |= wbp::HEALTH_RANGE;
         if (gnss.usable()) h |= wbp::HEALTH_GPS;
         if (status.flow && flow.healthy(now_ms)) h |= wbp::HEALTH_FLOW;
@@ -1296,11 +1372,13 @@ private:
             tel_.rpm[i] = t.rpm; tel_.esc_err_pct[i] = t.error_pct; tel_.esc_temp[i] = t.temp_c; tel_.esc_amps[i] = t.amps;
         }
         const float* b = mag.board(); for (int i = 0; i < 3; i++) tel_.mag[i] = b[i];
-        tel_.baro_alt = baro.altitudeM(); tel_.baro_pa = baro.pressurePa(); tel_.temp_c = baro.tempC(); tel_.range_m = sonar.valid(now_ms) ? sonar.heightM() : 0.0f;
+        { const BaroSensor& bu = baro_sel_.in_use() == 1 ? baro2 : baro; tel_.baro_alt = baro_sel_.in_use() >= 0 ? baro_alt_ : baro.altitudeM(); tel_.baro_pa = bu.pressurePa(); tel_.temp_c = bu.tempC(); } tel_.range_m = sonar.valid(now_ms) ? sonar.heightM() : 0.0f;
         const gps::Solution& g = gnss.solution();
         tel_.gps_fix = g.fix_type; tel_.gps_sats = g.num_sat; tel_.lat = g.lat; tel_.lon = g.lon; tel_.alt_cm = g.alt_cm; tel_.gs_cms = g.ground_speed_cms;
         tel_.course_ddeg = g.course_ddeg; tel_.hdop = g.hdop; tel_.hacc_mm = g.h_acc_mm; tel_.home_dist_m = gnss.home().distance_to_home_m();
         tel_.home_dir_ddeg = gnss.home().direction_to_home_ddeg(); tel_.gps_state = (uint8_t)gnss.state(); tel_.gps_baud = gnss.baud(); tel_.gps_rate_hz = gnss.rateHz();
+        { const int n = gnss.satCount() < app::Telemetry::kSats ? gnss.satCount() : app::Telemetry::kSats; const gps::SatInfo* sv = gnss.sats(); tel_.sat_n = (uint8_t)(n > 0 ? n : 0);
+          for (int i = 0; i < n; i++) { app::Telemetry::Sat& o = tel_.sat[i]; o.gnss = sv[i].gnss_id; o.sv = sv[i].sv_id; o.cno = sv[i].cno; o.elev = sv[i].elev; o.azim = sv[i].azim; o.flags = (uint8_t)(sv[i].flags & 0x0F); } }
         // calibration progress
         tel_.cal_kind = cal_kind_; tel_.cal_mask = acc_cal_.mask(); tel_.cal_result = mag_result_;
         const float* raw = imu.rawAcc();
@@ -1318,6 +1396,31 @@ private:
     }
 
     // ---- boot report
+    // ---- barometers: on the IMU's SPI bus (pins.baro_cs) and on the sensor I2C bus (0x76, then 0x77): the first two found
+    void init_baros(const wbp::Settings& s) {
+        status.baro = status.baro2 = false;
+        const uint8_t cs = s.pins.baro_cs;
+        if (cs != GPIO_UNUSED) {
+            SPIBus* host = imu.spiHost();
+            status.baro = host && baro.BaroInitShared(*host, cs);
+            char pb[8]; say(status.baro, "baro", baro.name(), !host ? "the IMU is not on SPI (pins.baro_cs is a chip select on the IMU's SPI bus)" : baro.failReason(), "SPI %s on CS %s", baro.name(), pin_str(cs, pb));
+        }
+        BaroSensor& i2c = status.baro ? baro2 : baro;
+        const bool found = i2c.BaroInit(false);
+        if (&i2c == &baro) {
+            status.baro = found;
+            if (found || cs == GPIO_UNUSED) say(found, "baro", baro.name(), baro.failReason(), "%s (I2C 0x%02X)", baro.name(), baro.i2cAddress());
+            if (found) { baro2.skipI2cAddress(baro.i2cAddress()); status.baro2 = baro2.BaroInit(false); }
+        } else status.baro2 = found;
+        const uint8_t prim = s.sensors.baro_primary;
+        if (status.baro2) say(true, "baro2", baro2.name(), "", "%s (I2C 0x%02X), %s", baro2.name(), baro2.i2cAddress(), prim == 1 ? "flies (baro_primary 1), the first one stands by" : "stands by (takes over while the first one is unhealthy)");
+        baro_sel_.configure(prim, status.baro2);
+    }
+    bool poll_baro(BaroSensor& b, uint32_t now_us, uint32_t now_ms, bool armed) {
+        if (!b.onImuBus()) return b.update(now_us, now_ms, armed);
+        app::Guard g(*sync_); return b.update(now_us, now_ms, armed);
+    }
+
     void say(bool ok, const char* what, const char* name, const char* why, const char* fmt, ...) {
         if (n_report_ >= kReportLines) return;
         char* line = report_[n_report_]; report_ptr_[n_report_] = line; n_report_++;
@@ -1344,7 +1447,7 @@ private:
 public:
     osd::DisplayPort osd_;                                // (public for the tests: what the video transmitter asked)
 private:
-    osd::Layout osd_layout_; osd::State osd_st_; msp::Info osd_info_; port::SerialPort* osd_uart_ = nullptr; uint8_t osd_buf_[512] = {}; uint32_t osd_fly_ms_ = 0, osd_last_ms_ = 0;
+    osd::Layout osd_layout_; osd::State osd_st_; msp::Info osd_info_; port::SerialPort* osd_uart_ = nullptr; uint8_t osd_buf_[512] = {}; uint32_t osd_fly_ms_ = 0, osd_last_ms_ = 0, osd_dt_ms_ = 0; float osd_dist_m_ = 0; bool osd_was_armed_ = false;
     beep::Conditions beep_cond_; uint32_t beacons_ = 0, start_us_ = 0, gap_max_ = 0, cycle_gap_ = 0, bb_slow_ms_ = 0;
     uint32_t last_us_ = 0, next_us_ = 0, slow_us_ = 0, period_us_ = 250, stat_ms_ = 0, test_until_ms_ = 0, reboot_at_ms_ = 0, imu_errors_ = 0, imu_fail_streak_ = 0, slot_ = 0, loops_ = 0, loops_mark_ = 0;
     uint16_t pub_div_ = 4, pub_n_ = 0, loop_max_ = 0;
@@ -1360,6 +1463,7 @@ private:
     fc::Ekf ekf_; fc::EkfNav ekf_nav_; EkfOut ekf_out_; fc::GpsMeas ekf_gm_; float ekf_baro_ = 0; fc::Vec3 ekf_mag_;
     bool ekf_gps_pend_ = false, ekf_baro_pend_ = false, ekf_mag_pend_ = false, ekf_rehome_ = true; uint32_t ekf_wait_ms_ = 0, ekf_us_cur_ = 0;       // sensor thread: longest pause between two passes, this second
     imusel::Selector imu_sel_; bool imu2_cfg_ = false;
+    barosel::Selector baro_sel_; float baro_alt_ = 0;
     // the LED strip (section led, pins.led): what it shows (app/led_logic.h), the colors of the last picture
 public:
     const app::Rgb* ledColors() const { return led_rgb_; }
@@ -1367,7 +1471,7 @@ public:
 private:
     app::LedLogic led_logic_; app::LedInput led_in_; app::Rgb led_rgb_[app::LedLogic::kMax]; int led_n_ = 0; uint32_t led_ms_ = 0; bool led_due_ = false;
 #if WB_HAS_LED_STRIP
-    led::SpiStrip led_strip_;
+    led::Strip led_strip_;
 #endif
     app::LedInput led_input() const {                     // (lock held)
         app::LedInput in; const fc::CoreOutput& o = last_out_;
@@ -1382,6 +1486,14 @@ private:
         return in;
     }
     bool can_gps_ = false, can_mag_ = false, can_baro_ = false, can_batt_ = false; uint32_t can_mark_[3] = {};
+    // the MSP port (hal/msp_sensors.h) and what is on it
+    mspdev::Port msp_port_; ArduinoBytePort msp_bytes_;
+    bool msp_on_ = false, msp_gps_ = false, msp_mag_ = false, msp_baro_ = false, msp_rc_ = false; const char* msp_why_ = "";
+    // An MSP port is opened when something is set to use it: a flow sensor, a GPS, a compass, a barometer or the receiver
+    static bool msp_port_wanted(const wbp::Settings& s, bool external_rc) {
+        return s.flow.type == FlowSensor::MSP || (s.sensors.gps_enabled && s.gps.provider == wbp::GPS_PROVIDER_MSP) || (!external_rc && s.receiver.protocol == wbp::RX_PROTOCOL_MSP) ||
+               (s.sensors.mag_enabled && s.sensors.mag_model == wbp::MAG_MODEL_MSP) || (s.sensors.baro_enabled && s.sensors.baro_model == wbp::BARO_MODEL_MSP);
+    }
     dcan::EscStatus can_esc_[dcan::Node::kMaxEsc]; uint8_t can_esc_new_ = 0;   // (esc.Status taken off the bus in part A, fed under the lock in part B)      // (DroneCAN GPS / compass in use; frame counters of the last second)
     struct StagePeaks { uint16_t lock = 0, imu = 0, core = 0, est = 0, motor = 0; } peak_;
     WB_FAST static uint16_t peak16(uint16_t was, uint32_t us) { return us > 65535u ? (uint16_t)65535 : us > was ? (uint16_t)us : was; }

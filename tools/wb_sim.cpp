@@ -45,6 +45,7 @@
 #ifdef _WIN32
   #include <winsock2.h>
   #include <ws2tcpip.h>
+  #undef PASSTHROUGH                 // (a wingdi.h macro: msp_bridge.h has an enum value of that name)
   typedef SOCKET sock_t;
   static void sock_init() { WSADATA w; WSAStartup(MAKEWORD(2, 2), &w); }
   static void sock_close(sock_t s) { closesocket(s); }

@@ -1,4 +1,4 @@
-# STM32 (H5, G4, F4, C5) và ESP32 thường: các MCU ngoài ESP32-S3 (0.25, DShot 0.26)
+# STM32 (H5, G4, F4, C5) và ESP32 thường: các MCU ngoài ESP32-S3 (0.25, DShot 0.26, đầy đủ 0.27)
 
 Cùng mã nguồn với bản ESP32-S3, vẫn trên Arduino (STM32duino 4.x), không viết lại bằng HAL thuần. Phần không phụ thuộc chip (FlightCore, EKF, bộ lọc, settings, giao thức với app, blackbox, MSP / ESC passthrough) dùng y nguyên. Chỉ phần chạm vào phần cứng có bản riêng cho STM32, gom trong `src/port/`.
 
@@ -28,15 +28,19 @@ Phần chung trên mọi STM32:
 - IMU SPI, baro / la bàn / lidar I2C: có.
 - Receiver nối tiếp, PPM / PWM, GPS, optical flow MSP: có.
 - Motor PWM / Oneshot / Multishot / brushed: có, dùng timer của chân.
-- Motor DShot150 / 300 / 600 / 1200 một chiều: có (0.26, mục 12).
+- Motor DShot150 / 300 / 600 / 1200: một chiều (0.26) và hai chiều có RPM (0.27), mục 12.
+- ESC telemetry trên dây riêng (KISS, UART RX): có, như ESP32.
 - Servo, còi: có.
-- ESC passthrough: có trong mã.
+- ESC passthrough (BLHeliSuite / ESC Configurator / AM32): có. Bit-bang trên chân motor bằng `digitalWriteFast`, giống ESP32.
 - Đo pin / dòng: có.
+- Thẻ SD cho blackbox (kiểu SPI, thư viện SdFat, FAT16 / FAT32 / exFAT): có (0.27, mục 13).
+- Dải LED WS2812 trên kênh timer + DMA: có (0.27, mục 13).
+- DroneCAN: FDCAN (G4 / H5) hoặc bxCAN (F4), có (0.27, mục 13).
 - **Chưa có:**
   - ProShot.
-  - DShot hai chiều, ESC telemetry.
-  - Thẻ SD.
-  - Dải LED.
+  - Thẻ SD kiểu SDMMC / SDIO (chỉ kiểu SPI).
+  - Flash SPI ngoài cho blackbox.
+  - Lưu nhật ký phiên ESC passthrough qua lần khởi động lại (ESP32 dùng RTC RAM; STM32 chưa).
 
 ## 2. MCU trong app
 - **Firmware báo tên MCU** trong DEVICE_INFO (`[tên]\0[MCU]\0[32 byte]`, `wbp::Server::set_chip`). 32 byte cuối là mặt nạ: bit n = có chân số n.
@@ -155,15 +159,41 @@ Theo cách "DMA burst" của Betaflight (`DSHOT_DMAR`). Mỗi chân motor phải
   - H5: kênh GPDMA1 0 – 3, `GPDMA1_REQUEST_TIMx_UP`, request ở đích (`DREQ`).
 - **Timer của motor thuộc về DShot hoàn toàn:** servo hoặc còi đặt trên kênh khác của cùng timer bị từ chối (`port::pwm_reserve_timer`).
 - **Báo lỗi:** báo cáo khởi động ghi lý do khi không bắt đầu được, ví dụ "a motor pin has no timer channel", "a motor's timer also runs a servo / the buzzer", "no DMA for the motor timer's update request".
-- **Một chiều:** bật DShot hai chiều trong app thì vẫn chạy một chiều, và tên backend ghi "(one-way)".
+- **Một chiều** (DShot hai chiều tắt): cách "DMA burst" ở trên.
+- **Hai chiều (0.27):** dùng đúng bộ điều khiển trình tự của ESP32 (`hal/motor/dshot_direct.h`, đã test trên PC), chỉ đổi phần chạm phần cứng (`stm32dshot::TimDmaPort`):
+  - Mỗi motor một kênh DMA (request TIMx_CHy). Dây đảo mức (nằm cao, bit là xung thấp, CCxP = 1).
+  - TIM6 một lần, vài µs sau frame: ngắt của nó trả dây cho ESC.
+  - Kênh chuyển sang input capture cả hai sườn, timer chạy tự do (ARR 0xFFFF). Cùng kênh DMA chép giá trị bộ đếm ở mỗi sườn.
+  - Frame sau: các sườn thành các đoạn mức (`motor::capture_to_words`, test với cả 4096 giá trị trả lời, cả khi bộ đếm quay vòng), giải mã như ESP32, RPM vào bộ lọc RPM.
+  - Đây là cách của Betaflight khi dùng timer (`pwm_output_dshot.c`, input capture + DMA).
+  - F4: TIM4 CH4 không có DMA, nên chân đó không dùng được DShot hai chiều.
+  - Không có kiểm tra lúc khởi động như ESP32 (chân STM32 không vừa phát vừa nghe được). ESC không trả lời thì tab Motor ghi "không trả lời", như ESP32.
 - **Kiểm chứng:**
   - `test_dshot` nhóm burst: các hàng của frame đọc ngược lại ra đúng packet, kênh không dùng nằm 0, đuôi thấp, chu kỳ theo clock.
   - 9 mutant `burst:`.
   - Phần chạm thanh ghi (timer, DMA) chỉ biên dịch được; **chưa thử trên mạch**, cần xem dạng sóng bằng máy hiện sóng / logic analyzer trước khi gắn ESC.
 
+## 13. Thẻ SD, dải LED, DroneCAN trên STM32 (0.27)
+- **Thẻ SD** (`blackbox/bb_card_stm32.h`):
+  - Kiểu SPI, thư viện SdFat (thêm vào `lib_deps`). Bốn chân sd_cs / sd_clk / sd_cmd (MOSI) / sd_d0 (MISO); SCK / MOSI / MISO phải là chân của cùng một khối SPI, sai thì báo lý do.
+  - Cùng thư mục và tên file như ESP32 (`/wblog/wb_00001.wblog`), thẻ exFAT dùng được.
+  - Task ghi `wb_sd` ưu tiên thấp nhất, bộ đệm 32 kB (chip ít RAM: 8 kB).
+  - Chip ít RAM chỉ chạy task này khi chọn thẻ SD lúc khởi động; chọn thẻ sau đó trong app thì cần khởi động lại.
+  - `blackbox.sd_mode = SDMMC` bị từ chối kèm lý do (chưa làm SDMMC trên STM32).
+- **Dải LED** (`port/stm32/ws2812_stm32.h`):
+  - Chân LED phải là kênh timer. Timer chạy 800 kHz, DMA ghi giá trị so sánh cho từng bit (`led::timer_rows`, bit 1 cao 2/3, bit 0 cao 1/3, thứ tự GRB).
+  - Timer dành riêng cho dải LED: không được chung với motor, servo, còi.
+  - Bộ nhớ hàng (3 kB) chỉ cấp khi có dải LED.
+- **DroneCAN** (`hal/can/stm32_can.h`):
+  - G4 / H5: FDCAN ở chế độ CAN thường. Clock nhân: PCLK1 trên G4, PLL1Q trên H5.
+  - F4: bxCAN CAN1 / CAN2.
+  - Controller theo chân (`PinMap_CAN_TD / RD`). Frame 29 bit, không ngắt (vòng cảm biến hỏi). Bus-off tự phục hồi và được đếm.
+  - Thời gian bit (`hal/can/can_timing.h`, test trong `test_can`): 8 – 25 quanta, điểm lấy mẫu 87,5 %, sai số dưới 0,5 %.
+  - Cần module CAN của HAL: `platformio.ini` thêm `-DHAL_FDCAN_MODULE_ENABLED` (G4 / H5) hoặc `-DHAL_CAN_MODULE_ENABLED` (F4).
+- **RAM:** các tính năng này thêm khoảng 8 kB RAM tĩnh. G473 / F405 còn khoảng 29 kB cho stack và heap; G491 chỉ còn khoảng 12 kB, ít hơn 22,5 kB stack của 3 task, nên gần như chắc chắn không khởi động được task.
+
 ## 11. Tiếp theo
-- DShot hai chiều trên STM32 (đảo dây, bắt trả lời bằng input capture + DMA như Betaflight).
-- Thẻ SD (SDMMC trên H5 / F4, SPI trên G4), flash SPI cho blackbox trên chip một bank.
-- Dải LED.
-- Đo stack thật của ba task.
+- Thẻ SD kiểu SDMMC / SDIO, flash SPI ngoài cho blackbox trên chip một bank.
+- Lưu nhật ký phiên ESC passthrough qua lần khởi động lại.
+- Đo stack thật của ba task; giảm RAM cho G491.
 - C5 khi STM32duino biên dịch được.

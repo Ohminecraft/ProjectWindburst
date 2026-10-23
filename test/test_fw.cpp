@@ -985,7 +985,7 @@ static void t_blackbox() {
       // (with true_accel off the height estimate has the barometer only: the half metre lost in the roll comes back slowly)
       CHECK(z_hover > 1.2f && z_hover < 1.9f && fabsf(b.plant.right_down_deg()) < 3.0f && fabsf(b.plant.nose_down_deg()) < 3.0f && fabsf(b.plant.vz) < 0.4f, "it flies normally while logging: z %.2f m, level, vz %.2f", z_hover, b.plant.vz);
       CHECK(b.stalled_us > 100000 && b.longest_stall_us == 700 && r->logmem.bad_writes == 0 && r->logmem.longest_write <= 256, "the flash stalled the flight loop %.0f ms in total, 0.7 ms at a time (one page), clean NOR writes", b.stalled_us / 1000.0);
-      CHECK(r->tel().loop_hz > 3600 && r->tel().gap_max_us >= 900 && r->tel().gap_max_us <= 1300, "the loop lost a few cycles to it: %u Hz, longest gap between cycles %u us (status stream shows it)", r->tel().loop_hz, r->tel().gap_max_us);
+      CHECK(r->tel().loop_hz >= 3500 && r->tel().gap_max_us >= 900 && r->tel().gap_max_us <= 1300, "the loop lost a few cycles to it: %u Hz, longest gap between cycles %u us (status stream shows it)", r->tel().loop_hz, r->tel().gap_max_us);
       st = bb_status(*r); CHECK(st.state == BB_STATE_LOGGING && st.rate_hz >= 440 && st.rate_hz <= 505 && st.dropped == 0 && st.byte_rate > 30000 && st.byte_rate < 42000, "status while logging: %u records/s (500 asked; the stalled cycles are missing), %u bytes/s, none dropped", st.rate_hz, st.byte_rate);
       CHECK(r->command(CMD_BLACKBOX_ERASE).err == ERR_ARMED && r->command(CMD_BLACKBOX_READ, {0, 0, 0, 0, 16, 0, 0, 0}).err == ERR_ARMED, "no erase, no download while armed");
       b.rc[2] = 1300; fly(6.0); b.rc[2] = 1000; fly(1.0);
@@ -1004,7 +1004,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.26.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.33.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -1636,7 +1636,7 @@ static void t_nav_mounting() {
 static void t_nav_uarts() {
     printf("[optical flow] which UART an MSP sensor gets\n");
     { auto r = nav_rig(msp_flow, false);
-      CHECK(has_line(*r, "flow: FAILED - no UART left for the flow sensor") && has_line(*r, "range: FAILED - the lidar of the flow sensor: the flow sensor did not start") && !r->app().status.flow,
+      CHECK(has_line(*r, "msp: FAILED - no UART left for the MSP port") && has_line(*r, "flow: FAILED - no UART left for the MSP port") && has_line(*r, "range: FAILED - the lidar of the flow sensor: the flow sensor did not start") && !r->app().status.flow,
             "app on UART0, GPS on UART1, receiver on UART2: no UART left - said so, for the flow sensor and for its lidar");
       CHECK(Serial1.rx_pin == VirtualBoard::kGpsRx && Serial2.rx_pin == VirtualBoard::kRcRx, "(GPS and receiver are untouched)"); r->run(2.0);
       CHECK((r->tel().health & HEALTH_RX) && !(r->tel().health & HEALTH_FLOW) && r->tel().blockers == 0, "the craft works without it"); }
@@ -1645,7 +1645,7 @@ static void t_nav_uarts() {
     { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { msp_flow(s, b); s.sensors.gps_enabled = 0; b.wire_flow_uart(1); }, true);
       CHECK(has_line(*r, "flow: MSP flow on UART1"), "a free UART1 is taken before UART0 (UART0 prints the boot messages of the chip at power-up)"); }
     { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { msp_flow(s, b); s.pins.flow_rx = 255; });
-      CHECK(has_line(*r, "flow: FAILED - flow sensor on a UART: pin flow_rx not set") && Serial0.rx_pin != VirtualBoard::kFlowRx, "pin flow_rx not set: said so, no UART opened"); }
+      CHECK(has_line(*r, "flow: FAILED - MSP port: pin flow_rx") && Serial0.rx_pin != VirtualBoard::kFlowRx, "pin flow_rx not set: said so, no UART opened"); }
     { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { msp_flow(s, b); s.sensors.range_model = RANGE_MODEL_MSP; }); r->run(2.0);
       CHECK(has_line(*r, "range: MSP lidar (flow sensor)") && (r->tel().health & HEALTH_RANGE), "range model MSP chosen in the settings: the flow sensor's lidar is the range sensor"); }
     { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { msp_flow(s, b); s.sensors.range_enabled = 0; }); r->run(2.0);
@@ -1681,6 +1681,9 @@ static void t_nav_gps() {
       r->run(6.0);
       CHECK(nav_now(*r, n) && n.flow_reject == FLOW_REJECT_NO_SAMPLE && n.flow_rate == 0 && n.flow_quality == 0 && n.flow_fwd == 0, "nav stream without a flow sensor: 'no sample' - never 'the sample was used'");
       CHECK((r->tel().health & HEALTH_GPS) && (r->tel().health & HEALTH_MAG_READY) && r->tel().yaw_from_mag && fabsf(r->tel().yaw - 60.0f) < 3.0f && r->tel().blockers == 0, "after 6 s: GPS fix, heading %.1f deg from the compass (true 60)", r->tel().yaw);
+      { r->clear_inbox(); r->stream(STR_SATELLITES, 1); r->run(2.1); T_satellites sv{}; const bool got = r->latest(STR_SATELLITES, sv); r->stream(STR_SATELLITES, 0);
+        CHECK(got && sv.count == 6 && sv.sv[0] == 10 && sv.cno[0] == 30 && sv.elev[1] == 21 && sv.azim[1] == 40 && (sv.flags[0] & 8) && sv.gnss[1] == 0 && sv.gnss[0] == 2,
+              "satellites stream: the module's list (6 satellites, Galileo E10 at 30 dBHz, used in the fix)"); }
       b.rc[7] = 2000; nav_takeoff(*r, 4.0);
       CHECK(r->tel().armed && b.plant.z > 1.5f && r->tel().pos_valid && r->tel().vel_valid && r->tel().tilt_aided && !r->tel().flow_valid, "armed with the Position Hold switch on, %.1f m up: a position and a velocity from the GPS, the tilt corrected from it", b.plant.z);
       CHECK(nav_now(*r, n) && (n.flags & NAV_FLAGS_POSHOLD) && (n.flags & NAV_FLAGS_NAV_LEAN) && n.ph_roll == PH_AXIS_LOITER && n.ph_pitch == PH_AXIS_LOITER && fabsf(n.target_n * 0.1f - b.plant.pn) < 1.0f && fabsf(n.target_e * 0.1f - b.plant.pe) < 1.0f,
@@ -1736,7 +1739,7 @@ static void t_nav_gps() {
       r->run(4.5); fly_out(*r); b.rc[8] = 2000; r->run(1.0);
       CHECK(r->tel().failsafe == FAILSAFE_NONE && nav_now(*r, n) && (n.flags & NAV_FLAGS_RESCUE) && n.rescue_phase == RESCUE_PHASE_CLIMB && (r->tel().modes & (1u << MODE_RESCUE)), "switch on: the rescue flies (no failsafe involved)");
       for (int i = 0; i < 400 && r->tel().rescue_phase != RESCUE_PHASE_FLY_HOME; i++) r->run(0.05);
-      r->run(2.0); const float v = hypotf(b.plant.vn, b.plant.ve); b.rc[8] = 1000; r->run(3.0);
+      r->run(3.0); const float v = hypotf(b.plant.vn, b.plant.ve); b.rc[8] = 1000; r->run(3.0);      // (0.28: the ground speed is reached with at most 2.5 m/s^2)
       CHECK(v > 4.0f && nav_now(*r, n) && !(n.flags & NAV_FLAGS_RESCUE) && r->tel().armed && fabsf(b.plant.nose_down_deg()) < 4.0f, "on the way home at %.1f m/s; switch off: the pilot has it back at once", v);
       // the GPS dies during a rescue the pilot switched on: it gives up, and the pilot (who is there) has the craft
       b.rc[8] = 2000; r->run(3.0); const bool again = nav_now(*r, n) && (n.flags & NAV_FLAGS_RESCUE); b.gps.responds = false; for (int i = 0; i < 400 && r->tel().rescue_phase != RESCUE_PHASE_FAILED; i++) r->run(0.05);
@@ -2270,7 +2273,14 @@ static void t_osd() {
         CHECK(r->tel().armed && st && (st->p[6] & 1), "armed: MSP_STATUS has the ARM box on (DJI / Walksnail start recording)");
         CHECK(!dp_has(scr, "DISARMED") && dp_has(scr, "ALTH"), "the screen: no DISARMED, flight mode ALTH");
         bool timer = false; for (auto& l : scr) if (l.rfind("1,46:", 0) == 0 && l.size() == 5 + 6 && l.substr(6) != "00:00") timer = true;
-        CHECK(timer, "the flight timer runs"); }
+        CHECK(timer, "the flight timer runs");
+        // 0.33: land, disarm - the statistics screen of that flight
+        b.rc[2] = 1000; for (int i = 0; i < 100 && b.plant.z > 0.05f; i++) r->run(0.1);
+        b.rc[4] = 1000; r->run(0.3);
+        b.tlm_wire.sent.clear(); r->run(0.5); scr = dp_screen(dp_read(b.tlm_wire.sent, bad));
+        const osd::Stats& sts = r->app().osd_.stats();
+        CHECK(!r->tel().armed && r->app().osd_.showing_stats() && dp_has(scr, "--- STATS ---") && !dp_has(scr, "DISARMED") && sts.max_alt_m > 0.5f && sts.fly_s >= 4,
+              "disarmed after the flight: the statistics screen (max altitude %.1f m, %u s)", sts.max_alt_m, (unsigned)sts.fly_s); }
     {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.telemetry.protocol = TELEMETRY_PROTOCOL_MAVLINK; s.telemetry.tx_pin = 38; s.telemetry.wifi = 0; });
         CHECK(has_line(*r, "osd: MSP DisplayPort on UART0") && has_line(*r, "telemetry: FAILED - no UART left (GPS, receiver, flow sensor, ESC wire and OSD have them)"), "OSD and MAVLink both on AUTO: the OSD has the last UART"); }
     {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.ports.assign = PORT_ASSIGN_TABLE; s.ports.function[0] = PORT_FUNCTION_NONE; s.ports.function[1] = PORT_FUNCTION_GPS; s.ports.function[2] = PORT_FUNCTION_SERIAL_RX; });
@@ -2424,6 +2434,41 @@ static void t_dual_imu() {
         CHECK(r->app().status.pin_conflict && !r->app().status.imu2, "the first IMU's chip select given for the second one: a pin conflict"); }
     {   auto r = nav_rig([](wbp::Settings&, VirtualBoard& b) { b.has_imu2 = true; }); r->run(2.5); T_sensors t{};
         CHECK(!r->app().status.imu2 && sensors_now(*r, t) && t.imu2 == IMU2_STATE_NONE && !has_line(*r, "imu2:"), "no chip select: no second IMU looked for (NONE)"); }
+}
+
+
+static void t_sensors_bus() {
+    printf("[sensors] two barometers (one dies in flight), a barometer and a compass on the IMU's SPI bus\n");
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { b.has_baro2 = true; b.baro2_offset_pa = 60; gps_compass(s, b); }); VirtualBoard& b = r->board;
+        CHECK(has_line(*r, "baro: BMP280 (I2C 0x76)") && has_line(*r, "baro2: MS5611 (I2C 0x77), stands by") && r->app().status.baro2, "boot report: both barometers, the second one standing by");
+        r->run(2.5);
+        CHECK(r->app().baroInUse() == 0 && r->app().baro2.valid(millis()) && (r->tel().health & HEALTH_BARO), "the first one flies, the second one is read too");
+        nav_takeoff(*r, 1.5);
+        const float z0 = b.plant.z;
+        CHECK(r->tel().armed && z0 > 0.4f, "Altitude Hold at %.2f m", z0);
+        b.baro.dead = true; float zmin = z0, zmax = z0;
+        for (int i = 0; i < 300; i++) { r->run(0.01); zmin = fminf(zmin, b.plant.z); zmax = fmaxf(zmax, b.plant.z); }
+        CHECK(r->app().baroInUse() == 1 && r->app().baroSwitches() == 1 && (r->tel().health & HEALTH_BARO) && r->tel().alt_valid, "the first barometer dies in flight: the second one takes over, the height stays valid");
+        CHECK(zmax - zmin < 0.5f && fabsf(b.plant.z - z0) < 0.4f, "and the hold does not jump: %.2f .. %.2f m (was %.2f; the second one reads its own ground, 60 Pa apart)", zmin, zmax, z0);
+        b.baro.dead = false; r->run(1.0);
+        CHECK(r->app().baroInUse() == 1, "back 1 s later: not taken yet");
+        r->run(2.0); float zb = b.plant.z; r->run(1.0);
+        CHECK(r->app().baroInUse() == 0 && r->app().baroSwitches() == 2 && fabsf(b.plant.z - zb) < 0.3f, "2 s valid again: the first one flies again, no step (%.2f -> %.2f m)", zb, b.plant.z); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.sensors.baro_primary = 1; });
+        CHECK(!r->app().status.baro2 && !has_line(*r, "baro2:") && (r->run(2.5), r->app().baroInUse() == 0), "baro_primary 1 with one barometer: that one"); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { b.has_spi_baro = true; b.has_spi_mag = true; s.pins.baro_cs = VirtualBoard::kBaroCs; s.pins.mag_cs = VirtualBoard::kMagCs; s.sensors.baro_primary = 1; gps_compass(s, b); });
+        VirtualBoard& b = r->board;
+        CHECK(has_line(*r, "baro: SPI MS5611 on CS GPIO35") && has_line(*r, "baro2: BMP280 (I2C 0x76), flies (baro_primary 1)") && has_line(*r, "mag: RM3100 on SPI CS GPIO36"), "boot report: the SPI barometer first, the I2C one second; the RM3100 on its chip select");
+        CHECK(r->app().baro.onImuBus() && r->app().mag.onImuBus() && !r->app().baro2.onImuBus() && !r->app().status.pin_conflict, "both chips on the IMU's bus, no pin conflict");
+        r->run(2.5);
+        CHECK(r->app().baroInUse() == 1 && r->app().baro.valid(millis()) && r->app().mag.valid(millis()) && r->app().imu.available(), "baro_primary 1: the I2C one flies; the SPI barometer and compass deliver, the IMU on the same bus too");
+        nav_takeoff(*r, 1.5);
+        CHECK(r->tel().armed && b.plant.z > 0.4f && fabsf(r->app().baro.altitudeM() - b.plant.z) < 0.5f, "flying: the SPI barometer reads %.2f m at %.2f m", r->app().baro.altitudeM(), b.plant.z); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { s.pins.baro_cs = VirtualBoard::kBaroCs; s.pins.mag_cs = VirtualBoard::kMagCs; gps_compass(s, b); });
+        CHECK(has_line(*r, "baro: FAILED - no BMP280/BMP388/MS5611 answered on SPI") && has_line(*r, "baro: BMP280 (I2C 0x76)") && r->app().status.baro && !r->app().status.baro2, "a chip select with nothing on it: said, the I2C barometer flies alone");
+        CHECK(has_line(*r, "mag: QMC5883L") && r->app().status.mag, "no RM3100 on mag_cs: the I2C compass is used"); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.pins.baro_cs = s.pins.imu_cs; });
+        CHECK(r->app().status.pin_conflict, "the IMU's chip select given for the barometer: a pin conflict"); }
 }
 
 
@@ -2609,6 +2654,147 @@ static void t_stick_arm() {
     { wbp::Settings s; wbp::SettingsStore st(r->flash); st.load(s); CHECK(s.general.stick_arm == 1, "stored"); }
 }
 
+// The live log over a UART (230400 baud behind the 8 kB transmit queue, MemTransport::uart_bps): records leave in a steady
+// stream - a frame every ~20 ms - not in bursts; what the app sees as a jumping chart is not made here (0.31: the chart now
+// scrolls with the clock, app/wbclient/web/js/gfx/follow.js)
+static void t_bb_uart_stream() {
+    printf("[blackbox] live stream over a 230400 baud UART: steady, not in bursts\n");
+    for (int busy = 0; busy < 2; busy++) {
+        auto r = fresh(); r->tx.uart_bps = 23040; r->run(2.0);
+        if (busy) { r->stream(STR_ATTITUDE, 30); r->stream(STR_SENSORS, 10); r->stream(STR_ESTIMATE, 10); }      // (another tab's telemetry as well)
+        r->stream(STR_STATUS, 10); r->stream(STR_BLACKBOX, 5); r->stream(STR_LINK, 1);
+        r->clear_inbox(); r->command(CMD_BLACKBOX_STREAM, {1, 200, 0});
+        std::vector<uint32_t> at; uint32_t newest_us = 0;
+        for (int i = 0; i < 4000; i++) {
+            r->run(0.001); r->collect();
+            for (const Rig::Rx& x : r->inbox) if (x.type == bb::kMsgData) { at.push_back(millis()); if (x.p.size() > 5 && x.p[0] == 'F') memcpy(&newest_us, x.p.data() + 1, 4); }
+            r->inbox.clear();
+            if (i % 500 == 0) r->request(MSG_HELLO);
+        }
+        uint32_t gap = 0; for (size_t k = 1; k < at.size(); k++) gap = std::max(gap, at[k] - at[k - 1]);
+        const uint32_t age = millis() - newest_us / 1000;
+        CHECK(r->fw->blackbox.state() == bb::ST_STREAMING && at.size() > 180 && gap < 40 && age < 80 && r->fw->blackbox.stream_frames_dropped() == 0,
+              "%s: %zu frames in 4 s, at most %u ms apart, the newest record %u ms old when it arrives, none dropped", busy ? "with 50 Hz of other telemetry" : "the Blackbox tab's streams", at.size(), gap, age);
+    }
+}
+
+// ---- 0.32: the failsafe's actions on the whole firmware: HOLD (Position + Altitude Hold, then land), a low pack flying home
+static void t_failsafe_actions_fw() {
+    printf("[failsafe 0.32] HOLD on a lost link, RTL on a low pack, the pilot takes it back\n");
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.nav.fs_procedure = FS_PROCEDURE_HOLD; s.nav.fs_hold_s = 8; }, false);
+        VirtualBoard& b = r->board; T_status st{}; r->run(6.0); fly_out(*r, 3.0);
+        const float n0 = b.plant.pn, e0 = b.plant.pe, z0 = b.plant.z;
+        b.tx_on = false; r->run(1.5);
+        CHECK(r->tel().failsafe == FAILSAFE_DESCENT && status_now(*r, st) && st.fs_action == FS_ACTION_HOLD && (st.fs_cause & FS_CAUSE_LINK), "transmitter off, procedure HOLD: the failsafe holds (action HOLD)");
+        float drift = 0, dz = 0; for (int i = 0; i < 50; i++) { r->run(0.1); drift = fmaxf(drift, hypotf(b.plant.pn - n0, b.plant.pe - e0)); dz = fmaxf(dz, fabsf(b.plant.z - z0)); }
+        CHECK(r->tel().armed && drift < 4.0f && dz < 0.8f, "5 s later: within %.1f m of where it was and %.2f m of its height (Position + Altitude Hold, the sticks neutral)", drift, dz);
+        r->run(3.0); const bool landing = status_now(*r, st) && st.fs_action == FS_ACTION_LAND;
+        for (int i = 0; i < 600 && r->tel().armed; i++) r->run(0.1);
+        CHECK(landing && !r->tel().armed && b.plant.z < 0.1f && hypotf(b.plant.pn - n0, b.plant.pe - e0) < 6.0f, "after fs_hold_s (8 s) it lands there and disarms (%.1f m from the hold point)", hypotf(b.plant.pn - n0, b.plant.pe - e0)); }
+    {   // flown WITHOUT Altitude Hold when the link goes: the hold switches Altitude Hold on by itself
+        auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.nav.fs_procedure = FS_PROCEDURE_HOLD; s.nav.fs_hold_s = 8; }, false);
+        VirtualBoard& b = r->board; r->run(6.0); fly_out(*r, 2.0);
+        b.rc[6] = 1000; r->run(0.1); const float z0 = b.plant.z;           // Altitude Hold off: the throttle stick (at its middle) flies
+        b.tx_on = false; float dz = 0; for (int i = 0; i < 40; i++) { r->run(0.1); dz = fmaxf(dz, fabsf(b.plant.z - z0)); }
+        CHECK(r->tel().armed && r->tel().ah_state == AH_STATE_FLYING && dz < 1.5f, "the link goes in manual throttle: HOLD flies Altitude Hold (state FLYING), the height within %.2f m", dz); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { rescue_setup(s, b); s.nav.fs_procedure = FS_PROCEDURE_LAND; s.nav.batt_low_action = FS_BATT_LOW_RTL; }, false);
+        VirtualBoard& b = r->board; T_nav n{}; T_status st{}; r->run(6.0);
+        CHECK(r->app().core.cfg.rescue_configured, "a battery action RTL counts as 'a rescue is set up' (a fix is needed to arm)");
+        fly_out(*r); const float d0 = hypotf(b.plant.pn, b.plant.pe);
+        b.batt_v = 14.3; r->run(8.0);                           // resting 3.575 V per cell: the warning level under load
+        CHECK(status_now(*r, st) && st.fs_action == FS_ACTION_RTL && (st.fs_cause & FS_CAUSE_BATTERY_LOW) && nav_now(*r, n) && (n.flags & NAV_FLAGS_RESCUE), "the pack at its warning level, batt_low_action RTL: the rescue flies home (link fine)");
+        for (int i = 0; i < 400 && r->tel().rescue_phase != RESCUE_PHASE_FLY_HOME; i++) r->run(0.05);
+        r->run(2.0); const float d1 = hypotf(b.plant.pn, b.plant.pe);
+        b.rc[0] = 1800; r->run(0.5); b.rc[0] = 1500; r->run(2.0);
+        CHECK(d1 < d0 && r->tel().failsafe == FAILSAFE_NONE && status_now(*r, st) && st.fs_action == FS_ACTION_WARN && nav_now(*r, n) && !(n.flags & NAV_FLAGS_RESCUE) && r->tel().armed,
+              "on the way home (%.0f -> %.0f m) the pilot moves a stick: he has it back, the battery stays a warning", d0, d1);
+        r->run(5.0); CHECK(r->tel().failsafe == FAILSAFE_NONE && nav_now(*r, n) && !(n.flags & NAV_FLAGS_RESCUE), "and the rescue is not started again while the pack is only low"); }
+}
+
+// ---- 0.33: the MSP port - GPS, compass, barometer and receiver from MSP devices on one UART (hal/msp_sensors.h)
+template <class V> static void put_le(std::vector<uint8_t>& p, V v) { uint8_t b[sizeof(V)]; memcpy(b, &v, sizeof(V)); p.insert(p.end(), b, b + sizeof(V)); }
+static void msp_gps_frame(VirtualBoard& b, uint8_t fix, uint8_t sats, int32_t lat, int32_t lon) {     // INAV mspSensorGpsDataMessage_t
+    std::vector<uint8_t> p; put_le<uint8_t>(p, 0); put_le<uint16_t>(p, 2300); put_le<uint32_t>(p, 1000u); put_le<uint8_t>(p, fix); put_le<uint8_t>(p, sats);
+    put_le<uint16_t>(p, 120); put_le<uint16_t>(p, 200); put_le<uint16_t>(p, 30); put_le<uint16_t>(p, 90);
+    put_le<int32_t>(p, lon); put_le<int32_t>(p, lat); put_le<int32_t>(p, 5000); put_le<int32_t>(p, 0); put_le<int32_t>(p, 0); put_le<int32_t>(p, 0);
+    put_le<uint16_t>(p, 0); put_le<uint16_t>(p, 65535); put_le<uint16_t>(p, 2026); put_le<uint8_t>(p, 10); put_le<uint8_t>(p, 23); put_le<uint8_t>(p, 12); put_le<uint8_t>(p, 0); put_le<uint8_t>(p, 0);
+    b.mtf.frame(0x1F03, p.data(), (uint16_t)p.size());
+}
+static void msp_rc_frame(VirtualBoard& b, const uint16_t ch[8]) { std::vector<uint8_t> p; for (int i = 0; i < 8; i++) put_le<uint16_t>(p, ch[i]); b.mtf.frame(200, p.data(), (uint16_t)p.size()); }
+static void t_msp_port() {
+    printf("[msp port] GPS, compass, barometer and receiver from MSP devices on one UART\n");
+    auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) {
+        gps_compass(s, b); s.pins.flow_rx = VirtualBoard::kFlowRx; s.gps.provider = GPS_PROVIDER_MSP; s.sensors.mag_model = MAG_MODEL_MSP;
+        s.sensors.baro_model = BARO_MODEL_MSP; s.receiver.protocol = RX_PROTOCOL_MSP; b.wire_flow_uart(1); });
+    VirtualBoard& b = r->board; b.mtf.present = false; b.mtf.host_baud = b.mtf.sensor_baud;
+    CHECK(has_line(*r, "msp: MSP port on UART1") && has_line(*r, "GPS compass barometer receiver") && has_line(*r, "gps: MSP") && has_line(*r, "rx: MSP"),
+          "boot report: the MSP port on UART1 (a GPS on MSP needs no UART of its own), for the GPS, the compass, the barometer and the receiver");
+    CHECK(Serial1.rx_pin == VirtualBoard::kFlowRx && Serial1.baud == 115200, "UART1 opened on pin flow_rx at flow.baud");
+    uint16_t ch[8] = {1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000};
+    auto feed = [&](double seconds, bool rc) {
+        for (int i = 0; i < (int)(seconds / 0.02 + 0.5); i++) {
+            if (rc) msp_rc_frame(b, ch);
+            std::vector<uint8_t> m; put_le<uint8_t>(m, 0); put_le<uint32_t>(m, 0); put_le<int16_t>(m, 220); put_le<int16_t>(m, 0); put_le<int16_t>(m, 400); b.mtf.frame(0x1F04, m.data(), (uint16_t)m.size());
+            std::vector<uint8_t> p; put_le<uint8_t>(p, 0); put_le<uint32_t>(p, 0); put_le<float>(p, 101325.0f - b.plant.z * 12.0f); put_le<int16_t>(p, 2000); b.mtf.frame(0x1F05, p.data(), (uint16_t)p.size());
+            if (i % 5 == 0) msp_gps_frame(b, 3, 15, 107000000 + (int32_t)(b.plant.pn * 90.0f), 1066000000 + (int32_t)(b.plant.pe * 90.0f));
+            r->run(0.02);
+        }
+    };
+    feed(3.0, true);
+    CHECK((r->tel().health & HEALTH_RX) && r->tel().rc_link && r->tel().rc[0] == 1500, "the receiver: MSP_SET_RAW_RC frames, link up");
+    CHECK((r->tel().health & HEALTH_GPS) && r->tel().gps_fix && r->tel().gps_sats == 15 && r->tel().lat == 107000000, "the GPS: a 3D fix with 15 satellites");
+    CHECK((r->tel().health & HEALTH_BARO) && r->app().baro.healthy(), "the barometer: healthy on MSP frames");
+    CHECK(r->app().mag.healthy() && r->app().mag.externalSamples() > 100, "the compass: %lu samples", (unsigned long)r->app().mag.externalSamples());
+    ch[5] = 2000; feed(0.3, true); ch[4] = 2000; feed(0.5, true);
+    CHECK(r->tel().armed, "armed by the MSP receiver's switch (blockers 0x%x)", (unsigned)r->tel().blockers);
+    ch[2] = 1700; feed(1.5, true); const float z = b.plant.z; ch[2] = 1500; feed(1.0, true);
+    CHECK(z > 0.3f, "its throttle lifts the craft (%.2f m), Altitude Hold on the MSP barometer", z);
+    feed(1.0, false);
+    CHECK(!r->tel().rc_link && r->tel().failsafe != FAILSAFE_NONE, "the MSP receiver stops sending: link lost after 300 ms, failsafe");
+    { auto q = nav_rig([](wbp::Settings& s, VirtualBoard& b) { s.receiver.protocol = RX_PROTOCOL_MSP; s.pins.flow_rx = 255; });
+      CHECK(has_line(*q, "msp: FAILED - MSP port: pin flow_rx") && has_line(*q, "rx: FAILED - MSP port: pin flow_rx") && !q->app().status.rx, "no MSP RX pin: the port and the receiver say why"); }
+    { auto q = nav_rig([](wbp::Settings& s, VirtualBoard& b) { msp_flow(s, b); s.gps.provider = GPS_PROVIDER_MSP; b.wire_flow_uart(1); }); q->run(2.0);
+      VirtualBoard& qb = q->board;
+      for (int i = 0; i < 50; i++) { msp_gps_frame(qb, 3, 12, 1, 2); q->run(0.02); }
+      CHECK(has_line(*q, "flow: MSP flow on UART1") && (q->tel().health & HEALTH_FLOW) && (q->tel().health & HEALTH_GPS) && q->tel().gps_sats == 12,
+            "a flow sensor and a GPS on the same MSP port: both work"); }
+    { auto q = nav_rig([](wbp::Settings& s, VirtualBoard& b) { dronecan_setup(s, b); msp_flow(s, b); b.wire_flow_uart(1); });
+      CHECK(has_line(*q, "gps: DroneCAN") && has_line(*q, "flow: MSP flow on UART1"), "a DroneCAN GPS needs no UART: the MSP port takes UART1"); }
+}
+
+// ---- 0.33: a configurator (Betaflight Configurator, the SpeedyBee app) on the app link: reads, writes, save, reboot (app/msp_config.h)
+static void t_msp_configurator() {
+    printf("[msp configurator] Betaflight Configurator's requests on the app link\n");
+    auto ask = [](app::MspLink& ml, MemTransport& mt, uint8_t cmd, std::vector<uint8_t> p = {}) {
+        std::vector<uint8_t> f = {'$', 'M', '<', (uint8_t)p.size(), cmd}; uint8_t x = (uint8_t)(p.size() ^ cmd);
+        for (uint8_t b : p) { f.push_back(b); x ^= b; }
+        f.push_back(x); mt.out.clear(); for (uint8_t c : f) ml.on_byte(c);
+        return mt.out.size() >= 6 && mt.out[2] == '>';
+    };
+    auto r = nav_rig([](wbp::Settings&, VirtualBoard&) {}); r->run(3.0);
+    MemTransport mt; app::MspLink ml(r->fw->host, mt, &r->fw->settings);
+    CHECK(ask(ml, mt, msp::FC_VARIANT) && memcmp(mt.out.data() + 5, "BTFL", 4) == 0, "the configurator is told BTFL (msp.identity default)");
+    r->board.plant.set_tilt(10, 0, 0); r->run(1.0);
+    CHECK(ask(ml, mt, msp::ATTITUDE) && mt.out.size() == 12 && abs((int16_t)(mt.out[5] | mt.out[6] << 8) - 100) <= 10, "MSP_ATTITUDE from the firmware's own estimate: roll %d decidegrees (10 deg)", (int16_t)(mt.out[5] | mt.out[6] << 8));
+    r->board.plant.set_tilt(0, 0, 0);
+    CHECK(ask(ml, mt, msp::PID) && mt.out[5] == r->fw->settings.pid.p[0], "MSP_PID: the settings' gains");
+    std::vector<uint8_t> pid = {58, 90, 40, 60, 92, 42, 50, 85, 0, 55, 0, 0, 0, 0, 0};
+    CHECK(ask(ml, mt, msp::SET_PID, pid) && r->fw->settings.pid.p[0] == 58 && r->fw->settings.pid.slider_mode == SLIDER_MODE_OFF && (r->fw->server.flags() & SF_DIRTY),
+          "SET_PID: the server's settings changed (sliders off), marked unsaved like an edit in the app");
+    CHECK(r->app().core.cfg.pid.p[0] == 58, "and applied to the flight core at once (roll P %.0f)", (double)r->app().core.cfg.pid.p[0]);
+    CHECK(ask(ml, mt, msp::EEPROM_WRITE) && !(r->fw->server.flags() & SF_DIRTY), "EEPROM_WRITE: saved");
+    { wbp::Settings s; wbp::SettingsStore st(r->flash); st.load(s); CHECK(s.pid.p[0] == 58 && s.pid.angle_strength == 55, "the flash holds the new gains"); }
+    const int boots = r->boots;
+    CHECK(ask(ml, mt, msp::REBOOT), "MSP_REBOOT: answered first");
+    r->run(0.5);
+    CHECK(r->boots == boots + 1, "then the firmware restarts (%d -> %d)", boots, r->boots);
+    { auto q = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.msp.writes = 0; s.msp.identity = MSP_IDENTITY_WINDBURST; }); q->run(3.0);
+      MemTransport mt2; app::MspLink ml2(q->fw->host, mt2, &q->fw->settings);
+      CHECK(ask(ml2, mt2, msp::FC_VARIANT) && memcmp(mt2.out.data() + 5, "WBRX", 4) == 0, "msp.identity WINDBURST: WBRX");
+      const uint8_t p0 = q->fw->settings.pid.p[0];
+      CHECK(!ask(ml2, mt2, msp::SET_PID, pid) && q->fw->settings.pid.p[0] == p0, "msp.writes off: SET_PID refused"); }
+}
+
 int main() {
     if (const char* only = getenv("WB_ONLY")) {            // one group alone (while working on it): WB_ONLY=nav ./build/test_fw
         if (!strcmp(only, "nav")) { t_nav_flow(); t_nav_mounting(); t_nav_uarts(); }
@@ -2635,6 +2821,10 @@ int main() {
         if (!strcmp(only, "osd")) t_osd();
         if (!strcmp(only, "switch")) t_switch_modes();
         if (!strcmp(only, "stickarm")) t_stick_arm();
+        if (!strcmp(only, "sensors")) t_sensors_bus();
+        if (!strcmp(only, "bbuart")) t_bb_uart_stream();
+        if (!strcmp(only, "fsact")) t_failsafe_actions_fw();
+        if (!strcmp(only, "msp")) { t_msp_port(); t_msp_configurator(); }
         printf("%d checks, %d failed (only '%s')\n", g_pass + g_fail, g_fail, only); return 1;
     }
     t_boot();
@@ -2678,6 +2868,11 @@ int main() {
     t_osd();
     t_switch_modes();
     t_stick_arm();
+    t_sensors_bus();
+    t_bb_uart_stream();
+    t_failsafe_actions_fw();
+    t_msp_port();
+    t_msp_configurator();
     t_mavlink();
     t_esc_passthrough();
     t_ekf();

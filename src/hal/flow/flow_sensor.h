@@ -91,6 +91,10 @@ public:
     // uart: nullptr = none could be given to this sensor (uart_name says why in failReason)
     void setUart(port::SerialPort* uart, const char* uart_name, uint8_t rx, uint8_t tx, uint32_t baud) { uart_ = uart; uart_name_ = uart_name; rx_ = rx; tx_ = tx; baud_ = baud; }
     void setSpiBusTaken(bool taken) { spi_taken_ = taken; }    // the second SPI bus already belongs to the SD card
+    // MSP sensor on the shared MSP port (hal/msp_sensors.h): that port's reader hands the frames in through mspFrame(); this
+    // sensor opens no UART of its own
+    void setMspShared(bool on) { shared_ = on; }
+    bool mspFrame(uint16_t cmd, const uint8_t* p, uint16_t n, uint32_t now_us) { return msp_active_ && shared_ && msp_.frame(cmd, p, n, now_us); }
     // Test hook / other sensor types: any driver (init() is called here).
     bool useDriver(flow::Driver* d) { drv_ = d && d->init() ? d : nullptr; fail_ = drv_ ? "" : "the flow driver did not start"; return drv_ != nullptr; }
 
@@ -105,11 +109,12 @@ public:
             drv_ = &pmw_;
             return true;
         }
+        if (shared_) { msp_.setPort(nullptr); msp_.init(); drv_ = &msp_; msp_active_ = true; return true; }
         if (rx_ == 255) { fail_ = "flow sensor on a UART: pin flow_rx not set"; return false; }
         if (!uart_) { fail_ = "no UART left for the flow sensor: the GPS, the receiver and the app's link use all of them"; return false; }
         if (!port::uart_begin(*uart_, baud_, SERIAL_8N1, rx_, tx_, false, 512)) { fail_ = "flow sensor: the UART did not start on these pins"; return false; }
         byte_port_.attach(*uart_);
-        msp_.init(); drv_ = &msp_; msp_active_ = true;
+        msp_.setPort(&byte_port_); msp_.init(); drv_ = &msp_; msp_active_ = true;
         return true;
     }
 
@@ -139,10 +144,10 @@ public:
 
 private:
     ArduinoPixartPort pix_port_; flow::Pmw3901 pmw_{pix_port_};
-    ArduinoBytePort byte_port_; flow::MspFlow msp_{byte_port_};
+    ArduinoBytePort byte_port_; flow::MspFlow msp_{&byte_port_};
     FlowRangeDriver range_;
     flow::Driver* drv_ = nullptr; flow::Reading reading_;
     port::SerialPort* uart_ = nullptr; const char* uart_name_ = ""; const char* fail_ = "";
     Type type_ = NONE; uint8_t spi_pins_[4] = {255, 255, 255, 255}, rx_ = 255, tx_ = 255, rate_ = 0; uint32_t baud_ = 115200;
-    bool spi_taken_ = false, msp_active_ = false, seen_ = false; uint32_t last_ms_ = 0, rate_ms_ = 0, samples_ = 0;
+    bool spi_taken_ = false, shared_ = false, msp_active_ = false, seen_ = false; uint32_t last_ms_ = 0, rate_ms_ = 0, samples_ = 0;
 };

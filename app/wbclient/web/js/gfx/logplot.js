@@ -4,9 +4,14 @@
 //
 //   drag            zoom into the dragged span          double-click    the whole log
 //   Ctrl + wheel    zoom around the pointer             Shift + drag    move along the time axis
+//   click           put the playhead there              Space           play / pause (0.31, like Betaflight's Blackbox Explorer)
+//   <- / ->         one record back / on (Shift: ten)   + / -           faster / slower       Home / End   start / end of the log
+// The overview bar under the tools shows the whole flight: click or drag on it to jump there (gfx/playback.js).
 import { h, track, token } from '../ui.js';
 import { tr } from '../i18n.js';
 import { niceStep } from './scope.js';
+import { followStep, nextLag, LAG_MAX } from './follow.js';
+import { SPEEDS, advance, windowAround, seekX, stepT, nextSpeed, covered, prefetch } from './playback.js';
 
 export const SERIES_COLORS = ['--series-1', '--series-2', '--series-3', '--series-4', '--series-5', '--series-6', '--series-7', '--series-8'];
 const PAD_L = 58, PAD_R = 10, PAD_T = 6, AXIS_H = 20, PANEL_H = 150;
@@ -50,6 +55,11 @@ export function logPlot({ source }) {
   let brush = null;            // { x0, x1, pan } while dragging
   let followSec = 0;           // > 0: keep showing the newest `followSec` seconds (live recording)
   let ticket = 0, timer = 0, alive = true, loading = false, again = false;
+  // following a live recording: the window's end moves with the clock (follow.js); disp = where it ends, lag = how far behind
+  // the newest record, newestSeen / newestWall = the newest record so far and when it arrived (performance.now, s)
+  let disp = null, lag = 0.3, newestSeen = -1, newestWall = 0, raf = 0, lastFrame = 0, lastPaint = 0;
+  // playback: playT = the playhead (s, null = none), speed (x real time), the overview of the whole log (ovField: its series)
+  let playT = null, playing = false, speed = 1, playRaf = 0, playLast = 0, onPlay = null, ovField = null, overview = null, ovTicket = 0;
 
   const rangeText = h('span', { class: 'num plot-range', id: 'plot-range' });
   const btn = (id, label, title, fn) => { const b = h('button', { type: 'button', class: 'btn quiet', id, title }, label); b.addEventListener('click', fn); return b; };
@@ -60,10 +70,22 @@ export function logPlot({ source }) {
     btn('plot-left', '◀', tr('Lùi về trước'), () => pan(-0.5)),
     btn('plot-right', '▶', tr('Tới về sau'), () => pan(0.5)),
     rangeText);
+  const playBtn = btn('plot-play', '▶', tr('Phát / dừng (phím cách)'), () => setPlaying(!playing));
+  const speedSel = h('select', { id: 'plot-speed', 'aria-label': tr('Tốc độ phát') }, SPEEDS.map((s) => h('option', { value: String(s) }, `${Math.round(s * 100)} %`)));
+  speedSel.value = '1';
+  speedSel.addEventListener('change', () => { speed = Number(speedSel.value) || 1; });
+  const ovCv = h('canvas', { class: 'plot-overview', id: 'plot-overview', 'aria-label': tr('Toàn bộ chuyến bay: bấm hoặc kéo để nhảy tới') });
+  const transport = h('div', { class: 'plot-transport', id: 'plot-transport' },
+    btn('plot-start', '⏮', tr('Về đầu log (Home)'), () => seek(span[0])),
+    btn('plot-back', '◀|', tr('Lùi một bản ghi (←, Shift: mười)'), () => step(-1, 1)),
+    playBtn,
+    btn('plot-fwd', '|▶', tr('Tới một bản ghi (→, Shift: mười)'), () => step(1, 1)),
+    speedSel, ovCv);
   const stack = h('div', { class: 'plot-stack' });
   const empty = h('p', { class: 'note', hidden: true }, tr('Chọn ít nhất một nhóm đồ thị ở trên.'));
-  const el = h('div', { class: 'logplot', id: 'logplot' }, tools, empty, stack,
-    h('p', { class: 'help' }, tr('Kéo chuột để phóng to một đoạn, bấm đúp để xem cả log. Ctrl + lăn chuột: phóng to quanh con trỏ. Shift + kéo: dịch theo thời gian.')));
+  const el = h('div', { class: 'logplot', id: 'logplot', tabindex: '0' }, tools, transport, empty, stack,
+    h('p', { class: 'help' }, tr('Kéo chuột để phóng to một đoạn, bấm đúp để xem cả log. Ctrl + lăn chuột: phóng to quanh con trỏ. Shift + kéo: dịch theo thời gian.')),
+    h('p', { class: 'help' }, tr('Phát lại như Blackbox Explorer: bấm vào đồ thị để đặt vạch phát, phím cách để phát / dừng, ← → từng bản ghi, + − đổi tốc độ. Thanh trên cùng là cả chuyến bay: bấm hoặc kéo để nhảy tới.')));
 
   const cur = () => view || span;
   const plotW = () => Math.max(50, (stack.clientWidth || 800) - PAD_L - PAD_R);
@@ -97,11 +119,15 @@ export function logPlot({ source }) {
     const mine = ++ticket;
     try {
       // in follow mode the server is asked for "the last N seconds": only it knows where the recording ends right now
-      const want = followSec ? [null, null] : (view || [null, null]);
-      const res = await source(names, want[0], want[1], Math.round(plotW()), followSec);
+      const want = followSec ? [null, null] : (playing && view) ? prefetch(view[0], view[1], span) : (view || [null, null]);
+      const res = await source(names, want[0], want[1], Math.round(plotW()), followSec ? followSec + LAG_MAX : 0);
       if (!alive || mine !== ticket) return;
       span = res.span;
-      if (followSec) view = clampView(Math.max(span[0], span[1] - followSec), span[1]);
+      if (followSec) {
+        const wall = performance.now() / 1000;
+        if (span[1] > newestSeen) { if (newestWall) lag = nextLag(lag, wall - newestWall); newestSeen = span[1]; newestWall = wall; }
+        followView(); startFollow();
+      }
       data = res.series; dataRange = [res.t0, res.t1];
       el.dataset.loaded = String(mine);
       paint();
@@ -112,6 +138,108 @@ export function logPlot({ source }) {
       if (again) { again = false; request(0); }
     }
   }
+
+  // ---- playback (Blackbox Explorer)
+  function defaultWidth() { return Math.min((span[1] - span[0]) / 3, 4); }
+  function centerOnPlay() { const w = view ? view[1] - view[0] : defaultWidth(); view = windowAround(playT, w, span); }
+  function notifyPlay() { if (onPlay && playT !== null) onPlay(playT, playing); el.dataset.playhead = playT === null ? '' : playT.toFixed(4); }
+  function syncButtons() { playBtn.textContent = playing ? '⏸' : '▶'; playBtn.setAttribute('aria-pressed', playing ? 'true' : 'false'); el.dataset.playing = playing ? '1' : '0'; }
+  function playTick(ts) {
+    playRaf = 0;
+    if (!alive || !playing) return;
+    const now = ts / 1000, dt = playLast ? Math.min(now - playLast, 0.1) : 0; playLast = now;
+    const r = advance(playT, speed, dt, span); playT = r.t;
+    centerOnPlay();
+    if (r.ended) { playing = false; syncButtons(); }
+    if (view && !loading && !covered(view[0], view[1], dataRange[0], dataRange[1], span)) request(0);
+    paint(); notifyPlay();
+    if (playing) playRaf = requestAnimationFrame(playTick);
+  }
+  function setPlaying(on) {
+    if (followSec > 0 || !(span[1] > span[0])) on = false;
+    if (on && !playing) {
+      if (playT === null || playT >= span[1]) playT = view ? (view[0] + view[1]) / 2 : span[0];
+      if (!view) view = windowAround(playT, defaultWidth(), span);
+      playLast = 0; playing = true; request(0);
+      if (!playRaf) playRaf = requestAnimationFrame(playTick);
+    } else if (!on && playing) { playing = false; if (playRaf) cancelAnimationFrame(playRaf); playRaf = 0; }
+    syncButtons(); paint(); notifyPlay();
+  }
+  function seek(t) {
+    if (followSec > 0) { followSec = 0; stopFollow(); }
+    playT = Math.min(span[1], Math.max(span[0], t));
+    if (view || playing) centerOnPlay();
+    paint(); request(60); notifyPlay();
+  }
+  function recordDt() { for (const k of Object.keys(data)) if (data[k] && data[k].dt > 0) return data[k].dt; return 0.004; }
+  function step(dir, n) { if (playing) setPlaying(false); seek(stepT(playT === null ? (cursor !== null ? cursor : cur()[0]) : playT, dir, recordDt(), span, n)); }
+  async function loadOverview() {
+    if (!ovField || !alive) { overview = null; paintOverview(); return; }
+    const mine = ++ovTicket;
+    try {
+      const res = await source([ovField], null, null, Math.max(100, Math.round(ovCv.clientWidth || 600)), 0);
+      if (mine !== ovTicket || !alive) return;
+      overview = res.series[ovField] || null; span = res.span;
+    } catch (e) { overview = null; }
+    paintOverview();
+  }
+  function paintOverview() {
+    const w = ovCv.clientWidth, hh = ovCv.clientHeight;
+    if (!w || !hh) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (ovCv.width !== Math.round(w * dpr) || ovCv.height !== Math.round(hh * dpr)) { ovCv.width = Math.round(w * dpr); ovCv.height = Math.round(hh * dpr); }
+    const ctx = ovCv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, hh);
+    const whole = Math.max(span[1] - span[0], 1e-6), XO = (t) => ((t - span[0]) / whole) * w;
+    ctx.fillStyle = token('--line'); ctx.globalAlpha = 0.35; ctx.fillRect(0, 0, w, hh); ctx.globalAlpha = 1;
+    const d = overview;
+    if (d && d.t.length) {
+      const los = d.v || d.lo, his = d.v || d.hi; let lo = Infinity, hi = -Infinity;
+      for (let i = 0; i < d.t.length; i++) { lo = Math.min(lo, los[i]); hi = Math.max(hi, his[i]); }
+      if (!(hi > lo)) { hi = lo + 1; }
+      const YO = (v) => hh - 3 - ((v - lo) / (hi - lo)) * (hh - 6);
+      ctx.strokeStyle = token('--muted'); ctx.lineWidth = 1; ctx.beginPath();
+      for (let i = 0; i < d.t.length; i++) { const x = XO(d.t[i]); ctx.moveTo(x, YO(los[i])); ctx.lineTo(x, YO(his[i]) - 0.5); }
+      ctx.stroke();
+    }
+    for (const ev of events) { const x = Math.round(XO(ev.t)) + 0.5; ctx.strokeStyle = token('--muted'); ctx.setLineDash([2, 2]); ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, hh); ctx.stroke(); ctx.setLineDash([]); }
+    const [a, b] = cur();
+    ctx.fillStyle = token('--blue'); ctx.globalAlpha = 0.18; ctx.fillRect(XO(a), 0, Math.max(2, XO(b) - XO(a)), hh); ctx.globalAlpha = 1;
+    if (playT !== null) { const x = Math.round(XO(playT)) + 0.5; ctx.strokeStyle = token('--bad'); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, hh); ctx.stroke(); }
+    ovCv.dataset.t0 = a.toFixed(3); ovCv.dataset.t1 = b.toFixed(3);
+  }
+  {
+    let dragging = false;
+    const at = (e) => seekX(e.clientX - ovCv.getBoundingClientRect().left, ovCv.clientWidth, span);
+    ovCv.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; dragging = true; ovCv.setPointerCapture(e.pointerId); const t = at(e); seek(t); if (!view) { view = windowAround(t, defaultWidth(), span); request(0); } });
+    ovCv.addEventListener('pointermove', (e) => { if (dragging) seek(at(e)); });
+    const done = () => { dragging = false; };
+    ovCv.addEventListener('pointerup', done); ovCv.addEventListener('pointercancel', done);
+  }
+  el.addEventListener('keydown', (e) => {
+    if (e.target !== el && e.target.tagName !== 'CANVAS') return;          // (the speed list keeps its own keys)
+    if (e.key === ' ') { e.preventDefault(); setPlaying(!playing); }
+    else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); step(e.key === 'ArrowRight' ? 1 : -1, e.shiftKey ? 10 : 1); }
+    else if (e.key === '+' || e.key === '=' || e.key === '-') { speed = nextSpeed(speed, e.key === '-' ? -1 : 1); speedSel.value = String(speed); }
+    else if (e.key === 'Home') { e.preventDefault(); seek(span[0]); }
+    else if (e.key === 'End') { e.preventDefault(); seek(span[1]); }
+  });
+
+  // ---- following a live recording
+  function followView() {
+    const end = disp === null ? span[1] : disp;
+    view = end - followSec <= span[0] ? (span[1] - span[0] <= followSec ? null : [span[0], span[0] + followSec]) : [end - followSec, end];
+  }
+  function followTick(ts) {
+    raf = 0;
+    if (!alive || followSec <= 0) return;
+    const now = ts / 1000, dt = lastFrame ? now - lastFrame : 0; lastFrame = now;
+    disp = followStep(disp, span[1], lag, dt);
+    followView();
+    if (now - lastPaint >= 0.03) { lastPaint = now; paint(); }               // about 30 pictures a second
+    raf = requestAnimationFrame(followTick);
+  }
+  function startFollow() { if (!raf && followSec > 0 && alive) { lastFrame = 0; raf = requestAnimationFrame(followTick); } }
+  function stopFollow() { if (raf) cancelAnimationFrame(raf); raf = 0; disp = null; newestSeen = -1; newestWall = 0; lag = 0.3; }
 
   // ---- drawing
   function yRange(p) {
@@ -211,6 +339,11 @@ export function logPlot({ source }) {
     }
     ctx.setLineDash([]);
     p.series.forEach((s, i) => { const d = data[s.field]; if (d && d.t.length) drawSeries(ctx, d, Y, token(SERIES_COLORS[i % SERIES_COLORS.length])); });
+    // the playhead: a solid line through every panel
+    if (playT !== null && playT >= a && playT <= b) {
+      const x = Math.round(X(playT)) + 0.5;
+      ctx.strokeStyle = token('--bad'); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, PAD_T + ph); ctx.stroke();
+    }
     // crosshair with a ringed dot on every series
     if (cursor !== null && cursor >= a && cursor <= b) {
       const x = Math.round(X(cursor)) + 0.5;
@@ -229,12 +362,13 @@ export function logPlot({ source }) {
     ctx.restore();
   }
   function paintLegend(p) {
+    const lt = (playing || cursor === null) && playT !== null ? playT : cursor;       // playing: the values under the playhead
     p.series.forEach((s, i) => {
-      const at = cursor === null ? null : sampleAt(data[s.field], cursor);
+      const at = lt === null ? null : sampleAt(data[s.field], lt);
       const cell = p.parts.values[i];
       // several samples share this pixel column when zoomed out: the legend then says from where to where they go
       const one = at && valueText(at.lo, '') === valueText(at.hi, '');
-      const text = !data[s.field] ? '' : at === null ? (cursor === null ? '' : '–')
+      const text = !data[s.field] ? '' : at === null ? (lt === null ? '' : '–')
         : (one ? valueText(at.lo, p.unit) : `${valueText(at.lo, '')} … ${valueText(at.hi, p.unit)}`);
       if (cell.textContent !== text) cell.textContent = text;
     });
@@ -246,6 +380,8 @@ export function logPlot({ source }) {
     el.dataset.t0 = a.toFixed(4); el.dataset.t1 = b.toFixed(4); el.dataset.cursor = cursor === null ? '' : cursor.toFixed(4);
     el.dataset.whole = view ? '0' : '1';
     panels.forEach((p, i) => { paintPanel(p, i === panels.length - 1); paintLegend(p); });
+    paintOverview();
+    transport.hidden = followSec > 0 || panels.length === 0;
   }
 
   // ---- pointer
@@ -266,14 +402,17 @@ export function logPlot({ source }) {
     cv.addEventListener('pointerleave', () => { if (!brush) { cursor = null; paint(); } });
     cv.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
+      el.focus({ preventScroll: true });
       const x = Math.min(Math.max(xOf(e), PAD_L), PAD_L + plotW());
-      brush = { x0: x, x1: x, pan: e.shiftKey, view: [...cur()] };
+      brush = { x0: x, x1: x, pan: e.shiftKey, view: [...cur()], playing };
+      if (playing) setPlaying(false);
       cv.setPointerCapture(e.pointerId);
     });
     const up = () => {
       if (!brush) return;
       const b = brush; brush = null;
       if (b.pan) { followSec = 0; request(0); } else if (Math.abs(b.x1 - b.x0) > 6) api.setRange(clampView(T(Math.min(b.x0, b.x1)), T(Math.max(b.x0, b.x1))), true);
+      else if (followSec <= 0) { playT = T(b.x0); notifyPlay(); if (b.playing) setPlaying(true); }        // a click: the playhead goes there
       paint();
     };
     cv.addEventListener('pointerup', up);
@@ -286,9 +425,9 @@ export function logPlot({ source }) {
     }, { passive: false });
   }
 
-  const ro = new ResizeObserver(() => { paint(); request(150); });
+  const ro = new ResizeObserver(() => { paint(); request(150); if (ovField) loadOverview(); });
   ro.observe(stack);
-  track(() => { alive = false; clearTimeout(timer); ro.disconnect(); });
+  track(() => { alive = false; clearTimeout(timer); stopFollow(); if (playRaf) cancelAnimationFrame(playRaf); ro.disconnect(); });
 
   const api = {
     el,
@@ -312,16 +451,25 @@ export function logPlot({ source }) {
     setSpan(next) { span = next; },
     // range [t0, t1] or null for the whole log; byUser = the pilot moved the chart, so it stops following a live recording
     setRange(range, byUser) {
-      if (byUser) followSec = 0;
+      if (byUser) { followSec = 0; stopFollow(); }
       view = range ? clampView(range[0], range[1]) : null;
       paint(); request();
     },
     // show the surroundings of a moment: the zoom the pilot already chose, or a third of the log (at most 4 s) when all of it is on screen
     centerOn(t) { const w = view ? view[1] - view[0] : Math.min((span[1] - span[0]) / 3, 4); api.setRange([t - w / 2, t + w / 2], true); },
-    follow(seconds) { followSec = seconds; request(0); },
+    follow(seconds) { stopFollow(); if (playing) setPlaying(false); followSec = seconds; request(0); },
+    // playback
+    play(on) { setPlaying(on === undefined ? !playing : !!on); },
+    seek,
+    playhead: () => playT,
+    isPlaying: () => playing,
+    setSpeed(s) { speed = s; speedSel.value = String(s); },
+    onPlayhead(fn) { onPlay = fn; },
+    // the field drawn on the overview bar (the whole flight); null: none
+    setOverview(field) { ovField = field; overview = null; loadOverview(); },
     following: () => followSec > 0,
     refresh() { request(0); },
-    clear() { data = {}; view = null; cursor = null; span = [0, 1]; followSec = 0; ticket++; paint(); },
+    clear() { stopFollow(); if (playing) setPlaying(false); playT = null; overview = null; ovTicket++; data = {}; view = null; cursor = null; span = [0, 1]; followSec = 0; ticket++; paint(); },
     paint,
   };
   return api;

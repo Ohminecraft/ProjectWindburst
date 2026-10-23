@@ -52,6 +52,10 @@ export const EN = {
     "Settings reloaded from flash.",
   "Mất kết nối với cổng {port} (rút cáp?)":
     "Lost the port {port} (cable unplugged?)",
+  "Mất kết nối với cổng {port}, đang chờ cổng quay lại (mạch đang khởi động lại?)":
+    "Lost the port {port}, waiting for it to come back (is the board restarting?)",
+  "Cổng {port} đã quay lại: đã kết nối lại":
+    "The port {port} is back: connected again",
   "Firmware không trả lời (đang khởi động lại, treo, hoặc mất nguồn?)":
     "The firmware does not answer (restarting, hung, or without power?)",
   "Flight controller vừa khởi động lại":
@@ -112,8 +116,8 @@ export const EN = {
     "The port sent no bytes at all.",
   "Nối flight controller để bắt đầu":
     "Connect the flight controller to begin",
-  "Cắm cáp USB vào mạch ESP32-S3 đã nạp firmware Windburst.":
-    "Plug the USB cable into the ESP32-S3 board that runs the Windburst firmware.",
+  "Cắm cáp USB vào MCU đã nạp firmware Windburst.":
+    "Plug the USB cable into the MCU that runs the Windburst firmware.",
   "Bấm \"Tìm cổng\", chọn cổng COM của mạch ở thanh trên cùng, rồi bấm \"Kết nối\".":
     "Press \"Find ports\", choose the COM port of the board in the top bar, then press \"Connect\".",
   "Tab Tổng quan cho biết firmware tìm thấy cảm biến nào và vì sao chưa arm được.":
@@ -1307,8 +1311,6 @@ export const EN = {
     "motors playing: ",
   "motor: {n} tiếng":
     "motors: {n} tones",
-  "{pct} % đang dùng, còn {free} kB":
-    "{pct} % in use, {free} kB free",
   "Âm của motor":
     "Motor tone",
   "Đang không ghi trên mạch: chọn \"Flash trên mạch\" hoặc \"Thẻ SD\" ở mục \"Ghi vào đâu\".":
@@ -1773,8 +1775,6 @@ export const EN = {
     "Tilt estimate",
   "Optical flow PMW3901: cần đủ bốn chân CS, SCK, MISO, MOSI.":
     "Optical flow PMW3901: all four pins CS, SCK, MISO, MOSI are needed.",
-  "Optical flow qua UART: chưa có chân RX.":
-    "Optical flow on a UART: the RX pin is not set.",
   "PMW3901 và thẻ SD kiểu SPI cần cùng một bus SPI: đổi thẻ sang SDMMC (tab Blackbox) hoặc dùng cảm biến optical flow qua UART.":
     "PMW3901 and an SD card in SPI mode need the same SPI bus: put the card on SDMMC (Blackbox tab) or use an optical flow sensor on a UART.",
   "cảm biến không gửi mẫu nào":
@@ -1827,8 +1827,6 @@ export const EN = {
     "Return height this time",
   "\"Sẵn sàng\" chỉ có khi máy đang bay với điểm home (GPS đã fix lúc arm), la bàn và ước lượng độ cao. Đã cài Rescue (công tắc hoặc failsafe) thì firmware không cho arm khi GPS chưa fix hoặc không có la bàn.":
     "\"Ready\" only shows while the craft is flying with a home point (GPS fix when it was armed), a compass and a height estimate. With Rescue set up (switch or failsafe) the firmware refuses to arm without a GPS fix or without a compass.",
-  "PMW3901: bốn chân SPI của riêng nó (không chung bus với IMU, và không dùng được cùng lúc với thẻ SD kiểu SPI). Cảm biến MSP qua UART: chỉ cần RX, nối với TX của cảm biến; firmware tự lấy cổng UART còn trống (UART1 nếu không có GPS, UART2 nếu không có receiver nối tiếp, UART0 khi app nối qua USB của chip - RX mặc định của UART0 là GPIO44). Chọn loại cảm biến ở tab Vị trí.":
-    "PMW3901: four SPI pins of its own (not the IMU's bus, and it cannot be used together with an SD card in SPI mode). MSP sensor on a UART: only RX is needed, wired to the sensor's TX; the firmware takes whichever UART is free (UART1 without a GPS, UART2 without a serial receiver, UART0 when the app is on the chip's USB - the default RX of UART0 is GPIO44). Choose the sensor type on the Position tab.",
   "ESP32-S3 có ba UART, mỗi cái nối được vào bất kỳ chân nào; chân của từng thiết bị đặt ở các nhóm bên trái. UART0 chỉ dùng được khi app nối qua cổng USB của chip (không qua mạch USB-UART). Tốc độ baud do từng thiết bị tự chọn (GPS tự dò, receiver theo giao thức, optical flow ở tab Vị trí).":
     "The ESP32-S3 has three UARTs, each can be routed to any pin; the pins of each device are set in the groups on the left. UART0 can only be used when the app talks through the chip's own USB port (not through a USB-UART bridge). Each device picks its own baud rate (the GPS is detected, the receiver follows its protocol, the optical flow sensor is set in the Position tab).",
   "Loại cảm biến":
@@ -1903,8 +1901,6 @@ export const EN = {
     "Velocity D",
   "Khi mất sóng hoặc bật công tắc Failsafe":
     "On a lost link or the Failsafe switch",
-  "Rescue cần GPS đã fix và la bàn; thiếu một trong hai thì máy hạ cánh tại chỗ.":
-    "Rescue needs a GPS fix and a compass; without either the craft lands where it is.",
   "Độ cao bay về":
     "Return height",
   "Leo thêm":
@@ -2109,8 +2105,6 @@ export const EN = {
     "Automatic: GPS on UART1, serial receiver on UART2, an MSP optical flow sensor on the port left. Table: each UART does what the table says. Takes effect after saving and restarting.",
   "Receiver nối tiếp":
     "Serial receiver",
-  "Optical flow MSP":
-    "MSP optical flow",
   "Tự động":
     "Automatic",
   "Theo bảng":
@@ -2611,16 +2605,262 @@ export const EN = {
     "battery",
   "Loại khí áp kế":
     "Barometer type",
-  "Tự dò: BMP280 / BMP388 trên bus I2C. DRONECAN: áp suất từ module DroneCAN trên bus CAN (cần bật CAN bus).":
-    "Auto: a BMP280 / BMP388 on the I2C bus. DRONECAN: the pressure of a DroneCAN module on the CAN bus (the CAN bus must be on).",
+  "{name} {sv}: {cno} dBHz, cao {el}°, hướng {az}°, dùng cho fix":
+    "{name} {sv}: {cno} dBHz, elevation {el}°, azimuth {az}°, used in the fix",
+  "{name} {sv}: {cno} dBHz, cao {el}°, hướng {az}°":
+    "{name} {sv}: {cno} dBHz, elevation {el}°, azimuth {az}°",
+  "Vòng lặp và hệ thống":
+    "Loop and system",
+  "còn {free} kB":
+    "{free} kB free",
+  "Thanh la bàn: hướng mũi máy bay":
+    "Compass tape: where the nose points",
+  "Bầu trời: vị trí các vệ tinh":
+    "Sky: where the satellites are",
+  "Đang chờ danh sách vệ tinh từ module…":
+    "Waiting for the module's satellite list…",
+  "{used} vệ tinh dùng cho fix, {seen} nhận được tín hiệu, {all} trong danh sách; tín hiệu trung bình {avg} dBHz":
+    "{used} satellites used in the fix, {seen} received, {all} listed; average signal {avg} dBHz",
+  "Danh sách tắt khi đang arm (như Betaflight), có lại sau khi disarm.":
+    "The list is off while armed (as in Betaflight), back after disarming.",
+  "Module chưa gửi danh sách vệ tinh (NMEA không có GSV, hoặc chưa cấu hình xong).":
+    "The module has not sent a satellite list (NMEA without GSV, or not configured yet).",
+  "Cột: cường độ tín hiệu (dBHz) - từ 35 là tốt, dưới 25 là yếu. Viền đậm: vệ tinh đang dùng cho fix. Trên bầu trời: giữa là đỉnh đầu, mép là chân trời, phía trên là hướng bắc.":
+    "Bars: signal strength (dBHz) - 35 and up is good, below 25 weak. Outlined: used in the fix. Sky: the middle is overhead, the edge the horizon, north up.",
+  "Vệ tinh GPS":
+    "GPS satellites",
+  "Thống kê sau chuyến bay":
+    "Statistics after a flight",
+  "Disarm xong thì kính hiện bảng thống kê như Betaflight (thời gian bay, tốc độ / khoảng cách / độ cao lớn nhất, quãng đường, pin thấp nhất, dòng lớn nhất, mAh đã dùng) trong 20 giây hoặc tới lần arm sau.":
+    "After disarming the goggles show Betaflight's statistics (flight time, max speed / distance / altitude, distance flown, lowest battery, max current, used mAh) for 20 seconds or until the next arming.",
+  "Công suất (W)":
+    "Power (W)",
+  "Quãng đường đã bay":
+    "Distance flown",
+  "Vĩ độ":
+    "Latitude",
+  "Kinh độ":
+    "Longitude",
+  "Thanh la bàn":
+    "Compass bar",
+  "Hai thanh bên của đường chân trời":
+    "Horizon sidebars",
+  "Gia tốc (G)":
+    "G force",
+  "Thanh pin còn lại":
+    "Battery left (bar)",
+  "Kéo một mục để dời nó, hoặc bấm vào nó rồi dùng phím mũi tên. Số hiện ở đây là số máy đang báo (chưa kết nối thì là ví dụ); ký hiệu vẽ theo đúng ô chữ của kính, kính dùng font Betaflight của nó. Canvas \"Tự động\" xem như 53 x 20; HDZero tự báo lưới 50 x 18 của nó, mục nào nằm ngoài lưới đó sẽ không hiện.":
+    "Drag an element to move it, or click it and use the arrow keys. The numbers here are what the craft reports now (examples when not connected); the symbols are drawn in the goggles' character cells, the goggles use their own Betaflight font. Canvas \"Auto\" is shown as 53 x 20; HDZero tells its own 50 x 18 grid, an element outside it is not shown.",
+  "Xưng là":
+    "Identify as",
+  "Trả lời như Betaflight 4.5 (BTFL): Betaflight Configurator, app SpeedyBee và công cụ ESC (BLHeliSuite32, ESC Configurator) chỉ nói chuyện với flight controller mà chúng biết. Windburst: báo đúng tên và phiên bản firmware này (WBRX) - các công cụ trên sẽ từ chối.":
+    "Answer as Betaflight 4.5 (BTFL): Betaflight Configurator, the SpeedyBee app and the ESC tools (BLHeliSuite32, ESC Configurator) only talk to flight controllers they know. Windburst: say this firmware's real name and version (WBRX) - the tools above then refuse it.",
+  "Cho công cụ khác sửa cấu hình":
+    "Let other tools change settings",
+  "Cho Betaflight Configurator / SpeedyBee đổi PID, rate, mode, map kênh, tên máy bay và lưu lại. Tắt: chỉ đọc được. Không bao giờ khi đang arm. Gõ PID trong công cụ đó thì thanh trượt tinh chỉnh ở tab PID tắt (như Betaflight).":
+    "Betaflight Configurator / SpeedyBee may change PID, rates, modes, the channel map, the craft name and save them. Off: they can only read. Never while armed. Gains typed there turn off the tuning sliders of the PID tab (like Betaflight).",
+  "Betaflight 4.5 (cho các công cụ của Betaflight)":
+    "Betaflight 4.5 (for Betaflight's tools)",
+  "Windburst (tên thật)":
+    "Windburst (its real name)",
+  "Công cụ khác qua MSP":
+    "Other tools over MSP",
+  "Cùng cổng với app này. Betaflight Configurator / SpeedyBee đọc được tư thế, receiver, GPS, pin, PID, rate, mode, map kênh, tên máy bay; ghi được các mục đó khi được phép.":
+    "On the same port as this app. Betaflight Configurator / SpeedyBee can read the attitude, receiver, GPS, battery, PID, rates, modes, channel map and craft name, and write those when allowed.",
+  "MSP (MSP_SET_RAW_RC trên cổng MSP)":
+    "MSP (MSP_SET_RAW_RC on the MSP port)",
+  "Cổng MSP (flow, GPS, la bàn, khí áp kế, receiver)":
+    "MSP port (flow, GPS, compass, barometer, receiver)",
+  "MSP (module trên cổng MSP)":
+    "MSP (a module on the MSP port)",
+  "Optical flow và cổng MSP":
+    "Optical flow and the MSP port",
+  "PMW3901: bốn chân SPI của riêng nó (không chung bus với IMU, và không dùng được cùng lúc với thẻ SD kiểu SPI). Cổng MSP (thiết bị MSP tự gửi dữ liệu: optical flow MSP, GPS / la bàn / khí áp kế MSP, receiver MSP): chỉ cần RX, nối với TX của thiết bị; mọi thiết bị MSP dùng chung một cổng; firmware tự lấy cổng UART còn trống (UART1 nếu GPS không dùng UART, UART2 nếu không có receiver nối tiếp, UART0 khi app nối qua USB của chip - RX mặc định của UART0 là GPIO44). Baud: ô \"Baud của cảm biến UART\" ở tab Vị trí.":
+    "PMW3901: four SPI pins of its own (not the IMU's bus, and not together with an SD card in SPI mode). The MSP port (MSP devices that send by themselves: an MSP optical flow sensor, an MSP GPS / compass / barometer, an MSP receiver): only RX is needed, to the device's TX; every MSP device shares this one port; the firmware takes the UART that is free (UART1 when the GPS uses no UART, UART2 without a serial receiver, UART0 when the app is on the chip's USB - UART0's default RX is GPIO44). Baud: \"UART sensor baud\" on the Position tab.",
+  "Cổng MSP: chưa có chân RX (optical flow, GPS, la bàn, khí áp kế hoặc receiver đang chọn MSP).":
+    "MSP port: no RX pin yet (the optical flow, GPS, compass, barometer or receiver is set to MSP).",
+  "Giao diện":
+    "Theme",
+  "Carbon (theo hệ thống)":
+    "Carbon (system)",
+  "Carbon sáng":
+    "Carbon light",
+  "Carbon tối":
+    "Carbon dark",
+  "HUD buồng lái":
+    "Cockpit HUD",
+  "Kính mờ":
+    "Frosted glass",
+  "Thụy Sĩ tối giản":
+    "Swiss minimal",
+  "Ngoài trời":
+    "Outdoor",
+  "Lắp máy":
+    "Build",
+  "Tinh chỉnh":
+    "Tune",
+  "Khi bay":
+    "In flight",
+  "Log và mạch":
+    "Logs and board",
+  "Hạ cánh tại chỗ; Rescue (bay về rồi hạ cánh: cần GPS đã fix và la bàn, thiếu thì hạ cánh tại chỗ); Giữ vị trí (giữ chỗ và độ cao trong \"Thời gian giữ\", rồi hạ cánh; không có vị trí thì chỉ giữ độ cao); Tắt motor (rơi tự do: chỉ cho máy không được phép tự bay tiếp).":
+    "Land on the spot; Rescue (fly home and land there: needs a GPS fix and a compass, without them it lands on the spot); Hold (holds its place and height for the \"Hold time\", then lands; without a position only the height); Motors off (it falls: only for a craft that must not fly on by itself).",
+  "Thời gian giữ":
+    "Hold time",
+  "Khi chọn \"Giữ vị trí\": giữ bao lâu rồi mới hạ cánh. Sóng về và phi công đánh cần thì lấy lại máy.":
+    "With \"Hold\": how long before it lands. When the link is back the pilot takes the craft by moving a stick.",
+  "Khi pin xuống mức cảnh báo":
+    "When the pack reaches its warning level",
+  "Chỉ cảnh báo (còi, OSD); Bay về (GPS Rescue) rồi hạ cánh; hoặc Hạ cánh tại chỗ. Phi công đánh cần là lấy lại máy, và việc này không lặp lại cho tới khi pin xuống mức tối thiểu (giống ArduPilot BATT_FS_LOW_ACT, PX4 COM_LOW_BAT_ACT).":
+    "Warn only (beeper, OSD); fly home (GPS Rescue) and land; or land on the spot. A stick moved by the pilot takes the craft back, and it is not done again until the pack reaches its minimum (like ArduPilot BATT_FS_LOW_ACT, PX4 COM_LOW_BAT_ACT).",
+  "Khi pin xuống mức tối thiểu":
+    "When the pack reaches its minimum",
+  "Hạ cánh tại chỗ (phi công vẫn lái roll / pitch / yaw để chọn chỗ đáp), hoặc Bay về (chỉ nên chọn khi bay gần: có thể không còn đủ điện).":
+    "Land on the spot (the pilot still steers roll / pitch / yaw to choose where), or fly home (only for a craft flown close by: there may not be enough energy left).",
+  "pin ở mức cảnh báo":
+    "pack at its warning level",
+  "chỉ cảnh báo":
+    "warning only",
+  "giữ vị trí":
+    "holding its place",
+  "bay về":
+    "flying home",
+  "hạ cánh tại chỗ":
+    "landing on the spot",
+  "tắt motor":
+    "motors off",
+  "Chỉ cảnh báo":
+    "Warn only",
+  "Bay về (GPS Rescue) rồi hạ cánh":
+    "Fly home (GPS Rescue) and land",
+  "Giữ vị trí rồi hạ cánh":
+    "Hold, then land",
+  "Tắt motor":
+    "Motors off",
+  "Cấu hình của chuyến bay này dùng thanh trượt (slider) để tính PID: chỉnh bằng thanh trượt ở tab Tuning theo hướng gợi ý, hoặc tắt thanh trượt trước khi nhập số.":
+    "The settings of this flight compute the PIDs from the sliders: move the sliders in the Tuning tab the way suggested, or switch the sliders off before typing numbers.",
+  "Giá trị cuối":
+    "Final value",
+  "Gợi ý":
+    "Suggestion",
+  "Log không có nhóm \"Gyro và setpoint\": bật nhóm này trong cài đặt blackbox rồi bay lại.":
+    "The log has no \"Gyro and setpoint\" group: switch it on in the blackbox settings and fly again.",
+  "Log không đọc được cấu hình PID (firmware khác phiên bản): chỉ có đáp ứng, không có gợi ý số.":
+    "The PID settings of the log cannot be read (another firmware version): the response only, no numbers to suggest.",
+  "Log quá ngắn để phân tích.":
+    "The log is too short to analyse.",
+  "Nhiễu gyro trên 80 Hz":
+    "Gyro noise above 80 Hz",
+  "Như PIDtoolbox: đáp ứng bước của từng trục được tính lại từ các lần đánh cần trong log (đỉnh 1,0 = không vọt lố), kèm độ nhiễu, rồi gợi ý chỉnh P / I / D / FF. Mỗi lần chỉnh tối đa 25 %: bay, ghi log, phân tích lại.":
+    "Like PIDtoolbox: the step response of each axis is worked out from the stick moves in the log (a peak of 1.0 = no overshoot), with the noise, and P / I / D / FF changes are suggested. At most 25 % at a time: fly, log, analyse again.",
+  "Phân tích PID":
+    "PID analysis",
+  "Phân tích PID từ log này":
+    "Analyse the PIDs from this log",
+  "Phần của D":
+    "Share of D",
+  "Tham số":
+    "Parameter",
+  "Trong log không có đoạn đánh cần đủ mạnh (trên 20 °/s): bay vài cú lật / đánh cần dứt khoát rồi ghi lại.":
+    "The log has no stick move strong enough (above 20 °/s): fly a few flips / sharp stick moves and log again.",
+  "Trục":
+    "Axis",
+  "Tốc độ ghi dưới 250 bản ghi/giây: đáp ứng tính ra thô. Nên ghi từ 1000 bản ghi/giây.":
+    "Logged at less than 250 records per second: the response comes out coarse. Log at 1000 records per second or more.",
+  "Tới nửa bước":
+    "To half the step",
+  "Vì sao":
+    "Why",
+  "dao động quanh đích sau đỉnh: bớt P":
+    "oscillates around the target after the peak: less P",
+  "gyro / D nhiễu: đừng tăng D, xem lại bộ lọc trước":
+    "gyro / D is noisy: do not raise D, look at the filters first",
+  "không tính được":
+    "could not be worked out",
+  "không tới hết mức được yêu cầu: thêm I":
+    "does not reach what was asked: more I",
+  "vọt lố nhưng D đã nhiễu: bớt P thay vì thêm D":
+    "overshoots but D is already noisy: less P instead of more D",
+  "vọt lố: thêm D để hãm":
+    "overshoots: more D to damp it",
+  "Đang tính…":
+    "Working it out…",
+  "Đáp ứng":
+    "Response",
+  "Đáp ứng tốt: không cần chỉnh gì.":
+    "A good response: nothing to change.",
+  "Đã đưa {n} giá trị vào cấu hình. Bấm Lưu để giữ lại.":
+    "{n} values put into the settings. Press Save to keep them.",
+  "Đưa gợi ý vào cấu hình (chưa lưu)":
+    "Put the suggestions into the settings (not saved)",
+  "Đỉnh":
+    "Peak",
+  "đáp ứng chậm, không vọt lố: thêm P (và feed-forward)":
+    "slow response, no overshoot: more P (and feed-forward)",
+  "Cần phải: roll và pitch":
+    "Right stick: roll and pitch",
+  "Cần trái: yaw và ga":
+    "Left stick: yaw and throttle",
+  "Ga ra motor":
+    "Throttle to the motors",
+  "Lùi một bản ghi (←, Shift: mười)":
+    "One record back (←, Shift: ten)",
+  "Tới một bản ghi (→, Shift: mười)":
+    "One record on (→, Shift: ten)",
+  "Phát / dừng (phím cách)":
+    "Play / pause (space)",
+  "Phát lại như Blackbox Explorer: bấm vào đồ thị để đặt vạch phát, phím cách để phát / dừng, ← → từng bản ghi, + − đổi tốc độ. Thanh trên cùng là cả chuyến bay: bấm hoặc kéo để nhảy tới.":
+    "Playback like Blackbox Explorer: click the chart to put the playhead there, space to play / pause, ← → one record at a time, + − to change the speed. The bar at the top is the whole flight: click or drag on it to jump there.",
+  "Toàn bộ chuyến bay: bấm hoặc kéo để nhảy tới":
+    "The whole flight: click or drag to jump there",
+  "Tốc độ phát":
+    "Playback speed",
+  "Về đầu log (Home)":
+    "To the start of the log (Home)",
+  "Gia tốc đổi tốc độ leo":
+    "Climb rate acceleration",
+  "Tốc độ leo / hạ cần ga yêu cầu được đạt tới với gia tốc không quá mức này (giống PILOT_ACCEL_Z của ArduPilot). Nhỏ hơn: êm hơn, chậm hơn.":
+    "The climb / descent rate the throttle stick asks for is reached with no more than this acceleration (like ArduPilot's PILOT_ACCEL_Z). Smaller: smoother, slower.",
+  "Độ giật (jerk)":
+    "Jerk",
+  "Gia tốc đó thay đổi không nhanh hơn mức này (PSC_JERK_D). Nhỏ hơn: bắt đầu và dừng mềm hơn.":
+    "That acceleration changes no faster than this (PSC_JERK_D). Smaller: softer starts and stops.",
+  "Vòng gia tốc P":
+    "Acceleration loop P",
+  "Phần sai lệch gia tốc đo được cộng vào lực đẩy: gió giật, luồng gió cánh, pin sụt được bù ngay. 0 = không phản hồi gia tốc (như trước 0.28).":
+    "The share of the measured acceleration error added to the thrust: gusts, prop wash and battery sag are answered at once. 0 = no acceleration feedback (as before 0.28).",
+  "Vòng gia tốc I":
+    "Acceleration loop I",
+  "Tích phân của sai lệch gia tốc: bù phần ga treo (hover) ước lượng sai.":
+    "The integral of the acceleration error: makes up for an error of the hover throttle estimate.",
+  "Tự dò: BMP280 / BMP388 / MS5611 trên bus I2C, hoặc trên bus SPI của IMU nếu có CS khí áp kế (tab Chân). DRONECAN: áp suất từ module DroneCAN trên bus CAN (cần bật CAN bus).":
+    "Auto: a BMP280 / BMP388 / MS5611 on the I2C bus, or on the IMU's SPI bus when the barometer CS is set (Pins tab). DRONECAN: the pressure of a DroneCAN module on the CAN bus (the CAN bus must be on).",
+  "Tự dò (BMP280 / BMP388 / MS5611)":
+    "Auto-detect (BMP280 / BMP388 / MS5611)",
+  "Khí áp kế chính":
+    "Primary barometer",
+  "Khi máy có hai khí áp kế (giống BARO_PRIMARY của ArduPilot). Cái thứ nhất là cái trên SPI, nếu không thì cái ở địa chỉ I2C 0x76, rồi 0x77. Cái kia dự phòng: thay ngay khi cái đang dùng hỏng, độ cao nối tiếp không nhảy; đang bay thì 2 giây sau khi cái chính trả lời lại mới quay về.":
+    "For a craft with two barometers (like ArduPilot's BARO_PRIMARY). The first one is the one on SPI, otherwise the one at I2C address 0x76, then 0x77. The other one stands by: it takes over at once when the one in use fails, the altitude carries on without a jump; in flight the primary is taken back 2 seconds after it answers again.",
+  "Cái thứ nhất":
+    "The first one",
+  "Cái thứ hai":
+    "The second one",
+  "Khí áp kế và la bàn trên bus SPI của IMU":
+    "Barometer and compass on the IMU's SPI bus",
+  "Khí áp kế (BMP280 / BMP388 / MS5611) và la bàn RM3100 nối chung SCK, MISO, MOSI với IMU, mỗi chip một chân CS riêng. Để trống nếu chúng nằm trên bus I2C.":
+    "A barometer (BMP280 / BMP388 / MS5611) and an RM3100 compass share SCK, MISO and MOSI with the IMU, each chip with its own CS pin. Leave empty when they are on the I2C bus.",
+  "CS khí áp kế":
+    "Barometer CS",
+  "CS la bàn":
+    "Compass CS",
+  "Khí áp kế / la bàn trên SPI dùng chung bus của IMU: IMU cũng phải nối SPI (có chân CS).":
+    "The barometer / compass on SPI share the IMU's bus: the IMU must be on SPI too (with a CS pin).",
   "DroneCAN (ESC trên bus CAN)":
     "DroneCAN (ESCs on the CAN bus)",
   "Module nguồn DroneCAN":
     "DroneCAN power module",
   "module nguồn DroneCAN":
     "DroneCAN power module",
-  "Tự dò (BMP280 / BMP388 trên I2C)":
-    "Auto-detect (BMP280 / BMP388 on I2C)",
   "máy không được xoay trong 15 giây":
     "the craft was not turned within 15 s",
   "Tự hiệu chuẩn (xoay tay)":
@@ -2789,8 +3029,6 @@ export const EN = {
     "Elements",
   "Màn hình":
     "Screen",
-  "Kéo một mục để dời nó, hoặc bấm vào nó rồi dùng phím mũi tên. Ký hiệu ở đây chỉ là hình minh hoạ: kính vẽ bằng font Betaflight của nó. Canvas \"Tự động\" xem như 53 x 20; HDZero tự báo lưới 50 x 18 của nó, mục nào nằm ngoài lưới đó sẽ không hiện.":
-    "Drag an element to move it, or click it and use the arrow keys. The symbols here are only stand-ins: the goggles draw with their Betaflight font. The \"Automatic\" canvas is shown as 53 x 20; HDZero reports its own 50 x 18 grid, elements outside it are not shown.",
   "Cổng nối tiếp: bảng không có UART nào cho OSD (DisplayPort).":
     "Serial ports: the table has no UART for the OSD (DisplayPort).",
   "Tự động (theo bộ phát hình)":
@@ -2813,7 +3051,7 @@ export const EN = {
 
 // Strings that read the same in both languages (units, protocol names, terms pilots use in English).
 export const SAME = [
-  "Hz", "°", "S", "mV", "ms", "s", "Airmode", "Roll", "Pitch", "Throttle", "Yaw", "%", "Throttle mid", "Throttle expo", "Throttle limit",
+  "m/s²", "m/s³", "Hz", "°", "S", "mV", "ms", "s", "Airmode", "Roll", "Pitch", "Throttle", "Yaw", "%", "Throttle mid", "Throttle expo", "Throttle limit",
   "Angle strength", "TPA rate", "TPA breakpoint", "I-term relax", "Feedforward max rate limit", "µs", "Extended DShot telemetry", "Motor idle",
   "× 100 rpm", "Dynamic idle P", "Dynamic idle I", "Dynamic idle D", "Barometer", "Lidar / sonar", "GPS", "Baud", "bps", "SBAS", "SBAS integrity",
   "Quad X", "Quad +", "Hexa X", "0°", "90°", "180°", "270°", "PWM", "Oneshot125", "Oneshot42", "Multishot", "DShot150", "DShot300", "DShot600",

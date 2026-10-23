@@ -568,9 +568,49 @@ static void t_burst() {
     rows[5] = 1; CHECK(burst_read(rows, 3, 2, 4, 140) == -1, "a row that is neither a 1 nor a 0 is not read as a packet");
 }
 
+// 0.26: bidirectional DShot on an STM32: the reply as input-capture timestamps -> the words DshotDirect decodes
+static void t_capture() {
+    printf("[capture] STM32 input capture of the ESC's reply -> runs -> the decoder\n");
+    using namespace motor;
+    const uint32_t bit = 213;                                       // a DShot600 reply bit (1.067 us) at 200 MHz
+    auto decode = [&](const uint32_t* w, int nw) -> ReplyDecode {   // what DshotDirect::harvest does with the words
+        Run runs[2 * kDshotRxWords]; int nr = 0;
+        for (int i = 0; i < nw; i++) {
+            const uint32_t d0 = w[i] & 0x7FFF, d1 = (w[i] >> 16) & 0x7FFF;
+            if (d0 == 0) break;
+            runs[nr++] = {(uint8_t)((w[i] >> 15) & 1), d0 << 4};
+            if (d1 == 0) break;
+            runs[nr++] = {(uint8_t)(w[i] >> 31), d1 << 4};
+        }
+        return reply_from_runs(runs, nr, bit * 16);
+    };
+    int ok = 0, wrapped = 0;
+    for (int v = 0; v < 4096; v++) {
+        uint8_t lv[21]; gcr_to_levels(gcr_encode((uint16_t)v), lv);
+        for (uint32_t t0 : {1000u, 0xFF80u}) {                     // (the second: the 16-bit counter wraps inside the reply)
+            uint32_t cap[32]; int n = 0; uint8_t level = 1; uint32_t t = t0;
+            for (int b = 0; b < 21; b++) { if (lv[b] != level) { cap[n++] = t & 0xFFFF; level = lv[b]; } t += bit; }
+            if (level == 0) cap[n++] = t & 0xFFFF;                  // the ESC lets go: the pull-up takes the line high
+            uint32_t w[kDshotRxWords]; const int nw = capture_to_words(cap, n, w, kDshotRxWords);
+            const ReplyDecode r = decode(w, nw);
+            if (r.err == RE_OK && gcr_decode(r.gcr) == (uint32_t)v) { if (t0 == 1000u) ok++; else wrapped++; }
+        }
+    }
+    CHECK(ok == 4096 && wrapped == 4096, "every reply value from its edges decodes back (%d), also across the counter's wrap (%d)", ok, wrapped);
+    uint32_t w[kDshotRxWords];
+    CHECK(capture_to_words(nullptr, 0, w, kDshotRxWords) == 0, "no edge: no words (the ESC did not answer)");
+    const uint32_t one[1] = {500}; const int n1 = capture_to_words(one, 1, w, kDshotRxWords);
+    CHECK(n1 == 2 && (w[0] & 0x7FFF) == 0x7FFF && ((w[0] >> 15) & 1) == 0 && w[1] == 0, "one falling edge and nothing after: a long low run, then the end mark");
+    CHECK(decode(w, n1).err != RE_OK, "... which is no reply");
+    uint32_t many[32]; for (int i = 0; i < 32; i++) many[i] = (uint32_t)(i * 100);
+    const int nm = capture_to_words(many, 32, w, 4);
+    CHECK(nm == 4 && w[3] == 0, "more edges than room: cut, still ended by the end mark");
+}
+
 int main() {
     t_decode();
     t_burst();
+    t_capture();
     t_words();
     t_oneway();
     t_bidir();

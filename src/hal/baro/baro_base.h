@@ -11,13 +11,15 @@
 #include "baro_driver.h"
 #include "bmp280_baro.h"
 #include "bmp388_baro.h"
+#include "ms5611_baro.h"
 #include "baro_altitude.h"
+#include "baro_select.h"
 #include "external_baro.h"
 #include "../../config/hardware_config.h"
 
 // ============================================================================
-// BaroSensor: detect -> init -> update.  Supports BMP280 / BME280 and BMP388 / BMP390 on I2C (0x76, 0x77) or SPI,
-// or a DroneCAN module (setModel(DRONECAN): the samples come through pushExternal(), from the CAN node).
+// BaroSensor: detect -> init -> update.  Supports BMP280 / BME280, BMP388 / BMP390 and MS5611 on I2C (0x76, 0x77) or SPI,
+// or a DroneCAN / MSP module (setModel(DRONECAN / MSP): the samples come through pushExternal(), from the CAN node / the MSP port).
 //
 //   BaroSensor baro;
 //   baro.IMUInit-style:  if (!baro.BaroInit(false)) Serial.println(baro.failReason());
@@ -25,16 +27,18 @@
 //
 // I2C: pass an existing I2CBus with attachI2C() when other sensors (magnetometer, lidar) share the bus - two TwoWire objects on one
 // hardware port cannot coexist. Without attachI2C() the sensor creates its own bus on I2C_DEVICE_1.
-// SPI: needs its own SPI device (SPI_DEVICE_1); sharing the IMU's SPI host with a second SPIBus object is not supported by SPIBus.
+// SPI: its own SPI device (SPI_DEVICE_1, BaroInit(true)), or a chip select on the IMU's bus (BaroInitShared: pins.baro_cs) - then
+// its transfers must not overlap the IMU's: the caller runs update() under the flight loop's lock (FlightApp).
+// Two barometers: two BaroSensor objects (the second skips the first one's I2C address), barosel::Selector picks.
 // ============================================================================
 class BaroSensor {
 public:
     void attachI2C(I2CBus& shared) { shared_i2c_ = &shared; }
     void setEnabled(bool on) { enabled_ = on; }                      // app switch "barometer on/off"
-    enum class Model : uint8_t { AUTO = 0, DRONECAN = 1 };           // == the schema's enum baro_model
+    enum class Model : uint8_t { AUTO = 0, DRONECAN = 1, MSP = 2 };  // == the schema's enum baro_model
     void setModel(Model m) { model_ = m; }
     Model model() const { return model_; }
-    void pushExternal(float pa, float temp_c, uint32_t now_us) { if (drv_ == &can_) can_.push(pa, temp_c, now_us); }
+    void pushExternal(float pa, float temp_c, uint32_t now_us) { if (drv_ == &can_) can_.push(pa, temp_c, now_us); else if (drv_ == &msp_) msp_.push(pa, temp_c, now_us); }
     void setI2cPins(uint8_t sda, uint8_t scl) { pins_i2c_[0] = sda; pins_i2c_[1] = scl; pins_i2c_set_ = true; }
     void setSpiPins(uint8_t cs, uint8_t miso, uint8_t mosi, uint8_t sck) { pins_spi_[0] = cs; pins_spi_[1] = miso; pins_spi_[2] = mosi; pins_spi_[3] = sck; pins_spi_set_ = true; }
 
@@ -43,7 +47,9 @@ public:
         drv_ = nullptr; detected_ = NONE_; fail_ = ""; alt_.reset();
         if (!enabled_) { fail_ = "barometer disabled"; return false; }
         if (model_ == Model::DRONECAN) { can_.init(cfg); drv_ = &can_; return true; }
+        if (model_ == Model::MSP) { msp_.init(cfg); drv_ = &msp_; return true; }
         if (!use_spi) {
+            addr_ = 0;
             I2CBus* bus = shared_i2c_;
             if (!bus) {
                 uint8_t pins[2];
@@ -55,34 +61,39 @@ public:
             }
             const uint8_t addrs[2] = {0x76, 0x77};                   // SDO low / high
             for (uint8_t a : addrs) {
+                if (a == skip_addr_) continue;                      // (the other barometer's)
                 i2c_bus_.bind(*bus, a);
                 uint8_t id280 = 0, id388 = 0;
                 i2c_bus_.read_u8(0xD0, id280);
                 if (id280 == 0x58 || id280 == 0x60 || id280 == 0x56 || id280 == 0x57) { detected_ = BMP280_; }
                 else if (i2c_bus_.read_u8(0x00, id388) && (id388 == 0x50 || id388 == 0x60)) { detected_ = BMP388_; }
-                if (detected_ != NONE_) { proxy_.set(&i2c_bus_); break; }
+                else { proxy_.set(&i2c_bus_); if (d5611_.probe()) detected_ = MS5611_; }      // no chip id: a PROM with a good CRC
+                if (detected_ != NONE_) { proxy_.set(&i2c_bus_); addr_ = a; break; }
             }
-            if (detected_ == NONE_) { fail_ = "no BMP280/BMP388 answered on I2C 0x76/0x77"; return false; }
+            if (detected_ == NONE_) { fail_ = "no BMP280/BMP388/MS5611 answered on I2C 0x76/0x77"; return false; }
         } else {
             uint8_t pins[4];
             if (pins_spi_set_) { for (int i = 0; i < 4; i++) pins[i] = pins_spi_[i]; } else hw_.getSPIBaroSensorPins(pins);
             for (int i = 0; i < 4; i++) if (pins[i] == GPIO_UNUSED) { fail_ = "SPI pins not set (hardware_config.h)"; return false; }
             SPIBus_config_t c; c.ioCsGpio = pins[0]; c.ioSdoGpio = pins[1]; c.ioSdiGpio = pins[2]; c.ioSckGpio = pins[3];
             if (!spi_.SPIInit(c)) { fail_ = "SPI bus init failed"; return false; }
-            uint8_t dummy[2]; spi_bus_.read(0x00, dummy, 2);          // first CS edge (BMP3xx boots in I2C mode)
-            delay(2);
-            uint8_t id280 = 0, two[2] = {0, 0};
-            spi_bus_.read(0xD0, &id280, 1);
-            spi_bus_.read(0x00, two, 2);                              // BMP3xx: dummy byte, then chip id
-            if (id280 == 0x58 || id280 == 0x60 || id280 == 0x56 || id280 == 0x57) detected_ = BMP280_;
-            else if (two[1] == 0x50 || two[1] == 0x60) detected_ = BMP388_;
-            if (detected_ == NONE_) { fail_ = "no BMP280/BMP388 answered on SPI (check CS/MISO/MOSI/SCK)"; return false; }
-            proxy_.set(&spi_bus_);
+            if (!detect_spi()) return false;
         }
-        drv_ = (detected_ == BMP280_) ? static_cast<BaroDriver*>(&d280_) : static_cast<BaroDriver*>(&d388_);
-        if (!drv_->init(cfg)) { fail_ = "chip found but init failed (bad calibration, implausible reading or bus error)"; drv_ = nullptr; return false; }
-        return true;
+        return finish(cfg);
     }
+
+    // A barometer on the IMU's SPI bus: `host` is the IMU's SPIBus (already started, IMUAccGyro::spiHost()), `cs` its own chip select.
+    bool BaroInitShared(SPIBus& host, uint8_t cs, const BaroInitConfig& cfg = BaroInitConfig()) {
+        drv_ = nullptr; detected_ = NONE_; fail_ = ""; alt_.reset(); addr_ = 0;
+        if (!enabled_) { fail_ = "barometer disabled"; return false; }
+        if (!spi_.SPIInitShared(host, cs)) { fail_ = "chip-select pin unusable (or the IMU's)"; return false; }
+        spi_.setFastClock(kSpiHz);
+        if (!detect_spi()) return false;
+        return finish(cfg);
+    }
+    void skipI2cAddress(uint8_t a) { skip_addr_ = a; }              // the second barometer: not the first one's chip again
+    uint8_t i2cAddress() const { return drv_ && !proxy_.is_spi() ? addr_ : 0; }
+    bool onImuBus() const { return drv_ && drv_ != &can_ && drv_ != &msp_ && proxy_.is_spi(); }      // (BaroInitShared: update() under the flight loop's lock)
 
     // Call often. Returns true when a NEW altitude sample was accepted.
     bool update(uint32_t now_us, uint32_t now_ms, bool armed) {
@@ -106,7 +117,26 @@ public:
     BaroAltitude& altitude() { return alt_; }
 
 private:
-    enum Kind : uint8_t { NONE_, BMP280_, BMP388_ };
+    static constexpr uint32_t kSpiHz = 8000000;                     // BMP280 / BMP388 10 MHz, MS5611 20 MHz
+    bool detect_spi() {
+        uint8_t dummy[2]; spi_bus_.read(0x00, dummy, 2);          // first CS edge (BMP3xx boots in I2C mode)
+        delay(2);
+        uint8_t id280 = 0, two[2] = {0, 0};
+        spi_bus_.read(0xD0, &id280, 1);
+        spi_bus_.read(0x00, two, 2);                              // BMP3xx: dummy byte, then chip id
+        if (id280 == 0x58 || id280 == 0x60 || id280 == 0x56 || id280 == 0x57) detected_ = BMP280_;
+        else if (two[1] == 0x50 || two[1] == 0x60) detected_ = BMP388_;
+        else { proxy_.set(&spi_bus_); if (d5611_.probe()) detected_ = MS5611_; }
+        if (detected_ == NONE_) { fail_ = "no BMP280/BMP388/MS5611 answered on SPI (check CS/MISO/MOSI/SCK)"; return false; }
+        proxy_.set(&spi_bus_);
+        return true;
+    }
+    bool finish(const BaroInitConfig& cfg) {
+        drv_ = detected_ == BMP280_ ? static_cast<BaroDriver*>(&d280_) : detected_ == BMP388_ ? static_cast<BaroDriver*>(&d388_) : static_cast<BaroDriver*>(&d5611_);
+        if (!drv_->init(cfg)) { fail_ = "chip found but init failed (bad calibration, implausible reading or bus error)"; drv_ = nullptr; return false; }
+        return true;
+    }
+    enum Kind : uint8_t { NONE_, BMP280_, BMP388_, MS5611_ };
     I2CBus* shared_i2c_ = nullptr;
     I2CBus own_i2c_{I2C_DEVICE_1};
     SPIBus spi_{SPI_DEVICE_1};
@@ -115,7 +145,8 @@ private:
     AgBusProxy proxy_;
     Bmp280Baro d280_{proxy_};
     Bmp388Baro d388_{proxy_};
-    ExternalBaro can_{"DroneCAN"};
+    Ms5611Baro d5611_{proxy_};
+    ExternalBaro can_{"DroneCAN"}, msp_{"MSP"};
     Model model_ = Model::AUTO;
     BaroDriver* drv_ = nullptr;
     BaroAltitude alt_;
@@ -124,6 +155,7 @@ private:
     uint8_t pins_i2c_[2] = {GPIO_UNUSED, GPIO_UNUSED}, pins_spi_[4] = {GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED, GPIO_UNUSED};
     bool pins_i2c_set_ = false, pins_spi_set_ = false, enabled_ = true;
     Kind detected_ = NONE_;
+    uint8_t addr_ = 0, skip_addr_ = 0;
     uint32_t rate_n_ = 0;
     const char* fail_ = "";
 };

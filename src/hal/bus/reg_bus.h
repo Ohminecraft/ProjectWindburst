@@ -31,6 +31,10 @@ public:
     virtual bool write(uint8_t reg, uint8_t value) = 0;
     virtual bool write_buf(uint8_t reg, const uint8_t* data, size_t len) = 0;  // one burst, one CS assertion
     virtual bool is_spi() const = 0;
+    // Chips driven by commands instead of registers (MS5611): `cmd` goes out as it is (no SPI read flag added), alone or followed
+    // by `len` bytes read back. Register chips never call these.
+    virtual bool command(uint8_t cmd) { return false; }
+    virtual bool command_read(uint8_t cmd, uint8_t* buf, size_t len) { return false; }
 
     bool read_u8(uint8_t reg, uint8_t& out) { return read(reg, &out, 1); }
     // read-modify-write; returns false on bus error

@@ -157,12 +157,73 @@ static void t_requests() {
     { DisplayPort d3; d3.configure(DisplayPort::CANVAS_HDZERO, 25); CHECK(d3.cols() == 50 && d3.rows() == 18, "HDZero canvas"); }
 }
 
+static void t_elements_033() {
+    printf("[elements 0.33] power, distance, coordinates, compass bar, sidebars, G, battery usage\n");
+    State s; uint8_t a = 0;
+    CHECK(text(E_POWER, s) == "<none>", "power: needs a battery and a current sensor");
+    s.batt = true; s.volts = 16.0f; s.cells = 4; s.have_current = true; s.amps = -12.4f;
+    CHECK(text(E_POWER, s) == "198W", "power: |A| x V, whole watts (%s)", text(E_POWER, s).c_str());
+    s.gps = true; s.dist_m = 1234.6f; CHECK(text(E_FLIGHT_DIST, s) == sym({SYM_TOTAL_DISTANCE}) + "1235" + sym({SYM_M}), "distance flown");
+    s.lat = 107654321; s.lon = -1066543210;
+    CHECK(text(E_GPS_LAT, s) == sym({SYM_LAT}) + "10.7654321" && text(E_GPS_LON, s) == sym({SYM_LON}) + "-106.6543210", "coordinates: symbol, degrees, 7 decimals, sign (osdFormatCoordinate)");
+    s.lat = 5; CHECK(text(E_GPS_LAT, s) == sym({SYM_LAT}) + "0.0000005", "a small one keeps its zeros");
+    s.heading_deg = 0;
+    CHECK(text(E_COMPASS_BAR, s) == sym({SYM_HEADING_W, SYM_HEADING_LINE, SYM_HEADING_DIVIDED_LINE, SYM_HEADING_LINE, SYM_HEADING_N, SYM_HEADING_LINE, SYM_HEADING_DIVIDED_LINE, SYM_HEADING_LINE, SYM_HEADING_E}),
+          "compass bar heading north: N in the middle, W and E at the ends");
+    s.heading_deg = 90; CHECK(text(E_COMPASS_BAR, s)[4] == (char)SYM_HEADING_E && text(E_COMPASS_BAR, s).size() == 9, "heading east: E in the middle");
+    s.heading_deg = 200; CHECK(text(E_COMPASS_BAR, s)[4] == (char)SYM_HEADING_LINE && text(E_COMPASS_BAR, s)[3] == (char)SYM_HEADING_S, "heading 200: one sixteenth past S");
+    s.heading_deg = -90; CHECK(text(E_COMPASS_BAR, s)[4] == (char)SYM_HEADING_W, "-90 = west");
+    s.g_force = 1.04f; CHECK(text(E_G_FORCE, s) == "1.0G", "G force"); s.g_force = 2.46f; CHECK(text(E_G_FORCE, s) == "2.5G", "2.5G");
+    CHECK(text(E_BATT_USAGE, s) == "<none>", "battery usage: nothing while what is left is unknown");
+    s.batt_remaining = 75;
+    CHECK(text(E_BATT_USAGE, s) == sym({SYM_PB_START, SYM_PB_FULL, SYM_PB_FULL, SYM_PB_FULL, SYM_PB_FULL, SYM_PB_FULL, SYM_PB_FULL, SYM_PB_FULL, SYM_PB_HALF, SYM_PB_EMPTY, SYM_PB_EMPTY, SYM_PB_CLOSE}),
+          "75 %% left: seven full cells, a half one, two empty");
+    s.batt_level = 1; text(E_BATT_USAGE, s, &a); CHECK(a == kAttrBlink, "low battery: the bar blinks");
+    {   // the sidebars, drawn cell by cell
+        Layout l; for (auto& p : l.pos) p = 0; l.pos[E_SIDEBARS] = make_pos(26, 10, true);
+        std::vector<std::string> w; render(s, l, [&](uint8_t r, uint8_t c, uint8_t, const char* t) { w.push_back(std::to_string(r) + "," + std::to_string(c) + "," + std::to_string((uint8_t)t[0])); });
+        CHECK(w.size() == 16 && w[0] == "7,19," + std::to_string(SYM_AH_DECORATION) && w[1] == "7,33," + std::to_string(SYM_AH_DECORATION) && w[14] == "10,20," + std::to_string(SYM_AH_LEFT) && w[15] == "10,32," + std::to_string(SYM_AH_RIGHT),
+              "sidebars: 7 rows either side at +-7 columns, level marks at +-6 (%zu cells)", w.size());
+        l.pos[E_SIDEBARS] = make_pos(2, 1, true); w.clear(); render(s, l, [&](uint8_t r, uint8_t c, uint8_t, const char* t) { w.push_back(std::to_string(r) + "," + std::to_string(c)); });
+        CHECK(w.size() == 6, "near the corner: only what is on the canvas (%zu)", w.size());
+        l.pos[E_SIDEBARS] = make_pos(50, 18, true); w.clear(); render(s, l, [&](uint8_t r, uint8_t c, uint8_t, const char* t) { w.push_back(std::to_string(r) + "," + std::to_string(c)); });
+        CHECK(w.size() == 6, "near the bottom right corner: the left bar (5 rows) and its mark, nothing past the last column / row (%zu)", w.size());
+    }
+}
+
+static void t_stats() {
+    printf("[statistics] Betaflight's screen after a flight\n");
+    DisplayPort dp; dp.configure(DisplayPort::CANVAS_HD, 10); Layout l; uint8_t out[4096];
+    State s; s.batt = true; s.volts = 16.4f; s.cells = 4; s.have_current = true; s.gps = true; s.home = true; s.alt_valid = true;
+    uint32_t t = 0;
+    auto run = [&](int ms) { for (int i = 0; i < ms; i += 100) { t += 100; dp.poll(t, s, l, out, sizeof(out)); } };
+    run(500); CHECK(!dp.showing_stats(), "no flight yet: no statistics");
+    s.armed = true;
+    for (int i = 0; i < 50; i++) { s.fly_s = (uint32_t)i / 10; s.speed_ms = i == 20 ? 25.0f : 5.0f; s.home_dist_m = (float)i * 2; s.alt_m = i == 30 ? 42.0f : 10.0f; s.volts = 16.4f - i * 0.02f; s.amps = i == 10 ? -60.0f : 20.0f; s.mah = (float)i * 10; s.dist_m = (float)i * 3; run(100); }
+    const Stats& st = dp.stats();
+    CHECK(st.max_speed_ms == 25.0f && st.max_dist_m == 98.0f && st.max_alt_m == 42.0f && fabsf(st.min_volts - (16.4f - 49 * 0.02f)) < 1e-4f && st.max_amps == 60.0f && st.mah == 490.0f && st.dist_m == 147.0f,
+          "kept while armed: max speed, distance, altitude; min battery; max current; used mAh; distance flown");
+    s.armed = false; s.volts = 16.0f;
+    std::string screen; t += 100; size_t n = dp.poll(t, s, l, out, sizeof(out)); screen.assign((const char*)out, n);
+    CHECK(dp.showing_stats() && screen.find("--- STATS ---") != std::string::npos && screen.find("MAX SPEED      : 90") != std::string::npos && screen.find("MAX ALTITUDE   : 42.0") != std::string::npos,
+          "disarmed: the statistics screen (90 km/h, 42.0 m)");
+    CHECK(screen.find("DISARMED") == std::string::npos, "instead of the elements");
+    run(19000); CHECK(dp.showing_stats(), "still after 19 s");
+    run(1200); CHECK(!dp.showing_stats(), "gone after 20 s");
+    s.armed = true; run(300); s.armed = false; run(200); CHECK(dp.showing_stats(), "a new flight: shown again");
+    CHECK(dp.stats().max_speed_ms == 5.0f && dp.stats().max_alt_m == 10.0f, "with that flight's own numbers (max speed %.1f m/s)", dp.stats().max_speed_ms);
+    s.armed = true; run(200); CHECK(!dp.showing_stats(), "arming ends it at once");
+    s.armed = false; l.stats = false; run(300); CHECK(!dp.showing_stats(), "osd.stats off: never shown");
+}
+
 int main() {
     t_elements();
     t_horizon();
     t_render();
     t_wire();
     t_requests();
+    t_elements_033();
+    t_stats();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

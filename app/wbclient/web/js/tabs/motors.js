@@ -19,19 +19,37 @@ function s(tag, attrs, ...kids) {
 // Returns the svg, the ring of each motor and its group (the motor wizard clicks on those).
 function frameSvg(m) {
     const L = LAYOUTS[m.layout], n = L.angles.length;
-    const svg = s('svg', { viewBox: '-140 -152 280 292', role: 'img', 'aria-label': tr('Khung {layout} nhìn từ trên xuống, {n} motor', { layout: m.layout, n }) });
+    const svg = s('svg', { viewBox: '-150 -152 300 310', role: 'img', 'aria-label': tr('Khung {layout} nhìn từ trên xuống, {n} motor', { layout: m.layout, n }) });
     svg.append(s('path', { d: 'M0 -150 l-12 20 h24 z', class: 'nose' }), s('text', { x: 0, y: -116, class: 'nose-t', 'text-anchor': 'middle' }, tr('mũi')));
     const fills = [], groups = [];
-    // where motor i is drawn: its arm (r: fraction of a full arm); the lower motor of a coaxial pair sits a little inwards and
-    // off to the side, so that both discs stay visible
-    const pos = (i) => {
-      const ang = L.angles[i], under = L.under && L.under[i], rr = (L.r ? L.r[i] : 1) * (under ? 0.72 : 1), a = ((ang + (under ? 14 : 0)) * Math.PI) / 180;
-      return [Math.sin(a) * 92 * rr, -Math.cos(a) * 92 * rr];
-    };
-    const big = n > 6, disc = big ? 26 : 36;
+    // where motor i is drawn: the end of its arm (r: fraction of a full arm). A coaxial pair (Y6, X8, Y4) sits side by side
+    // across its arm - the upper motor clockwise of it, the lower one the other way - so that neither disc covers the other
+    const coax = !!(L.under && L.under.some((u) => u));
+    const disc = coax ? 28 : n > 6 ? 26 : n > 4 ? 32 : 36, R = coax ? 104 : 92;
+    const armEnd = (i) => { const a = (L.angles[i] * Math.PI) / 180, rr = L.r ? L.r[i] : 1; return [Math.sin(a) * R * rr, -Math.cos(a) * R * rr, a]; };
+    const paired = (i) => coax && L.angles.some((ang, j) => j !== i && ang === L.angles[i] && (L.r ? L.r[j] === L.r[i] : true));
+    const P = L.angles.map((ang, i) => {
+      const [x, y, a] = armEnd(i);
+      if (!paired(i)) return [x, y];
+      const side = L.under[i] ? -1 : 1, off = disc + 6;                  // across the arm: (cos a, sin a) on the screen
+      return [x + Math.cos(a) * off * side, y + Math.sin(a) * off * side];
+    });
+    // motors on arms that are close together (A-tail, V-tail) are pushed apart until their discs clear each other
+    const gap = 2 * disc + 8;
+    for (let it = 0; it < 20; it++) {
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        const dx = P[j][0] - P[i][0], dy = P[j][1] - P[i][1], d = Math.hypot(dx, dy) || 1;
+        if (d >= gap) continue;
+        const push = (gap - d) / 2, ux = dx / d, uy = dy / d;
+        P[i][0] -= ux * push; P[i][1] -= uy * push; P[j][0] += ux * push; P[j][1] += uy * push;
+      }
+    }
+    const pos = (i) => P[i];
+    const arms = new Set();
     L.angles.forEach((ang, i) => {
-      if (L.under && L.under[i]) return;
-      const [x, y] = pos(i);
+      const [x, y] = paired(i) ? armEnd(i) : P[i], key = `${Math.round(x)},${Math.round(y)}`;        // (a pair shares its arm)
+      if (arms.has(key)) return;
+      arms.add(key);
       svg.append(s('line', { x1: 0, y1: 0, x2: x, y2: y, class: 'arm' }));
     });
     svg.append(s('rect', { x: -20, y: -30, width: 40, height: 60, rx: 6, class: 'hub' }));
@@ -42,11 +60,19 @@ function frameSvg(m) {
       const C = 2 * Math.PI * disc;
       const fill = s('circle', { r: disc, class: 'cmd', 'stroke-dasharray': `0 ${C}`, transform: 'rotate(-90)' });
       fills.push({ fill, C });
-      // arrow along the top of the disc: pointing right = clockwise, pointing left = counter-clockwise
-      const arc = ccw ? `M ${26 * k} ${-15 * k} A ${30 * k} ${30 * k} 0 0 0 ${-26 * k} ${-15 * k}` : `M ${-26 * k} ${-15 * k} A ${30 * k} ${30 * k} 0 0 1 ${26 * k} ${-15 * k}`;
-      const tip = ccw ? `M ${-26 * k} ${-15 * k} l ${11 * k} ${-4 * k} l ${-2 * k} ${11 * k} z` : `M ${26 * k} ${-15 * k} l ${-11 * k} ${-4 * k} l ${2 * k} ${11 * k} z`;
+      // arrow along the top of the disc, on a circle just inside the ring and centred on the motor: it runs over the top from
+      // one side to the other (left to right = clockwise) and its head follows the circle
+      const r = disc - 9 * k, dir = ccw ? -1 : 1, deg = Math.PI / 180;
+      const from = (ccw ? -35 : -145) * deg, to = (ccw ? -145 : -35) * deg, head = 9 * k;
+      const at = (t) => [r * Math.cos(t), r * Math.sin(t)];
+      const stop = to - dir * (head / r);                                   // the line ends where the head starts
+      const [x0, y0] = at(from), [x1, y1] = at(stop), [px, py] = at(to);
+      const arc = `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 0 ${ccw ? 0 : 1} ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+      const tx = -Math.sin(to) * dir, ty = Math.cos(to) * dir, nx = Math.cos(to), ny = Math.sin(to), w = 5.5 * k;    // tangent, outward normal
+      const bx = px - tx * head, by = py - ty * head;
+      const tip = `M ${(px + tx * 2 * k).toFixed(2)} ${(py + ty * 2 * k).toFixed(2)} L ${(bx + nx * w).toFixed(2)} ${(by + ny * w).toFixed(2)} L ${(bx - nx * w).toFixed(2)} ${(by - ny * w).toFixed(2)} z`;
       g.append(s('circle', { r: disc, class: under ? 'disc under' : 'disc' }), fill, s('path', { d: arc, class: 'spin' }), s('path', { d: tip, class: 'spin-tip' }),
-        s('text', { y: 12 * k, 'text-anchor': 'middle', class: 'mnum' }, String(i + 1) + (under ? '↓' : '')),
+        s('text', { y: 10 * k, 'text-anchor': 'middle', class: 'mnum', style: `font-size: ${(26 * k).toFixed(1)}px` }, String(i + 1) + (under ? '↓' : '')),
         s('text', { y: disc + 16, 'text-anchor': 'middle', class: 'mtag' }, ''));
       groups.push(g);
       svg.append(g);

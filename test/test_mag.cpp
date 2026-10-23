@@ -13,11 +13,25 @@
 #include "../src/hal/mag/mag_autocal.h"
 #include "../src/core/ahrs.h"
 
-// ---- Arduino stubs: I2C routed to the simulated chip at one address (same scheme as test_baro) ----
+// ---- Arduino stubs: I2C routed to the simulated chip at one address (same scheme as test_baro); SPI to g_spi_sim on CS g_cs ----
 int g_spi_begin_pins[4];
 static MagSimBase* g_sim = nullptr; static uint8_t g_addr = 0x1E, i2c_reg = 0;
-void digitalWrite(uint8_t, uint8_t) {}
-uint8_t stub_spi_transfer(uint8_t) { return 0xFF; }
+static MagSimBase* g_spi_sim = nullptr; static uint8_t g_cs = 10;
+static struct { bool active = false; int idx = 0; bool rd = false; uint8_t reg = 0; uint8_t cache[16]; uint8_t w[16]; } sx;
+void digitalWrite(uint8_t pin, uint8_t val) {
+    if (pin != g_cs) return;
+    if (val == LOW) { sx.active = true; sx.idx = 0; return; }
+    if (sx.active && !sx.rd && sx.idx == 2 && g_spi_sim) g_spi_sim->write(sx.reg, sx.w[0]);
+    sx.active = false;
+}
+uint8_t stub_spi_transfer(uint8_t v) {
+    if (!sx.active) return 0xFF;
+    uint8_t out = 0xFF;
+    if (sx.idx == 0) { sx.rd = (v & 0x80) != 0; sx.reg = v & 0x7F; out = 0x00; }
+    else if (sx.rd) { if (sx.idx == 1) { if (!g_spi_sim || !g_spi_sim->read(sx.reg, sx.cache, 16)) memset(sx.cache, 0xFF, 16); } out = sx.idx - 1 < 16 ? sx.cache[sx.idx - 1] : 0xFF; }
+    else if (sx.idx - 1 < 16) sx.w[sx.idx - 1] = v;
+    sx.idx++; return out;
+}
 bool stub_i2c_probe(uint8_t) { return true; }
 int stub_i2c_tx(uint8_t a, const uint8_t* d, size_t n, bool) { if (!g_sim || a != g_addr || n == 0) return 2; i2c_reg = d[0]; if (n == 2 && !g_sim->write(d[0], d[1])) return 2; return 0; }
 int stub_i2c_rx(uint8_t a, uint8_t* d, size_t n) { if (!g_sim || a != g_addr || n > 64) return 0; return g_sim->read(i2c_reg, d, n) ? (int)n : 0; }
@@ -66,6 +80,26 @@ static void t_qmc() {
 }
 
 static void t_ak() {
+    printf("[rm3100]\n");
+    { Rm3100Sim sim; Rm3100Mag d(sim); MagSample s; uint32_t us = 0;
+      CHECK(d.init() && strcmp(d.name(), "RM3100") == 0, "init");
+      CHECK(sim.r[0x0B] == 0x94 && sim.r[0x01] == 0x71 && sim.cc(0) == 200 && sim.cc(1) == 200 && sim.cc(2) == 200, "150 Hz, continuous X Y Z, cycle count 200");
+      bool got = false; for (int i = 0; i < 5 && !got; i++) { us += 4000; got = d.update(us, s); }
+      CHECK(got && fabsf(s.gauss[0] - 0.20f) < 0.0005f && fabsf(s.gauss[1] + 0.05f) < 0.0005f && fabsf(s.gauss[2] - 0.40f) < 0.0005f, "24-bit values, 7500 LSB/G, sign: %.4f %.4f %.4f", s.gauss[0], s.gauss[1], s.gauss[2]);
+      sim.field[0] = -0.55; sim.field[1] = 0.0001; sim.field[2] = -0.9; sim.drdy = true; us += 4000;
+      CHECK(d.update(us, s) && fabsf(s.gauss[0] + 0.55f) < 0.0005f && fabsf(s.gauss[2] + 0.9f) < 0.0005f, "negative values across the byte boundary: %.4f %.4f", s.gauss[0], s.gauss[2]);
+      us += 4000; CHECK(!d.update(us, s), "no data ready: no sample");
+      us += 1000; sim.drdy = true; const int before = sim.data_reads; CHECK(!d.update(us, s) && sim.data_reads == before, "polled at most every 3.3 ms");
+      CHECK(d.rate_hz() == 150.0f && d.healthy(), "rate, healthy"); }
+    { Rm3100Sim b; b.clone_revid = true; Rm3100Mag x(b); CHECK(x.init(), "a clone with another REVID is accepted (ArduPilot checks the cycle counts)"); }
+    { Rm3100Sim b; b.r[0x05] = 0x64; Rm3100Mag x(b); CHECK(!x.init(), "cycle counts not at their default: not an RM3100"); }
+    { Rm3100Sim b; Rm3100Mag x(b); x.init(); Rm3100Mag y(b); CHECK(y.init(), "warm restart: found again (init writes the default counts)"); }
+    { Rm3100Sim b; b.dead = true; Rm3100Mag x(b); CHECK(!x.init(), "dead bus"); }
+    { Rm3100Sim b; Rm3100Mag x(b); x.init(); MagSample q; uint32_t u = 0; b.dead = true; for (int i = 0; i < 100; i++) { u += 4000; x.update(u, q); } CHECK(!x.healthy(), "bus loss => unhealthy"); }
+    { Rm3100Sim b; Rm3100Mag x(b); x.init(); MagSample q; uint32_t u = 0; int n = 0; for (int i = 0; i < 60; i++) { u += 4000; b.drdy = true; if (x.update(u, q)) n++; }
+      CHECK(n == 11 && !x.healthy(), "identical output 60 times => frozen: dropped after 10 repeats, unhealthy (%d)", n); }
+    { Rm3100Sim b; b.field[0] = b.field[1] = b.field[2] = 0; Rm3100Mag x(b); x.init(); MagSample q; CHECK(!x.update(4000, q), "0, 0, 0 dropped"); }
+
     printf("[ak8963 inside mpu9250 via SPI master]\n");
     Mpu9250AkSim sim; Ak8963Mpu9250Mag d(sim); MagSample s; uint32_t us = 0;
     sim.field[0] = 0.30; sim.field[1] = -0.12; sim.field[2] = 0.38;            // AK8963 frame
@@ -222,8 +256,27 @@ static void t_manager() {
       CHECK(m.MagInit() && m.detected() == MagSensor::Model::QMC5883L, "QMC5883L @0x0D: %s", m.failReason()); }
     { QmcSim sim; sim.P = true; g_sim = &sim; g_addr = 0x2C; MagSensor m; m.setI2cPins(8, 9);
       CHECK(m.MagInit() && m.detected() == MagSensor::Model::QMC5883P, "QMC5883P @0x2C: %s", m.failReason()); }
+    for (uint8_t a = 0x20; a <= 0x23; a++) { Rm3100Sim sim; g_sim = &sim; g_addr = a; MagSensor m; m.setI2cPins(8, 9);
+      CHECK(m.MagInit() && m.detected() == MagSensor::Model::RM3100 && strcmp(m.name(), "RM3100") == 0, "RM3100 @0x%02X: %s", a, m.failReason()); }
+    { Rm3100Sim sim; g_sim = &sim; g_addr = 0x21; MagSensor m; m.setI2cPins(8, 9); m.setModel(MagSensor::Model::RM3100);
+      CHECK(m.MagInit() && m.detected() == MagSensor::Model::RM3100, "forced RM3100"); }
+    {   // an RM3100 on the IMU's SPI bus, its own chip select (pins.mag_cs)
+        Rm3100Sim chip; chip.spi = true; g_spi_sim = &chip; g_sim = nullptr; g_cs = 10;
+        SPIBus host(SPI_DEVICE_0); SPIBus_config_t c; c.ioCsGpio = 9; c.ioSdoGpio = 13; c.ioSdiGpio = 11; c.ioSckGpio = 12; host.SPIInit(c);
+        MagSensor m; m.setI2cPins(8, 9);
+        CHECK(m.MagInitShared(host, 10) && m.detected() == MagSensor::Model::RM3100 && m.onImuBus(), "RM3100 on SPI CS 10: %s", m.failReason());
+        CHECK(chip.r[0x0B] == 0x94 && chip.r[0x01] == 0x71, "set up through the SPI framing (writes without the read flag)");
+        g_stub_spi_max_hz = 0;
+        uint32_t us = 0, ms = 0; int got = 0; for (int i = 0; i < 100; i++) { us += 4000; ms += 4; chip.drdy = true; chip.field[0] += 0.0001; if (m.update(us, ms)) got++; }
+        CHECK(g_stub_spi_max_hz > 0 && g_stub_spi_max_hz <= 1000000, "the RM3100 is read at its own 1 MHz, not the IMU's clock (%u Hz)", (unsigned)g_stub_spi_max_hz);
+        CHECK(got >= 90 && fabsf(m.rawGauss()[0] - (float)chip.field[0]) < 0.001f && fabsf(m.rawGauss()[2] - 0.40f) < 0.001f, "samples through SPI (%d): %.4f %.4f", got, m.rawGauss()[0], m.rawGauss()[2]);
+        MagSensor q; q.setModel(MagSensor::Model::QMC5883L); CHECK(!q.MagInitShared(host, 10) && strstr(q.failReason(), "only an RM3100"), "a forced I2C-only model on SPI: '%s'", q.failReason());
+        MagSensor e; g_spi_sim = nullptr; CHECK(!e.MagInitShared(host, 10) && strstr(e.failReason(), "no RM3100"), "nothing on the chip select: '%s'", e.failReason());
+        MagSensor z; CHECK(!z.MagInitShared(host, 9) && strstr(z.failReason(), "chip-select"), "the IMU's own chip select is refused");
+        MagSensor i2c; HmcSim hs; g_sim = &hs; g_addr = 0x1E; i2c.setI2cPins(8, 9); CHECK(i2c.MagInit() && !i2c.onImuBus(), "an I2C compass is not on the IMU's bus");
+        g_spi_sim = nullptr; }
     { Mpu9250AkSim sim; g_sim = nullptr; MagSensor m; m.setI2cPins(8, 9); m.attachImuBus(&sim, MPU9520_SPI);
-      CHECK(m.MagInit() && m.detected() == MagSensor::Model::AK8963_MPU9250, "no external chip: falls back to the MPU9250's AK8963: %s", m.failReason()); }
+      CHECK(m.MagInit() && m.detected() == MagSensor::Model::AK8963_MPU9250 && m.onImuBus(), "no external chip: falls back to the MPU9250's AK8963 (read on the IMU's SPI bus: under the lock): %s", m.failReason()); }
     { Mpu9250AkSim sim; g_sim = nullptr; MagSensor m; m.setI2cPins(8, 9); m.attachImuBus(&sim, ICM42688P_SPI);
       CHECK(!m.MagInit(), "IMU is not an MPU9250: no internal mag assumed"); }
     { g_sim = nullptr; MagSensor m; m.setI2cPins(8, 9); CHECK(!m.MagInit() && strstr(m.failReason(), "no magnetometer"), "nothing connected: '%s'", m.failReason()); }

@@ -55,3 +55,39 @@ Mã nguồn: `src/osd/osd.h` (portable), `FlightApp::osd_in()` / `osd_send()` tr
 - `test_fw` nhóm `osd` (`WB_ONLY=osd`): mạch ảo, 2 s ra 20 màn hình, bộ phát hỏi trạng thái arm và đổi lưới, khi arm thì mode, timer và ARM box thay đổi, chia UART cùng MAVLink, bảng cổng, chân trùng.
 - 28 mutant `osd:`; `test_gui_browser.py::test_osd_tab` (viết nhưng chưa chạy được ở máy này).
 - **Chưa thử với kính thật.** Cần thử: DJI O3 (canvas mode), Walksnail, HDZero. Kính có hiện OSD không, các mục có đúng chỗ không, có quay video khi arm không.
+
+## 0.33: thêm mục, bảng thống kê, màn hình xem trước mới
+
+**Mục mới** (nối vào cuối `pos[]`, nên `pos` giờ có 32 ô; cài đặt từ bản cũ vẫn giữ, 8 mục mới mặc định ẩn). Cách vẽ theo `osd_elements.c` của Betaflight:
+
+| Mục | Ví dụ | Ghi chú |
+|---|---|---|
+| POWER | `198W` | dòng × áp; cần đo pin và đo dòng |
+| FLIGHT_DIST | `⟷1235m` | quãng đường bay từ lúc arm, theo tốc độ GPS khi có fix 3D |
+| GPS_LAT / GPS_LON | `10.7654321` | ký hiệu, độ, 7 số lẻ, có dấu âm (`osdFormatCoordinate`) |
+| COMPASS_BAR | `W·┴·N·┴·E` | 9 ký tự, hướng mũi ở giữa, mỗi bước 1/16 vòng (`osdElementCompassBar`) |
+| SIDEBARS | | hai thanh dọc 7 hàng, cách tâm 7 cột, dấu ngang ở cột ±6 (`osdElementHorizonSidebars`) |
+| G_FORCE | `1.0G` | độ lớn gia tốc đo được |
+| BATT_USAGE | `[■■■■■■■◧□□]` | 10 ô, mỗi ô 10 % pin còn lại; cần `battery.capacity_mah`; nhấp nháy khi pin yếu |
+
+**Bảng thống kê sau chuyến bay** (`osd.stats`, mặc định bật; giống `osdShowStats` của Betaflight):
+- Disarm xong thì kính hiện bảng thống kê thay cho các mục, trong 20 giây hoặc tới lần arm sau. Lần arm mới thì số liệu tính lại từ đầu.
+- Bảng có tiêu đề `--- STATS ---` và các dòng:
+  - FLY TIME;
+  - MAX SPEED, MAX DISTANCE, FLIGHT DISTANCE (khi có GPS);
+  - MAX ALTITUDE;
+  - MIN BATTERY;
+  - MAX CURRENT, USED MAH (khi có đo dòng).
+
+**App, tab OSD:**
+- **Xem trước như trong kính:** nền là ảnh camera (trời và đất) nghiêng theo máy. Có lưới ký tự. Mỗi ký tự nằm đúng một ô.
+- **Ký hiệu:** vẽ lại thành hình vector cùng nghĩa với font Betaflight, trắng viền đen như kính hiện (`js/gfx/osdglyph.js`). Không chép font bitmap của Betaflight.
+- **Số hiện là số máy đang báo:** pin, dòng, GPS, độ cao, tư thế, ga, mode. Khi chưa kết nối thì hiện số ví dụ.
+- **Đường chân trời giả và thanh bên** vẽ theo đúng công thức của firmware.
+- **Bố cục:** khối "Màn hình" lên đầu cột trái; danh sách mục ở cột phải.
+
+**Test:**
+- `test_osd`: thêm nhóm `[elements 0.33]` và `[statistics]`, tổng 84 kiểm tra.
+- `test_fw` nhóm `osd`: bay, hạ cánh, disarm thì kính hiện bảng thống kê.
+- `test_proto`: bản ghi `osd` 73 byte của bản cũ đọc được.
+- 15 mutant `osd33:`.

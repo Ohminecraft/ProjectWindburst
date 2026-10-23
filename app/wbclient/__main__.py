@@ -280,6 +280,20 @@ def cmd_blackbox_file(a):
         _log_summary(path)
         return 0
     sessions = wblog.load(path)
+    if action == "tune":                                     # PID tuning from the log (tune.py): step response per axis and what to change
+        from . import tune
+        if not sessions:
+            raise SystemExit("%s: no log session found" % path)
+        r = tune.analyse(sessions[int(a.args[2]) if len(a.args) > 2 else len(sessions) - 1], Schema())
+        for ax, v in r["axes"].items():
+            m = v["metrics"]
+            print("%-5s " % ax + ("peak %.2f at %.0f ms, half the step after %s ms, steady %.2f, ringing %d" % (m["peak"], m["peak_ms"], m["latency_ms"], m["steady"], m["ringing"]) if m else "no stick moves to learn from")
+                  + ("   gyro noise %.1f deg/s" % v["gyro_noise"] if v["gyro_noise"] is not None else "") + ("   D share %.0f %%" % (100 * v["d_share"]) if v["d_share"] is not None else ""))
+        for s in r["suggestions"]:
+            print("  %s %s: %s -> %s (%s)" % (s["axis"], s["param"], s["now"], s["new"] if s["new"] is not None else "keep", s["why"]))
+        for n in r["notes"]:
+            print("  note: %s" % n)
+        return 0
     if not sessions:
         raise SystemExit("%s: no log session found" % path)
     index = int(a.args[2]) if len(a.args) > 2 else len(sessions) - 1
@@ -364,7 +378,7 @@ def main(argv=None):
     if a.command == "gui":
         from .gui import run
         return run(a.port, a.baud, a.http, not a.no_browser, a.logs)
-    if a.command == "blackbox" and a.args and a.args[0] in ("info", "csv"):
+    if a.command == "blackbox" and a.args and a.args[0] in ("info", "csv", "tune"):
         if len(a.args) < 2:
             ap.error("blackbox %s needs a file name" % a.args[0])
         return cmd_blackbox_file(a)

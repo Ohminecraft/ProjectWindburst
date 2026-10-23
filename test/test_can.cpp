@@ -8,6 +8,7 @@
 #include "../src/hal/can/dronecan.h"
 #include "../src/hal/can/dronecan_msgs.h"
 #include "../src/hal/can/dronecan_node.h"
+#include "../src/hal/can/can_timing.h"
 #include <deque>
 #include "dronecan_vectors.h"
 using namespace dcan;
@@ -256,7 +257,22 @@ static void t_node2() {
     fc_port.tx_room = 0; { const int16_t cmd[4] = {}; CHECK(!node.send_esc(cmd, 4) && node.esc_dropped() == 1, "a full transmit queue: the command is dropped and counted"); }
 }
 
+// 0.27: the STM32's CAN bit timing (hal/can/can_timing.h)
+static void t_timing() {
+    printf("[can timing] prescaler and time quanta from the controller clock\n");
+    using cantiming::Timing; using cantiming::compute;
+    Timing t;
+    CHECK(compute(42000000, 1000000, 1024, 16, 8, t) && t.presc == 3 && t.seg1 == 11 && t.seg2 == 2,
+          "F405 APB1 42 MHz, 1 Mbit/s: 14 quanta (21 would need seg1 17, bxCAN stops at 16): presc %u, %u + %u", t.presc, t.seg1, t.seg2);
+    CHECK(compute(170000000, 1000000, 512, 256, 128, t) && 170000000u / (t.presc * (1 + t.seg1 + t.seg2)) == 1000000u, "G4 170 MHz, 1 Mbit/s: exact (presc %u, %u + %u)", t.presc, t.seg1, t.seg2);
+    const uint32_t tq = 1 + t.seg1 + t.seg2, sp = (1 + t.seg1) * 1000 / tq;
+    CHECK(tq >= 8 && tq <= 25 && sp >= 840 && sp <= 900, "8 .. 25 quanta, the sample point near 87.5 %% (%u quanta, %u per mille)", tq, sp);
+    CHECK(compute(250000000, 125000, 512, 256, 128, t) && t.presc >= 1, "H5 250 MHz, 125 kbit/s");
+    CHECK(!compute(6000000, 1000000, 1024, 16, 8, t) && compute(8000000, 1000000, 1024, 16, 8, t) && t.presc == 1, "6 MHz cannot make 1 Mbit/s with 8 quanta or more; 8 MHz just can");
+    CHECK(!compute(48000000, 0, 1024, 16, 8, t) && !compute(0, 1000000, 1024, 16, 8, t), "nonsense refused");
+}
+
 int main() {
-    t_codec(); t_vectors(); t_vectors2(); t_decode(); t_receiver(); t_node(); t_node2();
+    t_codec(); t_vectors(); t_vectors2(); t_decode(); t_receiver(); t_node(); t_node2(); t_timing();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

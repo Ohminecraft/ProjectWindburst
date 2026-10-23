@@ -3,6 +3,7 @@
 | File | Vai trò |
 |---|---|
 | `hal/mag/hmc5883l_mag.h` | HMC5883L @0x1E (id "H43", đọc thứ tự X,Z,Y big-endian, 1090 LSB/G) |
+| `hal/mag/rm3100_mag.h` | RM3100 @0x20-0x23 hoặc SPI trên bus IMU (0.28, 150 Hz, 7500 LSB/G) - xem `docs/SENSORS2.md` |
 | `hal/mag/qmc5883_mag.h` | QMC5883L @0x0D (200 Hz, 3000 LSB/G, mở khóa DOR) và QMC5883P @0x2C (3750 LSB/G) — thông số theo Betaflight |
 | `hal/mag/ak8963_mpu9250_mag.h` | AK8963 bên trong MPU9250 qua I2C master của MPU (chạy khi IMU nối SPI), điều chỉnh độ nhạy ASA, đổi trục sang hệ MPU; **init sau IMU** |
 | `hal/mag/mag_calibration.h` | Hiệu chuẩn ellipsoid: hard iron + ma trận soft iron 3×3 (Betaflight chỉ có offset); độ phủ 32 ô cầu; từ chối dữ liệu thiếu phủ, méo quá (tỉ trục > 2), nhiễu, từ trường vô lý |

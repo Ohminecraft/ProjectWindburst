@@ -5,6 +5,8 @@
 | `hal/baro/bmp280_baro.h` | Driver BMP280 (BME280 chỉ dùng P/T), I2C 0x76/0x77 hoặc SPI |
 | `hal/baro/bmp388_baro.h` | Driver BMP388/BMP390, I2C hoặc SPI (có dummy byte) |
 | `hal/baro/baro_altitude.h` | Áp suất → độ cao so với điểm cất cánh, chống nhảy, đo nhiễu, hết hạn |
+| `hal/baro/ms5611_baro.h` | Driver MS5611 (0.28), I2C 0x76/0x77 hoặc SPI - xem `docs/SENSORS2.md` |
+| `hal/baro/baro_select.h` | Hai khí áp kế: cái nào bay (0.28) |
 | `hal/baro/baro_base.h` | `BaroSensor`: dò chip, init, `update()`, báo lỗi bằng chữ |
 | `hal/bus/reg_bus.h`, `reg_bus_arduino.h` | Giao diện bus thanh ghi dùng chung (IMU, baro, sau này mag/lidar) |
 

@@ -18,46 +18,67 @@
 // ============================================================================
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
 #define WB_MCU_NAME "ESP32-S3"
+#define WB_MCU_BOARD_INFO "_S3_"
 #elif defined(CONFIG_IDF_TARGET_ESP32S2)
 #define WB_MCU_NAME "ESP32-S2"
+#define WB_MCU_BOARD_INFO "_S2_"
 #elif defined(CONFIG_IDF_TARGET_ESP32C5)
 #define WB_MCU_NAME "ESP32-C5"
+#define WB_MCU_BOARD_INFO "_C5_"
 #elif defined(CONFIG_IDF_TARGET_ESP32)
 #define WB_MCU_NAME "ESP32"
+#define WB_MCU_BOARD_INFO "_S__"
 #elif defined(STM32H563xx)
 #define WB_MCU_NAME "STM32H563"
+#define WB_MCU_BOARD_INFO "H563"
 #elif defined(STM32H562xx)
 #define WB_MCU_NAME "STM32H562"
+#define WB_MCU_BOARD_INFO "H562"
 #elif defined(STM32H523xx)
 #define WB_MCU_NAME "STM32H523"
+#define WB_MCU_BOARD_INFO "H523"
 #elif defined(STM32H533xx)
 #define WB_MCU_NAME "STM32H533"
+#define WB_MCU_BOARD_INFO "H533"
 #elif defined(STM32G473xx)
 #define WB_MCU_NAME "STM32G473"
+#define WB_MCU_BOARD_INFO "G473"
 #elif defined(STM32G474xx)
 #define WB_MCU_NAME "STM32G474"
+#define WB_MCU_BOARD_INFO "G474"
 #elif defined(STM32G491xx)
 #define WB_MCU_NAME "STM32G491"
+#define WB_MCU_BOARD_INFO "G491"
 #elif defined(STM32G431xx)
 #define WB_MCU_NAME "STM32G431"
+#define WB_MCU_BOARD_INFO "G431"
 #elif defined(STM32F405xx)
 #define WB_MCU_NAME "STM32F405"
+#define WB_MCU_BOARD_INFO "F405"
 #elif defined(STM32F412Cx) || defined(STM32F412Rx) || defined(STM32F412Vx) || defined(STM32F412Zx)
 #define WB_MCU_NAME "STM32F412"
+#define WB_MCU_BOARD_INFO "F412"
 #elif defined(STM32C552xx)
 #define WB_MCU_NAME "STM32C552"
+#define WB_MCU_BOARD_INFO "C552"
 #elif defined(STM32H5xx)
 #define WB_MCU_NAME "STM32H5"
+#define WB_MCU_BOARD_INFO "_H5_"
 #elif defined(STM32G4xx)
 #define WB_MCU_NAME "STM32G4"
+#define WB_MCU_BOARD_INFO "_G4_"
 #elif defined(STM32F4xx)
 #define WB_MCU_NAME "STM32F4"
+#define WB_MCU_BOARD_INFO "_F4_"
 #elif defined(STM32C5xx)
 #define WB_MCU_NAME "STM32C5"
+#define WB_MCU_BOARD_INFO "_C5_"
 #elif WB_PLATFORM_STM32
 #define WB_MCU_NAME "STM32"
+#define WB_MCU_BOARD_INFO "_32_"
 #else
 #define WB_MCU_NAME "PC"
+#define WB_MCU_BOARD_INFO "_PC_"
 #endif
 
 namespace port {

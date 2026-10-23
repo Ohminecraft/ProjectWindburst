@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0x944FD130",
+ "hash": "0xA48C55FA",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -39,7 +39,8 @@
    "NRF24",
    "PPM",
    "PWM",
-   "SPEKTRUM1024"
+   "SPEKTRUM1024",
+   "MSP"
   ],
   "align": [
    "CW0",
@@ -95,11 +96,14 @@
    "QMC5883L",
    "QMC5883P",
    "AK8963_MPU9250",
-   "DRONECAN"
+   "DRONECAN",
+   "RM3100",
+   "MSP"
   ],
   "baro_model": [
    "AUTO",
-   "DRONECAN"
+   "DRONECAN",
+   "MSP"
   ],
   "port_function": [
    "NONE",
@@ -351,7 +355,26 @@
   ],
   "fs_procedure": [
    "LAND",
-   "RESCUE"
+   "RESCUE",
+   "HOLD",
+   "DROP"
+  ],
+  "fs_action": [
+   "NONE",
+   "WARN",
+   "HOLD",
+   "RTL",
+   "LAND",
+   "DROP"
+  ],
+  "fs_batt_low": [
+   "WARN",
+   "RTL",
+   "LAND"
+  ],
+  "fs_batt_crit": [
+   "LAND",
+   "RTL"
   ],
   "servo_source": [
    "OFF",
@@ -401,6 +424,10 @@
    "FIRST",
    "SECOND",
    "BOTH"
+  ],
+  "baro_primary": [
+   "FIRST",
+   "SECOND"
   ],
   "imu2_state": [
    "NONE",
@@ -468,6 +495,10 @@
    "HD_53X20",
    "HDZERO_50X18",
    "SD_30X16"
+  ],
+  "msp_identity": [
+   "BETAFLIGHT",
+   "WINDBURST"
   ]
  },
  "bits": {
@@ -526,7 +557,8 @@
   "fs_cause": [
    "LINK",
    "SWITCH",
-   "BATTERY"
+   "BATTERY",
+   "BATTERY_LOW"
   ],
   "nav_flags": [
    "POSHOLD",
@@ -1666,11 +1698,19 @@
      "t": "u8",
      "d": 0,
      "enum": "baro_model",
-     "desc": "AUTO = a BMP280 / BMP388 on the sensor bus; DRONECAN = the pressure of a DroneCAN module (needs can.mode DRONECAN)"
+     "desc": "AUTO = a BMP280 / BMP388 / MS5611 on the sensor bus (pins.baro_cs: on the IMU's SPI bus); DRONECAN = the pressure of a DroneCAN module (needs can.mode DRONECAN)"
+    },
+    {
+     "n": "baro_primary",
+     "t": "u8",
+     "d": 0,
+     "enum": "baro_primary",
+     "desc": "two barometers (ArduPilot BARO_PRIMARY): FIRST = the first found (SPI on pins.baro_cs, else I2C 0x76, then 0x77) flies, SECOND = the second; the other takes over while the one in use is unhealthy (in flight: back after 2 s valid), the altitude carried on without a jump"
     }
    ],
    "live": false,
    "compat": [
+    19,
     18,
     16
    ]
@@ -2055,14 +2095,26 @@
      "t": "u8",
      "d": 255,
      "desc": "CAN bus: from the RX (R) output of the CAN transceiver"
+    },
+    {
+     "n": "baro_cs",
+     "t": "u8",
+     "d": 255,
+     "desc": "chip select of a barometer (BMP280 / BMP388 / MS5611) on the IMU's SPI bus (same SCK / MISO / MOSI)"
+    },
+    {
+     "n": "mag_cs",
+     "t": "u8",
+     "d": 255,
+     "desc": "chip select of a compass (RM3100) on the IMU's SPI bus (same SCK / MISO / MOSI)"
     }
    ],
    "live": false,
    "compat": [
+    50,
     48,
     47,
-    46,
-    37
+    46
    ]
   },
   {
@@ -2848,12 +2900,34 @@
      "d": 1,
      "enum": "ekf_mode",
      "desc": "the EKF (attitude + velocity + position + IMU biases in one filter, core/ekf.h): OFF not run; SHADOW (default) runs next to the usual estimators and is only logged, to compare; NAV Position Hold and GPS Rescue use its position, velocity and heading (experimental: only after logs have shown it is better)"
+    },
+    {
+     "n": "fs_hold_s",
+     "t": "u8",
+     "d": 30,
+     "min": 1,
+     "max": 255,
+     "desc": "fs_procedure HOLD: how long the craft holds its place and height after the link is lost before it lands there (s; PX4 NAV_RCL_ACT Hold, then land)"
+    },
+    {
+     "n": "batt_low_action",
+     "t": "u8",
+     "d": 0,
+     "enum": "fs_batt_low",
+     "desc": "the pack at its WARNING level (ArduPilot BATT_FS_LOW_ACT, PX4 COM_LOW_BAT_ACT): WARN only (beeper, OSD), RTL = fly home (GPS Rescue) and land, LAND where it is. The pilot takes the craft back by moving a stick (the action does not come again until the pack reaches its minimum)"
+    },
+    {
+     "n": "batt_crit_action",
+     "t": "u8",
+     "d": 0,
+     "enum": "fs_batt_crit",
+     "desc": "the pack at its MINIMUM (ArduPilot BATT_FS_CRT_ACT): LAND where it is (the pilot keeps roll / pitch / yaw), or RTL = fly home first (only if it is close: there may be no energy for more)"
     }
    ],
    "compat": [
+    31,
     30,
-    29,
-    27
+    29
    ]
   },
   {
@@ -2960,7 +3034,46 @@
      "max": 50,
      "scale": 0.1,
      "desc": "fastest descent the stick asks for (m/s)"
+    },
+    {
+     "n": "accel_z",
+     "t": "u8",
+     "d": 25,
+     "min": 5,
+     "max": 80,
+     "scale": 0.1,
+     "desc": "the climb rate the stick asks for is reached with at most this acceleration (m/s^2; ArduPilot PILOT_ACCEL_Z)"
+    },
+    {
+     "n": "jerk_z",
+     "t": "u8",
+     "d": 50,
+     "min": 10,
+     "max": 200,
+     "scale": 0.1,
+     "desc": "... and this jerk (m/s^3; PSC_JERK_D): smaller = softer starts and stops"
+    },
+    {
+     "n": "acc_p",
+     "t": "u8",
+     "d": 50,
+     "min": 0,
+     "max": 150,
+     "scale": 0.01,
+     "desc": "measured-acceleration loop: share of the acceleration error added to the thrust (0 = no acceleration feedback, as before 0.28)"
+    },
+    {
+     "n": "acc_i",
+     "t": "u8",
+     "d": 100,
+     "min": 0,
+     "max": 250,
+     "scale": 0.01,
+     "desc": "its integrator (1/s): takes up what the hover throttle estimate gets wrong"
     }
+   ],
+   "compat": [
+    6
    ]
   },
   {
@@ -3258,7 +3371,7 @@
     {
      "n": "pos",
      "t": "u16",
-     "count": 24,
+     "count": 32,
      "d": [
       2113,
       3201,
@@ -3283,9 +3396,47 @@
       641,
       705,
       1025,
-      2326
+      2326,
+      172,
+      834,
+      962,
+      1026,
+      86,
+      666,
+      642,
+      1172
      ],
-     "desc": "per element (src/osd/osd.h order: RSSI, BATT, CELL, CURRENT, MAH, MODE, NAME, FLY_TIME, ON_TIME, SATS, SPEED, HOME_DIR, HOME_DIST, ALT, VARIO, THROTTLE, CROSSHAIRS, HORIZON, WARNINGS, HEADING, PITCH, ROLL, ESC_TEMP, DISARMED): column (bits 0-5), row (bits 6-10), shown (bit 11) - Betaflight's osd_*_pos"
+     "desc": "per element (src/osd/osd.h order: RSSI, BATT, CELL, CURRENT, MAH, MODE, NAME, FLY_TIME, ON_TIME, SATS, SPEED, HOME_DIR, HOME_DIST, ALT, VARIO, THROTTLE, CROSSHAIRS, HORIZON, WARNINGS, HEADING, PITCH, ROLL, ESC_TEMP, DISARMED, POWER, FLIGHT_DIST, GPS_LAT, GPS_LON, COMPASS_BAR, SIDEBARS, G_FORCE, BATT_USAGE): column (bits 0-5), row (bits 6-10), shown (bit 11) - Betaflight's osd_*_pos"
+    },
+    {
+     "n": "stats",
+     "t": "bool",
+     "d": 1,
+     "desc": "after a flight: Betaflight's statistics screen (flight time, max speed / distance / altitude, traveled distance, min battery, max current, used mAh) for 20 s or until the next arming"
+    }
+   ],
+   "compat": [
+    73
+   ]
+  },
+  {
+   "id": 25,
+   "name": "msp",
+   "desc": "MSP (Betaflight's MultiWii Serial Protocol) on the app's port: what other tools are told and allowed - Betaflight Configurator, the SpeedyBee app, the ESC tools (BLHeliSuite32, ESC Configurator)",
+   "live": true,
+   "fields": [
+    {
+     "n": "identity",
+     "t": "u8",
+     "d": 0,
+     "enum": "msp_identity",
+     "desc": "BETAFLIGHT = answer as Betaflight 4.5 (variant BTFL): what Betaflight Configurator, the SpeedyBee app and the ESC tools need to talk to a flight controller; WINDBURST = say what this firmware really is (variant WBRX, its own version) - the tools above then refuse it"
+    },
+    {
+     "n": "writes",
+     "t": "bool",
+     "d": 1,
+     "desc": "the tools may change settings (PID, rates, modes, receiver map, craft name) and save them; off = they can only read. Never while armed"
     }
    ]
   }
@@ -3517,6 +3668,12 @@
      "n": "pid_target",
      "t": "u16",
      "desc": "the control rate asked for (loop_target / pid_denom)"
+    },
+    {
+     "n": "fs_action",
+     "t": "u8",
+     "enum": "fs_action",
+     "desc": "what the failsafe does (the most severe of its causes wins, PX4's failsafe framework): NONE, WARN (battery low, nothing done), HOLD (holds place and height), RTL (GPS Rescue home), LAND (where it is), DROP (motors off)"
     }
    ]
   },
@@ -4500,6 +4657,56 @@
      "n": "esc_dropped",
      "t": "u16",
      "desc": "esc.RawCommand transfers the transmit queue refused"
+    }
+   ]
+  },
+  {
+   "id": 16,
+   "name": "satellites",
+   "rate": 1,
+   "max": 2,
+   "desc": "the satellites the GPS module reports (u-blox NAV-SAT / NAV-SVINFO, NMEA GSV): empty while armed (the list is switched off in flight, as Betaflight does)",
+   "fields": [
+    {
+     "n": "count",
+     "t": "u8",
+     "desc": "satellites in the list (at most 32)"
+    },
+    {
+     "n": "gnss",
+     "t": "u8",
+     "count": 32,
+     "desc": "constellation: 0 GPS, 1 SBAS, 2 Galileo, 3 BeiDou, 5 QZSS, 6 GLONASS (u-blox gnssId)"
+    },
+    {
+     "n": "sv",
+     "t": "u8",
+     "count": 32,
+     "desc": "satellite number within its constellation"
+    },
+    {
+     "n": "cno",
+     "t": "u8",
+     "count": 32,
+     "desc": "signal strength, dBHz (0 = not received)"
+    },
+    {
+     "n": "elev",
+     "t": "i16",
+     "count": 32,
+     "desc": "elevation, degrees"
+    },
+    {
+     "n": "azim",
+     "t": "i16",
+     "count": 32,
+     "desc": "azimuth, degrees"
+    },
+    {
+     "n": "flags",
+     "t": "u8",
+     "count": 32,
+     "desc": "bits 0-2 signal quality (u-blox qualityInd 0..7), bit 3 used in the fix"
     }
    ]
   }

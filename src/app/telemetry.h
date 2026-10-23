@@ -29,7 +29,7 @@ struct Telemetry {
     uint16_t rc[16] = {1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
     bool rc_link = false; uint8_t rssi = 0; uint16_t rc_rate = 0, rc_bad = 0, rc_ovf = 0, rc_line = 0;      // rc_*: per second
     // ---- status
-    bool armed = false; uint32_t blockers = 0; uint8_t failsafe = 0, fs_cause = 0; uint32_t modes = 0; uint16_t health = 0; uint8_t ah_state = 0;
+    bool armed = false; uint32_t blockers = 0; uint8_t failsafe = 0, fs_cause = 0, fs_action = 0; uint32_t modes = 0; uint16_t health = 0; uint8_t ah_state = 0;
     uint16_t loop_us = 0, loop_max_us = 0, gap_max_us = 0, loop_hz = 0; float throttle = 0;
     uint16_t t_imu_us = 0, t_core_us = 0, t_motor_us = 0, t_rest_us = 0, t_slow_max_us = 0, overruns = 0, loop_target_hz = 0, pid_hz = 0, pid_target_hz = 0;   // where a control cycle spends its time (averages of the last second)
     uint8_t cpu_pct = 0, ram_pct = 0; uint16_t heap_free_kb = 0, psram_free_kb = 0, psram_total_kb = 0;    // load of the flight-loop core, memory
@@ -47,6 +47,8 @@ struct Telemetry {
     // ---- gps (Betaflight units)
     uint8_t gps_fix = 0, gps_sats = 0; int32_t lat = 0, lon = 0, alt_cm = 0; uint16_t gs_cms = 0, course_ddeg = 0, hdop = 0;
     uint32_t hacc_mm = 0, home_dist_m = 0; uint16_t home_dir_ddeg = 0; uint8_t gps_state = 0; uint32_t gps_baud = 0; float gps_rate_hz = 0;
+    struct Sat { uint8_t gnss = 0, sv = 0, cno = 0, flags = 0; int8_t elev = 0; int16_t azim = 0; };     // the module's satellite list (satellites stream)
+    static constexpr int kSats = 32; uint8_t sat_n = 0; Sat sat[kSats];
     // ---- estimator
     float z = 0, vz = 0, z_sigma = 0, pos_n = 0, pos_e = 0, vel_n = 0, vel_e = 0; bool alt_valid = false, pos_valid = false, yaw_from_mag = false;
     bool vel_valid = false, flow_valid = false, tilt_aided = false, gps_alt_used = false, gps_vz_used = false; uint16_t z_resets = 0;
@@ -126,7 +128,7 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
         T_status o; o.armed = t.armed ? 1 : 0; o.blockers = t.blockers; o.failsafe = t.failsafe; o.modes = t.modes; o.health = t.health; o.ah_state = t.ah_state;
         o.loop_us = t.loop_us; o.loop_max_us = t.loop_max_us; o.gap_max_us = t.gap_max_us; o.loop_hz = t.loop_hz; o.cell_mv = u16(t.cell_v, 0.001f); o.settings_dirty = settings_flags; o.throttle = u16(t.throttle, scale::status_throttle);
         o.cpu = t.cpu_pct; o.ram = t.ram_pct; o.heap_free = t.heap_free_kb; o.psram_free = t.psram_free_kb; o.psram_total = t.psram_total_kb;
-        o.t_imu = t.t_imu_us; o.t_core = t.t_core_us; o.t_motor = t.t_motor_us; o.t_rest = t.t_rest_us; o.t_slow_max = t.t_slow_max_us; o.overruns = t.overruns; o.loop_target = t.loop_target_hz; o.fs_cause = t.fs_cause; o.pid_hz = t.pid_hz; o.pid_target = t.pid_target_hz;
+        o.t_imu = t.t_imu_us; o.t_core = t.t_core_us; o.t_motor = t.t_motor_us; o.t_rest = t.t_rest_us; o.t_slow_max = t.t_slow_max_us; o.overruns = t.overruns; o.loop_target = t.loop_target_hz; o.fs_cause = t.fs_cause; o.fs_action = t.fs_action; o.pid_hz = t.pid_hz; o.pid_target = t.pid_target_hz;
         memcpy(out, &o, sizeof(o)); break; }
     case STR_MOTORS: {
         T_motors o;
@@ -144,6 +146,10 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
         o.baro_alt = s16(t.baro_alt, scale::sensors_baro_alt); o.baro_pa = t.baro_pa > 0 ? (uint32_t)lroundf(t.baro_pa) : 0; o.temp = s16(t.temp_c, scale::sensors_temp); o.range = s16(t.range_m, scale::sensors_range);
         for (int i = 0; i < 3; i++) o.gyro2[i] = s16(t.gyro2[i], scale::sensors_gyro2);
         o.imu2 = t.imu2; o.gyro_src = t.gyro_src;
+        memcpy(out, &o, sizeof(o)); break; }
+    case STR_SATELLITES: {
+        T_satellites o; memset(&o, 0, sizeof(o)); o.count = t.sat_n;
+        for (int i = 0; i < t.sat_n && i < Telemetry::kSats; i++) { const Telemetry::Sat& s = t.sat[i]; o.gnss[i] = s.gnss; o.sv[i] = s.sv; o.cno[i] = s.cno; o.elev[i] = s.elev; o.azim[i] = s.azim; o.flags[i] = s.flags; }
         memcpy(out, &o, sizeof(o)); break; }
     case STR_GPS: {
         T_gps o; o.fix = t.gps_fix; o.sats = t.gps_sats; o.lat = t.lat; o.lon = t.lon; o.alt = t.alt_cm; o.gs = t.gs_cms; o.course = t.course_ddeg; o.hdop = t.hdop;

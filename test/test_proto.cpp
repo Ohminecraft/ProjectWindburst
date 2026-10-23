@@ -63,7 +63,7 @@ static void t_schema() {
     CHECK(s.filters.gyro_lpf1_dyn_min_hz == 250 && s.filters.gyro_lpf1_dyn_max_hz == 500 && s.filters.gyro_lpf2_hz == 500 && s.filters.dterm_lpf1_dyn_min_hz == 75 && s.filters.dterm_lpf2_hz == 150 && s.filters.dyn_notch_count == 3 &&
           s.filters.rpm_harmonics == 3 && s.filters.yaw_lowpass_hz == 100 && s.filters.slider_gyro == 1 && s.filters.slider_dterm_mult == 100, "filter defaults = Betaflight's");
     CHECK(s.beeper.conditions == 0x1FFFFu && s.general.fs_guard_ms == 500 && s.general.airmode_start_throttle == 25 && s.receiver.rc_smoothing == 1 && s.receiver.rc_smoothing_factor == 30, "u32 default, general, receiver");
-    size_t total = 0; for (const SectionInfo& si : kSections) total += si.size; CHECK(kSectionCount == 24 && total == sizeof(Settings), "section table covers the Settings struct exactly (%zu vs %zu)", total, sizeof(Settings));
+    size_t total = 0; for (const SectionInfo& si : kSections) total += si.size; CHECK(kSectionCount == 25 && total == sizeof(Settings), "section table covers the Settings struct exactly (%zu vs %zu)", total, sizeof(Settings));
     CHECK(find_section(SEC_PID)->size == sizeof(S_pid) && find_section(99) == nullptr, "lookup");
     S_general g; defaults(g); g.loop_hz = 60000; g.max_arm_angle = 0; g.board_align = 99; g.airmode = 7; g.board_trim_yaw = -9999;
     Settings t; defaults(t); t.general = g; const int fixed = validate_section(t, SEC_GENERAL);
@@ -74,7 +74,7 @@ static void t_schema() {
           t.pid.stab_p[2] == 4.5f && t.pid.iterm_windup == 30, "motors / pid clamps (a NaN gain becomes the default)");
     t.filters.gyro_lpf1_type = 9; t.filters.gyro_lpf2_hz = 4000; t.filters.dyn_notch_count = 20; t.filters.rpm_harmonics = 5; t.filters.rpm_q = 10; t.filters.slider_gyro_mult = 3; t.filters.rpm_weights[2] = 180; validate_section(t, SEC_FILTERS);
     CHECK(t.filters.gyro_lpf1_type == LPF_TYPE_PT3 && t.filters.gyro_lpf2_hz == 1000 && t.filters.dyn_notch_count == 7 && t.filters.rpm_harmonics == 3 && t.filters.rpm_q == 250 && t.filters.slider_gyro_mult == 10 && t.filters.rpm_weights[2] == 100, "filter clamps");
-    CHECK(kProtocolVersion == 1 && kStreamCount == 15 && find_stream(STR_CAN)->size == sizeof(T_can) && find_stream(STR_LINK)->size == sizeof(T_link) && find_stream(STR_TUNING)->size == sizeof(T_tuning) && find_stream(STR_ATTITUDE)->size == sizeof(T_attitude), "streams");
+    CHECK(kProtocolVersion == 1 && kStreamCount == 16 && find_stream(STR_SATELLITES)->size == 257 && find_stream(STR_CAN)->size == sizeof(T_can) && find_stream(STR_LINK)->size == sizeof(T_link) && find_stream(STR_TUNING)->size == sizeof(T_tuning) && find_stream(STR_ATTITUDE)->size == sizeof(T_attitude), "streams");
 }
 
 static void t_store() {
@@ -97,7 +97,7 @@ static void t_store() {
         std::vector<uint8_t> rec(size + 5u); rec[0] = 1; rec[1] = (uint8_t)size; rec[2] = (uint8_t)(size >> 8); memcpy(rec.data() + 3, data, size);
         const uint16_t c = crc16(rec.data(), size + 3u); rec[size + 3u] = (uint8_t)c; rec[size + 4u] = (uint8_t)(c >> 8); ms.kv[key] = rec;
     };
-    CHECK(find_section(SEC_PINS)->compat == 48 && find_section(SEC_PINS)->compat2 == 47 && find_section(SEC_PINS)->compat3 == 46 && find_section(SEC_PINS)->compat4 == 37 && offsetof(S_pins, can_tx) == 48 && offsetof(S_pins, imu2_cs) == 47 && offsetof(S_pins, esc_tlm) == 46 && find_section(SEC_SENSORS)->compat == 18 && find_section(SEC_SENSORS)->compat2 == 16 && offsetof(S_sensors, baro_model) == 18 && offsetof(S_sensors, gyro_use) == 16 && offsetof(S_pins, flow_cs) == 27 && offsetof(S_pins, curr_adc) == 37 && offsetof(S_pins, servo) == 33 && find_section(SEC_BATTERY)->compat == 13 && offsetof(S_battery, current_source) == 13 && find_section(SEC_BLACKBOX)->compat == 8 && find_section(SEC_MOTORS)->compat == 37 && find_section(SEC_MOTORS)->compat2 == 36 && find_section(SEC_MOTORS)->compat3 == 35 && find_section(SEC_MOTORS)->compat4 == 34 && offsetof(S_motors, stall_disarm) == 37 && offsetof(S_motors, esc_sensor) == 36 && offsetof(S_motors, reserved1) == 34 && offsetof(S_motors, ext_pullup) == 35 && find_section(SEC_NAV)->compat == 30 && find_section(SEC_NAV)->compat2 == 29 && find_section(SEC_NAV)->compat3 == 27 && offsetof(S_nav, gps_alt) == 27 && offsetof(S_nav, ph_min_gps_hz) == 29 && offsetof(S_nav, ekf) == 30 && find_section(SEC_GENERAL)->compat2 == 22 && find_section(SEC_GENERAL)->compat3 == 23 && offsetof(S_general, reserved_g) == 22 && offsetof(S_general, pid_denom) == 23 && find_section(SEC_GPS)->compat == 0 && offsetof(S_blackbox, sd_mode) == 8,
+    CHECK(find_section(SEC_PINS)->compat == 50 && find_section(SEC_PINS)->compat2 == 48 && find_section(SEC_PINS)->compat3 == 47 && find_section(SEC_PINS)->compat4 == 46 && offsetof(S_pins, baro_cs) == 50 && offsetof(S_pins, mag_cs) == 51 && offsetof(S_pins, can_tx) == 48 && offsetof(S_pins, imu2_cs) == 47 && offsetof(S_pins, esc_tlm) == 46 && find_section(SEC_SENSORS)->compat == 19 && find_section(SEC_SENSORS)->compat2 == 18 && find_section(SEC_SENSORS)->compat3 == 16 && offsetof(S_sensors, baro_primary) == 19 && offsetof(S_sensors, baro_model) == 18 && offsetof(S_sensors, gyro_use) == 16 && offsetof(S_pins, flow_cs) == 27 && offsetof(S_pins, curr_adc) == 37 && offsetof(S_pins, servo) == 33 && find_section(SEC_BATTERY)->compat == 13 && offsetof(S_battery, current_source) == 13 && find_section(SEC_BLACKBOX)->compat == 8 && find_section(SEC_MOTORS)->compat == 37 && find_section(SEC_MOTORS)->compat2 == 36 && find_section(SEC_MOTORS)->compat3 == 35 && find_section(SEC_MOTORS)->compat4 == 34 && offsetof(S_motors, stall_disarm) == 37 && offsetof(S_motors, esc_sensor) == 36 && offsetof(S_motors, reserved1) == 34 && offsetof(S_motors, ext_pullup) == 35 && find_section(SEC_NAV)->compat == 31 && find_section(SEC_NAV)->compat2 == 30 && find_section(SEC_NAV)->compat3 == 29 && offsetof(S_nav, fs_hold_s) == 31 && offsetof(S_nav, batt_crit_action) == 33 && offsetof(S_nav, gps_alt) == 27 && offsetof(S_nav, ph_min_gps_hz) == 29 && offsetof(S_nav, ekf) == 30 && find_section(SEC_GENERAL)->compat2 == 22 && find_section(SEC_GENERAL)->compat3 == 23 && offsetof(S_general, reserved_g) == 22 && offsetof(S_general, pid_denom) == 23 && find_section(SEC_GPS)->compat == 0 && offsetof(S_blackbox, sd_mode) == 8,
           "pins (three times: the flow sensor's, the servos', the current sensor's and PWM receiver's), battery and blackbox grew at their end: their old sizes are known, and the old layout really is the start of the new one");
     { MemStorage ms; SettingsStore so(ms); Settings w; defaults(w); so.save(w);
       S_pins op; defaults(op); op.imu_cs = 10; op.motor[3] = 7; op.batt_adc = 2; op.sd_cs = 42; op.flow_cs = 38; op.servo[0] = 99; op.esc_tlm = 44; op.imu2_cs = 34;   // (imu2_cs lies beyond the 47 bytes that are stored)
@@ -115,8 +115,8 @@ static void t_store() {
       S_pins p7; defaults(p7); p7.imu_cs = 7; p7.motor[0] = 15; p7.sd_cs = 42; p7.flow_cs = 38; p7.servo[1] = 44; p7.curr_adc = 3;       // (curr_adc lies beyond the 37 bytes that are stored)
       old_record(ms, "wbs11", &p7, 37);
       Settings g7; const auto rr7 = so.load(g7);
-      CHECK(g7.pins.imu_cs == 7 && g7.pins.motor[0] == 15 && g7.pins.sd_cs == 42 && g7.pins.flow_cs == 38 && g7.pins.servo[1] == 44 && g7.pins.curr_adc == 255 && rr7.migrated_mask == (1u << SEC_PINS),
-            "a pin map of firmware 0.7.1 (37 bytes): kept as well, the current sensor's pin unset");
+      CHECK(g7.pins.imu_cs == 255 && (rr7.defaulted_mask & (1u << SEC_PINS)),
+            "a pin map of firmware 0.7.1 (37 bytes): no longer known since 0.28 (four older sizes are kept): defaults");
       S_battery obt; defaults(obt); obt.cells = 4; obt.current_source = CURR_SOURCE_NONE; obt.current_scale = 123; obt.capacity_mah = 999;    // (the current fields lie beyond the 13 bytes that are stored)
       old_record(ms, "wbs13", &obt, 13); Settings gb; const auto rb = so.load(gb);
       CHECK(gb.battery.cells == 4 && gb.battery.current_source == CURR_SOURCE_AUTO && gb.battery.current_scale == 400 && gb.battery.capacity_mah == 0 && (rb.migrated_mask & (1u << SEC_BATTERY)),
@@ -140,13 +140,27 @@ static void t_store() {
       { S_general og3; defaults(og3); og3.loop_hz = 8000; og3.est_hz = 250; old_record(ms, "wbs01", &og3, 22); Settings g9; const auto r9 = so.load(g9);
         CHECK(g9.general.loop_hz == 8000 && g9.general.est_hz == 250 && g9.general.pid_denom == 1 && (r9.migrated_mask & (1u << SEC_GENERAL)), "the general section of 0.9.5 - 0.11 (22 bytes): kept, the control rate = the gyro's (pid_denom 1)"); }
       { S_sensors os; defaults(os); os.mag_enabled = 1; os.range_l1x_mode = 2; old_record(ms, "wbs07", &os, 16); Settings g16; const auto r16 = so.load(g16);
-        CHECK(sizeof(S_sensors) == 19 && g16.sensors.baro_model == BARO_MODEL_AUTO && g16.sensors.mag_enabled == 1 && g16.sensors.range_l1x_mode == 2 && g16.sensors.gyro_use == GYRO_USE_FIRST && g16.sensors.imu2_align == ALIGN_CW0 && (r16.migrated_mask & (1u << SEC_SENSORS)),
+        CHECK(sizeof(S_sensors) == 20 && g16.sensors.baro_primary == 0 && g16.sensors.baro_model == BARO_MODEL_AUTO && g16.sensors.mag_enabled == 1 && g16.sensors.range_l1x_mode == 2 && g16.sensors.gyro_use == GYRO_USE_FIRST && g16.sensors.imu2_align == ALIGN_CW0 && (r16.migrated_mask & (1u << SEC_SENSORS)),
               "the sensors section before 0.13 (16 bytes): kept, the second IMU's settings at their defaults (FIRST, CW0)"); }
       { S_sensors os; defaults(os); os.gyro_use = GYRO_USE_BOTH; os.mag_model = MAG_MODEL_DRONECAN; old_record(ms, "wbs07", &os, 18); Settings g18; const auto r18 = so.load(g18);
         CHECK(g18.sensors.gyro_use == GYRO_USE_BOTH && g18.sensors.mag_model == MAG_MODEL_DRONECAN && g18.sensors.baro_model == BARO_MODEL_AUTO && (r18.migrated_mask & (1u << SEC_SENSORS)),
               "the sensors section of 0.13 - 0.16 (18 bytes): kept, the barometer AUTO (the one on the sensor bus)"); }
+      { S_osd oo; defaults(oo); oo.type = OSD_TYPE_MSP_DISPLAYPORT; oo.pos[23] = 0x0805; oo.name[0] = 'Q'; old_record(ms, "wbs24", &oo, 73); Settings g33; const auto r33 = so.load(g33);
+        CHECK(sizeof(S_osd) == 90 && find_section(SEC_OSD)->compat == 73 && g33.osd.type == OSD_TYPE_MSP_DISPLAYPORT && g33.osd.pos[23] == 0x0805 && g33.osd.name[0] == 'Q' && g33.osd.pos[24] == 172 && !(g33.osd.pos[31] & 0x800) && g33.osd.stats == 1 && (r33.migrated_mask & (1u << SEC_OSD)),
+              "the osd section before 0.33 (73 bytes, 24 elements): kept, the 8 new elements at their (hidden) defaults, statistics on"); }
       { S_can c; defaults(c); CHECK(c.mode == CAN_MODE_OFF && c.bitrate == CAN_BITRATE_M1 && c.node_id == 10 && c.dna_server == 1 && !find_section(SEC_CAN)->live, "can: off by default, 1 Mbit/s, node 10, hands out ids, needs a reboot");
         c.node_id = 0; validate(c); CHECK(c.node_id == 1, "node id 0 is not a node id: 1"); }
+      { S_pins p27; defaults(p27); p27.imu_cs = 9; p27.can_tx = 33; p27.baro_cs = 35; p27.mag_cs = 36; old_record(ms, "wbs11", &p27, 50); Settings g27; const auto r27 = so.load(g27);
+        CHECK(g27.pins.imu_cs == 9 && g27.pins.can_tx == 33 && g27.pins.baro_cs == 255 && g27.pins.mag_cs == 255 && (r27.migrated_mask & (1u << SEC_PINS)), "the pin map of 0.15 - 0.27 (50 bytes): kept, the barometer's and the compass's chip selects unset"); }
+      { S_nav on; defaults(on); on.fs_procedure = FS_PROCEDURE_RESCUE; on.batt_low_action = FS_BATT_LOW_LAND; const std::string nk = std::string("wbs") + (SEC_NAV < 10 ? "0" : "") + std::to_string(SEC_NAV); old_record(ms, nk.c_str(), &on, 31);
+        Settings gn; const auto rn = so.load(gn);
+        CHECK(gn.nav.fs_procedure == FS_PROCEDURE_RESCUE && gn.nav.batt_low_action == FS_BATT_LOW_WARN && gn.nav.fs_hold_s == 30 && gn.nav.batt_crit_action == FS_BATT_CRIT_LAND && (rn.migrated_mask & (1u << SEC_NAV)),
+              "the nav section of 0.18 - 0.31 (31 bytes): kept, the failsafe actions of 0.32 at their defaults (WARN, LAND, hold 30 s)"); }
+      { S_althold oa; defaults(oa); oa.climb_rate = 33; oa.acc_p = 7; old_record(ms, "wbs19", &oa, 6); Settings g6a; const auto r6a = so.load(g6a);
+        CHECK(find_section(SEC_ALTHOLD)->compat == 6 && offsetof(S_althold, accel_z) == 6 && g6a.althold.climb_rate == 33 && g6a.althold.acc_p == 50 && g6a.althold.accel_z == 25 && (r6a.migrated_mask & (1u << SEC_ALTHOLD)),
+              "the althold section before 0.29 (6 bytes): kept, the new controller's settings at their defaults"); }
+      { S_sensors os; defaults(os); os.baro_model = BARO_MODEL_DRONECAN; os.baro_primary = 1; old_record(ms, "wbs07", &os, 19); Settings g19; const auto r19 = so.load(g19);
+        CHECK(g19.sensors.baro_model == BARO_MODEL_DRONECAN && g19.sensors.baro_primary == 0 && (r19.migrated_mask & (1u << SEC_SENSORS)), "the sensors section of 0.15 - 0.27 (19 bytes): kept, baro_primary 0"); }
       { S_pins p11; defaults(p11); p11.imu_cs = 9; p11.imu2_cs = 34; old_record(ms, "wbs11", &p11, 48); Settings g11; const auto r11 = so.load(g11);
         CHECK(g11.pins.imu2_cs == 34 && g11.pins.can_tx == 255 && g11.pins.can_rx == 255 && (r11.migrated_mask & (1u << SEC_PINS)), "the pin map of 0.14 (48 bytes): kept, the CAN pins unset"); }
       { S_wifi w; defaults(w); CHECK(sizeof(S_wifi) == 100 && w.mode == WIFI_MODE_OFF && w.port == 5760 && w.channel == 6 && w.ssid[0] == 0 && w.pass[63] == 0 && !find_section(SEC_WIFI)->live, "wifi: off by default, port 5760, channel 6, empty texts, needs a reboot");
@@ -303,7 +317,11 @@ static void t_apply() {
     printf("[apply] settings -> typed configs\n");
     Settings s; defaults(s); fc::CoreConfig def; fc::CoreConfig c; fc::RcInterpreter rc; apply_core(s, c, rc);
     { const fc::AltHoldConfig ad; CHECK(fabsf(c.alt.mid_stick - ad.mid_stick) < 1e-6f && fabsf(c.alt.deadband - ad.deadband) < 1e-6f && fabsf(c.alt.low_stick - ad.low_stick) < 1e-6f && fabsf(c.alt.max_stick - ad.max_stick) < 1e-6f
-            && fabsf(c.alt.max_climb_mps - ad.max_climb_mps) < 1e-5f && fabsf(c.alt.max_descend_mps - ad.max_descend_mps) < 1e-5f, "althold defaults = the controller's own defaults (nothing changes for a craft that never touches the section)");
+            && fabsf(c.alt.max_climb_mps - ad.max_climb_mps) < 1e-5f && fabsf(c.alt.max_descend_mps - ad.max_descend_mps) < 1e-5f
+            && fabsf(c.alt.accel_z_mps2 - ad.accel_z_mps2) < 1e-5f && fabsf(c.alt.jerk_z_mps3 - ad.jerk_z_mps3) < 1e-5f && fabsf(c.alt.acc_p - ad.acc_p) < 1e-5f && fabsf(c.alt.acc_i - ad.acc_i) < 1e-5f,
+            "althold defaults = the controller's own defaults (nothing changes for a craft that never touches the section)");
+      { Settings u; defaults(u); u.althold.accel_z = 15; u.althold.jerk_z = 30; u.althold.acc_p = 0; u.althold.acc_i = 150; fc::AltHoldConfig a; apply_althold(u, a);
+        CHECK(fabsf(a.accel_z_mps2 - 1.5f) < 1e-5f && fabsf(a.jerk_z_mps3 - 3.0f) < 1e-5f && a.acc_p == 0.0f && fabsf(a.acc_i - 1.5f) < 1e-5f, "althold 0.28: accel 1.5 m/s^2, jerk 3 m/s^3, acceleration loop P 0 / I 1.5"); }
       Settings t; defaults(t); t.althold.mid_stick = 45; t.althold.climb_rate = 35; t.althold.low_stick = 25; t.althold.deadband = 10; fc::AltHoldConfig a; apply_althold(t, a);
       CHECK(fabsf(a.mid_stick - 0.45f) < 1e-6f && fabsf(a.max_climb_mps - 3.5f) < 1e-5f && a.low_stick <= 0.30f + 1e-6f, "althold: 45 %% holds, 3.5 m/s; a 'low' that would leave no descent travel is pulled down (%.2f)", a.low_stick); }
     CHECK(c.loop_hz == def.loop_hz && c.est_hz == def.est_hz && c.max_arm_angle_deg == def.max_arm_angle_deg && c.airmode == def.airmode && c.airmode == fc::AM_AUTO && fabsf(c.airmode_threshold - def.airmode_threshold) < 1e-6f, "default settings reproduce the core's defaults (loop, arming, airmode)");

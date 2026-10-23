@@ -53,10 +53,16 @@ static void t_parser() {
       CHECK(done == 1 && p.crc_errors() == 1 && p.frames() == 1 && p.command() == 0x1F01, "a frame with a wrong checksum is dropped and counted; the next one is read"); }
     { flow::MspV2Parser p; auto f = flow_frame(200, 1, 2); f[9] ^= 0x40; int done = 0; for (uint8_t c : f) done += p.feed(c);
       CHECK(done == 0 && p.crc_errors() == 1, "one flipped bit in the payload: dropped"); }
-    { flow::MspV2Parser p; int done = 0; const uint8_t junk[] = {0x00, 0xFF, '$', 'M', '<', '$', '$', 'X', 'x', '$', 'X'};
+    { flow::MspV2Parser p; int done = 0; const uint8_t junk[] = {0x00, 0xFF, '$', 'M', '!', '$', '$', 'X', 'x', '$', 'X'};
       for (uint8_t c : junk) done += p.feed(c);
       const auto f = range_frame(100, 777); for (size_t i = 2; i < f.size(); i++) done += p.feed(f[i]);       // (the junk ended with "$X": the frame carries on from there)
-      CHECK(done == 1 && p.command() == 0x1F01 && p.crc_errors() == 0, "noise, an MSP v1 header and a doubled '$' before the frame: found all the same"); }
+      CHECK(done == 1 && p.command() == 0x1F01 && p.crc_errors() == 0, "noise, an MSP v1 error header and a doubled '$' before the frame: found all the same"); }
+    { // MSP v1 (MSP_SET_RAW_RC from a receiver bridge): '$' 'M' '<' len cmd payload xor
+      flow::MspV2Parser p; std::vector<uint8_t> f = {'$', 'M', '<', 4, 200, 0xDC, 0x05, 0xE8, 0x03}; uint8_t x = 0; for (size_t i = 3; i < f.size(); i++) x ^= f[i]; f.push_back(x);
+      int done = 0; for (uint8_t c : f) done += p.feed(c);
+      CHECK(done == 1 && p.version() == 1 && p.command() == 200 && p.size() == 4 && p.payload()[0] == 0xDC, "an MSP v1 frame: read too (command %u, %u bytes)", p.command(), p.size());
+      f.back() ^= 1; done = 0; for (uint8_t c : f) done += p.feed(c);
+      CHECK(done == 0 && p.crc_errors() == 1, "an MSP v1 frame with a wrong xor: dropped"); }
     { flow::MspV2Parser p; int done = p.feed('$'); for (uint8_t c : flow_frame(7, 1, 2)) done += p.feed(c);
       CHECK(done == 1 && p.payload()[0] == 7, "a stray '$' right before a frame: the frame's own '$' starts it again"); }
     { flow::MspV2Parser p; int done = 0; for (uint8_t c : msp(0x1F01, {1, 2, 3, 4, 5}, '>')) done += p.feed(c); for (uint8_t c : msp(0x1F01, {1, 2, 3, 4, 5}, '!')) done += p.feed(c);
@@ -100,7 +106,7 @@ static int feed(Wire& w, flow::MspFlow& d, uint32_t& t, const std::vector<int>& 
 
 static void t_msp_flow() {
     printf("[msp flow] MicoAir MTF-01 style sensor: flow and its lidar\n");
-    { Wire w; flow::MspFlow d(w); flow::Reading r; uint32_t t = 0;
+    { Wire w; flow::MspFlow d(&w); flow::Reading r; uint32_t t = 0;
       CHECK(d.init() && !d.update(1000, r) && strcmp(d.name(), "MSP flow") == 0 && fabsf(d.nominal_rate_hz() - 20.0f) < 1e-6f, "nothing on the wire: no reading");
       const int first = feed(w, d, t, {100}, r), four = feed(w, d, t, {100, 100, 100, 100}, r), fifth = feed(w, d, t, {100}, r);
       CHECK(first == 0 && four == 0 && fifth == 1 && fabsf(r.x - 50.0f) < 1e-3f && fabsf(r.y + 50.0f) < 1e-3f, "the first frame only starts the timing; five more, 10 ms apart, make one reading: 500 counts in 50 ms = %.2f rad/s (motion / 200 / time, as Betaflight)", r.x);
@@ -119,7 +125,7 @@ static void t_msp_flow() {
       { feed(w, d, t, {40, 40}, r); t += 1500000; w.put(flow_frame(255, 40, -40)); const bool pause = d.update(t, r); const int four2 = feed(w, d, t, {2, 2, 2, 2}, r), fifth2 = feed(w, d, t, {2}, r);
         CHECK(!pause && four2 == 0 && fifth2 == 1 && fabsf(r.x - 1.0f) < 1e-5f, "1.5 s of silence: what was summed before is thrown away, the frame after it only restarts the timing (%.3f rad/s from the five that follow)", r.x); }
       CHECK(d.range_frames() == 0, "(no range frame so far)"); }
-    { Wire w; flow::MspFlow d(w); flow::Reading r; flow::RangeSample s; d.init();
+    { Wire w; flow::MspFlow d(&w); flow::Reading r; flow::RangeSample s; d.init();
       CHECK(!d.take_range(s), "no distance yet");
       w.put(range_frame(255, 1234)); const bool flow_new = d.update(5000, r);
       CHECK(!flow_new && d.take_range(s) && fabsf(s.distance_m - 1.234f) < 1e-6f && s.quality_pct == 100 && !d.take_range(s), "range frame 1234 mm: 1.234 m, handed over once (and it is not a flow reading)");
@@ -129,7 +135,7 @@ static void t_msp_flow() {
       w.put(msp(0x1F01, {1, 2, 3, 4})); w.put(msp(0x1F02, {1, 2, 3, 4, 5, 6, 7, 8})); w.put(msp(0x1F03, {1, 2, 3, 4, 5, 6, 7, 8, 9})); d.update(9000, r);
       CHECK(!d.take_range(s) && d.range_frames() == 5 && d.flow_frames() == 0 && d.samples() == 0 && d.parser().frames() == 8, "frames that are too short, and commands this driver does not know, are ignored"); }
     { // both kinds mixed, and never more than 256 bytes per call
-      Wire w; flow::MspFlow d(w); flow::Reading r; flow::RangeSample s; d.init(); uint32_t t = 0;
+      Wire w; flow::MspFlow d(&w); flow::Reading r; flow::RangeSample s; d.init(); uint32_t t = 0;
       feed(w, d, t, {0, 4, 4, 4, 4}, r);
       t += 10000; w.put(range_frame(255, 500)); w.put(flow_frame(255, 4, 0)); CHECK(d.update(t, r) && fabsf(r.x - 2.0f) < 1e-4f && d.take_range(s) && fabsf(s.distance_m - 0.5f) < 1e-6f, "a range and a flow frame in one pass: both come out");
       for (int i = 0; i < 40; i++) w.put(flow_frame(255, 1, 1));       // 40 x 18 = 720 bytes
@@ -137,7 +143,7 @@ static void t_msp_flow() {
       CHECK(w.reads - r0 == 256 && w.q.size() == 720 - 256, "a call reads 256 bytes at most (%u): the thread has other sensors to serve", (unsigned)(w.reads - r0)); }
     { // against the simulated sensor: what it sends is what comes out
       MspFlowSim sim; sim.host_baud = 115200; FlowTruth truth; struct P : flow::BytePort { MspFlowSim* s; int read() override { return s->read(); } } port; port.s = &sim;
-      flow::MspFlow d(port); d.init(); flow::Reading r; double sx = 0, sy = 0, worst = 0; int n = 0; float range = 0; flow::RangeSample rs;
+      flow::MspFlow d(&port); d.init(); flow::Reading r; double sx = 0, sy = 0, worst = 0; int n = 0; float range = 0; flow::RangeSample rs;
       for (uint32_t ms = 1; ms <= 2000; ms++) { truth.push(0.30f, -0.20f, 0.5f, 0.25f, 1.5f, 1.0f); sim.tick(ms, truth);
           if (d.update(ms * 1000u, r) && ms > 200) { sx += r.x; sy += r.y; n++; worst = fmax(worst, fmax(fabs(r.x - (0.30 - 0.25 / 1.5)), fabs(r.y - (-0.20 + 0.5 / 1.5)))); } if (d.take_range(rs)) range = rs.distance_m; }
       // x = roll rate - v_right / range = 0.30 - 0.25 / 1.5;  y = pitch rate + v_forward / range = -0.20 + 0.5 / 1.5

@@ -23,6 +23,8 @@
 #define ICM45605_WHO_AM_I   0xE5
 #define BMI160_WHO_AM_I     0xD1
 #define BMI270_WHO_AM_I     0x24
+#define ICM20948_WHO_AM_I   0xEA     // bank 0 register 0x00
+#define ICM20649_WHO_AM_I   0xE1
 
 struct IMUAccGyroRawData
 {

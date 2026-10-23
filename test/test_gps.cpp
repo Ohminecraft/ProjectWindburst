@@ -111,7 +111,8 @@ static void t_engine(UbxVersion ver) {
     CHECK(sim.dynmodel == 8, "%s after the first 3D fix the dynamic model becomes AIRBORNE<4g (u-blox dynModel 8): %u", tag, sim.dynmodel);
     check_pvt_solution(e, sim.truth, tag);
     CHECK(e.rate_hz() > 8.5f && e.rate_hz() < 11.5f, "%s measured solution rate %.1f Hz", tag, e.rate_hz());
-    if (ver >= UBX_M8) CHECK(e.sat_count() == 6 && e.sats()[0].sv_id == 10 && e.sats()[0].cno == 30, "%s satellite list: %d", tag, e.sat_count());
+    if (ver >= UBX_M8) CHECK(e.sat_count() == 6 && e.sats()[0].sv_id == 10 && e.sats()[0].cno == 30 && (e.sats()[0].flags & 0x0F) == 0x0D, "%s satellite list: %d (NAV-SAT: quality 5, used)", tag, e.sat_count());
+    else CHECK(e.sat_count() == 6 && e.sats()[0].sv_id == 10 && e.sats()[0].flags == 0x0F, "%s satellite list (NAV-SVINFO): %d, flags as NAV-SAT's (quality 7, used: 0x%x)", tag, e.sat_count(), e.sat_count() ? (unsigned)e.sats()[0].flags : 0u);
     // armed: satellite info is switched off, disarmed: back on
     e.set_armed(true); run(e, sim, t, 500, [&] { return false; });
     if (ver >= UBX_M8) CHECK(!sim.navsat && sim.sat_rate == 0, "%s NAV-SAT stopped while armed", tag);

@@ -1,6 +1,7 @@
 #pragma once
 #include "../config/fast_code.h"
 #include "types.h"
+#include "kinematics.h"
 
 // ============================================================================
 // Altitude Hold - structure follows ArduCopter ModeAltHold::run(): a 5-state machine so the position target can never
@@ -13,6 +14,19 @@
 // The HOVER THROTTLE - the one number that turns "accelerate up by a" into a throttle - is not a setting to get right: it differs
 // by a factor of five between a heavy camera craft (50 %) and a racing quad (10 %). It is measured all the time, in every flight
 // mode (HoverEstimator), and a take-off raises the throttle gently until the craft leaves the ground instead of jumping to a guess.
+//
+// The controller (0.28) is AC_PosControl's vertical cascade (D_update_controller), with PX4's hover normalisation:
+//   stick -> wanted climb rate -> jerk-limited shaping (kinematics.h: accel <= accel_z, jerk <= jerk_z) -> desired position,
+//   velocity and acceleration
+//   position error -> P (kp_z)                              -> + desired velocity  = velocity target
+//   velocity error -> P (kp_v) (+ I ki_v, 0 by default)     -> + desired accel     = acceleration target
+//   acceleration error (target - MEASURED, low-passed acc_filt_hz) -> P (acc_p) + I (acc_i)  -> + target (feed-forward)
+//   thrust = hover x (1 + that / g) / cos(tilt)
+// The measured-acceleration loop is what ArduPilot has and the controller before 0.28 had not: a gust, prop wash or a sagging
+// battery is answered by the thrust at once, not first through a velocity error; and its integrator - not the velocity's - takes
+// up what the hover estimate gets wrong. While Altitude Hold flies, the hover estimate itself learns slowly (3 s): it is the
+// feed-forward there, and a fast one fought the integrators (ArduPilot learns over 10 s, MOT_THST_HOVER). Flown by hand it keeps
+// learning fast (0.4 s): the failsafe descent without a height estimate has nothing else.
 // ============================================================================
 namespace fc {
 
@@ -31,17 +45,18 @@ public:
     // The craft just left the ground at this throttle, accelerating up with a_up (m/s^2): a first reading, taken at once.
     void seed(float throttle, float up_cos, float a_up) { value = clampf(throttle * maxf(up_cos, 0.5f) / maxf(1.0f + a_up / kG0, 0.5f), min, max); primed_ = false; }
     // throttle: here the mean MOTOR output 0..1. a_up: world-frame upward acceleration without gravity (m/s^2).
-    WB_FAST void update(float throttle, float up_cos, float a_up, float dt) {
+    WB_FAST void update(float throttle, float up_cos, float a_up, float dt, bool slow = false) {
         if (up_cos < 0.7f || dt <= 0.0f) return;                                 // tilted more than 45 deg: not a hover measurement
         const float num = throttle * up_cos, den = 1.0f + a_up / kG0;
         if (!primed_) { thr_lp_ = num; den_lp_ = den; primed_ = true; }
         const float k = dt / (kSignalTc + dt);                                   // the same smoothing on both: motor lag and vibration cancel in the ratio
         thr_lp_ += k * (num - thr_lp_); den_lp_ += k * (den - den_lp_);
         if (thr_lp_ < 0.04f || den_lp_ < 0.7f || den_lp_ > 1.4f) return;         // motors barely on, or accelerating hard
-        value = clampf(value + dt / (kTc + dt) * (thr_lp_ / den_lp_ - value), min, max);
+        const float tc = slow ? kTcSlow : kTc;
+        value = clampf(value + dt / (tc + dt) * (thr_lp_ / den_lp_ - value), min, max);
     }
 private:
-    static constexpr float kSignalTc = 0.10f, kTc = 0.40f;
+    static constexpr float kSignalTc = 0.10f, kTc = 0.40f, kTcSlow = 3.0f;
     float thr_lp_ = 0.0f, den_lp_ = 0.0f; bool primed_ = false;
 };
 
@@ -54,8 +69,13 @@ struct AltHoldConfig {
     float deadband = 0.05f;             // +- this around mid_stick still holds (0.8.7 and before: 0.10 of the half stick, the same 5 %)
     float max_stick = 1.0f;             // full climb rate here; full descent rate at low_stick
     float kp_z = 1.2f;                  // 1/s   position error -> velocity
-    float kp_v = 5.0f, ki_v = 3.0f;     // velocity error -> accel (m/s^2), integral of it
-    float i_limit_mps2 = 4.0f;
+    float kp_v = 5.0f, ki_v = 0.0f;     // velocity error -> accel (m/s^2), integral of it (PSC_VELZ_P / _I: the I is the accel loop's)
+    float accel_z_mps2 = 2.5f;          // the desired climb rate changes with at most this acceleration (PILOT_ACCEL_Z)
+    float jerk_z_mps3 = 5.0f;           // ... and this jerk (PSC_JERK_D)
+    float acc_p = 0.5f, acc_i = 1.0f;   // measured-acceleration loop: share of the error added (1/1), its integral (1/s)
+    float acc_i_max = 6.0f;             // m/s^2 the integrator may hold (a hover estimate 40 % off)
+    float acc_filt_hz = 20.0f;          // low-pass of the acceleration error (PSC_ACCZ_FLTE)
+    float i_limit_mps2 = 4.0f;          // velocity integrator limit (ki_v)
     float takeoff_alt_m = 0.6f, takeoff_climb_mps = 0.8f;
     float low_stick = 0.06f;            // below this = "throttle low"
     float hover_default = 0.40f;        // motor output that hovers: only the guess before the first measurement
@@ -100,7 +120,7 @@ public:
     // current (Altitude Hold needs it the moment it is switched on, the failsafe descent needs it without an altitude estimate).
     void learn(float throttle, float up_cos, float a_up, float dt) {
         if (state == AhState::TAKEOFF && !lifted_) return;           // the take-off ramp is not a hover measurement: the lift-off is (below)
-        hover_est.update(to_motor(throttle), up_cos, a_up, dt); hover = hover_est.value;
+        hover_est.update(to_motor(throttle), up_cos, a_up, dt, lifted()); hover = hover_est.value;
     }
 
     // Returns throttle 0..1 for the mixer.
@@ -136,16 +156,19 @@ public:
                 ramp_ += cfg.takeoff_ramp_per_s * dt;
                 if (in.v > cfg.liftoff_v_mps || in.z - z0 > cfg.liftoff_z_m) {
                     lifted_ = true; hover_est.seed(to_motor(ramp_), cosT, in.a_up); hover = hover_est.value;
-                    reset_ctl(in.z); takeoff_t = 0;
+                    reset_ctl(in.z, in.v); takeoff_t = 0;
                 } else if (ramp_ >= cfg.takeoff_abort_throttle) { state = AhState::LANDED_IDLE; need_low = true; return 0.0f; }      // it does not fly: stop, and want the stick down first
                 else return ramp_;
             }
             takeoff_t += dt;
-            float ramp = clampf(takeoff_t / 0.6f, 0.0f, 1.0f); // ease the climb target in, don't slam
-            float vt = cfg.takeoff_climb_mps * ramp;
-            z_target = minf(z_target + vt * dt, z0 + cfg.takeoff_alt_m);
+            // the climb to the take-off height, shaped like any other (it starts gently); the take-off is complete when the TARGET
+            // gets there (ArduCopter's takeoff), and the FLYING state stops it - or climbs on, if the stick says so
+            // (the climb rate falls as sqrt(2 a d) towards the height: the target arrives there in finite time; `left` counts from
+            // where the target would come to rest from its present climb - the shaping stops it in about accel_z / jerk_z seconds)
+            const float left = z0 + cfg.takeoff_alt_m - (pos_des_ + vel_des_ * cfg.accel_z_mps2 / cfg.jerk_z_mps3);
+            const float vt = left > 0.0f ? minf(cfg.takeoff_climb_mps, kin::sqrt_ctl(left, 0.0f, kTakeoffBrake, dt)) : 0.0f;
             float thr = control(in, dt, vt, cosT);
-            bool reached = in.z >= z0 + cfg.takeoff_alt_m - 0.05f || takeoff_t > 4.0f;
+            bool reached = left <= 0.02f || in.z >= z0 + cfg.takeoff_alt_m - 0.05f || takeoff_t > 4.0f;
             // Off the ground and the pilot pulls the stick down (or the failsafe wants down): that is "descend", flown by the
             // FLYING state at its descent rate until the craft stands again - not a motor cut from wherever it is (ArduCopter
             // ends a take-off the same way when the climb request turns negative).
@@ -163,16 +186,11 @@ public:
             else if (!in.pilot_absent) {                 // (nobody at the stick, no descent ordered yet: hold the height)
                 vt = stick_rate(in.stick01);
             }
-            if (vt == 0.0f) {                            // holding: target stays put (like D_set_pos_target_from_climb_rate with 0)
-                // nothing to integrate
-            } else z_target += vt * dt;
-            // never let the target run away from reality (e.g. motor saturation): bounded lead, like ArduPilot's pos error limit
-            z_target = clampf(z_target, in.z - 2.0f, in.z + 2.0f);
             float thr = control(in, dt, vt, cosT);
             // landing detection: pilot/failsafe wants down, we are not moving, and the controller is asking for (near) min throttle
             bool want_down = in.ext_climb ? in.climb_mps < 0.0f : (low || in.failsafe_descent);
             // (target far below reality while not moving = we are standing on something)
-            if (want_down && fabsf(in.v) < cfg.land_speed_mps && (to_motor(thr) < hover * 0.85f || in.z - z_target > 0.8f)) land_t += dt; else land_t = 0;
+            if (want_down && fabsf(in.v) < cfg.land_speed_mps && (to_motor(thr) < hover * 0.85f || in.z - pos_des_ > 0.8f)) land_t += dt; else land_t = 0;
             if (land_t > 1.0f) { state = AhState::LANDED_IDLE; need_low = true; land_t = 0; return 0.0f; } // must bring throttle low before the next takeoff
             return thr;
         }
@@ -188,43 +206,72 @@ public:
         return 0.0f;
     }
     // Call when Altitude Hold is (re)engaged in flight from another mode; seeds integrator so throttle does not jump.
-    void begin_flight(float z, float current_throttle01, float up_cos) {
+    // (AC_PosControl::D_init_controller: the targets start at the craft's state, the integrator at what the present throttle gives)
+    void begin_flight(float z, float current_throttle01, float up_cos, float v = 0.0f, float a_up = 0.0f) {
         state = AhState::FLYING;
-        z_target = z; vel_int = ((to_motor(current_throttle01) * maxf(up_cos, 0.5f)) / hover - 1.0f) * kG0;
-        vel_int = clampf(vel_int, -cfg.i_limit_mps2, cfg.i_limit_mps2);
-        land_t = 0; steady_t = 0; sat_ = 0;
+        reset_ctl(z, v, a_up);
+        acc_int_ = clampf(((to_motor(current_throttle01) * maxf(up_cos, 0.5f)) / hover - 1.0f) * kG0 - acc_des_, -cfg.acc_i_max, cfg.acc_i_max);
     }
     void on_disengage() { if (state != AhState::STOPPED) { state = AhState::STOPPED; } }
     AhState get_state() const { return state; }
     bool lifted() const { return state == AhState::FLYING || (state == AhState::TAKEOFF && lifted_); }      // off the ground under Altitude Hold
-    float target_z() const { return z_target; }
-    float integrator() const { return vel_int; }
+    float target_z() const { return pos_des_; }
+    float target_v() const { return vel_des_; }          // the shaped climb rate
+    float target_a() const { return acc_des_; }
+    float integrator() const { return acc_int_; }        // the acceleration loop's integrator (m/s^2): the hover error it carries
 
 private:
-    WB_FAST float control(const AhInput& in, float dt, float vt_ff, float cosT) {
-        // (the limits follow a commanded rate that is beyond the pilot's own)
-        float v_des = clampf(cfg.kp_z * (z_target - in.z) + vt_ff, -maxf(cfg.max_descend_mps, -vt_ff) * 1.5f, maxf(cfg.max_climb_mps, vt_ff) * 1.5f);
-        float verr = v_des - in.v;
-        // Anti-windup (AC_PosControl limits its integrator the same way): while the throttle stands at one of its ends, the
+    WB_FAST float control(const AhInput& in, float dt, float vt, float cosT) {
+        // ---- the target: moved on by its own velocity / acceleration, then shaped towards the wanted climb rate. Not further in
+        //      a direction the motors cannot give any more (sat_: AC_PosControl's limit vector) - the target would run away.
+        const float lim = (float)sat_;
+        kin::update_pos_vel_accel(pos_des_, vel_des_, acc_des_, dt, lim, pos_des_ - in.z, vel_err_);
+        // (a commanded rate beyond the pilot's own - GPS Rescue - gets the room it needs)
+        const float up = maxf(cfg.max_climb_mps, vt), dn = maxf(cfg.max_descend_mps, -vt);
+        // over-speed (AC_PosControl::calculate_overspeed_gain): taken over while climbing or sinking faster than the limits allow,
+        // the target is brought back with acceleration and jerk raised in proportion - not a metre and more of coasting on
+        float og = 1.0f;
+        if (vel_des_ > up) og = kOverspeedGain * vel_des_ / up;
+        else if (vel_des_ < -dn) og = kOverspeedGain * -vel_des_ / dn;
+        kin::shape_vel_accel(clampf(vt, -dn, up), 0.0f, vel_des_, acc_des_, -cfg.accel_z_mps2 * og, cfg.accel_z_mps2 * og, cfg.jerk_z_mps3 * og, dt, false);
+        // never further than 2 m from the craft (ArduPilot: the position error is limited by the stopping distances)
+        pos_des_ = clampf(pos_des_, in.z - 2.0f, in.z + 2.0f);
+        // ---- position -> velocity -> acceleration
+        const float v_cmd = clampf(cfg.kp_z * (pos_des_ - in.z) + vel_des_, -dn * 1.5f, up * 1.5f);
+        vel_err_ = v_cmd - in.v;
+        // Anti-windup (AC_PosControl limits its integrators the same way): while the throttle stands at one of its ends, an
         // integrator may only move away from that end. Otherwise a craft held down, or one that cannot climb any faster, comes
         // back with seconds of stored-up error.
-        const float i_step = cfg.ki_v * verr * dt;
-        if (!((sat_ > 0 && i_step > 0.0f) || (sat_ < 0 && i_step < 0.0f))) vel_int = clampf(vel_int + i_step, -cfg.i_limit_mps2, cfg.i_limit_mps2);
-        float a = clampf(cfg.kp_v * verr + vel_int, -cfg.max_down_accel_mps2, cfg.max_accel_mps2);
+        const float vi_step = cfg.ki_v * vel_err_ * dt;
+        if (!((sat_ > 0 && vi_step > 0.0f) || (sat_ < 0 && vi_step < 0.0f))) vel_int = clampf(vel_int + vi_step, -cfg.i_limit_mps2, cfg.i_limit_mps2);
+        const float a_cmd = clampf(cfg.kp_v * vel_err_ + vel_int + acc_des_, -cfg.max_down_accel_mps2, cfg.max_accel_mps2);
+        // ---- the measured-acceleration loop
+        const float e = a_cmd - in.a_up;
+        if (fresh_) { acc_err_ = e; fresh_ = false; }
+        else acc_err_ += (e - acc_err_) * dt / (dt + 1.0f / (2.0f * kPi * cfg.acc_filt_hz));
+        const float ai_step = cfg.acc_i * acc_err_ * dt;
+        if (!((sat_ > 0 && ai_step > 0.0f) || (sat_ < 0 && ai_step < 0.0f))) acc_int_ = clampf(acc_int_ + ai_step, -cfg.acc_i_max, cfg.acc_i_max);
+        const float a = clampf(a_cmd + cfg.acc_p * acc_err_ + acc_int_, -cfg.max_down_accel_mps2, cfg.max_accel_mps2 + cfg.acc_i_max);
         // thrust ~ motor output: a = g * (output * cos / hover - 1). Leaning, the output is raised by 1 / cos (at most x2, 60 deg).
         // Past 84 deg it is taken back and on its back the craft gets none: thrust would push it DOWN there (ArduPilot's
         // "inverted factor", AC_AttitudeControl_Multi::get_throttle_boosted).
         const float inverted = clampf(10.0f * in.up_cos, 0.0f, 1.0f);
-        const float out = hover * (1.0f + a / kG0) / cosT * inverted;
+        const float out = hover * maxf(1.0f + a / kG0, 0.0f) / cosT * inverted;
         sat_ = out >= top_ ? 1 : (out <= idle_ ? -1 : 0);
         return to_throttle(out);
     }
+    static constexpr float kOverspeedGain = 2.0f;           // POSCONTROL_OVERSPEED_GAIN_U
+    static constexpr float kTakeoffBrake = 1.0f;            // m/s^2 the take-off climb is planned to stop with
     static float failsafe_rate(float z) { return clampf(0.3f + 0.15f * z, 0.3f, 1.5f); } // slow near ground, brisker up high (BF alt-scaled descent)
-    void reset_ctl(float z) { z_target = z; vel_int = 0; land_t = 0; steady_t = 0; sat_ = 0; }
+    void reset_ctl(float z, float v = 0.0f, float a = 0.0f) {
+        pos_des_ = z; vel_des_ = v; acc_des_ = clampf(a, -cfg.accel_z_mps2, cfg.accel_z_mps2);
+        vel_int = 0; acc_int_ = 0; acc_err_ = 0; vel_err_ = 0; fresh_ = true; land_t = 0; steady_t = 0; sat_ = 0;
+    }
 
     AhState state = AhState::STOPPED;
     bool need_low = true, lifted_ = false; int8_t sat_ = 0;      // sat_: the output of the last cycle stood at the top (+1) / the bottom (-1) of the motor range
     float idle_ = 0.055f, top_ = 1.0f;
-    float z_target = 0, vel_int = 0, takeoff_t = 0, z0 = 0, land_t = 0, steady_t = 0, ramp_ = 0;
+    float pos_des_ = 0, vel_des_ = 0, acc_des_ = 0, vel_err_ = 0, acc_err_ = 0, acc_int_ = 0; bool fresh_ = true;     // shaped target, loop state
+    float vel_int = 0, takeoff_t = 0, z0 = 0, land_t = 0, steady_t = 0, ramp_ = 0;
 };
 } // namespace fc

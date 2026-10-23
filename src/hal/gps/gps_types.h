@@ -57,7 +57,7 @@ struct Solution {
     DateTime date;
 };
 
-struct SatInfo { uint8_t gnss_id = 255, sv_id = 0, cno = 0; int8_t elev = 0; int16_t azim = 0; uint32_t flags = 0; };
+struct SatInfo { uint8_t gnss_id = 255, sv_id = 0, cno = 0; int8_t elev = 0; int16_t azim = 0; uint32_t flags = 0; };    // flags: u-blox NAV-SAT's (bits 0-2 quality, bit 3 used)
 
 enum State : uint8_t { ST_UNKNOWN, ST_INITIALIZED, ST_DETECT_BAUD, ST_CHANGE_BAUD, ST_CONFIGURE, ST_RECEIVING_DATA, ST_LOST_COMMUNICATION };
 enum UbxVersion : uint8_t { UBX_UNDEF, UBX_M5, UBX_M6, UBX_M7, UBX_M8, UBX_M9, UBX_M10 };

@@ -546,7 +546,9 @@ static void t_althold() {
       CHECK(fabsf(up - (hov + (1 - hov) * 0.5f)) < 0.03f && fabsf(down - hov * 0.5f) < 0.03f, "[%s] and the stick flies it: three quarters up = %.2f, a quarter = %.2f", who, up, down);
       b.baro = true; b.range = true; const float z1 = b.pl.z; b.run(0.4f, s); const bool again = b.out.althold_active && !b.out.althold_unavailable && b.out.ah_state == AhState::FLYING;
       lo = hi = z1; for (int k = 0; k < 50; k++) { b.run(0.1f, s); lo = fminf(lo, b.pl.z); hi = fmaxf(hi, b.pl.z); }
-      CHECK(again && hi - z1 < 0.8f && z1 - lo < 0.8f && lo > 0.05f && fabsf(b.pl.vz) < 0.15f && b.out.ah_state == AhState::FLYING, "[%s] sensors back: Altitude Hold takes over from that throttle and holds (%.2f m then, %.2f .. %.2f after, vz %.2f)", who, z1, lo, hi, b.pl.vz); }
+      // (0.28: taken over the way AC_PosControl does it - the target starts at the craft's climb rate and is stopped with the
+      // limited acceleration, so a craft that was still climbing coasts on a little instead of being yanked back)
+      CHECK(again && hi - z1 < 1.2f && z1 - lo < 0.8f && lo > 0.05f && fabsf(b.pl.vz) < 0.15f && b.out.ah_state == AhState::FLYING, "[%s] sensors back: Altitude Hold takes over from that throttle and holds (%.2f m then, %.2f .. %.2f after, vz %.2f)", who, z1, lo, hi, b.pl.vz); }
     // the throttle Altitude Hold commands goes to the motors as it is: no throttle boost on it, no anti-gravity from it
     { Rig r; r.baro = true; r.range = true; r.h.baro_ok = true; Pilot p; p.mode = 1; p.althold = true; r.run(1.0f, p); p.arm = true; r.run(0.3f, p); p.thr = 0.8f; float ag = 0, off = 0, moved = 0, prev = 0;
       for (int k = 0; k < 4000; k++) { if (k == 700) p.thr = 0.5f; if (k == 2500) p.thr = 0.7f; r.run(0.001f, p); float mean = 0; for (int m = 0; m < 4; m++) mean += r.out.motor[m] * 0.25f;
@@ -561,7 +563,7 @@ static void t_althold() {
       CHECK(r.core.vertical().range_reanchors() == 1 && fabsf(r.core.vertical().range_anchor() + 0.35f) < 0.08f && hi - z0 < 0.12f && z0 - lo < 0.12f && fabsf(r.out.est.z - r.pl.z) < 0.12f,
             "hovering at %.2f m, a table 35 cm high under it for 8 s: the ground level is moved (%.2f m), the craft is not (%.2f .. %.2f)", z0, r.core.vertical().range_anchor(), lo, hi);
       r.ground_level = 0.0f; for (int k = 0; k < 80; k++) { r.run(0.1f, p); lo = fminf(lo, r.pl.z); hi = fmaxf(hi, r.pl.z); }
-      CHECK(r.core.vertical().range_reanchors() == 2 && hi - z0 < 0.12f && z0 - lo < 0.12f, "and off the table again (%.2f .. %.2f)", lo, hi); }
+      CHECK(r.core.vertical().range_reanchors() == 2 && hi - z0 < 0.15f && z0 - lo < 0.15f, "and off the table again (%.2f .. %.2f of %.2f)", lo, hi, z0); }
     // a GPS whose altitude is 3 m off (they wander like that): it has no say while there is a barometer
     for (int lidar = 0; lidar < 2; lidar++) { Rig r; r.baro = true; r.range = lidar; r.h.baro_ok = true; Pilot p; p.mode = 1; p.althold = true; r.run(1.0f, p); p.arm = true; r.run(0.3f, p); p.thr = 0.8f; r.run(0.7f, p); p.thr = 0.5f; r.run(8.0f, p);
       const float z0 = r.pl.z; r.gps = true; r.gps_alt_err = 3.0f; float lo = z0, hi = z0; for (int k = 0; k < 300; k++) { r.run(0.1f, p); lo = fminf(lo, r.pl.z); hi = fmaxf(hi, r.pl.z); }
@@ -617,8 +619,8 @@ static void t_failsafe() {
       CHECK(r.out.fs_cause == FS_LINK && r.out.althold_active && r.pl.vz < -0.1f, "the cause is shown (LINK), it is coming down (%.2f m/s)", r.pl.vz);
       p.link = true; p.roll = 0; p.pitch = 0; r.run(0.3f, p); CHECK(r.out.failsafe == FsStage::DESCENT && r.out.fs_cause == FS_LINK && r.pl.z > 0.5f && r.pl.z < z_top - 0.2f, "link back for 0.3 s: not believed yet, the descent goes on (stage %d)", (int)r.out.failsafe);
       r.run(0.8f, p); const float z_back = r.pl.z; r.run(2.0f, p);
-      CHECK(r.out.failsafe == FsStage::NONE && r.out.fs_cause == 0 && r.out.armed && r.out.ah_state == AhState::FLYING && fabsf(r.pl.z - z_back) < 0.2f && z_back > 0.3f,
-            "a second of unbroken link: the pilot has the craft back - Altitude Hold holds where the descent had got to (%.2f m, stage %d)", r.pl.z, (int)r.out.failsafe);
+      CHECK(r.out.failsafe == FsStage::NONE && r.out.fs_cause == 0 && r.out.armed && r.out.ah_state == AhState::FLYING && fabsf(r.pl.z - z_back) < 0.35f && z_back > 0.3f,
+            "a second of unbroken link: the pilot has the craft back - Altitude Hold holds where the descent had got to (%.2f m, from %.2f: the descent is stopped with the limited acceleration; stage %d)", r.pl.z, z_back, (int)r.out.failsafe);
       p.roll = 0.5f; r.run(1.0f, p); CHECK(fabsf(r.pl.right_down_deg() - angle_cmd(r, ROLL, 0.5f)) < 3.0f, "and the sticks are his again (roll %.1f deg)", r.pl.right_down_deg()); p.roll = 0;
       p.link = false; r.run(30.0f, p); CHECK(!r.out.armed && r.pl.z < 0.1f && r.out.failsafe == FsStage::LANDED, "lost for good: landed and disarmed (armed %d, z %.2f)", (int)r.out.armed, r.pl.z); }
     // the time limit is for a craft that does not come down - a descent that simply takes longer is never cut short in the air

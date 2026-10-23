@@ -1,5 +1,6 @@
 #pragma once
 #include "types.h"
+#include "kinematics.h"
 
 // ============================================================================
 // Horizontal position / velocity controller (north, east) - the cascade of ArduPilot's AC_PosControl (NE part):
@@ -11,6 +12,9 @@
 // is what the Angle controller takes. Used by Position Hold (position target fixed) and by GPS Rescue (velocity wanted, no
 // position target). The acceleration is limited to what the lean limit can give; the integrator may then only turn, not grow
 // (AC_PID_2D's limit vector).
+// A wanted velocity (GPS Rescue) is not taken as it is (0.28): it is shaped first - jerk-limited, at most shape_accel
+// (AC_PosControl::input_vel_accel_NE, kinematics.h) - and the shaped acceleration goes in as a feed-forward, so a new
+// ground speed is flown into smoothly instead of as a velocity step.
 // ============================================================================
 namespace fc {
 
@@ -43,6 +47,7 @@ struct PosControlConfig {
     float accel_corr = 2.5f;                           // m/s^2: the deceleration the square-root curve is laid out for
     float angle_max_deg = 30.0f;                       // lean limit of the controller
     float i_max = 5.0f;                                // m/s^2: what the integrator may hold (wind: 5 m/s^2 = 27 deg of lean)
+    float shape_accel = 2.5f, shape_jerk = 5.0f;       // a wanted velocity is reached with at most this acceleration / jerk (PSC_NE_ACC / PSC_JERK_NE)
 };
 
 class PosControlNE {
@@ -56,7 +61,7 @@ public:
         float af, ar; lean_to_accel(roll_deg, pitch_deg, af, ar);
         body_to_ne(af, ar, yaw_deg, i_[0], i_[1]); limit2(i_, cfg.i_max);
         acc_[0] = i_[0]; acc_[1] = i_[1];
-        for (int a = 0; a < 2; a++) { err_[a] = 0; err_last_[a] = 0; d_[a] = 0; vel_tgt_[a] = a == 0 ? vel_n : vel_e; }
+        for (int a = 0; a < 2; a++) { err_[a] = 0; err_last_[a] = 0; d_[a] = 0; vel_tgt_[a] = vel_des_[a] = a == 0 ? vel_n : vel_e; acc_des_[a] = 0; }
         limited_ = false; fresh_ = true;
     }
     void set_target(float pos_n, float pos_e) { tgt_[0] = pos_n; tgt_[1] = pos_e; }
@@ -66,8 +71,13 @@ public:
     // hold_position: steer to the target position (else only the wanted velocity counts and the target follows the craft).
     // vel_want: feed-forward (m/s; north, east).
     WB_FAST void update(float pos_n, float pos_e, float vel_n, float vel_e, float dt, bool hold_position, float vel_want_n = 0, float vel_want_e = 0) {
-        const float pos[2] = {pos_n, pos_e}, vel[2] = {vel_n, vel_e}, vw[2] = {vel_want_n, vel_want_e};
+        const float pos[2] = {pos_n, pos_e}, vel[2] = {vel_n, vel_e};
         float corr[2] = {0, 0};
+        // the wanted velocity, shaped (held still: shaped towards 0, so a hand-over from a moving target does not step either)
+        { const float want[2] = {vel_want_n, vel_want_e}, ff[2] = {0, 0};
+          kin::update_vel_accel_xy(vel_des_, acc_des_, dt);
+          kin::shape_vel_accel_xy(want, ff, vel_des_, acc_des_, cfg.shape_accel, cfg.shape_jerk, dt, false); }
+        const float* vw = vel_des_;
         if (hold_position) {
             float e[2] = {tgt_[0] - pos[0], tgt_[1] - pos[1]};
             const float len = sqrtf(e[0] * e[0] + e[1] * e[1]);
@@ -91,7 +101,7 @@ public:
         i_[0] += delta[0]; i_[1] += delta[1];
         if (limited_ && delta[0] * lim_dir_[0] + delta[1] * lim_dir_[1] > 0.0f) limit2(i_, i_len);
         limit2(i_, cfg.i_max);
-        for (int a = 0; a < 2; a++) out[a] = err_[a] * cfg.vel_p + i_[a] + d_[a] * cfg.vel_d;
+        for (int a = 0; a < 2; a++) out[a] = err_[a] * cfg.vel_p + i_[a] + d_[a] * cfg.vel_d + acc_des_[a];
         const float amax = kG0 * tanf(cfg.angle_max_deg * kDeg2Rad), olen = sqrtf(out[0] * out[0] + out[1] * out[1]);
         limited_ = olen > amax;
         if (limited_) { lim_dir_[0] = out[0] / olen; lim_dir_[1] = out[1] / olen; out[0] *= amax / olen; out[1] *= amax / olen; }
@@ -103,11 +113,13 @@ public:
     float accel_n() const { return acc_[0]; } float accel_e() const { return acc_[1]; }
     float target_n() const { return tgt_[0]; } float target_e() const { return tgt_[1]; }
     float vel_target_n() const { return vel_tgt_[0]; } float vel_target_e() const { return vel_tgt_[1]; }
+    float vel_desired_n() const { return vel_des_[0]; } float vel_desired_e() const { return vel_des_[1]; }      // the shaped wanted velocity
     float i_n() const { return i_[0]; } float i_e() const { return i_[1]; }
     float pos_error() const { return pos_err_; }
     bool limited() const { return limited_; }
 private:
     WB_FAST static void limit2(float v[2], float len) { const float l = sqrtf(v[0] * v[0] + v[1] * v[1]); if (l > len && l > 0.0f) { v[0] *= len / l; v[1] *= len / l; } }
+    float vel_des_[2] = {0, 0}, acc_des_[2] = {0, 0};
     float tgt_[2] = {0, 0}, vel_tgt_[2] = {0, 0}, err_[2] = {0, 0}, err_last_[2] = {0, 0}, d_[2] = {0, 0}, i_[2] = {0, 0}, acc_[2] = {0, 0}, lim_dir_[2] = {0, 0}, pos_err_ = 0;
     bool limited_ = false, fresh_ = true;
 };

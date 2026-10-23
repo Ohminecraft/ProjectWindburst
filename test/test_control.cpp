@@ -678,15 +678,16 @@ static void t_attitude() {
       CHECK(near(att[0], 36, 0.05f) && peak < 36.05f && t90 > 0.3f && t90 < 0.7f && fabsf(att[1]) < 0.01f && fabsf(att[2]) < 0.01f, "stick 0.8 -> 36 deg (linear in the stick): there after %.2f s, peak %.2f, pitch and heading untouched", t90, peak);
       // the per-axis P gains: a disturbance is corrected with kp x error
       StabilizeController k; StabilizeConfig kc = c; kc.kp[0] = 3; kc.kp[1] = 6; kc.kp[2] = 2; k.configure(kc); k.reset(0, 0, 0); const float a2[3] = {-2, 1, 3}, st0[2] = {0, 0}; k.update(st0, 0, a2, dt, sp);
-      CHECK(near(sp[0], 3 * 2 + (2 * -3) * sinf(1 * kDeg2Rad), 0.02f) && near(sp[1], 6 * -1 * cosf(-2 * kDeg2Rad) - (2 * -3) * cosf(1 * kDeg2Rad) * sinf(-2 * kDeg2Rad), 0.02f) && near(sp[2], 6 * -1 * sinf(-2 * kDeg2Rad) + (2 * -3) * cosf(1 * kDeg2Rad) * cosf(-2 * kDeg2Rad), 0.02f),
-            "Stabilize Roll / Pitch / Yaw P = 3 / 6 / 2: pushed 2 deg left, 1 deg nose-down and 3 deg right of its heading, it answers %.2f / %.2f / %.2f dps (kp x error, turned into body rates)", sp[0], sp[1], sp[2]);
+      // (0.29: the error is a rotation in the BODY frame - thrust vector, then heading - so for small angles each axis is kp x its error)
+      CHECK(near(sp[0], 3 * 2, 0.05f) && near(sp[1], 6 * -1, 0.05f) && near(sp[2], 2 * -3, 0.05f),
+            "Stabilize Roll / Pitch / Yaw P = 3 / 6 / 2: pushed 2 deg left, 1 deg nose-down and 3 deg right of its heading, it answers %.2f / %.2f / %.2f dps (kp x error, body frame)", sp[0], sp[1], sp[2]);
       // a big error is answered with the square root, not with kp x error
       StabilizeController b; b.configure(c); b.reset(0, 0, 0); const float a3[3] = {-40, 0, 0}; b.update(st0, 0, a3, dt, sp); const float lin = 550.0f / (4.5f * 4.5f);
       CHECK(near(sp[0], sqrtf(2 * 550 * (40 - lin / 2)), 0.5f) && sp[0] < 4.5f * 40, "40 deg off: %.0f dps (sqrt with half the acceleration limit), not 180", sp[0]);
       // heading hold: the target does not run away from a craft that cannot follow
       StabilizeController y; y.configure(c); y.reset(0, 0, 0); float ya[3] = {0, 0, 0}; for (int i = 0; i < 8000; i++) y.update(st0, 200, ya, dt, sp);
       CHECK(near(wrap180(y.target_deg(2) - ya[2]), 45, 0.5f), "yaw stick held while the craft is stuck: the heading target leads by 45 deg at most (%.1f)", wrap180(y.target_deg(2) - ya[2]));
-      y.hold_yaw(170); CHECK(y.target_deg(2) == 170 && y.target_rate(2) == 0, "on the ground the heading target is the craft's heading");
+      y.hold_yaw(170); CHECK(near(y.target_deg(2), 170, 1e-3f) && y.target_rate(2) == 0, "on the ground the heading target is the craft's heading");
       StabilizeController w; w.configure(c); w.reset(0, 0, 179); float wa[3] = {0, 0, 179}; for (int i = 0; i < 4000; i++) { w.update(st0, 60, wa, dt, sp); wa[2] = wrap180(wa[2] + sp[2] * dt); }
       CHECK(fabsf(wrap180(wa[2] - (179 + 60))) < 9 && near(sp[2], 60, 1.5f), "turning through north / south (+-180): no jump (heading %.1f after 1 s at 60 dps from 179)", wa[2]);
       // without the shaping
@@ -696,7 +697,7 @@ static void t_attitude() {
       StabilizeConfig lc = c; lc.limit_deg = 30; lc.input_tc = 0.05f; StabilizeController l; l.configure(lc); l.reset(0, 0, 0); float la[3] = {0, 0, 0}; const float full[2] = {1.5f, -1}; float lt90 = -1;
       for (int i = 0; i < 8000; i++) { l.update(full, 0, la, dt, sp); la[0] += sp[0] * dt; la[1] += sp[1] * dt; if (lt90 < 0 && la[0] > 27) lt90 = i * dt; }
       CHECK(near(la[0], 30, 0.05f) && near(la[1], -30, 0.05f) && lt90 < 0.35f, "tilt limit 30: full stick (and beyond) = 30 deg; input time constant 0.05 s is quicker (90 %% after %.2f s)", lt90);
-      s.reset(5, -3, 90); CHECK(s.target_deg(0) == 5 && s.target_deg(1) == -3 && s.target_deg(2) == 90 && s.target_rate(0) == 0 && s.target_accel(0) == 0, "reset: the target is where the craft is, at rest");
+      s.reset(5, -3, 90); CHECK(near(s.target_deg(0), 5, 1e-4f) && near(s.target_deg(1), -3, 1e-4f) && near(s.target_deg(2), 90, 1e-4f) && s.target_rate(0) == 0 && s.target_accel(0) == 0, "reset: the target is where the craft is, at rest");
       float keep[3] = {1, 2, 3}; s.update(st, 0, att, 0, keep); CHECK(keep[0] == 1 && keep[2] == 3, "dt 0: nothing happens"); }
     { StabilizeConfig c; const float dt = DT, st0[2] = {0, 0}; float sp[3];
       StabilizeController y; y.configure(c); y.reset(0, 0, 0); const float still[3] = {0, 0, 0}; for (int i = 0; i < 1000; i++) y.update(st0, 500, still, dt, sp);
@@ -768,7 +769,72 @@ static void t_inflight_trim() {
       CHECK(near(s.roll_deg(), 1.0f, 0.06f) && near(s.pitch_deg(), 0.0f, 0.01f), "a craft that sways around its hover attitude: the mean (%.3f, %.3f)", s.roll_deg(), s.pitch_deg()); }
 }
 
+// ---- 0.29: Stabilize as ArduPilot's quaternion attitude controller (attitude.h)
+// A craft whose body rates follow the commanded rates exactly: the attitude is integrated as a quaternion.
+static void quat_step(Quatf& q, const float sp_user[3], float dt) {
+    const float w[3] = {sp_user[ROLL] * kDeg2Rad, -sp_user[PITCH] * kDeg2Rad, sp_user[YAW] * kDeg2Rad};
+    const float rv[3] = {w[0] * dt, w[1] * dt, w[2] * dt}; Quatf d = Quatf::from_rotation_vector(rv);
+    q = q * d; const float n = sqrtf(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z); q.w /= n; q.x /= n; q.y /= n; q.z /= n;
+}
+static void quat_att(const Quatf& q, float att[3]) { float r, p, y; q.to_euler(r, p, y); att[ROLL] = r * kRad2Deg; att[PITCH] = -p * kRad2Deg; att[YAW] = y * kRad2Deg; }
+static void t_stabilize_quat() {
+    printf("[stabilize 0.29] quaternion attitude error (thrust vector first, then heading)\n");
+    {   Quatf tc; float e[3], tilt, terr;
+        thrust_vector_rotation_angles(Quatf::from_euler(0, 0, 0.5f), Quatf::from_euler(0, 0, 0), tc, e, tilt, terr);
+        CHECK(fabsf(e[0]) < 1e-6f && fabsf(e[1]) < 1e-6f && fabsf(e[2] - 0.5f) < 1e-5f && terr < 1e-5f, "only the heading differs: the whole error is heading (%.4f %.4f %.4f)", e[0], e[1], e[2]);
+        thrust_vector_rotation_angles(Quatf::from_euler(0.3f, 0, 0), Quatf::from_euler(0, 0, 0), tc, e, tilt, terr);
+        CHECK(fabsf(e[0] - 0.3f) < 1e-5f && fabsf(e[1]) < 1e-6f && fabsf(e[2]) < 1e-5f && fabsf(terr - 0.3f) < 1e-5f, "only the roll differs: roll error 0.3 rad, no heading error");
+        thrust_vector_rotation_angles(Quatf::from_euler(0.5f, 0.4f, 1.0f), Quatf::from_euler(0.5f, 0.4f, 1.0f), tc, e, tilt, terr);
+        CHECK(fabsf(e[0]) < 1e-4f && fabsf(e[1]) < 1e-4f && fabsf(e[2]) < 1e-4f && fabsf(tilt - acosf(cosf(0.5f) * cosf(0.4f))) < 1e-4f, "on target, banked and pitched: no error; tilt %.3f rad", tilt);
+    }
+    {   // the two rotations put together again give the target: thrust correction, then the heading about the body's z
+        const Quatf tgt = Quatf::from_euler(0.5f, -0.3f, 0.35f), bod = Quatf::from_euler(-0.2f, 0.1f, -0.4f); Quatf tc; float e[3], tilt, terr;
+        thrust_vector_rotation_angles(tgt, bod, tc, e, tilt, terr);
+        const float hz[3] = {0, 0, e[2]}; const Quatf back = bod * tc * Quatf::from_rotation_vector(hz);
+        const float dot = fabsf(back.w * tgt.w + back.x * tgt.x + back.y * tgt.y + back.z * tgt.z);
+        CHECK(dot > 0.99999f, "body x thrust correction x heading = the target (|dot| %.6f)", dot); }
+    StabilizeConfig c; const float dt = 0.002f, st0[2] = {0, 0};
+    {   // nose up 60 deg (user pitch -60), the heading 10 deg off: about the EARTH's vertical, which for this craft is mostly its
+        // roll axis - an Euler-difference controller would ask the body's yaw axis for all of it
+        StabilizeController s; s.configure(c); s.reset(0, -60, 10); float sp[3]; const float att[3] = {0, -60, 0};
+        const float hold[2] = {0, -60.0f / 45.0f}; StabilizeConfig cc = c; cc.limit_deg = 60; cc.rate_ff = false; s.configure(cc);
+        s.update(hold, 0, att, dt, sp);
+        CHECK(fabsf(sp[ROLL]) > 0.8f * fabsf(sp[YAW]) && fabsf(sp[ROLL]) > 5.0f, "nose up 60 deg, 10 deg off its heading: %.1f dps of roll, %.1f of yaw (the turn is about the vertical)", sp[ROLL], sp[YAW]); }
+    {   // the target pitched 30 deg nose down and turning at 60 dps, the craft exactly on it: the rates asked for are the target's
+        // own body rates - part of the turn is roll for a pitched craft
+        StabilizeController s; s.configure(c); s.reset(0, 0, 0); float sp[3] = {0, 0, 0}, att[3] = {0, 0, 0}; const float stp[2] = {0, 30.0f / 45.0f};
+        for (int i = 0; i < 1500; i++) { s.update(stp, 0, att, dt, sp); for (int a = 0; a < 3; a++) att[a] = s.target_deg(a); }
+        float acc_roll = 0, acc_yaw = 0;
+        for (int i = 0; i < 1500; i++) { s.update(stp, 60, att, dt, sp); if (i == 15) { acc_roll = s.target_accel(ROLL); acc_yaw = s.target_accel(YAW); } for (int a = 0; a < 3; a++) att[a] = s.target_deg(a); }
+        CHECK(near(fabsf(sp[ROLL]), 60.0f * sinf(30 * kDeg2Rad), 1.0f) && near(sp[YAW], 60.0f * cosf(30 * kDeg2Rad), 1.0f), "pitched 30 deg and turning at 60 dps: body rates %.1f roll / %.1f yaw (60 sin 30, 60 cos 30)", sp[ROLL], sp[YAW]);
+        CHECK(fabsf(acc_roll) > 0.4f * fabsf(acc_yaw) && fabsf(acc_yaw) > 10.0f, "and while the turn spins up, the rate loop's feed-forward has its roll share too (%.0f / %.0f deg/s^2)", acc_roll, acc_yaw); }
+    {   // the craft rolled 30 deg off a level target that turns: the target's yaw rate is turned into the craft's axes
+        StabilizeController s; s.configure(c); s.reset(0, 0, 0); float sp[3] = {0, 0, 0};
+        for (int i = 0; i < 1500; i++) { const float att[3] = {s.target_deg(ROLL) + 30, s.target_deg(PITCH), s.target_deg(YAW)}; s.update(st0, 60, att, dt, sp); }
+        CHECK(near(fabsf(sp[PITCH]), 60.0f * sinf(30 * kDeg2Rad), 2.0f), "rolled 30 deg off a target turning at 60 dps: %.1f dps of it is pitch for this craft (60 sin 30)", sp[PITCH]); }
+    {   // banked 40 deg, the heading 40 deg off: the heading is turned back about the vertical, the bank is not disturbed
+        StabilizeController s; s.configure(c); s.reset(40, 0, 0);
+        Quatf q = Quatf::from_euler(40 * kDeg2Rad, 0, 40 * kDeg2Rad); float att[3], sp[3], worst = 0;
+        // the target: hold 40 deg of bank with the stick (40 / 45 of full stick)
+        const float st[2] = {40.0f / 45.0f, 0};
+        for (int i = 0; i < 3000; i++) { quat_att(q, att); s.update(st, 0, att, dt, sp); quat_step(q, sp, dt); quat_att(q, att); worst = fmaxf(worst, fabsf(att[ROLL] - 40)); }
+        CHECK(fabsf(wrap180(att[YAW])) < 0.5f && fabsf(att[ROLL] - 40) < 0.3f && fabsf(att[PITCH]) < 0.3f, "back on its heading (%.2f), still banked 40 (%.2f / %.2f)", att[YAW], att[ROLL], att[PITCH]);
+        CHECK(worst < 3.0f, "and while it turned back the bank moved by %.2f deg at most (the error is taken about the thrust axis, not as Euler differences)", worst); }
+    {   // a big mixed error: 60 / -50 / 120 deg off, all at once - it converges, the tilt first
+        StabilizeController s; s.configure(c); s.reset(0, 0, 0);
+        Quatf q = Quatf::from_euler(60 * kDeg2Rad, 50 * kDeg2Rad, 120 * kDeg2Rad); float att[3], sp[3] = {0, 0, 0}, rates[3] = {0, 0, 0}; float terr_at_half = -1;
+        for (int i = 0; i < 5000; i++) { quat_att(q, att); s.update(st0, 0, att, dt, sp, rates); quat_step(q, sp, dt); for (int k = 0; k < 3; k++) rates[k] = sp[k];
+            if (i == 250) terr_at_half = s.thrust_error_deg(); }
+        quat_att(q, att);
+        CHECK(fabsf(att[ROLL]) < 0.5f && fabsf(att[PITCH]) < 0.5f && fabsf(wrap180(att[YAW] - s.target_deg(YAW))) < 0.5f, "from 60 / 50 / 120 deg off: level again, on the (pulled-along) heading target (%.2f %.2f, heading %.1f / %.1f)", att[ROLL], att[PITCH], att[YAW], s.target_deg(YAW));
+        CHECK(terr_at_half >= 0.0f && terr_at_half < 20.0f, "the thrust vector is put right first: %.1f deg of tilt error left after 0.5 s", terr_at_half); }
+    {   // the feed-forward fades out with a large thrust error, the yaw takes the gyro's
+        StabilizeController s; s.configure(c); s.reset(0, 0, 0); float sp[3]; const float att[3] = {80, 0, 0}, gyro[3] = {0, 0, 33};
+        s.update(st0, 0, att, dt, sp, gyro);
+        CHECK(s.thrust_error_deg() > 60.0f && near(sp[YAW], 33, 0.01f), "80 deg of thrust error: the yaw rate is left as the gyro has it (%.1f)", sp[YAW]); }
+}
+
 int main() {
-    t_filters(); t_gyro_chain(); t_dyn_notch(); t_pid(); t_acro_trainer(); t_setpoint(); t_attitude(); t_sliders(); t_inflight_trim();
+    t_filters(); t_gyro_chain(); t_dyn_notch(); t_pid(); t_acro_trainer(); t_setpoint(); t_attitude(); t_stabilize_quat(); t_sliders(); t_inflight_trim();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

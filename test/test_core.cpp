@@ -827,12 +827,15 @@ static void t_althold_edges() {
     // ---- the integrator while the throttle stands at one of its ends
     { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.hover = 0.70f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 1.0f; in.z = 5.0f; float thr = 0;
       for (int i = 0; i < 1500; i++) { thr = ah.update(in, dt); }
-      CHECK(thr == 1.0f && ah.integrator() >= 0.0f && ah.integrator() < 0.1f, "a heavy craft held down for 3 s with the stick up: full throttle, and the integrator has not stored the 3 s (%.3f m/s^2; unlimited it would stand at its 4.0 limit)", ah.integrator()); }
+      CHECK(thr == 1.0f && ah.integrator() >= 0.0f && ah.integrator() < 0.5f, "a heavy craft held down for 3 s with the stick up: full throttle, and the integrator has not stored the 3 s (%.3f m/s^2; unlimited it would stand at its 6.0 limit)", ah.integrator()); }
     { AltHold ah; ah.init(); ah.set_limits(0.055f, 0.90f); ah.hover = 0.75f; ah.begin_flight(5.0f, 1.0f, 1.0f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; in.v = 0.1f; in.up_cos = 0.9f;      // asks for 96 % of output: above the 90 % limit, below 100 %
       const float i0 = ah.integrator(); float thr = 0; for (int i = 0; i < 50; i++) { thr = ah.update(in, dt); }
       CHECK(i0 > 1.0f && thr == 1.0f && ah.integrator() < i0 - 0.02f, "at the top of the range (leaning in a turn, output limit 90 %%) and climbing a little: the integrator may come DOWN (%.3f -> %.3f)", i0, ah.integrator());
-      in.v = -0.1f; const float i1 = ah.integrator(); for (int i = 0; i < 50; i++) { ah.update(in, dt); }
-      CHECK(ah.integrator() == i1, "... but not up"); }
+      in.v = -1.0f; ah.update(in, dt); const float i1 = ah.integrator(); for (int i = 0; i < 200; i++) { thr = ah.update(in, dt); }
+      CHECK(thr == 1.0f && ah.integrator() <= i1, "... but not up (falling, at the top: %.3f -> %.3f)", i1, ah.integrator()); }
+    { AltHold ah; ah.init(); ah.set_limits(0.055f, 0.90f); ah.hover = 0.75f; ah.begin_flight(5.0f, 1.0f, 0.9f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; in.v = -0.05f; in.up_cos = 0.9f;
+      float thr = ah.update(in, dt); const float i1 = ah.integrator(); for (int i = 0; i < 200; i++) { thr = ah.update(in, dt); }
+      CHECK(thr == 1.0f && ah.integrator() <= i1 + 1e-6f, "sinking a little and asking for about 93 %% of the output - above the 90 %% limit, below 100 %%: the integrator does not grow (%.3f -> %.3f)", i1, ah.integrator()); }
     { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.hover = 0.10f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 0.0f; in.z = 5.0f; in.v = -0.4f; float thr = 1;
       for (int i = 0; i < 1500; i++) { thr = ah.update(in, dt); }
       CHECK(ah.get_state() == AhState::FLYING && thr == 0.0f && ah.integrator() <= 0.0f && ah.integrator() > -0.3f, "a light craft in an updraught, sinking slower than the stick at the bottom asks for 3 s: motors at idle, the integrator not wound down (%.3f; unlimited it would stand at -4.0)", ah.integrator());
@@ -848,10 +851,161 @@ static void t_althold_edges() {
             "from 84 degrees on it is taken back (87 degrees: %.2f), and on its side or on its back the craft gets idle: thrust would push it down there", out_at(0.05f)); }
 }
 
+// ---- 0.28: jerk-limited shaping (kinematics.h, ArduPilot AP_Math/control.cpp) and the AC_PosControl vertical cascade
+static void t_kinematics() {
+    printf("[kinematics] jerk-limited shaping as ArduPilot's control.cpp\n");
+    using namespace kin;
+    CHECK(sqrt_ctl(0.1f, 2.0f, 5.0f, 0.0f) == 0.2f && fabsf(sqrt_ctl(10.0f, 2.0f, 5.0f, 0.0f) - sqrtf(2.0f * 5.0f * (10.0f - 0.5f * 5.0f / 4.0f))) < 1e-4f && sqrt_ctl(-10.0f, 2.0f, 5.0f, 0.0f) == -sqrt_ctl(10.0f, 2.0f, 5.0f, 0.0f),
+          "sqrt controller: linear near, square root far, odd");
+    CHECK(fabsf(sqrt_ctl(0.01f, 2.0f, 5.0f, 0.1f) - 0.02f) < 1e-6f && fabsf(sqrt_ctl(0.01f, 50.0f, 0.0f, 0.1f) - 0.1f) < 1e-6f, "the last step never asks for more than the whole error in dt (0.01 / 0.1 = 0.1)");
+    CHECK(fabsf(sqrt_ctl(8.0f, 0.0f, 2.0f, 0.0f) - sqrtf(32.0f)) < 1e-5f && fabsf(sqrt_ctl(-8.0f, 0.0f, 2.0f, 0.0f) + sqrtf(32.0f)) < 1e-5f, "no P: pure sqrt(2 a e)");
+    {   // a step of the wanted velocity 0 -> 2 m/s, accel 2.5, jerk 5
+        float v = 0, a = 0, amax = 0, jmax = 0, vmax = 0; const float dt = 0.0025f; int n_reach = -1;
+        for (int i = 0; i < 2000; i++) { const float a0 = a; update_vel_accel(v, a, dt, 0, 0); shape_vel_accel(2.0f, 0.0f, v, a, -2.5f, 2.5f, 5.0f, dt, false);
+            amax = fmaxf(amax, fabsf(a)); jmax = fmaxf(jmax, fabsf(a - a0) / dt); vmax = fmaxf(vmax, v); if (n_reach < 0 && v > 1.96f) n_reach = i; }
+        CHECK(amax <= 2.5f + 1e-4f && jmax <= 5.0f + 1e-3f, "acceleration never above 2.5 m/s^2 (%.3f), jerk never above 5 m/s^3 (%.3f)", amax, jmax);
+        CHECK(vmax < 2.02f && fabsf(v - 2.0f) < 0.01f && n_reach > 0 && n_reach * dt < 2.5f, "2 m/s reached in %.2f s, overshoot %.3f m/s", n_reach * dt, vmax - 2.0f);
+    }
+    {   float v = 1.0f, p = 0; update_pos_vel_accel(p, v, 2.0f, 0.1f, 1.0f, 1.0f, 1.0f);
+        CHECK(p == 0.0f && v == 1.0f, "limited upwards with the errors upwards: neither position nor velocity grows");
+        v = -1.0f; update_vel_accel(v, 2.0f, 0.1f, 1.0f, 1.0f);
+        CHECK(fabsf(v + 0.8f) < 1e-5f, "... but a velocity on the other side may come back towards 0 (%.2f)", v);
+        v = 1.0f; p = 0; update_pos_vel_accel(p, v, 2.0f, 0.1f, 0.0f, 1.0f, 1.0f);
+        CHECK(fabsf(p - 0.11f) < 1e-5f && fabsf(v - 1.2f) < 1e-5f, "not limited: p += v dt + a dt^2 / 2, v += a dt");
+    }
+    {   float v[2] = {0, 0}, a[2] = {0, 0}; const float want[2] = {3.0f, 4.0f}, ff[2] = {0, 0}; float amax = 0;
+        for (int i = 0; i < 2000; i++) { update_vel_accel_xy(v, a, 0.0025f); shape_vel_accel_xy(want, ff, v, a, 2.5f, 5.0f, 0.0025f, false); amax = fmaxf(amax, hypotf(a[0], a[1])); }
+        CHECK(amax <= 2.5f + 1e-3f && fabsf(v[0] - 3.0f) < 0.02f && fabsf(v[1] - 4.0f) < 0.02f, "2-D: the length of the acceleration is limited (%.3f), the velocity reaches (3, 4)", amax);
+    }
+}
+
+// A craft on a vertical axis: thrust ~ motor output, the true hover output may differ from the controller's estimate; a force
+// from outside (gust, prop wash) adds to it. The motors follow with a 30 ms lag.
+struct VPlant { float z = 5, v = 0, a = 0, hover_true = 0.4f, out = 0.4f, push = 0; };
+static void vstep(VPlant& p, AltHold& ah, AhInput& in, float dt) {
+    in.z = p.z; in.v = p.v; in.a_up = p.a;
+    const float thr = ah.update(in, dt), want = ah.to_motor(thr);
+    p.out += (want - p.out) * dt / (0.03f + dt);
+    p.a = kG0 * (p.out / p.hover_true - 1.0f) + p.push;
+    p.v += p.a * dt; p.z += p.v * dt;
+}
+static void t_althold_cascade() {
+    printf("[althold 0.28] AC_PosControl's vertical cascade: shaped target, measured-acceleration loop\n");
+    const float dt = 0.0025f;
+    auto craft = [&](float hover_est, float hover_true) { AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.hover = hover_est; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); return ah; };
+    {   // the hover estimate 20 % low: the acceleration loop's integrator takes it up, the height is held
+        AltHold ah = craft(0.40f, 0.50f); VPlant p; p.hover_true = 0.5f; p.out = 0.4f; AhInput in; in.armed = true; in.stick01 = 0.5f;
+        float lo = 5, hi = 5; for (int i = 0; i < 4000; i++) { vstep(p, ah, in, dt); lo = fminf(lo, p.z); hi = fmaxf(hi, p.z); }
+        const float want_i = kG0 * (0.5f / 0.4f - 1.0f);
+        CHECK(fabsf(p.z - 5.0f) < 0.03f && fabsf(p.v) < 0.02f && fabsf(ah.integrator() - want_i) < 0.15f, "hover estimate 0.40, true 0.50: holds 5 m (%.3f), the integrator carries %.2f m/s^2 (%.2f is the error)", p.z, ah.integrator(), want_i);
+        CHECK(5.0f - lo < 0.5f, "and the sag before it is taken up stays small (%.2f m)", 5.0f - lo); }
+    {   // a downdraught of 3 m/s^2 for one second: with the measured-acceleration loop the craft loses less height
+        auto loss = [&](float acc_p, float acc_i) { AltHold ah = craft(0.40f, 0.40f); ah.cfg.acc_p = acc_p; ah.cfg.acc_i = acc_i; ah.cfg.ki_v = acc_i > 0 ? 0.0f : 3.0f;   // (without it: the old velocity integrator)
+            VPlant p; AhInput in; in.armed = true; in.stick01 = 0.5f; for (int i = 0; i < 800; i++) vstep(p, ah, in, dt);
+            float lo = p.z; p.push = -3.0f; for (int i = 0; i < 400; i++) { vstep(p, ah, in, dt); lo = fminf(lo, p.z); } p.push = 0;
+            for (int i = 0; i < 2000; i++) { vstep(p, ah, in, dt); lo = fminf(lo, p.z); }
+            return 5.0f - lo; };
+        const float with = loss(0.5f, 1.0f), without = loss(0.0f, 0.0f);
+        CHECK(with < 0.75f * without, "a 1 s downdraught of 3 m/s^2: %.3f m lost with the acceleration loop, %.3f m without it (velocity PI only, as before 0.28)", with, without); }
+    {   // the stick from hold to full climb: the target accelerates with at most accel_z, the throttle does not step
+        AltHold ah = craft(0.40f, 0.40f); VPlant p; AhInput in; in.armed = true; in.stick01 = 0.5f; for (int i = 0; i < 400; i++) vstep(p, ah, in, dt);
+        in.stick01 = 1.0f; float amax = 0, step = 0, prev = ah.to_motor(ah.hover_throttle()); float vmax = 0;
+        for (int i = 0; i < 2000; i++) { vstep(p, ah, in, dt); amax = fmaxf(amax, fabsf(ah.target_a())); step = fmaxf(step, fabsf(p.out - prev)); prev = p.out; vmax = fmaxf(vmax, p.v); }
+        CHECK(amax <= ah.cfg.accel_z_mps2 + 1e-3f && fabsf(ah.target_v() - ah.cfg.max_climb_mps) < 0.01f, "full climb: the target's acceleration stays within %.1f m/s^2 (%.3f), its climb rate gets to %.1f m/s", ah.cfg.accel_z_mps2, amax, ah.target_v());
+        CHECK(step < 0.004f && vmax < ah.cfg.max_climb_mps * 1.1f, "the motor output moves at most %.4f per 2.5 ms, the craft climbs at most %.2f m/s", step, vmax);
+        in.stick01 = 0.5f; const float z_rel = p.z; float hi = p.z; for (int i = 0; i < 2000; i++) { vstep(p, ah, in, dt); hi = fmaxf(hi, p.z); }
+        CHECK(hi - z_rel < 1.7f && fabsf(p.v) < 0.05f && fabsf(p.z - ah.target_z()) < 0.05f, "stick back to the middle at 2 m/s: stops %.2f m higher (about v^2 / 2a + the jerk ramp) and holds", hi - z_rel); }
+    {   // taken over while climbing at 5 m/s (more than the 2 m/s allowed): the over-speed gain stops it briskly
+        AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.hover = 0.4f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f, 5.0f, 0.0f);
+        VPlant p; p.v = 5.0f; AhInput in; in.armed = true; in.stick01 = 0.5f; float amax = 0, hi = p.z;
+        for (int i = 0; i < 2000; i++) { vstep(p, ah, in, dt); amax = fmaxf(amax, fabsf(ah.target_a())); hi = fmaxf(hi, p.z); }
+        CHECK(amax > ah.cfg.accel_z_mps2 * 1.5f && hi - 5.0f < 4.5f && fabsf(p.v) < 0.05f, "over-speed: the target decelerates at up to %.1f m/s^2 (limit %.1f in normal flight), the craft stops %.2f m higher (5^2 / (2 x 2.5) = 5 m without it)", amax, ah.cfg.accel_z_mps2, hi - 5.0f); }
+    {   // the measured acceleration: falling at 2 m/s^2 while target, height and climb rate all agree -> more thrust at once
+        AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.hover = 0.4f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f);
+        AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; in.v = 0.0f; in.a_up = -2.0f; float thr = 0;
+        for (int i = 0; i < 20; i++) thr = ah.update(in, dt);
+        const float out = ah.to_motor(thr), want = 0.4f * (1.0f + 0.5f * 2.0f / kG0);
+        CHECK(out > 0.4f * (1.0f + 0.4f * 2.0f / kG0) && out < want * 1.02f, "the craft starts to sink at 2 m/s^2 (a gust) before height or climb rate show it: the thrust rises at once (%.4f, hover 0.4, P 0.5 x 2 m/s^2 -> %.4f)", out, want); }
+    {   // one vibration spike in the accelerometer: the 20 Hz filter takes most of it out
+        AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.hover = 0.4f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f);
+        AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; for (int i = 0; i < 20; i++) ah.update(in, dt);
+        const float before = ah.to_motor(ah.update(in, dt)); in.a_up = 20.0f; const float spike = ah.to_motor(ah.update(in, dt));
+        const float raw = 0.4f * 0.5f * 20.0f / kG0;
+        CHECK(fabsf(spike - before) < 0.4f * raw, "a single 20 m/s^2 spike moves the thrust by %.4f (unfiltered it would be %.4f)", fabsf(spike - before), raw); }
+    {   // the target is not let run away: the craft is held (it does not move), the stick asks for a climb
+        AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.hover = 0.10f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f);
+        AhInput in; in.armed = true; in.stick01 = 1.0f; in.z = 5.0f; for (int i = 0; i < 1000; i++) ah.update(in, dt);
+        CHECK(ah.target_z() - in.z <= 2.0f + 1e-4f && ah.target_z() - in.z > 1.9f, "held where it is, not saturated (a light craft): the target goes no further than 2 m ahead (%.2f m)", ah.target_z() - in.z);
+        AltHold hv; hv.init(); hv.set_limits(0.0f, 1.0f); hv.hover = 0.70f; hv.begin_flight(5.0f, hv.hover_throttle(), 1.0f);
+        for (int i = 0; i < 1000; i++) hv.update(in, dt);
+        CHECK(hv.target_z() - in.z < 0.5f, "a heavy craft at full throttle: the target stops where the motors cannot follow (%.2f m ahead)", hv.target_z() - in.z); }
+    {   // the hand-over keeps the throttle
+        AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.hover = 0.4f; const float thr0 = 0.42f; ah.begin_flight(5.0f, thr0, 1.0f, 0.0f, 0.0f);
+        AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; const float thr1 = ah.update(in, 0.0025f);
+        CHECK(fabsf(thr1 - thr0) < 0.005f, "Altitude Hold switched on in flight: the throttle continues (%.3f -> %.3f)", thr0, thr1); }
+}
+
+// ---- 0.32: the failsafe as PX4's framework: conditions -> actions, the most severe wins, fallbacks, user takeover
+static void t_failsafe_actions() {
+    printf("[failsafe 0.32] actions by condition, severity, HOLD, DROP, battery low, takeover\n");
+    const float dt = 0.01f;
+    auto run = [&](Failsafe& f, FsInput& in, float s) { FsOutput o; for (int i = 0; i < (int)(s / dt + 0.5f); i++) o = f.update(in, dt); return o; };
+    {   Failsafe f; CHECK(f.action_of(0) == FA_NONE && f.action_of(FS_LINK) == FA_LAND && f.action_of(FS_BATTERY_LOW) == FA_WARN && f.action_of(FS_BATTERY) == FA_LAND, "defaults: link -> LAND, battery low -> WARN, minimum -> LAND");
+        f.cfg.procedure = FSP_RESCUE; CHECK(f.action_of(FS_LINK) == FA_RTL && f.action_of(FS_LINK | FS_BATTERY) == FA_LAND, "RESCUE: RTL - but with the pack at its minimum LAND wins (the more severe)");
+        f.cfg.procedure = FSP_HOLD; f.cfg.batt_low = FBL_RTL; CHECK(f.action_of(FS_SWITCH) == FA_HOLD && f.action_of(FS_SWITCH | FS_BATTERY_LOW) == FA_RTL, "HOLD < RTL");
+        f.cfg.procedure = FSP_DROP; CHECK(f.action_of(FS_LINK | FS_BATTERY) == FA_DROP, "DROP is the most severe"); }
+    {   // battery low, WARN (the default): nothing is flown, it is only said
+        Failsafe f; FsInput in; in.armed = true; in.alt_valid = true; in.batt_low = true; const FsOutput o = run(f, in, 2.0f);
+        CHECK(o.stage == FsStage::NONE && o.warn && o.action == FA_WARN && o.cause == FS_BATTERY_LOW && !o.alt_descent && !o.neutral_sticks, "battery low, WARN: stage NONE, a warning with its cause"); }
+    {   // battery low, RTL: at once (no guard - the battery monitor has its delays), the pilot can take it back
+        Failsafe f; f.cfg.batt_low = FBL_RTL; FsInput in; in.armed = true; in.alt_valid = true; in.vz = -0.5f; in.batt_low = true;
+        FsOutput o = f.update(in, dt); o = f.update(in, dt);
+        CHECK(o.stage == FsStage::DESCENT && o.rescue && o.action == FA_RTL && !o.neutral_sticks, "battery low, RTL: the rescue starts at once; the link is fine, the sticks stay the pilot's");
+        in.rescue_active = true; o = run(f, in, 5.0f); CHECK(o.stage == FsStage::DESCENT && o.rescue, "flying home");
+        in.stick_move = 0.6f; o = f.update(in, dt); in.stick_move = 0; in.rescue_active = false;
+        CHECK(o.stage == FsStage::NONE && o.warn && !o.rescue, "the pilot moves a stick: he has the craft back, it stays a warning");
+        o = run(f, in, 3.0f); CHECK(o.stage == FsStage::NONE && o.warn, "and the RTL is not asked for again while the pack is only low (PX4: user takeover)");
+        in.batt_critical = true; o = run(f, in, 0.7f);
+        CHECK(o.stage == FsStage::DESCENT && o.action == FA_LAND && o.alt_descent && !o.rescue, "the pack reaches its minimum: LAND (critical action), taking it back does not hold any more"); }
+    {   // battery low, LAND; then the link goes: still LAND (not softened to the procedure's RTL)
+        Failsafe f; f.cfg.batt_low = FBL_LAND; f.cfg.procedure = FSP_RESCUE; FsInput in; in.armed = true; in.alt_valid = true; in.vz = -0.5f; in.batt_low = true;
+        FsOutput o = run(f, in, 0.1f); CHECK(o.action == FA_LAND && o.alt_descent, "battery low, LAND");
+        in.rx_ok = false; o = run(f, in, 1.0f); CHECK(o.action == FA_LAND && !o.rescue && o.neutral_sticks && (o.cause & FS_LINK), "the link goes as well: still LAND - an action is never softened while its cause lasts"); }
+    {   // RTL that cannot fly falls back to a landing (the caller does not start the rescue: rescue_active false)
+        Failsafe f; f.cfg.procedure = FSP_RESCUE; f.cfg.max_descent_s = 5; FsInput in; in.armed = true; in.alt_valid = true; in.rx_ok = false; in.vz = 0;
+        FsOutput o = run(f, in, 1.0f); CHECK(o.rescue && o.alt_descent, "RTL asked for; the descent is there for when the rescue cannot fly");
+        o = run(f, in, 5.0f); CHECK(o.disarm, "and the time net counts while it lands on the spot instead (no rescue flying)"); }
+    {   // HOLD: holds place and height for hold_s, then lands; without a height it lands at once
+        Failsafe f; f.cfg.procedure = FSP_HOLD; f.cfg.hold_s = 10; f.cfg.max_descent_s = 5; FsInput in; in.armed = true; in.alt_valid = true; in.rx_ok = false; in.vz = 0;
+        FsOutput o = run(f, in, 1.0f);
+        CHECK(o.stage == FsStage::DESCENT && o.hold && o.action == FA_HOLD && !o.alt_descent && o.neutral_sticks, "link lost, HOLD: Altitude / Position Hold with neutral sticks, no descent");
+        o = run(f, in, 8.0f); CHECK(o.hold && !o.disarm, "9 s of holding (the time net does not count: holding is not a stuck landing)");
+        o = run(f, in, 2.0f); CHECK(!o.hold && o.alt_descent && o.action == FA_LAND, "10 s of holding: it lands");
+        in.rx_ok = true; o = run(f, in, 1.2f); CHECK(o.stage == FsStage::NONE, "the link back for 1 s: the pilot has it");
+        Failsafe g; g.cfg.procedure = FSP_HOLD; FsInput j; j.armed = true; j.alt_valid = false; j.rx_ok = false;
+        o = run(g, j, 1.0f); CHECK(!o.hold && o.throttle_fallback && o.action == FA_LAND, "HOLD without a height: lands at once (the open-loop descent)"); }
+    {   // a battery-low landing outlives a lost link that comes back: taking it back during the link's recovery does not count
+        Failsafe f; f.cfg.batt_low = FBL_LAND; f.cfg.procedure = FSP_HOLD; FsInput in; in.armed = true; in.alt_valid = true; in.vz = -0.5f; in.batt_low = true;
+        FsOutput o = run(f, in, 0.2f); in.rx_ok = false; o = run(f, in, 1.0f); CHECK(o.action == FA_LAND, "battery low LAND, then the link goes (HOLD would be milder): LAND");
+        in.rx_ok = true; in.stick_move = 0.6f; o = run(f, in, 0.2f); in.stick_move = 0; o = run(f, in, 1.5f);
+        CHECK(o.stage == FsStage::DESCENT && o.action == FA_LAND && (o.cause & FS_BATTERY_LOW), "a stick moved while the link still had to prove itself: the battery landing goes on");
+        in.stick_move = 0.6f; o = f.update(in, dt); CHECK(o.stage == FsStage::NONE && o.warn, "moved again on a link that is back: the pilot has it"); in.stick_move = 0;
+        in.batt_low = false; o = run(f, in, 0.1f); in.batt_low = true; o = run(f, in, 0.1f);
+        CHECK(o.stage == FsStage::DESCENT && o.action == FA_LAND, "the pack recovers, then sags again: the landing is asked for again"); }
+    {   // DROP is the most severe: a landing already going on becomes a motor stop when its cause comes
+        Failsafe f; f.cfg.procedure = FSP_DROP; FsInput in; in.armed = true; in.alt_valid = true; in.vz = -0.5f; in.batt_critical = true;
+        FsOutput o = run(f, in, 1.0f); CHECK(o.stage == FsStage::DESCENT && o.action == FA_LAND, "battery landing");
+        in.rx_ok = false; o = run(f, in, 0.1f); CHECK(o.disarm && o.stage == FsStage::LANDED, "the link goes, procedure DROP: motors off"); }
+    {   // DROP: motors off after the guard time
+        Failsafe f; f.cfg.procedure = FSP_DROP; FsInput in; in.armed = true; in.alt_valid = true; in.rx_ok = false;
+        FsOutput o = run(f, in, 0.3f); CHECK(o.stage == FsStage::GUARD && !o.disarm, "DROP: the guard time first (a blip of the link does not stop the motors)");
+        o = run(f, in, 0.3f); CHECK(o.stage == FsStage::LANDED && o.disarm, "then the motors stop"); }
+}
+
 int main() {
     t_stall_guard();
     t_fast_math();
     t_minmax();
-    t_filters(); t_ahrs(); t_ahrs_trust(); t_vertical(); t_vertical_gps(); t_horizontal(); t_rc(); t_mixer(); t_layouts(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges();
+    t_filters(); t_ahrs(); t_ahrs_trust(); t_vertical(); t_vertical_gps(); t_horizontal(); t_rc(); t_mixer(); t_layouts(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges(); t_kinematics(); t_althold_cascade(); t_failsafe_actions();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

@@ -10,6 +10,7 @@
 #include "exchange.h"
 #include "tx_queue.h"
 #include "msp_bridge.h"
+#include "msp_config.h"
 #include "../blackbox/bb_service.h"
 #include "../proto/settings_apply.h"
 
@@ -39,6 +40,7 @@ inline void msp_info_of(const Telemetry& t, const wbp::Settings* s, msp::Info& i
         const uint8_t rp = s->receiver.protocol;
         in.rx_kind = rp == wbp::RX_PROTOCOL_PPM ? 1 : rp == wbp::RX_PROTOCOL_PWM ? 2 : 0;
         in.gps = s->sensors.gps_enabled != 0; in.range = s->sensors.range_enabled != 0;
+        in.identity = s->msp.identity;
         in.modes_set = 0;
         for (int i = 0; i < 16; i++) if (s->modes.hi[i] > s->modes.lo[i] && s->modes.mode[i] < 32) in.modes_set |= 1u << s->modes.mode[i];
     }
@@ -161,6 +163,8 @@ public:
         memcpy(in.uid, uid_, 12);
     }
     void set_uid(const uint8_t uid[12]) { memcpy(uid_, uid, 12); }
+    const Telemetry& telemetry() const { return tel_; }       // the snapshot msp_info() took
+    wbp::Server* server() const { return srv_; }
 
 private:
     uint8_t uid_[12] = {};
@@ -183,25 +187,39 @@ private:
 // pins): the caller then runs the 4-way interface (hal/motor/esc4way.h) on this port and restarts the firmware when it ends.
 class MspLink {
 public:
-    MspLink(LinkHost& h, wbp::Transport& tx) : h_(h), tx_(tx) {}
-    void set_firmware(uint8_t maj, uint8_t min, uint8_t patch, const char* date, const char* time) { info_.fw_major = maj; info_.fw_minor = min; info_.fw_patch = patch; info_.build_date = date; info_.build_time = time; }
+    // settings: the object the app's server edits - given, the configurators may read and (msp.writes) change it (app/msp_config.h)
+    MspLink(LinkHost& h, wbp::Transport& tx, wbp::Settings* settings = nullptr) : h_(h), tx_(tx), port_(h), cfg_(settings ? *settings : spare(), port_) {
+        if (settings) br_.set_handler(&msp::Config::handler, &cfg_);
+    }
+    void set_firmware(uint8_t maj, uint8_t min, uint8_t patch, const char* date, const char* time) { info_.fw_major = maj; info_.fw_minor = min; info_.fw_patch = patch; info_.build_date = date; info_.build_time = time; info_.target = WB_MCU_NAME; }
     uint8_t on_byte(uint8_t c) {
-        if (c == '$' && !info_fresh_) { h_.msp_info(info_); info_fresh_ = true; }      // (a fresh snapshot per frame, not per byte)
-        uint8_t out[160]; size_t n = 0;
+        if (c == '$' && !info_fresh_) { h_.msp_info(info_); cfg_.set_telemetry(&h_.telemetry()); info_fresh_ = true; }      // (a fresh snapshot per frame, not per byte)
+        uint8_t out[msp::kMaxReply + 9]; size_t n = 0;
         const msp::Bridge::Result r = br_.feed(c, info_, out, sizeof(out), n);
         if (r == msp::Bridge::NONE) return 0;
         info_fresh_ = false;
-        if (r == msp::Bridge::REPLY) { tx_.write(out, n); return 0; }
+        if (r == msp::Bridge::REPLY) { tx_.write(out, n); if (cfg_.reboot_pending()) h_.reboot(); return 0; }
         const uint8_t escs = h_.esc_passthrough();          // PASSTHROUGH: ask the flight side (refused armed, without motors)
         n = br_.passthrough_reply(escs, out, sizeof(out)); tx_.write(out, n);
         passthroughs_ += escs ? 1 : 0;
         return escs;
     }
     const msp::Bridge& bridge() const { return br_; }
+    const msp::Config& config() const { return cfg_; }
     bool mid_frame() const { return br_.mid_frame(); }
     uint32_t passthroughs() const { return passthroughs_; }
 private:
+    // writes go the way the app's own go: through the server (clamp, rules, apply live / reboot required; save)
+    struct Port : msp::ConfigPort {
+        explicit Port(LinkHost& h) : h(h) {}
+        LinkHost& h;
+        bool armed() override { return h.armed(); }
+        void commit(uint8_t section) override { if (wbp::Server* s = h.server()) s->commit_section(section); }
+        bool save() override { wbp::Server* s = h.server(); return s && s->save_all(); }
+    };
+    static wbp::Settings& spare() { static wbp::Settings s; return s; }      // (no settings given: the handler is not installed)
     LinkHost& h_; wbp::Transport& tx_; msp::Bridge br_; msp::Info info_; bool info_fresh_ = false; uint32_t passthroughs_ = 0;
+    Port port_; msp::Config cfg_;
 };
 
 } // namespace app

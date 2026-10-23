@@ -251,9 +251,15 @@ static void t_poscontrol() {
       const float len = hypotf(c.accel_n(), c.accel_e()); float r, p; c.lean(0, r, p);
       CHECK(c.limited() && fabsf(len - amax) < 1e-3f && fabsf(p - 20.0f) < 0.05f, "a demand beyond the lean limit: %.2f m/s^2 = 20 deg (limit %.2f)", len, amax);
       CHECK(fabsf(c.i_n()) < 0.05f, "and the integrator has not grown while the output was at the limit (%.3f m/s^2 after 6 s of 12 m/s error)", c.i_n());
-      PosControlNE d; d.cfg.angle_max_deg = 20; d.init(0, 0, 0, 0, 0, 0, 0);
+      PosControlNE d; d.cfg.angle_max_deg = 20; d.init(0, 0, 4.0f, 0, 0, 0, 0);               // (taken over at 4 m/s: the shaped velocity starts there)
       for (int i = 0; i < 3000; i++) d.update(0, 0, 3.9f, 0, dt, false, 4.0f, 0);            // a small error, not limited: it does integrate
       CHECK(!d.limited() && fabsf(d.i_n() - 0.1f * 1.0f * 6.0f) < 0.02f, "(unlimited it integrates: 0.1 m/s of error x I 1.0 x 6 s = %.2f m/s^2)", d.i_n());
+      {   // 0.28: a new wanted velocity is shaped (jerk-limited) and its acceleration fed forward
+          PosControlNE s; s.cfg.angle_max_deg = 30; s.init(0, 0, 0, 0, 0, 0, 0);
+          s.update(0, 0, 0, 0, dt, false, 5.0f, 0);
+          CHECK(fabsf(s.accel_n()) < 0.5f, "5 m/s north wanted from a standstill: the first step asks for %.3f m/s^2, not a velocity step x P", s.accel_n());
+          float amid = 0; for (int i = 0; i < 500; i++) { s.update(0, 0, s.vel_desired_n(), 0, dt, false, 5.0f, 0); if (i == 250) amid = s.accel_n(); }
+          CHECK(amid > 1.5f && amid < 2.6f, "tracking the shaped velocity exactly (no error), the acceleration it asks for is the shaping's own (%.2f m/s^2): the feed-forward", amid); }
       PosControlNE w; w.cfg.angle_max_deg = 60; w.init(0, 0, 0, 0, 0, 0, 0); for (int i = 0; i < 20000; i++) w.update(0, 0, 0.4f, 0.3f, dt, false);
       CHECK(fabsf(hypotf(w.i_n(), w.i_e()) - 5.0f) < 1e-3f, "the integrator itself stops at 5 m/s^2 (%.2f)", hypotf(w.i_n(), w.i_e())); }
     // no jump when it takes over from a craft that already leans

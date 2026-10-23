@@ -25,6 +25,8 @@
 //   start recording on arming).
 //
 // Elements: Betaflight's osd_*_pos encoding: column bits 0-5, row bits 6-10, shown = bit 11 (OSD_PROFILE_1_FLAG).
+// After a flight (0.33): Betaflight's statistics screen (osd.c osdShowStats) instead of the elements, until the next arming or
+// for kStatsMs - flight time, max speed / distance / altitude, traveled distance, min battery, max current, used mAh.
 // Portable (test/test_osd.cpp). The sensor thread fills a State, poll() hands it the bytes to write, never more than the UART takes.
 // ============================================================================
 namespace osd {
@@ -36,13 +38,19 @@ enum : uint8_t {
     SYM_ARROW_SOUTH = 0x60, SYM_SPEED = 0x70, SYM_AH_CENTER_LINE = 0x72, SYM_AH_CENTER = 0x73, SYM_AH_CENTER_LINE_RIGHT = 0x74,
     SYM_ARROW_SMALL_UP = 0x75, SYM_ARROW_SMALL_DOWN = 0x76, SYM_LINK_QUALITY = 0x7B, SYM_ALTITUDE = 0x7F, SYM_AH_BAR9_0 = 0x80,
     SYM_BATT_EMPTY = 0x96, SYM_MAIN_BATT = 0x97, SYM_AMP = 0x9A, SYM_ON_M = 0x9B, SYM_FLY_M = 0x9C, SYM_KPH = 0x9E, SYM_MPS = 0x9F,
+    SYM_AH_RIGHT = 0x02, SYM_AH_LEFT = 0x03, SYM_AH_DECORATION = 0x13, SYM_HEADING_N = 0x18, SYM_HEADING_S = 0x19, SYM_HEADING_E = 0x1A,
+    SYM_HEADING_W = 0x1B, SYM_HEADING_DIVIDED_LINE = 0x1C, SYM_HEADING_LINE = 0x1D, SYM_TOTAL_DISTANCE = 0x71, SYM_LAT = 0x89, SYM_LON = 0x98,
+    SYM_PB_START = 0x8A, SYM_PB_FULL = 0x8B, SYM_PB_HALF = 0x8C, SYM_PB_EMPTY = 0x8D, SYM_PB_END = 0x8E, SYM_PB_CLOSE = 0x8F,
 };
 
 // The elements, in the order of osd.pos[] (append only: the settings store them by index)
 enum Element : uint8_t {
     E_RSSI, E_BATT, E_CELL, E_CURRENT, E_MAH, E_MODE, E_NAME, E_FLY_TIME, E_ON_TIME, E_SATS, E_SPEED, E_HOME_DIR, E_HOME_DIST,
-    E_ALT, E_VARIO, E_THROTTLE, E_CROSSHAIRS, E_HORIZON, E_WARNINGS, E_HEADING, E_PITCH, E_ROLL, E_ESC_TEMP, E_DISARMED, E_COUNT
+    E_ALT, E_VARIO, E_THROTTLE, E_CROSSHAIRS, E_HORIZON, E_WARNINGS, E_HEADING, E_PITCH, E_ROLL, E_ESC_TEMP, E_DISARMED,
+    E_POWER, E_FLIGHT_DIST, E_GPS_LAT, E_GPS_LON, E_COMPASS_BAR, E_SIDEBARS, E_G_FORCE, E_BATT_USAGE,          // (0.33)
+    E_COUNT
 };
+constexpr uint32_t kStatsMs = 20000;                  // the statistics screen after a flight: this long, or until the next arming
 constexpr uint16_t kVisible = 0x0800;
 inline uint8_t pos_col(uint16_t p) { return (uint8_t)(p & 0x3F); }
 inline uint8_t pos_row(uint16_t p) { return (uint8_t)((p >> 6) & 0x1F); }
@@ -72,6 +80,24 @@ struct State {
     float roll_deg = 0, pitch_deg = 0, heading_deg = 0;   // Betaflight's conventions: roll right +, pitch nose DOWN +, heading 0..360
     uint8_t esc_temp_c = 0;                           // the hottest ESC, 0 = none reported
     char warning[24] = {};                            // the most important warning, upper case; empty = none
+    int32_t lat = 0, lon = 0;                         // 1e-7 degrees
+    float g_force = 1.0f;                             // length of the measured acceleration, g
+    uint8_t batt_remaining = 255;                     // % of the pack left; 255 = unknown
+    float dist_m = 0;                                 // distance flown since arming (ground track)
+};
+
+// Betaflight's statistics of one flight (osd.c statistic_t)
+struct Stats {
+    uint32_t fly_s = 0; float max_speed_ms = 0, max_dist_m = 0, max_alt_m = 0, dist_m = 0, min_volts = 0, max_amps = 0, mah = 0; bool have_batt = false, have_current = false, gps = false;
+    void begin(const State& s) { *this = Stats(); have_batt = s.batt; have_current = s.have_current; gps = s.gps; min_volts = s.volts; }
+    void update(const State& s) {
+        fly_s = s.fly_s; dist_m = s.dist_m; mah = s.mah; gps = gps || s.gps;
+        if (s.speed_ms > max_speed_ms) max_speed_ms = s.speed_ms;
+        if (s.home && s.home_dist_m > max_dist_m) max_dist_m = s.home_dist_m;
+        if (s.alt_valid && s.alt_m > max_alt_m) max_alt_m = s.alt_m;
+        if (s.batt) { if (!have_batt || s.volts < min_volts) min_volts = s.volts; have_batt = true; }
+        if (s.have_current) { have_current = true; if (fabsf(s.amps) > max_amps) max_amps = fabsf(s.amps); }
+    }
 };
 
 // Where the elements go
@@ -79,6 +105,7 @@ struct Layout {
     uint16_t pos[E_COUNT] = {};
     char name[17] = {};
     uint8_t cols = 53, rows = 20;
+    bool stats = true;                                // osd.stats: the statistics screen after a flight
 };
 
 // ---- the elements as text (Betaflight's look). Returns false when the element shows nothing now.
@@ -137,7 +164,29 @@ inline bool element_text(Element e, const State& s, const Layout& l, char* b, si
     case E_PITCH: case E_ROLL: { const float a = e == E_PITCH ? s.pitch_deg : s.roll_deg; snprintf(b, cap, "%c%c%02u", e == E_PITCH ? SYM_PITCH : SYM_ROLL, a < 0 ? '-' : ' ', (unsigned)lroundf(fabsf(a))); return true; }
     case E_ESC_TEMP: if (!s.esc_temp_c) return false; snprintf(b, cap, "%u%c", (unsigned)s.esc_temp_c, SYM_C); return true;
     case E_DISARMED: if (s.armed) return false; snprintf(b, cap, "DISARMED"); return true;
-    default: return false;            // (E_HORIZON: drawn character by character, below)
+    case E_POWER: if (!s.have_current || !s.batt) return false; snprintf(b, cap, "%uW", (unsigned)lroundf(fabsf(s.amps) * s.volts)); return true;
+    case E_FLIGHT_DIST: if (!s.gps) return false; snprintf(b, cap, "%c%u%c", SYM_TOTAL_DISTANCE, (unsigned)lroundf(s.dist_m), SYM_M); return true;
+    case E_GPS_LAT: case E_GPS_LON: {                  // osdFormatCoordinate: symbol, degrees, 7 decimals
+        if (!s.gps) return false;
+        const int32_t v = e == E_GPS_LAT ? s.lat : s.lon; const uint32_t a = (uint32_t)(v < 0 ? -(int64_t)v : v);
+        snprintf(b, cap, "%c%s%u.%07u", e == E_GPS_LAT ? SYM_LAT : SYM_LON, v < 0 ? "-" : "", (unsigned)(a / 10000000u), (unsigned)(a % 10000000u)); return true; }
+    case E_COMPASS_BAR: {                              // osdElementCompassBar: 9 characters of compassBar, from the heading's 16th
+        static const uint8_t bar[24] = {SYM_HEADING_W, SYM_HEADING_LINE, SYM_HEADING_DIVIDED_LINE, SYM_HEADING_LINE, SYM_HEADING_N, SYM_HEADING_LINE, SYM_HEADING_DIVIDED_LINE, SYM_HEADING_LINE,
+            SYM_HEADING_E, SYM_HEADING_LINE, SYM_HEADING_DIVIDED_LINE, SYM_HEADING_LINE, SYM_HEADING_S, SYM_HEADING_LINE, SYM_HEADING_DIVIDED_LINE, SYM_HEADING_LINE,
+            SYM_HEADING_W, SYM_HEADING_LINE, SYM_HEADING_DIVIDED_LINE, SYM_HEADING_LINE, SYM_HEADING_N, SYM_HEADING_LINE, SYM_HEADING_DIVIDED_LINE, SYM_HEADING_LINE};
+        int h = (int)lroundf(s.heading_deg); h = ((h % 360) + 360) % 360;
+        const int d = (h * 16 + 180) / 360 % 16;
+        for (int i = 0; i < 9; i++) b[i] = (char)bar[d + i];
+        b[9] = 0; return true; }
+    case E_G_FORCE: { const int g10 = (int)lroundf(s.g_force * 10.0f); snprintf(b, cap, "%d.%dG", g10 / 10, g10 % 10); return true; }
+    case E_BATT_USAGE: {                               // osdElementMainBatteryUsage: a bar of what is left, 10 cells of 10 %
+        if (s.batt_remaining > 100) return false;
+        b[0] = (char)SYM_PB_START;
+        for (int i = 0; i < 10; i++) { const int left = s.batt_remaining - i * 10; b[1 + i] = (char)(left >= 10 ? SYM_PB_FULL : left >= 5 ? SYM_PB_HALF : SYM_PB_EMPTY); }
+        b[11] = (char)SYM_PB_CLOSE; b[12] = 0;
+        if (s.batt_level >= 1) attr = kAttrBlink;
+        return true; }
+    default: return false;            // (E_HORIZON, E_SIDEBARS: drawn character by character, below)
     }
 }
 
@@ -162,8 +211,11 @@ template <class Write> void render(const State& s, const Layout& l, Write write)
         const uint16_t p = l.pos[e];
         if (!(p & kVisible)) continue;
         const int col = pos_col(p), row = pos_row(p);
-        if (e == E_HORIZON) {
-            horizon(s, [&](int dx, int dy, uint8_t c) { const int x = col + dx, y = row + dy; if (x >= 0 && x < l.cols && y < l.rows) { char t[2] = {(char)c, 0}; write((uint8_t)y, (uint8_t)x, 0, t); } });
+        auto put = [&](int x, int y, uint8_t c) { if (x >= 0 && x < l.cols && y >= 0 && y < l.rows) { char t[2] = {(char)c, 0}; write((uint8_t)y, (uint8_t)x, 0, t); } };
+        if (e == E_HORIZON) { horizon(s, [&](int dx, int dy, uint8_t c) { put(col + dx, row + dy, c); }); continue; }
+        if (e == E_SIDEBARS) {                         // osdElementHorizonSidebars: bars 7 columns either side, rows -3 .. 3, level marks inside
+            for (int y = -3; y <= 3; y++) { put(col - 7, row + y, SYM_AH_DECORATION); put(col + 7, row + y, SYM_AH_DECORATION); }
+            put(col - 6, row, SYM_AH_LEFT); put(col + 6, row, SYM_AH_RIGHT);
             continue;
         }
         uint8_t attr = 0;
@@ -171,6 +223,29 @@ template <class Write> void render(const State& s, const Layout& l, Write write)
         size_t n = strlen(b); if (n > (size_t)(l.cols - col)) { n = (size_t)(l.cols - col); b[n] = 0; }   // (cut at the right edge of the canvas)
         write((uint8_t)row, (uint8_t)col, attr, b);
     }
+}
+
+// The statistics screen (osdShowStats / osdDisplayStatisticLabel): a title, then "LABEL : value" lines, centred as a block.
+template <class Write> void render_stats(const Stats& st, const Layout& l, Write write) {
+    char lines[9][kMaxString + 1]; int n = 0;
+    auto line = [&](const char* label, const char* value) { snprintf(lines[n++], kMaxString + 1, "%-15s: %s", label, value); };
+    char v[12];                                       // (a value is 11 characters at most: the line stays within 30)
+    snprintf(v, sizeof(v), "%02u:%02u", (unsigned)(st.fly_s / 60u % 100u), (unsigned)(st.fly_s % 60u)); line("FLY TIME", v);
+    if (st.gps) {
+        snprintf(v, sizeof(v), "%u%c", (unsigned)lroundf(st.max_speed_ms * 3.6f), SYM_KPH); line("MAX SPEED", v);
+        snprintf(v, sizeof(v), "%u%c", (unsigned)lroundf(st.max_dist_m), SYM_M); line("MAX DISTANCE", v);
+        snprintf(v, sizeof(v), "%u%c", (unsigned)lroundf(st.dist_m), SYM_M); line("FLIGHT DISTANCE", v);
+    }
+    snprintf(v, sizeof(v), "%.1f%c", (double)st.max_alt_m, SYM_M); line("MAX ALTITUDE", v);
+    if (st.have_batt) { snprintf(v, sizeof(v), "%.2f%c", (double)st.min_volts, SYM_VOLT); line("MIN BATTERY", v); }
+    if (st.have_current) {
+        snprintf(v, sizeof(v), "%.1f%c", (double)st.max_amps, SYM_AMP); line("MAX CURRENT", v);
+        snprintf(v, sizeof(v), "%u%c", (unsigned)lroundf(st.mah), SYM_MAH); line("USED MAH", v);
+    }
+    const int width = (int)strlen(lines[0]) + 4, col = l.cols > width ? (l.cols - width) / 2 : 0;
+    int row = l.rows > n + 3 ? (l.rows - n - 2) / 2 : 0;
+    write((uint8_t)row, (uint8_t)(l.cols > 15 ? (l.cols - 15) / 2 : 0), 0, "--- STATS ---"); row += 2;
+    for (int i = 0; i < n && row < l.rows; i++, row++) { char* t = lines[i]; if ((int)strlen(t) > l.cols - col) t[l.cols - col] = 0; write((uint8_t)row, (uint8_t)col, 0, t); }     // (cut at the canvas edge)
 }
 
 // ---- the wire: screens out, the video transmitter's requests in
@@ -209,12 +284,19 @@ public:
             started_ = true; next_ms_ = now_ms + period_ms_;
             if (!hb_ms_set_ || (int32_t)(now_ms - hb_ms_) >= 1000) { hb_ms_ = now_ms; hb_ms_set_ = true; push_dp(DP_HEARTBEAT, nullptr, 0); }
             Layout l = layout; l.cols = cols_; l.rows = rows_;
+            // a flight's statistics: kept while armed, shown once it ends
+            if (s.armed && !was_armed_) stats_.begin(s);
+            if (s.armed) stats_.update(s);
+            if (!s.armed && was_armed_) { stats_until_ = now_ms + kStatsMs; stats_on_ = layout.stats; }
+            was_armed_ = s.armed;
+            if (s.armed || (int32_t)(now_ms - stats_until_) >= 0) stats_on_ = false;
             push_dp(DP_CLEAR, nullptr, 0);
-            render(s, l, [&](uint8_t row, uint8_t col, uint8_t attr, const char* t) {
+            auto write = [&](uint8_t row, uint8_t col, uint8_t attr, const char* t) {
                 uint8_t p[kMaxString + 3]; const size_t k = strlen(t);
                 p[0] = row; p[1] = col; p[2] = attr; memcpy(p + 3, t, k);
                 push_dp(DP_WRITE, p, k + 3);
-            });
+            };
+            if (stats_on_) render_stats(stats_, l, write); else render(s, l, write);
             push_dp(DP_DRAW, nullptr, 0);
             screens_++;
         }
@@ -223,6 +305,8 @@ public:
         return k;
     }
     uint32_t screens() const { return screens_; }
+    bool showing_stats() const { return stats_on_; }
+    const Stats& stats() const { return stats_; }
     uint32_t requests() const { return requests_; }
     uint32_t overflows() const { return overflows_; }
     bool canvas_from_vtx() const { return canvas_set_; }
@@ -243,6 +327,7 @@ private:
     uint8_t canvas_ = CANVAS_AUTO, cols_ = 53, rows_ = 20; bool canvas_set_ = false;
     uint32_t period_ms_ = 100, next_ms_ = 0, hb_ms_ = 0; bool started_ = false, hb_ms_set_ = false;
     uint32_t screens_ = 0, requests_ = 0, overflows_ = 0;
+    Stats stats_; bool was_armed_ = false, stats_on_ = false; uint32_t stats_until_ = 0;
 };
 
 }  // namespace osd

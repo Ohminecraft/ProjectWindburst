@@ -102,3 +102,27 @@ struct Mpu9250AkSim : MagSimBase {
     }
     bool write_buf(uint8_t, const uint8_t*, size_t) override { return false; }
 };
+
+// ---------------- RM3100: X,Y,Z 24-bit two's complement big-endian @0x24, 75 LSB/uT at cycle count 200, DRDY = STATUS bit 7
+struct Rm3100Sim : MagSimBase {
+    uint8_t r[0x40]; bool drdy = true; int data_reads = 0; bool clone_revid = false;
+    Rm3100Sim() { memset(r, 0, sizeof(r)); for (int i = 0; i < 3; i++) { r[0x04 + 2 * i] = 0x00; r[0x05 + 2 * i] = 0xC8; } r[0x0B] = 0x96; r[0x36] = 0x22; }
+    int cc(int axis) const { return (r[0x04 + 2 * axis] << 8) | r[0x05 + 2 * axis]; }
+    double lsb_per_g() const { return cc(0) == 200 ? 7500.0 : cc(0) == 100 ? 3800.0 : 2000.0; }   // 75 / 38 / 20 LSB/uT
+    bool running() const { return (r[0x01] & 0x71) == 0x71; }
+    uint8_t reg(uint8_t a) const {
+        if (a >= 0x24 && a <= 0x2C) {
+            if (!running()) return 0;
+            const int i = (a - 0x24) / 3, b = (a - 0x24) % 3;
+            double x = field[i] * lsb_per_g(); if (x > 8388607) x = 8388607; if (x < -8388608) x = -8388608;
+            const int32_t v = (int32_t)llround(x);
+            return (uint8_t)((uint32_t)v >> (16 - 8 * b));
+        }
+        if (a == 0x34) return (drdy && running()) ? 0x80 : 0x00;
+        if (a == 0x36) return clone_revid ? 0x00 : r[0x36];
+        return a < 0x40 ? r[a] : 0;
+    }
+    bool read(uint8_t a, uint8_t* b, size_t n) override { if (dead) return false; for (size_t i = 0; i < n; i++) b[i] = reg((uint8_t)(a + i)); if (a == 0x24) { drdy = false; data_reads++; } return true; }
+    bool write(uint8_t a, uint8_t v) override { if (dead) return false; if (a < 0x34) r[a] = v; return true; }
+    bool write_buf(uint8_t, const uint8_t*, size_t) override { return false; }
+};

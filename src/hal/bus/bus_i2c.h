@@ -100,6 +100,14 @@ public:
         return _wire.endTransmission() == 0;
     }
 
+    // One byte, nothing after it: a command for chips without registers (MS5611).
+    bool I2CWriteByte(uint8_t value) {
+        _wire.beginTransmission(_addr);
+        _wire.write(value);
+
+        return _wire.endTransmission() == 0;
+    }
+
     // Select the device address for the next transactions (several sensors on one bus share this object).
     void I2CSetAddress(uint8_t addr) { _addr = addr; }
 

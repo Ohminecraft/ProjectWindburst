@@ -65,7 +65,8 @@ int main() {
         {C_ICM20601, "ICM20601", ICM20601_SPI, 4000}, {C_ICM20602, "ICM20602", ICM20602_SPI, 4000},
         {C_ICM42622P, "ICM42622P", ICM42622P_SPI, 4000}, {C_ICM42686P, "ICM42686P", ICM42686P_SPI, 4000}, {C_ICM42688P, "ICM42688P", ICM42688P_SPI, 4000},
         {C_ICM45605, "ICM45605", ICM45605_SPI, 3200}, {C_ICM45686, "ICM45686", ICM45686_SPI, 3200},
-        {C_BMI160, "BMI160", BMI160_SPI, 3200}, {C_BMI270, "BMI270", BMI270_SPI, 3200}};
+        {C_BMI160, "BMI160", BMI160_SPI, 3200}, {C_BMI270, "BMI270", BMI270_SPI, 3200},
+        {C_ICM20948, "ICM20948", ICM20948_SPI, 9000}, {C_ICM20649, "ICM20649", ICM20649_SPI, 9000}};
     for (const Row& row : rows) {
         Sim* s = make(row.c, true);
         std::unique_ptr<IMUAccGyro> m(new IMUAccGyro()); pins(*m);
@@ -92,6 +93,11 @@ int main() {
       AgSample o{}; CHECK(m->read(o) && near_(o.gyro_dps[1], -s->tg[1]) && near_(o.gyro_dps[0], s->tg[0]) && near_(o.acc_g[2], -s->ta[2], 0.01f), "i2c values (chip y / z are the board's left / up)"); }
     { make(C_MPU6500, false); g_i2c_addr = 0x69; std::unique_ptr<IMUAccGyro> m(new IMUAccGyro()); pins(*m);
       CHECK(m->IMUInit(false) && m->detected() == MPU6500_I2C, "MPU6500 @0x69 (AD0 high): %s", m->failReason()); }
+    { Sim* s = make(C_ICM20948, false); g_i2c_addr = 0x69; std::unique_ptr<IMUAccGyro> m(new IMUAccGyro()); pins(*m);
+      CHECK(m->IMUInit(false) && m->detected() == ICM20948_I2C && strcmp(m->name(), "ICM20948") == 0, "ICM20948 @0x69: %s", m->failReason());
+      AgSample o{}; CHECK(m->read(o) && near_(o.gyro_dps[0], s->tg[0]) && near_(o.acc_g[2], -s->ta[2], 0.01f) && fabsf(m->gyroRateHz() - 1125) < 1, "ICM20948 I2C values, 1125 Hz"); }
+    { Sim* s = make(C_ICM20649, false); s->bank = 2; g_i2c_addr = 0x68; std::unique_ptr<IMUAccGyro> m(new IMUAccGyro()); pins(*m);
+      CHECK(m->IMUInit(false) && m->detected() == ICM20649_I2C, "ICM20649 @0x68 left in bank 2: %s", m->failReason()); }
     g_i2c_addr = 0x68;
 
     printf("[manager] mounting alignment + gyro bias\n");
@@ -124,6 +130,8 @@ int main() {
       CHECK(!m->IMUInit(true) && strstr(m->failReason(), "init failed"), "bad microcode: '%s'", m->failReason()); }
     { make(C_ICM45686, true); std::unique_ptr<IMUAccGyro> m(new IMUAccGyro()); pins(*m);
       CHECK(m->IMUInit(true) && m->IMUInit(true) && m->available(), "re-init twice works"); }
+    { Sim* s = make(C_ICM20948, true); s->bank = 2; std::unique_ptr<IMUAccGyro> m(new IMUAccGyro()); pins(*m);
+      CHECK(m->IMUInit(true) && m->detected() == ICM20948_SPI, "ICM20948 left in bank 2 by a warm restart: found on the second try: %s", m->failReason()); }
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

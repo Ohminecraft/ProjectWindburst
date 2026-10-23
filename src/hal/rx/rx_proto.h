@@ -24,7 +24,7 @@
 // ============================================================================
 namespace rx {
 
-enum Protocol : uint8_t { PROTO_CRSF, PROTO_SBUS, PROTO_IBUS, PROTO_SPEKTRUM, PROTO_NRF24, PROTO_PPM, PROTO_PWM, PROTO_SPEKTRUM1024 };   // == schema enum rx_protocol
+enum Protocol : uint8_t { PROTO_CRSF, PROTO_SBUS, PROTO_IBUS, PROTO_SPEKTRUM, PROTO_NRF24, PROTO_PPM, PROTO_PWM, PROTO_SPEKTRUM1024, PROTO_MSP };   // == schema enum rx_protocol (MSP: MSP_SET_RAW_RC on the MSP port, hal/msp_sensors.h)
 // (PROTO_SPEKTRUM = 2048 mode: DSMX, DSM2 11 ms)
 
 constexpr int kChannels = 16;

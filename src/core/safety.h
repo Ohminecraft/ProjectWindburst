@@ -50,61 +50,89 @@ inline uint32_t arm_blockers(const ArmInput& a) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Failsafe: what the craft does when the pilot can no longer fly it.
+// Failsafe: what the craft does when the pilot can no longer fly it - since 0.32 built the way PX4's failsafe framework
+// (Commander/failsafe) and ArduCopter's failsafes are: every CONDITION asks for an ACTION, the most severe action asked for
+// is what is flown, an action is never softened while its cause lasts, and an action that cannot be flown falls back to the
+// next one that can.
 //
-//   cause     LINK     no receiver frames
-//             SWITCH   the pilot's failsafe switch (a test of the above on a live link)
-//             BATTERY  the pack is at its minimum
-//   GUARD     the first guard_s. LINK / SWITCH: the sticks read neutral and the craft is levelled, the throttle stays where it was.
-//             BATTERY: nothing yet. The cause goes away -> back to normal AT ONCE (Betaflight's stage 1).
+//   conditions  LINK         no receiver frames                                     -> nav.fs_procedure
+//               SWITCH       the pilot's failsafe switch (a test of the above)      -> nav.fs_procedure
+//               BATTERY_LOW  the pack at its warning level                          -> nav.batt_low_action  (WARN, RTL, LAND)
+//               BATTERY      the pack at its minimum                                -> nav.batt_crit_action (LAND, RTL)
+//   actions     (least to most severe)
+//               WARN   nothing is flown; the beeper / OSD say so
+//               HOLD   the craft holds its place (Position Hold, if it has a position) and its height, for fs_hold_s; then LAND
+//               RTL    GPS Rescue flies home and lands there
+//               LAND   comes down where it is (with a height: at a controlled rate; without: at a fixed fraction of the hover
+//                      throttle). LINK / SWITCH: levelled, sticks neutral. BATTERY: the pilot keeps roll / pitch / yaw - he can
+//                      still choose where it comes down (ArduCopter's LAND).
+//               DROP   the motors stop (Betaflight's failsafe procedure DROP: a craft that must not fly on by itself)
+//   fallbacks   RTL that cannot fly (no fix, no home, no compass: the caller says so with rescue_active false) -> LAND;
+//               HOLD without a height -> LAND (the open-loop descent)
+//
+//   GUARD     the first guard_s of a LINK / SWITCH / BATTERY cause: the sticks read neutral and the craft is levelled (LINK /
+//             SWITCH), the throttle stays where it was. The cause goes away -> back to normal AT ONCE (Betaflight's stage 1).
 //             Short dropouts add up: the guard time already used drains only as fast as it was filled, so a link that is gone
-//             half of the time still ends in a descent.
-//   DESCENT   the craft comes down by itself (with a height: at a controlled rate; without: at a fixed fraction of the hover
-//             throttle). LINK / SWITCH: levelled, sticks neutral. BATTERY: the pilot keeps roll / pitch / yaw - he can still
-//             choose where it comes down (ArduCopter's LAND).
-//             The cause goes away -> control returns: at once for the switch, after recover_s of unbroken link for a lost
-//             link (Betaflight: failsafe_recovery_delay). A battery landing is not called off: the voltage comes back as
-//             soon as the motors are unloaded, and would be gone again with the next climb.
+//             half of the time still ends in a descent. BATTERY_LOW needs no guard: the battery monitor has its own delays.
+//   DESCENT   an action is flown (the name is older than HOLD and RTL: any action but WARN). The causes end by themselves:
+//             the switch at once, the link after recover_s without a break (Betaflight: failsafe_recovery_delay). A battery
+//             landing is not called off: the voltage comes back as soon as the motors are unloaded, and would be gone again
+//             with the next climb. While a rescue flies the craft home, a link that is back is not enough: the pilot gets the
+//             craft when he MOVES A STICK (Betaflight; PX4's COM_RC_OVERRIDE). The same takes back a BATTERY_LOW RTL / LAND
+//             (PX4's user takeover): it is not asked for again until the pack reaches its minimum.
 //             Standing on the ground when the guard time ends: no descent, the motors stop.
 //   LANDED    disarmed; back to NONE when the switch is off on a live link.
 //
-//   procedure RESCUE (LINK / SWITCH only): instead of coming down where it is, the craft is flown home and landed there by
-//             GPS Rescue (rescue.h). The failsafe only asks for it (FsOutput::rescue); when the rescue cannot fly - no fix, no
-//             home, no compass - the caller says so (FsInput::rescue_active stays false) and the descent on the spot happens as
-//             described above. While the rescue flies, the time limit does not count (flying home takes minutes, and starts
-//             with a climb), and a pilot whose link is back for recover_s gets the craft when he MOVES A STICK (Betaflight's
-//             rule: nobody is surprised by a craft that suddenly follows sticks left in a corner). A critical battery lands on
-//             the spot whatever the procedure: there may be no energy left to fly home.
-//
-// The time limit max_descent_s is a net for a craft that does not come down (or cannot tell): it counts only while the craft
-// is NOT sinking by its own height estimate - a descent from 100 m is never cut short in the air - and always when there is
-// no height estimate.
+// The time limit max_descent_s is a net for a craft that does not come down (or cannot tell): it counts only while LANDING and
+// the craft is NOT sinking by its own height estimate - a descent from 100 m is never cut short in the air - and always when
+// there is no height estimate. A hold or a rescue flying home is not a landing that makes no progress.
 // ---------------------------------------------------------------------------------------------------------------------
 enum class FsStage : uint8_t { NONE, GUARD, DESCENT, LANDED };
-enum FsCause : uint8_t { FS_LINK = 1, FS_SWITCH = 2, FS_BATTERY = 4 };
-enum FsProcedure : uint8_t { FSP_LAND = 0, FSP_RESCUE = 1 };
+enum FsCause : uint8_t { FS_LINK = 1, FS_SWITCH = 2, FS_BATTERY = 4, FS_BATTERY_LOW = 8 };
+enum FsProcedure : uint8_t { FSP_LAND = 0, FSP_RESCUE = 1, FSP_HOLD = 2, FSP_DROP = 3 };
+enum FsAction : uint8_t { FA_NONE = 0, FA_WARN = 1, FA_HOLD = 2, FA_RTL = 3, FA_LAND = 4, FA_DROP = 5 };      // severity order
+enum FsBattLow : uint8_t { FBL_WARN = 0, FBL_RTL = 1, FBL_LAND = 2 };
+enum FsBattCrit : uint8_t { FBC_LAND = 0, FBC_RTL = 1 };
 struct FsConfig { float guard_s = 0.5f, recover_s = 1.0f, max_descent_s = 60.0f; float fallback_throttle_scale = 0.85f;
-                  uint8_t procedure = FSP_LAND;          // FSP_RESCUE: fly home and land there; falls back to the landing on the spot when the rescue cannot fly
-                  float stick_threshold = 0.30f; };      // after a rescue from a lost link the pilot gets the craft back when a stick is moved this far
+                  uint8_t procedure = FSP_LAND;          // LINK / SWITCH: what to fly (FsProcedure)
+                  float stick_threshold = 0.30f;         // the pilot takes the craft back by moving a stick this far
+                  float hold_s = 30.0f;                  // FSP_HOLD: how long before it lands
+                  uint8_t batt_low = FBL_WARN, batt_crit = FBC_LAND; };
 struct FsInput { bool rx_ok = true, batt_critical = false, alt_valid = false, landed = false, armed = false, switch_on = false;
+                 bool batt_low = false;        // the pack at its warning level
                  bool airborne = true;         // false: the craft stands on the ground - there is nothing to land, the failsafe disarms
                  float vz = 0.0f;              // climb rate by the height estimate (m/s, up positive); only looked at when alt_valid
                  bool rescue_active = false;   // GPS Rescue is flying the craft (as asked for by FsOutput::rescue)
                  float stick_move = 0.0f; };   // the largest deflection of roll / pitch / yaw right now (0..1)
 struct FsOutput {
     FsStage stage = FsStage::NONE;
-    uint8_t cause = 0;                // FsCause bits: why (0 when NONE)
+    uint8_t cause = 0;                // FsCause bits: why (0 when NONE and nothing is warned about)
+    uint8_t action = FA_NONE;         // FsAction: what is flown (GUARD: what will be)
+    bool warn = false;                // a condition only warned about (BATTERY_LOW with WARN, or one the pilot took back)
     bool neutral_sticks = false;      // roll/pitch/yaw = 0, Angle forced
     bool alt_descent = false;         // feed AltHold failsafe_descent
+    bool hold = false;                // HOLD: Altitude Hold (and Position Hold, if possible) with neutral sticks
     bool throttle_fallback = false;   // no altitude estimate: use hover*scale
     bool disarm = false;
-    bool rescue = false;              // DESCENT with the procedure RESCUE: the caller starts GPS Rescue; while that flies, alt_descent / throttle_fallback do not count
+    bool rescue = false;              // the action is RTL: the caller starts GPS Rescue; while that flies, alt_descent / throttle_fallback do not count
 };
 
 class Failsafe {
 public:
     FsConfig cfg;
     static constexpr float kSinking = 0.2f;      // m/s: coming down at least this fast = the descent makes progress
+
+    // The action a set of causes asks for: the most severe of them (PX4: actions are ordered, the worst wins).
+    WB_FAST uint8_t action_of(uint8_t causes) const {
+        uint8_t a = FA_NONE;
+        if (causes & (FS_LINK | FS_SWITCH)) {
+            static const uint8_t kProc[4] = {FA_LAND, FA_RTL, FA_HOLD, FA_DROP};
+            a = up(a, cfg.procedure < 4 ? kProc[cfg.procedure] : (uint8_t)FA_LAND);
+        }
+        if (causes & FS_BATTERY) a = up(a, cfg.batt_crit == FBC_RTL ? FA_RTL : FA_LAND);
+        if (causes & FS_BATTERY_LOW) a = up(a, cfg.batt_low == FBL_RTL ? FA_RTL : cfg.batt_low == FBL_LAND ? FA_LAND : FA_WARN);
+        return a;
+    }
 
     WB_FAST FsOutput update(const FsInput& in, float dt) {
         FsOutput o;
@@ -113,52 +141,78 @@ public:
             if (!in.rx_ok) now |= FS_LINK;
             else if (in.switch_on) now |= FS_SWITCH;                 // (without a link the switch channel is not the pilot's hand)
             if (in.batt_critical) now |= FS_BATTERY;
+            else if (in.batt_low) now |= FS_BATTERY_LOW;
         }
+        // the pilot took a BATTERY_LOW action back: it stays a warning until the pack reaches its minimum (or recovers)
+        if (!(now & FS_BATTERY_LOW)) low_taken_back_ = false;          // (at the minimum the cause is BATTERY: the takeover is over too)
+        uint8_t acting = now;
+        if (low_taken_back_) acting &= (uint8_t)~FS_BATTERY_LOW;
+        const uint8_t want = action_of(acting);
         switch (stage) {
         case FsStage::NONE:
             t = t > dt ? t - dt : 0.0f;                              // the guard time used by earlier dropouts drains
-            if (now) { stage = FsStage::GUARD; cause = now; }
+            if (want > FA_WARN) { stage = FsStage::GUARD; cause = acting; action_ = want; }
             break;
         case FsStage::GUARD:
-            if (!now) { stage = FsStage::NONE; cause = 0; break; }
-            cause = now; t += dt;
-            if (t >= cfg.guard_s) {
-                if (in.airborne) { stage = FsStage::DESCENT; t = 0; good_t = 0; stuck_t = 0; }
-                else { stage = FsStage::LANDED; o.disarm = true; }   // on the ground: motors off, not a "descent" at 85 % of the hover throttle
+            if (want <= FA_WARN) { stage = FsStage::NONE; cause = 0; action_ = FA_NONE; break; }
+            cause = acting; action_ = want; t += dt;
+            // BATTERY_LOW alone needs no guard (the battery monitor's delays did that): the action starts at once
+            if (t >= cfg.guard_s || !(acting & (FS_LINK | FS_SWITCH | FS_BATTERY))) {
+                if (action_ == FA_DROP || !in.airborne) { stage = FsStage::LANDED; o.disarm = true; }   // on the ground: motors off, not a "descent"
+                else { stage = FsStage::DESCENT; t = 0; good_t = 0; stuck_t = 0; hold_t = 0; }
             }
             break;
-        case FsStage::DESCENT:
-            // each cause ends by itself: the link after recover_s without a break, the switch and the battery at once
+        case FsStage::DESCENT: {
+            // each cause ends by itself: the link after recover_s without a break, the switch at once; a battery landing stays
             if (now & FS_LINK) { cause |= FS_LINK; good_t = 0; }
             else {
-                // (while the rescue flies the craft home, a link that is back is not enough: the pilot shows he is there)
                 if (cause & FS_LINK) { good_t += dt; if (good_t >= cfg.recover_s && (!in.rescue_active || in.stick_move > cfg.stick_threshold)) cause &= (uint8_t)~FS_LINK; }
                 if (now & FS_SWITCH) cause |= FS_SWITCH; else cause &= (uint8_t)~FS_SWITCH;        // (only a live link says where the switch is)
             }
             if (now & FS_BATTERY) cause |= FS_BATTERY;               // stays: a pack recovers as soon as the load is gone, and would sag again
-            if (!cause) { stage = FsStage::NONE; t = 0; break; }
-            if (in.rescue_active) stuck_t = 0;                       // on its way home: the net is for a landing that makes no progress
+            if (acting & FS_BATTERY_LOW) cause |= FS_BATTERY_LOW;
+            // the pilot takes a battery-low action back with a stick (on a live link, nothing else asking for an action)
+            if ((cause & FS_BATTERY_LOW) && in.rx_ok && in.stick_move > cfg.stick_threshold && !(cause & (FS_LINK | FS_SWITCH | FS_BATTERY))) {
+                cause &= (uint8_t)~FS_BATTERY_LOW; low_taken_back_ = true;
+            }
+            const uint8_t a = action_of(cause);
+            if (a <= FA_WARN) { stage = FsStage::NONE; cause = 0; action_ = FA_NONE; t = 0; break; }
+            if (a > action_) { action_ = a; hold_t = 0; stuck_t = 0; }            // worse news: the more severe action (never the other way)
+            if (action_ == FA_DROP) { stage = FsStage::LANDED; o.disarm = true; break; }
+            if (action_ == FA_HOLD) {
+                hold_t += dt;
+                if (hold_t >= cfg.hold_s || !in.alt_valid) action_ = FA_LAND;   // held long enough (or nothing to hold a height with): land
+            }
+            const bool landing = action_ == FA_LAND || (action_ == FA_RTL && !in.rescue_active);
+            if (!landing) stuck_t = 0;                                         // holding or on its way home: the net is for a landing that makes no progress
             else if (!in.alt_valid || in.vz > -kSinking) stuck_t += dt;
             if (!in.armed || in.landed || stuck_t > cfg.max_descent_s) { stage = FsStage::LANDED; o.disarm = true; }
             break;
+        }
         case FsStage::LANDED:
             o.disarm = true;
-            if (!in.armed && in.rx_ok && !in.switch_on) { stage = FsStage::NONE; cause = 0; t = 0; }
+            if (!in.armed && in.rx_ok && !in.switch_on) { stage = FsStage::NONE; cause = 0; action_ = FA_NONE; t = 0; }
             break;
         }
         o.stage = stage;
-        o.cause = cause;                                             // (0 whenever the stage is NONE: every way there clears it)
         const bool active = stage == FsStage::GUARD || stage == FsStage::DESCENT;
+        o.cause = stage == FsStage::NONE ? (uint8_t)(now & FS_BATTERY_LOW) : cause;     // (a battery-low warning shows its cause too)
+        o.action = stage == FsStage::NONE ? (uint8_t)((now & FS_BATTERY_LOW) ? FA_WARN : FA_NONE) : action_;
+        o.warn = stage == FsStage::NONE && (now & FS_BATTERY_LOW);
         o.neutral_sticks = active && (cause & (FS_LINK | FS_SWITCH)) != 0;
-        o.alt_descent = stage == FsStage::DESCENT && in.alt_valid;
-        o.throttle_fallback = stage == FsStage::DESCENT && !in.alt_valid;
-        o.rescue = stage == FsStage::DESCENT && cfg.procedure == FSP_RESCUE && (cause & (FS_LINK | FS_SWITCH)) != 0 && !(cause & FS_BATTERY);
+        const bool flying = stage == FsStage::DESCENT;
+        o.hold = flying && action_ == FA_HOLD && in.alt_valid;
+        o.rescue = flying && action_ == FA_RTL;
+        o.alt_descent = flying && (action_ == FA_LAND || action_ == FA_RTL) && in.alt_valid;
+        o.throttle_fallback = flying && !in.alt_valid && action_ != FA_DROP;
         return o;
     }
     FsStage get_stage() const { return stage; }
     uint8_t get_cause() const { return cause; }
+    uint8_t get_action() const { return action_; }
 private:
-    FsStage stage = FsStage::NONE; uint8_t cause = 0; float t = 0, good_t = 0, stuck_t = 0;
+    static uint8_t up(uint8_t a, uint8_t b) { return a > b ? a : b; }
+    FsStage stage = FsStage::NONE; uint8_t cause = 0, action_ = FA_NONE; float t = 0, good_t = 0, stuck_t = 0, hold_t = 0; bool low_taken_back_ = false;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------

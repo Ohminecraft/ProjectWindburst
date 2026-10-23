@@ -42,9 +42,11 @@ WB_SAME(ARM_BLOCKER_NO_IMU, fc::AB_NO_IMU); WB_SAME(ARM_BLOCKER_GYRO_NOT_CAL, fc
 WB_SAME(ARM_BLOCKER_ANGLE_TOO_HIGH, fc::AB_ANGLE_TOO_HIGH); WB_SAME(ARM_BLOCKER_FAILSAFE, fc::AB_FAILSAFE); WB_SAME(ARM_BLOCKER_ALTHOLD_NO_BARO, fc::AB_ALTHOLD_NO_BARO); WB_SAME(ARM_BLOCKER_BATT_LOW, fc::AB_BATT_LOW);
 WB_SAME(ARM_BLOCKER_ARM_SWITCH_ON, fc::AB_ARM_SWITCH_ON); WB_SAME(ARM_BLOCKER_CONFIG_UNSAVED, fc::AB_CONFIG_UNSAVED); WB_SAME(ARM_BLOCKER_CALIBRATING, fc::AB_CALIBRATING);
 WB_SAME(ARM_BLOCKER_POSHOLD_NO_GPS, fc::AB_POSHOLD_NO_GPS); WB_SAME(ARM_BLOCKER_MAG_NOT_CALIBRATED, fc::AB_MAG_NOT_CALIBRATED); WB_SAME(ARM_BLOCKER_PIN_CONFLICT, fc::AB_PIN_CONFLICT); WB_SAME(ARM_BLOCKER_LOOP_RATE, fc::AB_LOOP_RATE); WB_SAME(ARM_BLOCKER_RUNAWAY_TAKEOFF, fc::AB_RUNAWAY_TAKEOFF);
-WB_SAME(FS_CAUSE_LINK, fc::FS_LINK); WB_SAME(FS_CAUSE_SWITCH, fc::FS_SWITCH); WB_SAME(FS_CAUSE_BATTERY, fc::FS_BATTERY);
+WB_SAME(FS_CAUSE_LINK, fc::FS_LINK); WB_SAME(FS_CAUSE_SWITCH, fc::FS_SWITCH); WB_SAME(FS_CAUSE_BATTERY, fc::FS_BATTERY); WB_SAME(FS_CAUSE_BATTERY_LOW, fc::FS_BATTERY_LOW);
 WB_SAME(ARM_BLOCKER_RESCUE_NO_FIX, fc::AB_RESCUE_NO_FIX); WB_SAME(ARM_BLOCKER_RESCUE_NO_COMPASS, fc::AB_RESCUE_NO_COMPASS); WB_SAME(ARM_BLOCKER_MOTOR_STALL, fc::AB_MOTOR_STALL);
-WB_SAME(FS_PROCEDURE_LAND, fc::FSP_LAND); WB_SAME(FS_PROCEDURE_RESCUE, fc::FSP_RESCUE);
+WB_SAME(FS_PROCEDURE_LAND, fc::FSP_LAND); WB_SAME(FS_PROCEDURE_RESCUE, fc::FSP_RESCUE); WB_SAME(FS_PROCEDURE_HOLD, fc::FSP_HOLD); WB_SAME(FS_PROCEDURE_DROP, fc::FSP_DROP);
+WB_SAME(FS_ACTION_NONE, fc::FA_NONE); WB_SAME(FS_ACTION_WARN, fc::FA_WARN); WB_SAME(FS_ACTION_HOLD, fc::FA_HOLD); WB_SAME(FS_ACTION_RTL, fc::FA_RTL); WB_SAME(FS_ACTION_LAND, fc::FA_LAND); WB_SAME(FS_ACTION_DROP, fc::FA_DROP);
+WB_SAME(FS_BATT_LOW_WARN, fc::FBL_WARN); WB_SAME(FS_BATT_LOW_RTL, fc::FBL_RTL); WB_SAME(FS_BATT_LOW_LAND, fc::FBL_LAND); WB_SAME(FS_BATT_CRIT_LAND, fc::FBC_LAND); WB_SAME(FS_BATT_CRIT_RTL, fc::FBC_RTL);
 WB_SAME(FLOW_REJECT_OK, fc::FLOW_OK); WB_SAME(FLOW_REJECT_QUALITY, fc::FLOW_QUALITY); WB_SAME(FLOW_REJECT_HEIGHT, fc::FLOW_HEIGHT); WB_SAME(FLOW_REJECT_TILT, fc::FLOW_TILT);
 WB_SAME(FLOW_REJECT_TURNING, fc::FLOW_TURNING); WB_SAME(FLOW_REJECT_NO_GYRO, fc::FLOW_NO_GYRO); WB_SAME(FLOW_REJECT_NO_SAMPLE, fc::FLOW_NO_SAMPLE);
 WB_SAME(PH_AXIS_PILOT, fc::PhAxis::PILOT); WB_SAME(PH_AXIS_BRAKE, fc::PhAxis::BRAKE); WB_SAME(PH_AXIS_BRAKE_READY, fc::PhAxis::BRAKE_READY); WB_SAME(PH_AXIS_TO_LOITER, fc::PhAxis::TO_LOITER);
@@ -134,14 +136,16 @@ inline void apply_nav(const Settings& s, fc::CoreConfig& c) {
     c.poshold.angle_max_deg = n.ph_angle_max; c.poshold.brake_rate_dps = n.ph_brake_rate; c.poshold.brake_angle_max_deg = n.ph_brake_angle;
     c.pos.angle_max_deg = n.ph_angle_max;
     c.pos.pos_p = n.pos_p * 0.1f; c.pos.vel_p = n.vel_p * 0.1f; c.pos.vel_i = n.vel_i * 0.1f; c.pos.vel_d = n.vel_d * 0.01f;
-    c.fs.procedure = n.fs_procedure;
+    c.fs.procedure = n.fs_procedure; c.fs.hold_s = n.fs_hold_s; c.fs.batt_low = n.batt_low_action; c.fs.batt_crit = n.batt_crit_action;
     c.rescue.alt_mode = n.rescue_alt_mode; c.rescue.initial_climb_m = n.rescue_initial_climb; c.rescue.return_alt_m = n.rescue_return_alt;
     c.rescue.ascend_mps = n.rescue_ascend_rate * 0.1f; c.rescue.descend_mps = n.rescue_descend_rate * 0.1f; c.rescue.ground_speed_mps = n.rescue_ground_speed * 0.1f;
     c.rescue.descent_dist_m = n.rescue_descent_dist; c.rescue.min_start_dist_m = n.rescue_min_start_dist; c.rescue.landing_alt_m = n.rescue_landing_alt;
     c.rescue.min_sats = n.rescue_min_sats;
     bool on_switch = false;
     for (int i = 0; i < 16; i++) if (s.modes.mode[i] == MODE_RESCUE && s.modes.aux[i] < fc::kAuxCount && s.modes.hi[i] > s.modes.lo[i]) on_switch = true;
-    c.rescue_configured = on_switch || n.fs_procedure == FS_PROCEDURE_RESCUE; c.rescue_allow_no_fix = n.rescue_allow_no_fix != 0;
+    // (any way a rescue can be asked for: the switch, the procedure, a battery action RTL - then a fix is needed to arm)
+    c.rescue_configured = on_switch || n.fs_procedure == FS_PROCEDURE_RESCUE || n.batt_low_action == FS_BATT_LOW_RTL || n.batt_crit_action == FS_BATT_CRIT_RTL;
+    c.rescue_allow_no_fix = n.rescue_allow_no_fix != 0;
     c.gps_alt = n.gps_alt; c.gps_vel_z = n.gps_vel_z != 0;          // (read by the estimator every step: live)
     c.ph_min_gps_hz = (float)n.ph_min_gps_hz;
     c.ekf_nav = n.ekf == EKF_MODE_NAV;
@@ -152,6 +156,7 @@ inline void apply_althold(const Settings& s, fc::AltHoldConfig& a) {
     const S_althold& h = s.althold;
     a.mid_stick = h.mid_stick * 0.01f; a.deadband = h.deadband * 0.01f; a.low_stick = h.low_stick * 0.01f; a.max_stick = h.max_stick * 0.01f;
     a.max_climb_mps = h.climb_rate * 0.1f; a.max_descend_mps = h.descend_rate * 0.1f;
+    a.accel_z_mps2 = h.accel_z * 0.1f; a.jerk_z_mps3 = h.jerk_z * 0.1f; a.acc_p = h.acc_p * 0.01f; a.acc_i = h.acc_i * 0.01f;
     if (a.low_stick > a.mid_stick - a.deadband - 0.05f) a.low_stick = fmaxf(0.02f, a.mid_stick - a.deadband - 0.05f);      // (a usable descent travel)
 }
 

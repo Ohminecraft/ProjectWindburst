@@ -133,7 +133,7 @@ export default {
               [tr('Độ cao bay về lần này'), withId('rescue-alt', readout('nav', (n) => (n.return_alt > 0 ? f(n.return_alt, 1) + ' m' : '–')))],
             ]),
             h('p', { class: 'help' }, tr('"Sẵn sàng" chỉ có khi máy đang bay với điểm home (GPS đã fix lúc arm), la bàn và ước lượng độ cao. Đã cài Rescue (công tắc hoặc failsafe) thì firmware không cho arm khi GPS chưa fix hoặc không có la bàn.')),
-            fields('nav', ['fs_procedure', 'rescue_alt_mode', 'rescue_initial_climb', 'rescue_return_alt', 'rescue_ascend_rate', 'rescue_descend_rate', 'rescue_ground_speed', 'rescue_descent_dist', 'rescue_min_start_dist',
+            fields('nav', ['fs_procedure', 'fs_hold_s', 'batt_low_action', 'batt_crit_action', 'rescue_alt_mode', 'rescue_initial_climb', 'rescue_return_alt', 'rescue_ascend_rate', 'rescue_descend_rate', 'rescue_ground_speed', 'rescue_descent_dist', 'rescue_min_start_dist',
               'rescue_landing_alt', 'rescue_min_sats', 'rescue_allow_no_fix'])))));
   },
 };

@@ -4,6 +4,7 @@ import { store, on, loadSchema, loadSettings, reloadSection, wantStreams, pushSt
 import { h, clear, toast, showError, disposeScope, errorText, failsafeText } from './ui.js';
 import { BLOCKERS } from './labels.js';
 import { tr, LANGS, getLang, setLang } from './i18n.js';
+import { THEMES, getTheme, setTheme } from './theme.js';
 import overview from './tabs/overview.js';
 import receiver from './tabs/receiver.js';
 import modes from './tabs/modes.js';
@@ -20,6 +21,30 @@ import osd from './tabs/osd.js';
 import system from './tabs/system.js';
 
 const TABS = [overview, receiver, modes, sensors, motors, tuning, rates, filters, nav, power, osd, blackbox, pins, system];
+// the rail in the order of building a craft: put it together, tune it, what it does in the air, then its logs and the board itself
+const GROUPS = [
+  [tr('Lắp máy'), ['overview', 'receiver', 'modes', 'sensors', 'motors']],
+  [tr('Tinh chỉnh'), ['tuning', 'rates', 'filters']],
+  [tr('Khi bay'), ['nav', 'power', 'osd']],
+  [tr('Log và mạch'), ['blackbox', 'pins', 'system']],
+];
+// one line drawing per tab (24 x 24, stroked in the text colour)
+const ICONS = {
+  overview: '<path d="M4 16a8 8 0 1 1 16 0"/><path d="M12 16l4.5-5"/><path d="M4 20h16"/>',
+  receiver: '<path d="M12 21v-9"/><circle cx="12" cy="10" r="2"/><path d="M8.5 6.5a5 5 0 0 0 0 7M15.5 6.5a5 5 0 0 1 0 7M5.6 3.6a9 9 0 0 0 0 12.8M18.4 3.6a9 9 0 0 1 0 12.8"/>',
+  modes: '<rect x="3" y="4.5" width="18" height="6.5" rx="3.25"/><circle cx="16.5" cy="7.75" r="1.7"/><rect x="3" y="13" width="18" height="6.5" rx="3.25"/><circle cx="7.5" cy="16.25" r="1.7"/>',
+  sensors: '<rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/>',
+  motors: '<circle cx="12" cy="12" r="2.2"/><path d="M12 9.8C11 6 12 3 14.5 3S17 6.5 13.6 10.4M14 13.3c3.4 1.6 5.7 3.8 4.4 5.8s-4.7.3-6.2-4.3M10 13.4c-3 2.6-6.1 3.2-6.9 1s1.8-4.4 6.8-4.6"/>',
+  tuning: '<path d="M5 4v16M12 4v16M19 4v16"/><rect x="3" y="13" width="4" height="3.2" rx="1"/><rect x="10" y="7" width="4" height="3.2" rx="1"/><rect x="17" y="15" width="4" height="3.2" rx="1"/>',
+  rates: '<path d="M4 4v16h16"/><path d="M4 19c7 0 10-3 12-8s2.5-6 4-7"/>',
+  filters: '<path d="M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0"/><path d="M3 20h18"/>',
+  nav: '<path d="M12 21s-6.5-5.6-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15.4 12 21 12 21z"/><circle cx="12" cy="10.5" r="2.3"/>',
+  power: '<rect x="3" y="7" width="16" height="10" rx="2"/><path d="M21 10.5v3M7 10v4M10.5 10v4"/>',
+  osd: '<rect x="3" y="5" width="18" height="13" rx="2"/><path d="M6.5 9h4M13.5 14.5h4M6.5 14.5h2.5"/>',
+  blackbox: '<path d="M3 4v16h18"/><path d="M6.5 15l4-5 3 3 5-7"/>',
+  pins: '<rect x="4" y="9" width="16" height="7" rx="1.5"/><path d="M8 9V4.5M12 9V4.5M16 9V4.5M8 16v3.5M16 16v3.5"/>',
+  system: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12.5 15H17"/>',
+};
 const $ = (id) => document.getElementById(id);
 let current = null;          // id of the tab on screen
 let settingsReady = false;
@@ -40,17 +65,21 @@ const saveBtn = h('button', { type: 'button', class: 'btn primary', id: 'save', 
 const revertBtn = h('button', { type: 'button', class: 'btn quiet', id: 'revert', hidden: true }, tr('Bỏ thay đổi'));
 const banner = h('div', { class: 'banner', id: 'banner', hidden: true });
 const langSel = h('select', { id: 'lang', class: 'lang', 'aria-label': 'Ngôn ngữ / Language' }, Object.entries(LANGS).map(([k, name]) => h('option', { value: k }, name)));
+const themeSel = h('select', { id: 'theme', class: 'lang', 'aria-label': tr('Giao diện') }, Object.entries(THEMES).map(([k, name]) => h('option', { value: k }, name)));
 
 function buildBar() {
   $('bar').append(
     h('div', { class: 'brand' }, h('strong', {}, 'Windburst'), fwLabel, mcuBadge),
-    h('div', { class: 'link' }, portSel, baudSel, refreshBtn, connectBtn),
-    h('div', { class: 'state' }, armPill, readyLine),
-    chips,
-    h('div', { class: 'actions' }, revertBtn, saveBtn),
-    banner);
+    h('div', { class: 'bar-main' },
+      h('div', { class: 'link' }, portSel, baudSel, refreshBtn, connectBtn),
+      h('div', { class: 'state' }, armPill, readyLine),
+      chips,
+      h('div', { class: 'actions' }, revertBtn, saveBtn),
+      banner));
   langSel.value = getLang();
   langSel.addEventListener('change', () => setLang(langSel.value));
+  themeSel.value = getTheme();
+  themeSel.addEventListener('change', () => setTheme(themeSel.value));
   refreshBtn.addEventListener('click', () => refreshPorts());
   portSel.addEventListener('change', pickCustom);
   baudSel.addEventListener('change', () => { try { localStorage.setItem('wb-baud', baudSel.value); } catch (e) { /* not remembered */ } });
@@ -65,7 +94,9 @@ let portsKey = '';
 function portLabel(p) {
   if (p.sim) return tr('Mô phỏng wb_sim (127.0.0.1:5760)');
   if (p.wifi) return tr('WiFi của máy bay (điểm phát riêng, 192.168.4.1:5760)');
-  const what = [p.description, p.chip && !String(p.description).includes(p.chip) ? p.chip : ''].filter(Boolean).join(', ');
+  // the name the device gives itself (USB iProduct) before the driver's ("USB Serial Device (COM5)")
+  const name = p.product || p.description;
+  const what = [name, p.chip && !String(name).includes(p.chip) ? p.chip : ''].filter(Boolean).join(', ');
   return p.port + (what ? ' - ' + what : '');
 }
 function pickCustom() {
@@ -108,7 +139,7 @@ async function connect() {
   busy = true; lastFailure = null; paintBar();
   try {
     try { localStorage.setItem('wb-port', portSel.value); } catch (e) { /* not remembered */ }
-    await api.post('/api/connect', { port: portSel.value, baud: Number(baudSel.value) || 230400 });
+    await api.post('/api/connect', { port: portSel.value, baud: Number(baudSel.value) || 115200 });
   } catch (e) {
     lastFailure = e;
     showError(e);
@@ -149,7 +180,9 @@ function chip(label, value, kind = '') { return h('span', { class: 'chip ' + kin
 // The server says WHY the link is in its state as a code; the words are chosen here.
 function noteText(note) {
   if (!note) return '';
+  if (note.code === 'PORT_LOST' && note.waiting) return tr('Mất kết nối với cổng {port}, đang chờ cổng quay lại (mạch đang khởi động lại?)', { port: note.port });
   if (note.code === 'PORT_LOST') return tr('Mất kết nối với cổng {port} (rút cáp?)', { port: note.port });
+  if (note.code === 'RECONNECTED') return tr('Cổng {port} đã quay lại: đã kết nối lại', { port: note.port });
   if (note.code === 'NOT_RESPONDING') return tr('Firmware không trả lời (đang khởi động lại, treo, hoặc mất nguồn?)');
   if (note.code === 'REBOOTED') return tr('Flight controller vừa khởi động lại');
   if (note.code === 'STALLED') return tr('Dữ liệu từ firmware ngừng {s} giây nhưng firmware KHÔNG khởi động lại (chi tiết: tab Hệ thống, Nhật ký firmware)', { s: note.seconds });
@@ -209,10 +242,20 @@ function paintBar() {
 
 // ------------------------------------------------------------------ tabs
 function buildRail() {
-  for (const tab of TABS) {
-    $('rail').append(h('a', { href: '#' + tab.id, class: 'tab', id: 'tab-' + tab.id, 'data-tab': tab.id }, tab.title));
+  const placed = new Set();
+  const add = (tab) => {
+    const a = h('a', { href: '#' + tab.id, class: 'tab', id: 'tab-' + tab.id, 'data-tab': tab.id }, h('span', {}, tab.title));
+    if (ICONS[tab.id]) a.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[tab.id]}</svg>`);
+    $('rail').append(a); placed.add(tab.id);
+  };
+  for (const [name, ids] of GROUPS) {
+    const tabs = ids.map((id) => TABS.find((t) => t.id === id)).filter(Boolean);
+    if (!tabs.length) continue;
+    $('rail').append(h('div', { class: 'rail-group' }, name));
+    tabs.forEach(add);
   }
-  $('rail').append(h('div', { class: 'rail-foot' }, langSel));       // language: at the foot of the rail, out of the way of the status bar
+  TABS.filter((t) => !placed.has(t.id)).forEach(add);          // (a tab nobody put in a group still gets its place)
+  $('rail').append(h('div', { class: 'rail-foot' }, themeSel, langSel));       // language: at the foot of the rail, out of the way of the status bar
 }
 function tabFromHash() {
   const id = location.hash.replace('#', '');
@@ -258,7 +301,7 @@ function connectHelp() {
   return h('div', { class: 'welcome' },
     h('h1', {}, tr('Nối flight controller để bắt đầu')),
     h('ol', {},
-      h('li', {}, tr('Cắm cáp USB vào mạch ESP32-S3 đã nạp firmware Windburst.')),
+      h('li', {}, tr('Cắm cáp USB vào MCU đã nạp firmware Windburst.')),
       h('li', {}, tr('Bấm "Tìm cổng", chọn cổng COM của mạch ở thanh trên cùng, rồi bấm "Kết nối".')),
       h('li', {}, tr('Tab Tổng quan cho biết firmware tìm thấy cảm biến nào và vì sao chưa arm được.'))),
     lastFailure ? failureHelp(lastFailure) : null,
@@ -274,6 +317,7 @@ async function onConn({ before }) {
   paintBar();
   if (before.connected && (c.stalls || 0) > (before.stalls || 0)) toast(noteText(c.note), 'warn');
   if (fresh) {
+    if (c.note && c.note.code === 'RECONNECTED') toast(noteText(c.note), 'ok');
     lastFailure = null;
     refreshPorts(true);                   // a page opened on an existing connection shows the port that is in use
     settingsReady = false; show(current);

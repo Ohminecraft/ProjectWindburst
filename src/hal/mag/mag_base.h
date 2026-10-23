@@ -11,13 +11,14 @@
 #include "mag_driver.h"
 #include "hmc5883l_mag.h"
 #include "qmc5883_mag.h"
+#include "rm3100_mag.h"
 #include "ak8963_mpu9250_mag.h"
 #include "external_mag.h"
 #include "mag_processor.h"
 #include "../../config/hardware_config.h"
 
 // ============================================================================
-// MagSensor (the "Magnetometer" tab): HMC5883L (0x1E), QMC5883L (0x0D), QMC5883P (0x2C) on I2C, or the AK8963 inside an MPU9250 that
+// MagSensor (the "Magnetometer" tab): HMC5883L (0x1E), QMC5883L (0x0D), QMC5883P (0x2C), RM3100 (0x20 .. 0x23) on I2C, or the AK8963 inside an MPU9250 that
 // the IMU driver already found on SPI.
 //
 //   MagSensor mag;
@@ -31,7 +32,7 @@
 // ============================================================================
 class MagSensor {
 public:
-    enum class Model : uint8_t { AUTO, HMC5883L, QMC5883L, QMC5883P, AK8963_MPU9250, DRONECAN };      // == the schema's mag_model
+    enum class Model : uint8_t { AUTO, HMC5883L, QMC5883L, QMC5883P, AK8963_MPU9250, DRONECAN, RM3100, MSP };      // == the schema's mag_model
 
     void attachI2C(I2CBus& shared) { shared_ = &shared; }
     void attachImuBus(AgRegBus* imu_bus, IMUAccGyroDevice imu_device) { imu_bus_ = imu_bus; imu_dev_ = imu_device; }
@@ -45,6 +46,7 @@ public:
         drv_ = nullptr; fail_ = ""; detected_ = Model::AUTO;
         if (!enabled_) { fail_ = "magnetometer disabled"; return false; }
         if (model_ == Model::DRONECAN) { can_.init(); drv_ = &can_; detected_ = Model::DRONECAN; return true; }      // (samples: pushExternal(), from the CAN node)
+        if (model_ == Model::MSP) { msp_.init(); drv_ = &msp_; detected_ = Model::MSP; return true; }                  // (samples: pushExternal(), from the MSP port)
         const bool want_i2c = model_ == Model::AUTO || (model_ != Model::AK8963_MPU9250);
         if (want_i2c && (shared_ || pins_ok())) {
             I2CBus* bus = shared_;
@@ -55,15 +57,32 @@ public:
             if (try_i2c(*bus, 0x1E, Model::HMC5883L, hmc_)) return true;
             if (try_i2c(*bus, 0x0D, Model::QMC5883L, qmcl_)) return true;
             if (try_i2c(*bus, 0x2C, Model::QMC5883P, qmcp_)) return true;
+            for (uint8_t a = 0x20; a <= 0x23; a++) if (try_i2c(*bus, a, Model::RM3100, rm3100_)) return true;
         }
         if ((model_ == Model::AUTO || model_ == Model::AK8963_MPU9250) && imu_bus_ && imu_dev_ == MPU9520_SPI) {
             proxy_.set(imu_bus_);
             if (ak_.init()) { drv_ = &ak_; detected_ = Model::AK8963_MPU9250; proc_.cfg = MagProcessorConfig(); return true; }
         }
         if (want_i2c && !shared_ && !pins_ok() && !(imu_bus_ && imu_dev_ == MPU9520_SPI)) fail_ = "I2C pins not set (app: Pins tab, or hardware_config.h)";
-        else fail_ = "no magnetometer answered (HMC5883L 0x1E, QMC5883L 0x0D, QMC5883P 0x2C, MPU9250 AK8963)";
+        else fail_ = "no magnetometer answered (HMC5883L 0x1E, QMC5883L 0x0D, QMC5883P 0x2C, RM3100 0x20-0x23, MPU9250 AK8963)";
         return false;
     }
+
+    // A compass on the IMU's SPI bus (pins.mag_cs): only the RM3100 of the list talks SPI. `host` = IMUAccGyro::spiHost(). Its
+    // transfers must not overlap the IMU's: the caller runs update() under the flight loop's lock (FlightApp).
+    bool MagInitShared(SPIBus& host, uint8_t cs) {
+        drv_ = nullptr; fail_ = ""; detected_ = Model::AUTO;
+        if (!enabled_) { fail_ = "magnetometer disabled"; return false; }
+        if (model_ != Model::AUTO && model_ != Model::RM3100) { fail_ = "only an RM3100 can be on SPI (sensors.mag_model)"; return false; }
+        if (!spi_.SPIInitShared(host, cs)) { fail_ = "chip-select pin unusable (or the IMU's)"; return false; }
+        spi_.setFastClock(1000000);                                    // RM3100: 1 MHz
+        proxy_.set(&spi_bus_);
+        if (!rm3100_.init()) { fail_ = "no RM3100 answered on SPI (pins.mag_cs)"; return false; }
+        drv_ = &rm3100_; detected_ = Model::RM3100;
+        return true;
+    }
+    // On the IMU's SPI bus (an RM3100 on pins.mag_cs, or the AK8963 read through the MPU9250): update() under the flight loop's lock
+    bool onImuBus() const { return drv_ && drv_ != &can_ && drv_ != &msp_ && proxy_.is_spi(); }
 
     // Call often. Returns true when a NEW sample was taken.
     bool update(uint32_t now_us, uint32_t now_ms) {
@@ -90,9 +109,9 @@ public:
         return r;
     }
 
-    // A sample of an external compass (DroneCAN: the module's frame, x forward, y right, z down; gauss)
-    void pushExternal(const float frd_ga[3], uint32_t now_us) { if (drv_ == &can_) can_.push(frd_ga, now_us); }
-    uint32_t externalSamples() const { return can_.samples(); }
+    // A sample of an external compass (DroneCAN, MSP: the module's frame, x forward, y right, z down; gauss)
+    void pushExternal(const float frd_ga[3], uint32_t now_us) { if (drv_ == &can_) can_.push(frd_ga, now_us); else if (drv_ == &msp_) msp_.push(frd_ga, now_us); }
+    uint32_t externalSamples() const { return drv_ == &msp_ ? msp_.samples() : can_.samples(); }
     bool available() const { return drv_ != nullptr; }
     bool healthy() const { return drv_ && drv_->healthy(); }
     bool calibrated() const { return proc_.calibrated(); }
@@ -120,12 +139,15 @@ private:
     I2CBus* shared_ = nullptr; I2CBus own_{I2C_DEVICE_1};
     AgRegBus* imu_bus_ = nullptr; IMUAccGyroDevice imu_dev_ = NONE;
     AgI2CRegBus i2c_bus_{own_};
+    SPIBus spi_{SPI_DEVICE_1};
+    AgSpiRegBus spi_bus_{spi_};
     AgBusProxy proxy_;
     Hmc5883lMag hmc_{proxy_};
     Qmc5883Mag qmcl_{proxy_, Qmc5883Mag::Variant::L};
     Qmc5883Mag qmcp_{proxy_, Qmc5883Mag::Variant::P};
+    Rm3100Mag rm3100_{proxy_};
     Ak8963Mpu9250Mag ak_{proxy_};
-    ExternalMag can_{"DroneCAN"};
+    ExternalMag can_{"DroneCAN"}, msp_{"MSP"};
     MagDriver* drv_ = nullptr;
     MagProcessor proc_;
     MagCalibrator cal_;

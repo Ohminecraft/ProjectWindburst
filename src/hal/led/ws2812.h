@@ -52,6 +52,41 @@ inline int decode(const uint8_t* in, size_t n, app::Rgb* c, int max) {
     return leds;
 }
 
+// ---- the STM32 way (port/stm32/ws2812_stm32.h, Betaflight's ws2811 driver): the pin's timer channel at 800 kHz, a DMA writes the
+// compare value of every bit (GRB, MSB first): a 1 is high for 2/3 of the 1.25 us bit (0.83 us), a 0 for 1/3 (0.42 us); after the
+// last LED two rows of 0 keep the line low (the latch is the pause until the next picture, 20 ms at 50 pictures a second).
+constexpr uint32_t kTimerHz = 800000;
+constexpr int kRowTail = 2;
+inline int rows_for(int n) { return n * 24 + kRowTail; }
+inline uint32_t row_one(uint32_t period) { return (period * 2u + 1u) / 3u; }
+inline uint32_t row_zero(uint32_t period) { return (period + 1u) / 3u; }
+inline int timer_rows(const app::Rgb* c, int n, uint32_t period, uint32_t* out, int cap) {
+    if (n < 0 || rows_for(n) > cap) return 0;
+    int k = 0;
+    const uint32_t one = row_one(period), zero = row_zero(period);
+    for (int i = 0; i < n; i++) {
+        const uint8_t v[3] = {c[i].g, c[i].r, c[i].b};
+        for (int j = 0; j < 3; j++) for (int b = 7; b >= 0; b--) out[k++] = (v[j] >> b) & 1u ? one : zero;
+    }
+    for (int t = 0; t < kRowTail; t++) out[k++] = 0;
+    return k;
+}
+// back from the rows to colors (the tests): -1 when a row is neither a clean 1 nor a clean 0
+inline int timer_rows_read(const uint32_t* rows, int k, uint32_t period, app::Rgb* c, int max) {
+    int leds = 0;
+    for (int i = 0; i + 24 <= k && leds < max; i += 24) {
+        if (rows[i] == 0) break;
+        uint8_t v[3] = {};
+        for (int j = 0; j < 3; j++) for (int b = 0; b < 8; b++) {
+            const uint32_t x = rows[i + j * 8 + b];
+            if (x != row_one(period) && x != row_zero(period)) return -1;
+            v[j] = (uint8_t)((v[j] << 1) | (x == row_one(period) ? 1 : 0));
+        }
+        c[leds].g = v[0]; c[leds].r = v[1]; c[leds].b = v[2]; leds++;
+    }
+    return leds;
+}
+
 } // namespace led
 
 #if defined(ARDUINO_ARCH_ESP32)
@@ -69,10 +104,15 @@ public:
         const size_t k = encode(c, n, buf_, sizeof(buf_)); if (!k) return;
         spi_.beginTransaction(SPISettings(kSpiHz, MSBFIRST, SPI_MODE0)); spi_.transferBytes(buf_, nullptr, (uint32_t)k); spi_.endTransaction();
     }
+    const char* why() const { return nullptr; }
 private:
     SPIClass spi_{(int)SPI_DEVICE_1}; bool ok_ = false; uint8_t buf_[32 * 12 + kLatchBytes];
 };
+using Strip = SpiStrip;
 }
+#define WB_HAS_LED_STRIP 1
+#elif defined(ARDUINO_ARCH_STM32)
+#include "../../port/stm32/ws2812_stm32.h"
 #define WB_HAS_LED_STRIP 1
 #else
 #define WB_HAS_LED_STRIP 0

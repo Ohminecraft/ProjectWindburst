@@ -32,6 +32,8 @@
 #include "proto/kv_flash.h"
 #include "blackbox/bb_qword.h"
 #include "blackbox/bb_header.h"
+#include "blackbox/bb_card_stm32.h"
+#include "hal/can/stm32_can.h"
 
 #if defined(STM32F4xx)
 // The clock of an F4 (instead of the generic variant's internal 16 MHz oscillator): a flight controller has a crystal - 8 MHz on
@@ -93,10 +95,17 @@ static app::LinkHost host(flight.link, &LinkTask::wait_1ms, nullptr, &LinkTask::
 static wbp::Server server(settings, &store, host, transport, wbp::ROLE_RX, WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH, "Windburst RX",
                           wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | wbp::FEAT_STM32);
 static LinkTask link_task(server, Serial, transport);
-static app::MspLink msp_link(host, transport);
+static app::MspLink msp_link(host, transport, &settings);
 static app::Cli term_cli(settings, server, [](const char* t, void*) { transport.write((const uint8_t*)t, strlen(t)); }, nullptr);     // '#' on the serial port: the command line (app/cli.h)
 static bb::Service blackbox(flight.blackbox, transport);
 static bb::FirmwareHeader log_header{&settings, "Windburst RX", WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH};
+static SdFatFileStore sd_store;                          // SD card on SPI (SdFat), only touched when blackbox.device = SDCARD
+static RtosLockStm32 sd_lock;
+static bb::CardLog card_log(sd_store, sd_lock);
+static SdCardTaskStm32 sd_task(card_log);
+#if WB_HAS_STM32_CAN
+static Stm32CanBus can_bus;                              // FDCAN (G4 / H5) or bxCAN (F4): DroneCAN, section can
+#endif
 static TaskHandle_t sensor_handle = nullptr;
 
 static void sensor_entry(void*) {
@@ -120,6 +129,12 @@ void setup() {
     flight.usb_link = true;
 #endif
     flight.uart0 = &uart_c; flight.uart1 = &uart_a; flight.uart2 = &uart_b;
+#if WB_HAS_STM32_CAN
+    flight.can_port = &can_bus;
+#endif
+    {   // the chip's unique id (DroneCAN's hardware unique id)
+        const uint32_t u[3] = {port::uid_word(0), port::uid_word(1), port::uid_word(2)}; memcpy(flight.chip_uid, u, sizeof(u));
+    }
     flight.configure(settings);
     flight.begin();
 
@@ -134,6 +149,17 @@ void setup() {
                  (unsigned long)(blackbox.log().used() / 1024u), blackbox.log().needs_erase() ? " - holds other data: erase it in the app" : "");
     else snprintf(line, sizeof(line), "blackbox: FAILED - the log region of flash bank 2 cannot be read");
     flight.add_report(line);
+    //    SD card: mounted now when the settings select it; a card that is missing (or selected later in the app) is looked for
+    //    every 3 s by the writer task
+    if (settings.blackbox.device == bb::DEV_SDCARD) {
+        card_log.configure_device(true, settings.blackbox.sd_mode, settings.blackbox.sd_mhz);
+        SdCardTaskStm32::give_buffer(card_log);
+        if (card_log.begin()) snprintf(line, sizeof(line), "blackbox: SD card '%s' %lu MB, %lu MB free, %d log files, buffer %lu kB", sd_store.name(), (unsigned long)(card_log.capacity_kb() / 1024u),
+                                       (unsigned long)((card_log.capacity_kb() - card_log.used_kb()) / 1024u), card_log.sessions(), (unsigned long)(card_log.buffer_size() / 1024u));
+        else snprintf(line, sizeof(line), "blackbox: SD card FAILED - %s (it is looked for again every 3 s)", card_log.why());
+        flight.add_report(line);
+    }
+    blackbox.attach_card(&card_log);
     blackbox.set_header_source(&bb::FirmwareHeader::write, &log_header);
     blackbox.set_loop(flight.core.cfg.pid_hz(), flight.motors.cfg().count, flight.core.cfg.loop_hz);   // a record per control cycle at most
     host.set_blackbox(&blackbox, &settings);
@@ -164,6 +190,9 @@ void setup() {
     snprintf(line, sizeof(line), "loop: %s, TIM7 every %lu us%s", flight_ok ? "flight task" : "FAILED to start the flight task", (unsigned long)flight.period_us(),
              sensor_ok ? "" : " - FAILED to start the sensor task");
     flight.add_report(line);
+    // the SD card's writer task (a low-RAM chip starts it only when the card is selected at boot: choosing the card later in the
+    // app then needs a restart there)
+    if ((settings.blackbox.device == bb::DEV_SDCARD || !WB_LOW_RAM) && !sd_task.start()) flight.add_report("blackbox: FAILED to start the SD card task");
     { static uint8_t pins[port::kPinMaskBytes]; port::chip_pins(pins); server.set_chip(WB_MCU_NAME, pins); }      // the app: which MCU, which pins exist
     host.attach(&server);
     host.set_report(flight.report(), flight.report_lines());

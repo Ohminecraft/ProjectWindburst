@@ -29,7 +29,7 @@ using namespace wbp;
 
 static void t_pack() {
     printf("[telemetry] wire structs: scaling, saturation, NaN\n");
-    app::Telemetry t; uint8_t b[256];
+    app::Telemetry t; uint8_t b[512];          // (a stream frame holds kMaxPayload bytes: the satellite list is 257)
     t.roll = 12.345f; t.pitch = -7.891f; t.yaw = -179.99f; t.gyro_f[0] = 123.44f; t.gyro_f[2] = -2000.06f; t.sp[1] = 360.0f;
     CHECK(app::pack_stream(STR_ATTITUDE, t, 0, b, sizeof(b)) == sizeof(T_attitude), "attitude size");
     { T_attitude a; memcpy(&a, b, sizeof(a)); CHECK(a.roll == 1235 && a.pitch == -789 && a.yaw == 18001 && a.gyro[0] == 1234 && a.gyro[2] == -20001 && a.sp[1] == 3600, "0.01 deg / 0.1 deg/s, rounded to nearest; yaw -179.99 goes out as the heading 180.01: %d %d %d %d %d %d", a.roll, a.pitch, a.yaw, a.gyro[0], a.gyro[2], a.sp[1]); }
@@ -450,7 +450,7 @@ static void t_settings() {
       CHECK(b.valid && b.offset[0] == 0.02f && b.offset[2] == -0.03f && b.scale[1] == 1.01f && c.mag_valid == 0, "accelerometer calibration <-> settings round trip, compass part untouched"); }
     { Settings q; defaults(q); q.general.board_trim_roll = 15; q.general.board_trim_yaw = -900; q.calibration.acc_trim_roll = -7; q.calibration.acc_trim_pitch = 22; float r, p, y; board_fine_alignment(q, r, p, y);
       CHECK(fabsf(r - 0.8f) < 1e-5f && fabsf(p - 2.2f) < 1e-5f && fabsf(y + 90.0f) < 1e-5f, "fine alignment = board trim + level trim: %.2f %.2f %.2f", r, p, y); }
-    for (const SectionInfo& si : kSections) CHECK(si.live == (si.id == SEC_MODES || si.id == SEC_RATES || si.id == SEC_PID || si.id == SEC_CALIBRATION || si.id == SEC_BEEPER || si.id == SEC_BATTERY || si.id == SEC_BLACKBOX || si.id == SEC_FILTERS || si.id == SEC_NAV || si.id == SEC_SERVO || si.id == SEC_ALTHOLD), "section %s live flag", si.name);
+    for (const SectionInfo& si : kSections) CHECK(si.live == (si.id == SEC_MODES || si.id == SEC_RATES || si.id == SEC_PID || si.id == SEC_CALIBRATION || si.id == SEC_BEEPER || si.id == SEC_BATTERY || si.id == SEC_BLACKBOX || si.id == SEC_FILTERS || si.id == SEC_NAV || si.id == SEC_SERVO || si.id == SEC_ALTHOLD || si.id == SEC_MSP), "section %s live flag", si.name);
 }
 
 static void t_hwconfig() {
@@ -629,7 +629,13 @@ static void t_led() {
     { Rgb k[3] = {{255, 0, 0}, {0, 0x81, 0}, {0x12, 0x34, 0x56}}; uint8_t b[200]; const size_t n = led::encode(k, 3, b, sizeof(b)); Rgb back[3]; const int m = led::decode(b, n, back, 3);
       CHECK(n == 3 * 12 + led::kLatchBytes && b[0] == 0x88 && b[4] == 0xEE && b[sizeof(b) > n ? n - 1 : 0] == 0 && m == 3 && eq(back[0], k[0]) && eq(back[1], k[1]) && eq(back[2], k[2]),
             "WS2812 on SPI: 12 bytes per LED, G R B, 1000 = 0 / 1110 = 1 (first bytes %02X %02X), the latch, decoded back", b[0], b[4]);
-      CHECK(led::encode(k, 3, b, 40) == 0, "a buffer too small: nothing"); }
+      CHECK(led::encode(k, 3, b, 40) == 0, "a buffer too small: nothing");
+      // the STM32 way: a compare value per bit for the timer channel at 800 kHz (210 ticks at 168 MHz)
+      uint32_t rows[3 * 24 + 2]; const int nr = led::timer_rows(k, 3, 210, rows, 74); Rgb back2[3];
+      CHECK(nr == 74 && led::row_one(210) == 140 && led::row_zero(210) == 70 && rows[0] == 70 && rows[7] == 70 && rows[8] == 140 && rows[72] == 0 && rows[73] == 0,
+            "STM32 timer rows: 24 a LED, G R B MSB first, a 1 = 2/3 of the bit, a 0 = 1/3, then two 0 rows (first G bit of red: 0, its R MSB: 1)");
+      CHECK(led::timer_rows_read(rows, nr, 210, back2, 3) == 3 && eq(back2[0], k[0]) && eq(back2[1], k[1]) && eq(back2[2], k[2]), "... read back");
+      CHECK(led::timer_rows(k, 3, 210, rows, 73) == 0 && led::rows_for(32) == 770, "a buffer too small: nothing; 32 LEDs = 770 rows"); }
 }
 
 static void t_sticks() {

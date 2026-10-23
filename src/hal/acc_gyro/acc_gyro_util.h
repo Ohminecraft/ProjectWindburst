@@ -29,6 +29,10 @@ typedef enum
     ICM45686_SPI,
     BMI160_SPI,
     BMI270_SPI,
+    ICM20948_SPI,
+    ICM20649_SPI,
+    ICM20948_I2C,
+    ICM20649_I2C,
     ACCGYRO_DEVICE_COUNT
 
 } IMUAccGyroDevice;
@@ -85,7 +89,8 @@ WB_FAST inline void apply_rotation(float v[3], const float m[3][3]) {
 }
 
 // Identify the chip from raw ID reads. r00_dummy_second = byte 2 of a 2-byte read of reg 0x00 (BMI270 has a dummy byte first),
-// r00_first = a plain 1-byte read of reg 0x00 (BMI160), r72 = reg 0x72 (ICM456xx), r75 = reg 0x75 (MPU family / ICM426xx).
+// r00_first = a plain 1-byte read of reg 0x00 (BMI160, ICM20948 / ICM20649), r72 = reg 0x72 (ICM456xx), r75 = reg 0x75 (MPU family / ICM426xx).
+// The ICM-209xx is looked for last, as Betaflight does: on the MPU family reg 0x00 is a factory self-test value that may be anything.
 inline IMUAccGyroDevice classify_spi(uint8_t r00_dummy_second, uint8_t r00_first, uint8_t r72, uint8_t r75) {
     if (r00_dummy_second == BMI270_WHO_AM_I) return BMI270_SPI;
     if (r00_first == BMI160_WHO_AM_I) return BMI160_SPI;
@@ -102,12 +107,18 @@ inline IMUAccGyroDevice classify_spi(uint8_t r00_dummy_second, uint8_t r00_first
     case ICM42622P_WHO_AM_I: return ICM42622P_SPI;
     case ICM42686P_WHO_AM_I: return ICM42686P_SPI;
     case ICM42688P_WHO_AM_I: return ICM42688P_SPI;
-    default:                 return NONE;
+    default:                 break;
     }
+    if (r00_first == ICM20948_WHO_AM_I) return ICM20948_SPI;
+    if (r00_first == ICM20649_WHO_AM_I) return ICM20649_SPI;
+    return NONE;
 }
-inline IMUAccGyroDevice classify_i2c(uint8_t who) {
+// who = reg 0x75, r00 = reg 0x00 (ICM-209xx, only when 0x75 is not an MPU)
+inline IMUAccGyroDevice classify_i2c(uint8_t who, uint8_t r00 = 0) {
     if (who == MPU6050_WHO_I_AM) return MPU6050_I2C;
     if (who == MPU6500_WHO_I_AM) return MPU6500_I2C;
+    if (r00 == ICM20948_WHO_AM_I) return ICM20948_I2C;
+    if (r00 == ICM20649_WHO_AM_I) return ICM20649_I2C;
     return NONE;
 }
 

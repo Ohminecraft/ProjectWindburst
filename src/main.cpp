@@ -42,7 +42,7 @@ void loop() { Serial.println("Windburst TX: firmware not implemented yet"); dela
 // shows up under its own name (general.usb_name). The app link is usb_cdc; `Serial` is UART0 there.
 #include "USB.h"
 #include "esp32-hal-tinyusb.h"
-static USBCDC usb_cdc(0);                               // (the core defines USBSerial only when USB starts at boot)
+static USBCDC usb_cdc;                               // (the core defines USBSerial only when USB starts at boot)
 #define WB_LINK usb_cdc
 #define WB_FEAT_USB wbp::FEAT_USB_NAME
 #else
@@ -87,7 +87,7 @@ static app::LinkHost host(flight.link, &LinkTask::wait_1ms, nullptr, &LinkTask::
 static wbp::Server server(settings, &store, host, transport, wbp::ROLE_RX, WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH, "Windburst RX",
                           wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | WB_FEAT_WIFI | WB_FEAT_USB);
 static LinkTask link_task(server, WB_LINK, transport);
-static app::MspLink msp_link(host, transport);           // ESC tools on the same port (ESC passthrough)
+static app::MspLink msp_link(host, transport, &settings);           // ESC tools on the same port (ESC passthrough)
 static app::Cli term_cli(settings, server, [](const char* t, void*) { transport.write((const uint8_t*)t, strlen(t)); }, nullptr);     // '#' on the serial port: the command line (app/cli.h)
 static EspPartitionStore log_store;                      // flash region of the flight log (partition "wblog", or the stock "spiffs" one)
 static bb::Service blackbox(flight.blackbox, transport);
@@ -141,7 +141,7 @@ void setup() {
     USB.manufacturerName("Windburst"); USB.productName(g_usb_name);
     usb_cdc.setRxBufferSize(2048);
     usb_cdc.enableReboot(false); usb_cdc.onEvent(on_usb_cdc);
-    usb_cdc.begin(WB_LINK_BAUD);
+    usb_cdc.begin();
     USB.begin();
 #endif
 

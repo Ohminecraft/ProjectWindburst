@@ -2,6 +2,7 @@
 import { store, emit } from '../store.js';
 import { h, block, kv, readout, listen, failsafeText } from '../ui.js';
 import { craftView } from '../gfx/craft3d.js';
+import { usageBar, compassTape } from '../gfx/instruments.js';
 import { BLOCKERS } from '../labels.js';
 import { api } from '../api.js';
 import { tr } from '../i18n.js';
@@ -15,6 +16,19 @@ const TROUBLE = [['flow', 'Optical flow'], ['pins', tr('Bảng chân')]];
 const f = (v, d) => (v === undefined || v === null ? '–' : Number(v).toFixed(d));
 const vec = (a, d) => (a ? a.map((x) => f(x, d)).join('   ') : '–');
 const withId = (id, el) => { el.id = id; return el; };
+
+// A block with tabs: [[label, content], ...]; the first one shows. Each tab button names its pane (aria).
+function tabbed(id, panes) {
+  const bar = h('div', { class: 'seg', role: 'tablist' });
+  const bodies = panes.map(([, content], i) => h('div', { class: 'seg-pane', role: 'tabpanel', id: `${id}-${i}`, hidden: i !== 0 }, content));
+  const btns = panes.map(([label], i) => h('button', { type: 'button', role: 'tab', class: 'seg-btn', 'aria-selected': String(i === 0), 'aria-controls': `${id}-${i}`, 'data-pane': String(i) }, label));
+  btns.forEach((b, i) => b.addEventListener('click', () => {
+    btns.forEach((x, k) => x.setAttribute('aria-selected', String(k === i)));
+    bodies.forEach((x, k) => { x.hidden = k !== i; });
+  }));
+  bar.append(...btns);
+  return h('div', { class: 'tabbed', id }, bar, ...bodies);
+}
 
 function moduleTable() {
   const body = h('tbody');
@@ -77,13 +91,13 @@ export default {
             h('div', {}, h('span', { class: 'k' }, 'Pitch'), readout('attitude', (a) => f(a.pitch, 1) + '°')),
             h('div', {}, h('span', { class: 'k' }, 'Yaw'), readout('attitude', (a) => f(a.yaw, 1) + '°'))),
           h('p', { class: 'help' }, tr('Nghiêng máy sang phải thì roll dương, chúi mũi xuống thì pitch dương, quay mũi sang phải thì yaw tăng. Hình phải nghiêng đúng như máy trên tay; nếu sai, sửa "Hướng chip IMU" ở tab Cảm biến.')),
+          (store.settings.sensors || {}).mag_enabled ? compassTape('attitude', (a) => a.yaw) : null,      // (the heading needs a compass to mean north)
           recenter),
         block(tr('Vì sao chưa arm được'), blockers)),
       h('div', {},
         block('Module', moduleTable(), again),
-        block(tr('Số đo'),
-          h('p', { class: 'help' }, tr('"Thời gian từng khâu" là trung bình của giây vừa rồi cho một chu kỳ điều khiển; cộng lại phải nhỏ hơn 1 000 000 / tần số đã đặt (250 µs ở 4000 Hz). Khâu nào lớn bất thường là chỗ cần xem: đọc IMU (dây SPI, tốc độ SPI), tính toán (bộ lọc, RPM filter), gửi motor (DShot); "còn lại" gồm chờ luồng cảm biến nhả khoá, ghi log và telemetry. Số lớn nhất của từng khâu nằm trong log blackbox (nhóm "Thời gian vòng lặp").')),
-          kv([
+        block(tr('Số đo'), tabbed('readings', [
+          [tr('Cảm biến'), kv([
             ['Gyro (°/s)', readout('sensors', (s) => vec(s.gyro, 1))],
             ['Accelerometer (g)', readout('sensors', (s) => vec(s.acc, 3))],
             [tr('La bàn (gauss)'), readout('sensors', (s) => vec(s.mag, 3))],
@@ -92,15 +106,20 @@ export default {
             [tr('Độ cao ước lượng'), readout('estimate', (e) => (e.valid.includes('ALT') ? `${f(e.z, 2)} m, ${f(e.vz, 2)} m/s` : tr('chưa hợp lệ')))],
             ['GPS', readout('gps', (g) => (g.fix >= 2 ? tr('fix {fix}D, {sats} vệ tinh, HDOP {hdop}', { fix: g.fix, sats: g.sats, hdop: f(g.hdop, 2) }) : tr('chưa fix, {sats} vệ tinh ({state})', { sats: g.sats, state: g.state })))],
             [tr('Pin'), readout('battery', (b) => (b.cells ? tr('{v} V, {cells} cell, {cell} V mỗi cell', { v: f(b.voltage, 2), cells: b.cells, cell: f(b.cell, 2) }) : tr('không có pin')))],
-            [tr('Thời gian một chu kỳ'), readout('status', (s) => tr('{us} µs, dài nhất {max} µs', { us: s.loop_us, max: s.loop_max_us }))],
-            [tr('Chu kỳ điều khiển thực tế'), withId('loop-rate', readout('status', (s) => (s.loop_hz ? (s.loop_target ? tr('{hz} Hz (đặt {target} Hz), bỏ lỡ {n} chu kỳ trong giây vừa rồi', { hz: s.loop_hz, target: s.loop_target, n: s.overruns }) : `${s.loop_hz} Hz`) : tr('đang đo'))))],
-            [tr('Vòng PID thực tế'), withId('pid-rate', readout('status', (s) => (s.pid_target ? tr('{hz} Hz (đặt {target} Hz = gyro / {n})', { hz: s.pid_hz, target: s.pid_target, n: Math.round(s.loop_target / s.pid_target) }) : '–')))],
-            [tr('Thời gian từng khâu'), withId('stage-times', readout('status', (s) => (s.loop_target ? tr('đọc IMU {imu} · tính toán {core} · gửi motor {motor} · còn lại {rest} µs', { imu: s.t_imu, core: s.t_core, motor: s.t_motor, rest: s.t_rest }) : '–')))],
-            [tr('Luồng cảm biến, lượt dài nhất'), withId('slow-max', readout('status', (s) => (s.loop_target ? `${s.t_slow_max} µs` : '–')))],
-            ['Failsafe', withId('fs-state', readout('status', (s) => (s.failsafe === 'NONE' ? tr('không') : failsafeText(s).replace('Failsafe: ', ''))))],
-            [tr('CPU (nhân chạy vòng bay)'), withId('cpu-load', readout('status', (s) => `${s.cpu} %`))],
-            ['RAM', withId('ram-use', readout('status', (s) => tr('{pct} % đang dùng, còn {free} kB', { pct: s.ram, free: s.heap_free })))],
-            ['PSRAM', withId('psram-use', readout('status', (s) => (s.psram_total ? tr('còn {free} trên {total} kB', { free: s.psram_free, total: s.psram_total }) : tr('không có'))))],
-          ])))));
+          ])],
+          [tr('Vòng lặp và hệ thống'), [
+            kv([
+              [tr('CPU (nhân chạy vòng bay)'), usageBar('status', (s) => ({ pct: s.cpu }), 'cpu-load')],
+              ['RAM', usageBar('status', (s) => ({ pct: s.ram, caption: tr('còn {free} kB', { free: s.heap_free }) }), 'ram-use')],
+              ['PSRAM', usageBar('status', (s) => (s.psram_total ? { pct: (100 * (s.psram_total - s.psram_free)) / s.psram_total, caption: tr('còn {free} trên {total} kB', { free: s.psram_free, total: s.psram_total }) } : null), 'psram-use')],
+              [tr('Thời gian một chu kỳ'), readout('status', (s) => tr('{us} µs, dài nhất {max} µs', { us: s.loop_us, max: s.loop_max_us }))],
+              [tr('Chu kỳ điều khiển thực tế'), withId('loop-rate', readout('status', (s) => (s.loop_hz ? (s.loop_target ? tr('{hz} Hz (đặt {target} Hz), bỏ lỡ {n} chu kỳ trong giây vừa rồi', { hz: s.loop_hz, target: s.loop_target, n: s.overruns }) : `${s.loop_hz} Hz`) : tr('đang đo'))))],
+              [tr('Vòng PID thực tế'), withId('pid-rate', readout('status', (s) => (s.pid_target ? tr('{hz} Hz (đặt {target} Hz = gyro / {n})', { hz: s.pid_hz, target: s.pid_target, n: Math.round(s.loop_target / s.pid_target) }) : '–')))],
+              [tr('Thời gian từng khâu'), withId('stage-times', readout('status', (s) => (s.loop_target ? tr('đọc IMU {imu} · tính toán {core} · gửi motor {motor} · còn lại {rest} µs', { imu: s.t_imu, core: s.t_core, motor: s.t_motor, rest: s.t_rest }) : '–')))],
+              [tr('Luồng cảm biến, lượt dài nhất'), withId('slow-max', readout('status', (s) => (s.loop_target ? `${s.t_slow_max} µs` : '–')))],
+              ['Failsafe', withId('fs-state', readout('status', (s) => (s.failsafe === 'NONE' ? tr('không') : failsafeText(s).replace('Failsafe: ', ''))))],
+            ]),
+            h('p', { class: 'help' }, tr('"Thời gian từng khâu" là trung bình của giây vừa rồi cho một chu kỳ điều khiển; cộng lại phải nhỏ hơn 1 000 000 / tần số đã đặt (250 µs ở 4000 Hz). Khâu nào lớn bất thường là chỗ cần xem: đọc IMU (dây SPI, tốc độ SPI), tính toán (bộ lọc, RPM filter), gửi motor (DShot); "còn lại" gồm chờ luồng cảm biến nhả khoá, ghi log và telemetry. Số lớn nhất của từng khâu nằm trong log blackbox (nhóm "Thời gian vòng lặp").'))]],
+        ])))));
   },
 };

@@ -145,7 +145,8 @@ struct CoreOutput {
     bool armed = false;
     uint32_t arm_blockers = 0;
     FsStage failsafe = FsStage::NONE;
-    uint8_t fs_cause = 0;          // FsCause bits while the failsafe is active
+    uint8_t fs_cause = 0;          // FsCause bits while the failsafe is active (BATTERY_LOW also as a warning only)
+    uint8_t fs_action = 0;         // FsAction: what the failsafe flies (WARN: only warns)
     uint32_t modes = 0;            // active Mode bits as the pilot selected them
     bool althold_active = false, althold_unavailable = false;
     AhState ah_state = AhState::STOPPED;
@@ -313,12 +314,12 @@ private:
         o.stick[0] = cmd.roll; o.stick[1] = cmd.pitch; o.stick[2] = cmd.yaw; o.stick[3] = cmd.throttle_raw; o.throttle_low = cmd.throttle_low;
 
         FsInput fi;
-        fi.rx_ok = in.rc_link; fi.batt_critical = in.health.batt_critical; fi.alt_valid = est_.alt_valid;
+        fi.rx_ok = in.rc_link; fi.batt_critical = in.health.batt_critical; fi.batt_low = in.health.batt_low; fi.alt_valid = est_.alt_valid;
         fi.landed = alt_.get_state() == AhState::LANDED_IDLE; fi.airborne = airborne_; fi.armed = armed_; fi.switch_on = (cmd.modes >> M_FAILSAFE_SW) & 1u; fi.vz = est_.vz;
         fi.rescue_active = rescue_out_.active; fi.stick_move = in.rc_link ? maxf(fabsf(cmd.roll), maxf(fabsf(cmd.pitch), fabsf(cmd.yaw))) : 0.0f;
         const FsOutput fo = fs_.update(fi, dt);
         if (fo.disarm) { arming_.force_disarm(); armed_ = false; }
-        o.failsafe = fo.stage; o.fs_cause = fo.cause; o.armed = armed_;
+        o.failsafe = fo.stage; o.fs_cause = fo.cause; o.fs_action = fo.action; o.armed = armed_;
 
         est_.att = att_; est_.tilt_deg = ahrs_.tilt_deg(); est_.yaw_from_mag = mag_fresh && mag_seeded_; heading_ok_ = est_.yaw_from_mag;
         o.est = est_; o.ah_state = alt_.get_state();
@@ -353,10 +354,10 @@ private:
         bool pilot_throttle = false;
         const bool rescue = rescue_out_.active;                // GPS Rescue flies: it gives the climb rate (it only runs with a valid height)
         bool rescue_landed = false;
-        if (rescue || fo.alt_descent || (althold_sw && alt_ok && !fo.throttle_fallback)) {
+        if (rescue || fo.alt_descent || fo.hold || (althold_sw && alt_ok && !fo.throttle_fallback)) {
             // Engaged while flying: carry on from the present throttle. "Flying" is what the craft has been doing (airborne_), not
             // where the stick happens to be: a craft that hovers at 13 % of the stick must not be taken for a parked one.
-            if (!was_althold_ && airborne_) alt_.begin_flight(est_.z, last_thr_, ahrs_.up_cos());
+            if (!was_althold_ && airborne_) alt_.begin_flight(est_.z, last_thr_, ahrs_.up_cos(), est_.vz, est_.az);
             AhInput ah; ah.armed = true; ah.stick01 = cmd.throttle_raw; ah.z = est_.z; ah.v = est_.vz; ah.a_up = est_.az; ah.up_cos = ahrs_.up_cos(); ah.failsafe_descent = fo.alt_descent && !rescue; ah.pilot_absent = neutral || rescue; ah.alt_valid = true;
             ah.ext_climb = rescue; ah.climb_mps = rescue_out_.climb_mps;
             thr = alt_.update(ah, dt); o.althold_active = true; was_althold_ = true;
@@ -432,7 +433,8 @@ private:
             const bool gps_rate_ok = !(cfg.ph_min_gps_hz > 0.0f) || gps_.rate_hz >= cfg.ph_min_gps_hz;
             const bool ph_ok = vel_valid && (est_.flow_valid || (heading_valid && gps_rate_ok));
             ph_slow_gps_ = ((cmd.modes >> M_POSHOLD) & 1u) && !est_.flow_valid && heading_valid && vel_valid && !gps_rate_ok;
-            const bool ph_on = ((cmd.modes >> M_POSHOLD) & 1u) && !neutral && !rescue_out_.active;
+            // (the failsafe's HOLD: Position Hold with the sticks neutral, if there is a position to hold - else Altitude Hold alone)
+            const bool ph_on = ((((cmd.modes >> M_POSHOLD) & 1u) && !neutral) || (fo.hold && ph_ok)) && !rescue_out_.active;
             ph_unavail_ = ph_on && !ph_ok;
             if (rescue_out_.active) {
                 if (!was_rescue) rctl_.init(npn, npe, nvn, nve, angle_.target_deg(ROLL), angle_.target_deg(PITCH), yaw);
@@ -442,7 +444,7 @@ private:
             } else if (ph_on && ph_ok) {
                 PosHoldInput pi; pi.airborne = airborne_; pi.yaw_deg = yaw; pi.pos_n = npn; pi.pos_e = npe; pi.vel_n = nvn; pi.vel_e = nve;
                 pi.pilot_roll_deg = cfg.angle.limit_deg * ss.rate[ROLL] / maxf(cfg.rates.max_rate_dps[ROLL], 1.0f); pi.pilot_pitch_deg = cfg.angle.limit_deg * ss.rate[PITCH] / maxf(cfg.rates.max_rate_dps[PITCH], 1.0f);
-                pi.roll_centred = cmd.roll == 0.0f; pi.pitch_centred = cmd.pitch == 0.0f;
+                pi.roll_centred = neutral || cmd.roll == 0.0f; pi.pitch_centred = neutral || cmd.pitch == 0.0f;      // (the failsafe's hold: the sticks are not the pilot's)
                 if (!was_poshold_) ph_.init(pi);
                 ph_.update(pi, dt_est, nav_tgt_[ROLL], nav_tgt_[PITCH]);
                 nav_lean_ = true; was_poshold_ = true;
@@ -469,7 +471,7 @@ private:
             if (!was_stab_) stab_.reset(att_.roll, att_.pitch, att_.yaw);
             if (ground_idle) stab_.hold_yaw(att_.yaw);         // standing on the ground: the heading to hold is the one it has (ArduCopter resets the yaw target there)
             const float st[2] = {ss.stick[ROLL], ss.stick[PITCH]}, at[3] = {att_.roll, att_.pitch, att_.yaw};
-            stab_.update(st, ss.rate[YAW], at, dt, sp_dps);
+            stab_.update(st, ss.rate[YAW], at, dt, sp_dps, g_f_);
             for (int a = 0; a < 3; a++) pin.feedforward[a] = stab_.target_accel(a);   // the shaped target says how the rate is about to change: no waiting for the error
         } else {                                               // Acro
             for (int a = 0; a < 3; a++) pin.feedforward[a] = ss.feedforward[a];

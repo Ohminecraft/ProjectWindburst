@@ -19,6 +19,7 @@
 #include "icm456xx_accgyro.h"
 #include "bmi160_accgyro.h"
 #include "bmi270_accgyro.h"
+#include "icm20948_accgyro.h"
 #include "acc_gyro_util.h"
 #include "acc_calibration.h"
 
@@ -54,9 +55,13 @@ public:
                 config.addr = a;
                 i2c_.I2CInit(config);
                 uint8_t who = 0;
-                if (i2c_.I2CReadRegister(MPU_WHO_AM_I_CMD, &who, 1)) { imu_detected = accgyro::classify_i2c(who); if (imu_detected != NONE) break; }
+                if (i2c_.I2CReadRegister(MPU_WHO_AM_I_CMD, &who, 1)) {
+                    uint8_t r00 = 0;
+                    if (accgyro::classify_i2c(who) == NONE) { i2c_.I2CWriteRegister(0x7F, 0x00); i2c_.I2CReadRegister(0x00, &r00, 1); }   // ICM-209xx: bank 0, WHO_AM_I
+                    imu_detected = accgyro::classify_i2c(who, r00); if (imu_detected != NONE) break;
+                }
             }
-            if (imu_detected == NONE) { fail_ = "no MPU6050/MPU6500 answered on I2C 0x68/0x69"; return false; }
+            if (imu_detected == NONE) { fail_ = "no MPU6050/MPU6500/ICM20948/ICM20649 answered on I2C 0x68/0x69"; return false; }
             proxy_.set(&i2c_bus_);
         } else {
             uint8_t pins[4];
@@ -97,6 +102,7 @@ private:
                 spi_.SPIReadRegisterMask(0x72, r72);
                 spi_.SPIReadRegisterMask(0x75, r75);
                 imu_detected = accgyro::classify_spi(d2[1], r00, r72, r75);
+                if (imu_detected == NONE && attempt == 1) spi_.SPIWriteRegisterMask(0x7F, 0x00);   // an ICM-209xx left in another bank by a warm restart
             }
             if (imu_detected == NONE) { fail_ = "no known IMU answered on SPI (check CS/MISO/MOSI/SCK pins and power)"; return false; }
             return true;
@@ -121,6 +127,9 @@ private:
     }
 
 public:
+
+    // The started SPI bus of this IMU, for other chips with their own chip select on it (a barometer, a compass); nullptr on I2C.
+    SPIBus* spiHost() { return drv_ && proxy_.is_spi() ? &spi_ : nullptr; }
 
     // Optional runtime pin override (instead of hardware_config.h), e.g. pins loaded from settings. Call before IMUInit().
     void setI2cPins(uint8_t sda, uint8_t scl) { pins_i2c_[0] = sda; pins_i2c_[1] = scl; pins_i2c_set_ = true; }
@@ -240,6 +249,8 @@ private:
         case ICM45686_SPI:                  drv_ = &d_icm45686_; break;
         case BMI160_SPI:                    drv_ = &d_bmi160_; break;
         case BMI270_SPI:                    drv_ = &d_bmi270_; break;
+        case ICM20948_SPI: case ICM20948_I2C: drv_ = &d_icm20948_; break;
+        case ICM20649_SPI: case ICM20649_I2C: drv_ = &d_icm20649_; break;
         default: return false;
         }
         return true;
@@ -263,6 +274,8 @@ private:
     Icm456xxAccGyro d_icm45686_{proxy_, Icm456xxAccGyro::Variant::ICM45686};
     Bmi160AccGyro d_bmi160_{proxy_};
     Bmi270AccGyro d_bmi270_{proxy_};
+    Icm20948AccGyro d_icm20948_{proxy_, Icm20948AccGyro::Variant::ICM20948};
+    Icm20948AccGyro d_icm20649_{proxy_, Icm20948AccGyro::Variant::ICM20649};
     AccGyroDriver* drv_ = nullptr;
 
     HardwareConfig hw_;

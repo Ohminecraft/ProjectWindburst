@@ -62,6 +62,9 @@ class Sim:
         while True:
             try:
                 self.ctl = socket.create_connection(("127.0.0.1", self.port + 1), timeout=1.0)
+                if self.ctl.getsockname() == self.ctl.getpeername():     # a TCP self-connect (Windows, before the simulator listens): it echoes
+                    self.ctl.close()
+                    raise OSError("self-connect")
                 break
             except OSError:
                 if time.monotonic() > end or self.proc.poll() is not None:

@@ -1,4 +1,4 @@
-// Register-level simulated BMP280 / BMP388. Raw ADC values are produced by inverting the datasheet's DOUBLE-precision compensation
+// Register-level simulated BMP280 / BMP388 (and the command-driven MS5611). Raw ADC values are produced by inverting the datasheet's DOUBLE-precision compensation
 // (independent of the drivers' integer maths), so a driver that decodes bits, scales or compensates wrongly cannot pass.
 #pragma once
 #include <string.h>
@@ -24,6 +24,11 @@ struct BaroSim : AgRegBus {
     }
     bool write(uint8_t reg, uint8_t v) override { if (dead) return false; wr(reg, v); return true; }
     bool write_buf(uint8_t reg, const uint8_t* d, size_t n) override { if (dead) return false; for (size_t i = 0; i < n; i++) wr((uint8_t)(reg + i), d[i]); return true; }
+    // Command chips (MS5611): every byte sent first in a transaction is a command; register chips ignore them.
+    virtual bool raw() const { return false; }               // SPI: no read flag, the first byte is the command as it is
+    virtual void cmd(uint8_t) {}
+    bool command(uint8_t c) override { if (dead) return false; cmd(c); return true; }
+    bool command_read(uint8_t c, uint8_t* buf, size_t len) override { if (!command(c)) return false; return read(c, buf, len); }
 };
 
 // ------------------------------------------------------------------------------------------------------------ BMP280
@@ -191,5 +196,72 @@ struct Bmp388Sim : BaroSim {
                 if ((v & 3) == 3) { normal = true; drdy = false; busy = busy_reads; } else bad_triggers++;
             } else normal = false;
         }
+    }
+};
+
+// ------------------------------------------------------------------------------------------------------------ MS5611
+// Commands: reset 0x1E, PROM 0xA0 + 2 i, conversion D1 0x40..0x48 / D2 0x50..0x58 (OSR 256..4096), ADC read 0x00. The ADC result is
+// read once: a second read (or one without a conversion) gives 0, as the chip. The raw values come from the datasheet's
+// compensation in double precision (first and second order), inverted.
+struct Ms5611Sim : BaroSim {
+    uint16_t C[7] = {0, 40127, 36924, 23317, 23282, 33464, 28312};     // datasheet example coefficients C1..C6
+    uint16_t w0 = 0x0050, w7_hi = 0x0000;
+    uint32_t d1 = 9085466, d2 = 8569150;                              // datasheet example: 20.07 C, 1000.09 mbar
+    uint32_t adc = 0;
+    int resets = 0, conv_p = 0, conv_t = 0, osr_p = -1, osr_t = -1, early = 0;
+    bool bad_crc = false, zero_adc = false, blank = false;
+    bool raw() const override { return true; }
+    // AN520 as published (unsigned int arithmetic, word 7 masked to its high byte)
+    static unsigned int an520(unsigned int n_prom[8]) {
+        unsigned int n_rem = 0, crc_read = n_prom[7];
+        n_prom[7] = (0xFF00 & (n_prom[7]));
+        for (int cnt = 0; cnt < 16; cnt++) {
+            if (cnt % 2 == 1) n_rem ^= (unsigned short)((n_prom[cnt >> 1]) & 0x00FF);
+            else n_rem ^= (unsigned short)(n_prom[cnt >> 1] >> 8);
+            for (unsigned char n_bit = 8; n_bit > 0; n_bit--) n_rem = (n_rem & 0x8000) ? (n_rem << 1) ^ 0x3000 : (n_rem << 1);
+        }
+        n_rem = 0x000F & (n_rem >> 12);
+        n_prom[7] = crc_read;
+        return n_rem;
+    }
+    uint16_t prom_word(int i) const {
+        if (blank) return 0;
+        if (i == 0) return w0;
+        if (i < 7) return C[i];
+        unsigned int p[8] = {w0, C[1], C[2], C[3], C[4], C[5], C[6], w7_hi};
+        const unsigned int crc = an520(p);
+        return (uint16_t)(w7_hi | ((crc + (bad_crc ? 1 : 0)) & 0x0F));
+    }
+    void cmd(uint8_t c) override {
+        if (c == 0x1E) { adc = 0; resets++; return; }
+        if (c >= 0x40 && c <= 0x48 && !(c & 1)) { adc = zero_adc ? 0 : d1; osr_p = (c - 0x40) / 2; conv_p++; return; }
+        if (c >= 0x50 && c <= 0x58 && !(c & 1)) { adc = zero_adc ? 0 : d2; osr_t = (c - 0x50) / 2; conv_t++; return; }
+    }
+    uint8_t byte_at(uint8_t reg, int i) override {
+        if (reg == 0x00 && i < 3) return (uint8_t)(adc >> (16 - 8 * i));
+        if (reg >= 0xA0 && reg <= 0xAE && !(reg & 1) && i < 2) { const uint16_t w = prom_word((reg - 0xA0) / 2); return i == 0 ? (uint8_t)(w >> 8) : (uint8_t)w; }
+        return 0;
+    }
+    void read_done(uint8_t reg, int n) override { if (reg == 0x00 && n > 0) adc = 0; }
+    void wr(uint8_t, uint8_t) override {}
+
+    // datasheet double precision: temperature in C, pressure in Pa
+    double comp_t(uint32_t D2) const { const double dT = (double)D2 - C[5] * 256.0, t = 2000 + dT * C[6] / 8388608.0; return (t < 2000 ? t - dT * dT / 2147483648.0 : t) / 100.0; }
+    double comp_p(uint32_t D1, uint32_t D2) const {
+        const double dT = (double)D2 - C[5] * 256.0, t = 2000 + dT * C[6] / 8388608.0;
+        double off = C[2] * 65536.0 + C[4] * dT / 128.0, sens = C[1] * 32768.0 + C[3] * dT / 256.0;
+        if (t < 2000) {
+            double off2 = 5 * (t - 2000) * (t - 2000) / 2, sens2 = 5 * (t - 2000) * (t - 2000) / 4;
+            if (t < -1500) { off2 += 7 * (t + 1500) * (t + 1500); sens2 += 11 * (t + 1500) * (t + 1500) / 2; }
+            off -= off2; sens -= sens2;
+        }
+        return (D1 * sens / 2097152.0 - off) / 32768.0;
+    }
+    void set_env(double pa, double tc) {
+        uint32_t lo = 0, hi = (1u << 24) - 1;
+        while (lo < hi) { uint32_t m = (lo + hi) / 2; if (comp_t(m) < tc) lo = m + 1; else hi = m; }
+        d2 = lo; lo = 0; hi = (1u << 24) - 1;
+        while (lo < hi) { uint32_t m = (lo + hi) / 2; if (comp_p(m, d2) < pa) lo = m + 1; else hi = m; }
+        d1 = lo;
     }
 };

@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import framing as F
-from . import logview, wblog
+from . import logview, tune, usbnames, wblog
 from .client import SchemaMismatch, WbClient, WbError, WbTimeout
 from .schema import Schema
 
@@ -93,6 +93,7 @@ class Hub:
         self._link_ev = threading.Event()
         self._link_restarted = False
         self.stalls = 0                     # pauses of the streams seen on this connection that were NOT a restart
+        self._gen = 0                       # bumped by connect / disconnect: a wait for a lost port to come back ends when the user acts
         threading.Thread(target=self._watchdog, name="wbgui-watchdog", daemon=True).start()
 
     # ------------------------------------------------------------------ state
@@ -160,9 +161,62 @@ class Hub:
                 self.seq += 1
                 self.raw.append((self.seq, text))
 
-    def _on_lost(self):
+    def _on_lost(self, fc):
         # the serial port itself failed; tidy up from another thread (close() joins the reader thread, which is the caller here)
-        threading.Thread(target=self._drop, args=({"code": "PORT_LOST", "port": self.port},), daemon=True).start()
+        threading.Thread(target=self._lost, args=(fc,), daemon=True).start()
+
+    def _lost(self, fc):
+        with self.lock:
+            if self.fc is not fc:           # already replaced (a reboot that opened the port again) or closed by the user
+                return
+            port, baud, gen = self.port, self.baud, self._gen
+            self._drop({"code": "PORT_LOST", "port": port, "waiting": True})
+        # A board on native USB (ESP32-S3 / STM32 with TinyUSB) leaves the bus while it restarts - a watchdog reset, a crash, a
+        # reboot it did by itself - and comes back as the same port a few seconds later: take it again.
+        if not self._reopen(port, baud, gen, time.monotonic() + self.REOPEN_S):
+            with self.lock:
+                if self._gen == gen and self.fc is None:
+                    self.note = {"code": "PORT_LOST", "port": port}
+            self._changed()
+
+    REOPEN_S = 20.0                         # how long a port that went away is waited for
+
+    def _new_client(self, port, baud):
+        fc = WbClient(port, baud, schema=self.schema, timeout=1.0)
+        fc.on_log = self._on_log
+        fc.on_disconnect = lambda: self._on_lost(fc)
+        fc.on_raw = self._on_raw
+        return fc
+
+    def _reopen(self, port, baud, gen, deadline):
+        """Open `port` again once it is back and the firmware answers; until `deadline`, or until the user connects / disconnects."""
+        while time.monotonic() < deadline and not self._stop:
+            time.sleep(0.5)
+            with self.lock:
+                if self._gen != gen or self.fc is not None:
+                    return False
+                fc = self._new_client(port, baud)
+                try:
+                    fc.open(hello=False)
+                except Exception:           # not back yet (no such port), or Windows still holds the old handle
+                    continue
+                try:
+                    fc.hello()
+                except SchemaMismatch:      # another firmware on the port: the user has to say
+                    fc.close()
+                    return False
+                except Exception:           # USB is up before the firmware answers: try again
+                    fc.close()
+                    continue
+                self.fc, self.port, self.baud, self.responding = fc, port, baud, True
+                self.note = {"code": "RECONNECTED", "port": port}
+                self.boots += 1             # the page reloads its settings
+                self._last_frame = time.monotonic()
+                self._log_gui("port %s came back: connected again" % port)
+                self._after_boot()
+            self._changed()
+            return True
+        return False
 
     def _drop(self, note):
         with self.lock:
@@ -185,9 +239,10 @@ class Hub:
         out = []
         try:
             from serial.tools import list_ports
+            names = usbnames.product_names()          # Windows: the device's own name (pyserial only has "USB Serial Device")
             for p in list_ports.comports():
                 desc = p.description if p.description and p.description != "n/a" else ""
-                out.append({"port": p.device, "description": desc, "manufacturer": p.manufacturer or "",
+                out.append({"port": p.device, "description": desc, "product": names.get(p.device) or p.product or "", "manufacturer": p.manufacturer or "",
                             "vid": p.vid, "pid": p.pid, "chip": LIKELY_VIDS.get(p.vid, ""), "likely": p.vid in LIKELY_VIDS, "sim": False})
         except Exception:
             pass
@@ -214,10 +269,7 @@ class Hub:
             self.disconnect()
             with self._data:
                 self.raw.clear()
-            fc = WbClient(port, baud, schema=self.schema, timeout=1.0)
-            fc.on_log = self._on_log
-            fc.on_disconnect = self._on_lost
-            fc.on_raw = self._on_raw
+            fc = self._new_client(port, baud)
             try:
                 fc.open(hello=False)
             except Exception as e:           # serial.SerialException, OSError ...: no such port, or another program holds it
@@ -241,6 +293,7 @@ class Hub:
 
     def disconnect(self, note=None):
         with self.lock:
+            self._gen += 1
             if self.fc and self.rec and self.rec.stopped is None:
                 try:
                     self.fc.blackbox_stream(False)
@@ -414,13 +467,36 @@ class Hub:
             if self.job and self.job["state"] == "running":
                 raise ApiError(409, "BUSY", "a log download is running")
             self._busy = True
+            port, baud, gen = self.port, self.baud, self._gen
             try:
-                fc.reboot(wait=True, timeout=10.0)
-                self.boots += 1
-                self.note = None
-                self.responding = True
-                self._after_boot()
-                self._last_frame = time.monotonic()
+                fc.reboot(wait=False)
+                end = time.monotonic() + self.REOPEN_S
+                time.sleep(0.5)
+                while not fc.lost:          # the same port answers again (USB-UART bridge, ESP32-S3 USB Serial/JTAG, simulator)
+                    try:
+                        fc.hello()
+                        break
+                    except Exception:
+                        if not fc.lost and time.monotonic() > end:
+                            raise
+                        time.sleep(0.05)
+                if fc.lost:                 # native USB (TinyUSB): the port left the bus with the chip; take it again when it is back
+                    self.fc = None
+                    self._end_recording()
+                    try:
+                        fc.close()
+                    except Exception:
+                        pass
+                    if not self._reopen(port, baud, gen, end):
+                        self.note = {"code": "PORT_LOST", "port": port}
+                        raise ApiError(504, "NO_ANSWER", "%s did not come back within %.0f s of the restart" % (port, self.REOPEN_S), port=port)
+                    self.note = None
+                else:
+                    self.boots += 1
+                    self.note = None
+                    self.responding = True
+                    self._after_boot()
+                    self._last_frame = time.monotonic()
             finally:
                 self._busy = False
         self._changed()
@@ -772,6 +848,8 @@ class Handler(BaseHTTPRequestHandler):
         attach = lambda fn: {"Content-Disposition": 'attachment; filename="%s"' % fn}      # noqa: E731 - names are made of [A-Za-z0-9 ._()+-] only
         if what == "meta":
             return self._send(200, hub.log_meta(name))
+        if what == "tune":                                   # PID tuning from the log: step response, noise, suggestions (tune.py)
+            return self._send(200, tune.analyse(hub.log_session(name, index), hub.schema))
         if what == "view":
             def num(k):
                 try:

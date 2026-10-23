@@ -29,15 +29,28 @@ inline uint8_t crc8_dvb_s2(uint8_t crc, uint8_t v) {
     return crc;
 }
 
-// MSP v2 frames out of a byte stream. One byte at a time; true when a frame with a good checksum is complete.
+// MSP frames out of a byte stream: v2 ('$' 'X'), and v1 ('$' 'M' '<' len cmd payload xor) for the devices that still send it
+// (a receiver bridge sending MSP_SET_RAW_RC). One byte at a time; true when a frame with a good checksum is complete.
 class MspV2Parser {
 public:
-    static constexpr uint16_t kMaxPayload = 64;                // (the two messages we know are 5 and 9 bytes long)
+    static constexpr uint16_t kMaxPayload = 64;                // (the GPS message, the longest one we know, is 52 bytes)
     bool feed(uint8_t c) {
         switch (st_) {
         case 0: if (c == '$') st_ = 1; return false;
-        case 1: st_ = c == 'X' ? 2 : (c == '$' ? 1 : 0); return false;
+        case 1: st_ = c == 'X' ? 2 : c == 'M' ? 6 : (c == '$' ? 1 : 0); return false;
         case 2: st_ = (c == '<' || c == '>') ? 3 : (c == '$' ? 1 : 0); n_ = 0; crc_ = 0; return false;
+        case 6: st_ = (c == '<' || c == '>') ? 7 : (c == '$' ? 1 : 0); n_ = 0; return false;
+        case 7: size_ = c; crc_ = c; st_ = 8; return false;                                        // v1: length, command, payload, xor
+        case 8:
+            cmd_ = c; crc_ ^= c;
+            if (size_ > kMaxPayload) { st_ = 0; too_long_++; return false; }
+            st_ = size_ ? 9 : 10; return false;
+        case 9: crc_ ^= c; payload_[n_++] = c; if (n_ >= size_) st_ = 10; return false;
+        case 10:
+            st_ = 0;
+            if (c != crc_) { crc_errors_++; return false; }
+            frames_++; version_ = 1;
+            return true;
         case 3:                                                // flags, command (2), size (2)
             crc_ = crc8_dvb_s2(crc_, c); hdr_[n_++] = c;
             if (n_ == 5) {
@@ -50,10 +63,11 @@ public:
         default:
             st_ = 0;
             if (c != crc_) { crc_errors_++; return false; }
-            frames_++;
+            frames_++; version_ = 2;
             return true;
         }
     }
+    uint8_t version() const { return version_; }
     uint16_t command() const { return cmd_; }
     uint16_t size() const { return size_; }
     const uint8_t* payload() const { return payload_; }
@@ -61,7 +75,7 @@ public:
     uint32_t crc_errors() const { return crc_errors_; }
     uint32_t too_long() const { return too_long_; }
 private:
-    uint8_t st_ = 0, hdr_[5] = {}, payload_[kMaxPayload] = {}, crc_ = 0; uint16_t n_ = 0, cmd_ = 0, size_ = 0;
+    uint8_t st_ = 0, hdr_[5] = {}, payload_[kMaxPayload] = {}, crc_ = 0, version_ = 2; uint16_t n_ = 0, cmd_ = 0, size_ = 0;
     uint32_t frames_ = 0, crc_errors_ = 0, too_long_ = 0;
 };
 
@@ -77,42 +91,50 @@ public:
     static constexpr float kWindowS = 0.040f, kAgeS = 0.045f;
     static constexpr int kMaxBytesPerCall = 256;               // (a call never works through more than this: the thread has other sensors)
 
-    explicit MspFlow(BytePort& port) : port_(port) {}
+    // port: the UART this sensor has to itself; nullptr when the MSP port is shared (hal/msp_sensors.h reads it and hands the
+    // flow and range frames to frame()).
+    explicit MspFlow(BytePort* port) : port_(port) {}
+    void setPort(BytePort* port) { port_ = port; }
     const char* name() const override { return "MSP flow"; }
     float nominal_rate_hz() const override { return 20.0f; }
     uint32_t samples() const override { return flow_frames_; }
-    bool init() override { have_prev_ = false; range_ = RangeSample(); sum_.reset(); return true; }      // (the sensor is not asked anything: whether it is there shows when frames arrive)
+    bool init() override { have_prev_ = false; range_ = RangeSample(); sum_.reset(); pending_ = false; return true; }      // (the sensor is not asked anything: whether it is there shows when frames arrive)
 
     // Returns true when a new FLOW reading is in `out`. A new range, if any, waits in take_range().
     bool update(uint32_t now_us, Reading& out) override {
-        bool got = false;
-        for (int k = 0; k < kMaxBytesPerCall; k++) {
-            const int c = port_.read();
+        for (int k = 0; port_ && k < kMaxBytesPerCall; k++) {
+            const int c = port_->read();
             if (c < 0) break;
-            if (!parser_.feed((uint8_t)c)) continue;
-            const uint8_t* p = parser_.payload();
-            if (parser_.command() == kCmdRange && parser_.size() >= 5) {
-                int32_t mm; memcpy(&mm, p + 1, 4);
-                range_.fresh = mm >= 0; range_.distance_m = mm >= 0 ? mm * 0.001f : 0.0f; range_.quality_pct = (uint8_t)((uint32_t)p[0] * 100u / 255u);
-                range_frames_++;
-            } else if (parser_.command() == kCmdFlow && parser_.size() >= 9) {
-                int32_t mx, my; memcpy(&mx, p + 1, 4); memcpy(&my, p + 5, 4);
-                // Frames that were waiting together (the thread came late) share one arrival time: the first carries the whole
-                // pause, the others none - summed, their counts and that time still belong together.
-                const uint32_t dt_us = now_us - prev_us_;
-                const bool timed = have_prev_ && dt_us < 1000000u;
-                prev_us_ = now_us; have_prev_ = true; flow_frames_++;
-                if (!timed) { sum_.reset(); continue; }
-                sum_.add((float)mx / 200.0f, (float)my / 200.0f, dt_us, (uint8_t)((uint32_t)p[0] * 100u / 255u));
-                if (!sum_.ready()) continue;
-                const float per_frame = sum_.seconds() / (float)sum_.count();
-                sum_.take(out);
-                out.dt += kWindowS - per_frame;                // the first frame's window began that much before its own share of the sum
-                out.age_s = kAgeS;
-                got = true;
-            }
+            if (parser_.feed((uint8_t)c)) frame(parser_.command(), parser_.payload(), parser_.size(), now_us);
         }
-        return got;
+        if (!pending_) return false;
+        pending_ = false; out = reading_;
+        return true;
+    }
+    // One whole frame (this driver's own UART, or the shared MSP port). Returns false for a command that is not a flow / range one.
+    bool frame(uint16_t cmd, const uint8_t* p, uint16_t size, uint32_t now_us) {
+        if (cmd == kCmdRange && size >= 5) {
+            int32_t mm; memcpy(&mm, p + 1, 4);
+            range_.fresh = mm >= 0; range_.distance_m = mm >= 0 ? mm * 0.001f : 0.0f; range_.quality_pct = (uint8_t)((uint32_t)p[0] * 100u / 255u);
+            range_frames_++;
+            return true;
+        }
+        if (cmd != kCmdFlow || size < 9) return false;
+        int32_t mx, my; memcpy(&mx, p + 1, 4); memcpy(&my, p + 5, 4);
+        // Frames that were waiting together (the thread came late) share one arrival time: the first carries the whole
+        // pause, the others none - summed, their counts and that time still belong together.
+        const uint32_t dt_us = now_us - prev_us_;
+        const bool timed = have_prev_ && dt_us < 1000000u;
+        prev_us_ = now_us; have_prev_ = true; flow_frames_++;
+        if (!timed) { sum_.reset(); return true; }
+        sum_.add((float)mx / 200.0f, (float)my / 200.0f, dt_us, (uint8_t)((uint32_t)p[0] * 100u / 255u));
+        if (!sum_.ready()) return true;
+        const float per_frame = sum_.seconds() / (float)sum_.count();
+        sum_.take(reading_);
+        reading_.dt += kWindowS - per_frame;                   // the first frame's window began that much before its own share of the sum
+        reading_.age_s = kAgeS;
+        pending_ = true;
+        return true;
     }
     // The lidar of the same sensor: true once per new distance.
     bool take_range(RangeSample& r) { if (!range_.fresh) return false; r = range_; range_.fresh = false; return true; }
@@ -121,7 +143,7 @@ public:
     uint32_t range_frames() const { return range_frames_; }
 
 private:
-    BytePort& port_; MspV2Parser parser_; Accumulator sum_;
+    BytePort* port_; MspV2Parser parser_; Accumulator sum_; Reading reading_; bool pending_ = false;
     bool have_prev_ = false; uint32_t prev_us_ = 0, flow_frames_ = 0, range_frames_ = 0;
     RangeSample range_;
 };

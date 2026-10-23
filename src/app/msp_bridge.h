@@ -8,6 +8,9 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "../port/chip.h"
+#include "../config/version.h"
+
 // ============================================================================
 // MSP on the app link: just enough of Betaflight's MultiWii Serial Protocol for the ESC tools to find the flight controller and
 // ask it for ESC passthrough - BLHeliSuite / BLHeliSuite32, ESC Configurator (esc-configurator.com) and the BLHeli_32 / AM32
@@ -20,10 +23,12 @@
 //   v1  '$' 'M' '<' len cmd payload[len] xor(len, cmd, payload)          reply '$' 'M' '>' ..., unknown / refused '$' 'M' '!' ...
 //   v2  '$' 'X' '<' flag cmd_lo cmd_hi len_lo len_hi payload crc8_dvb_s2(flag .. payload)
 //
-// Identification: the tools accept only flight controllers they know, so the MSP side answers as Betaflight 4.5 does
-// (variant "BTFL", API 1.46) - for compatibility, like other non-Betaflight firmwares (esp-fc, INAV's tools mode) do; the board
-// name says what it really is. Only read-only requests are answered; MSP_SET_MOTOR (spinning a motor from the ESC tool) is
-// refused: the app's motor test, with its safety checks, is the place for that.
+// Identification (settings msp.identity): the tools accept only flight controllers they know, so by default the MSP side answers
+// as Betaflight 4.5 does (variant "BTFL", 4.5.0, API 1.46) - for compatibility, like other non-Betaflight firmwares (esp-fc)
+// do; the board info says what it really is. WINDBURST: variant "WBRX" and this firmware's own version.
+// Settings and live values for the configurators (Betaflight Configurator, the SpeedyBee app) are answered by a handler that
+// knows the settings (app/msp_config.h, set_handler()); this file answers the rest. MSP_SET_MOTOR (spinning a motor from a
+// tool) is refused: the app's motor test, with its safety checks, is the place for that.
 // Portable: unit-tested in test/test_esc4way.cpp.
 // ============================================================================
 namespace msp {
@@ -41,6 +46,7 @@ inline uint8_t crc8_dvb_s2(uint8_t crc, uint8_t b) {
 }
 
 struct Frame { uint8_t version = 1; uint16_t cmd = 0; uint16_t len = 0; uint8_t payload[64]; };
+constexpr uint16_t kMaxReply = 256;                  // the longest answer (MSP_BOXNAMES)
 
 // One byte at a time; true when a whole frame with a good checksum is in `f`. A request longer than the buffer is dropped.
 class Parser {
@@ -99,6 +105,7 @@ struct Info {
                                                          // DShot150 5, DShot300 6, DShot600 7, ProShot1000 8)
     uint16_t pwm_rate = 480, idle_x100 = 550;           // motor PWM rate (Hz); idle in 0.01 % (Betaflight motorIdle)
     uint8_t fw_major = 0, fw_minor = 0, fw_patch = 0;
+    uint8_t identity = 0;                                // msp.identity: 0 BETAFLIGHT, 1 WINDBURST
     const char* build_date = "Jan  1 2026";              // __DATE__ (11 characters)
     const char* build_time = "00:00:00";                 // __TIME__ (8)
     // ---- the firmware's own state, in its own terms (the Bridge turns it into Betaflight's): telemetry and settings
@@ -127,6 +134,9 @@ class Bridge {
 public:
     bool mid_frame() const { return parser_.mid_frame(); }
     enum Result : uint8_t { NONE, REPLY, PASSTHROUGH };
+    // A request the settings handler answers (app/msp_config.h): true = handled, the answer in p / n (error: '!' instead of '>').
+    using Handler = bool (*)(void* ctx, const Frame& f, uint8_t* p, uint16_t& n, bool& error);
+    void set_handler(Handler h, void* ctx) { handler_ = h; handler_ctx_ = ctx; }
     // One byte from the link. REPLY: out / out_n hold the answer. PASSTHROUGH: the PC tool asks for the 4-way interface - the caller
     // asks the flight side to let go of the motors and calls passthrough_reply() with the number of ESCs (0 = refused).
     Result feed(uint8_t c, const Info& info, uint8_t* out, size_t cap, size_t& out_n) {
@@ -138,7 +148,7 @@ public:
             if (mode == kPassthroughEsc4Way && !info.armed) { pending_version_ = f_.version; return PASSTHROUGH; }
             const uint8_t zero = 0; out_n = encode(f_.version, SET_PASSTHROUGH, &zero, 1, false, out, cap); refused_++; return REPLY;
         }
-        uint8_t p[64]; uint16_t n = 0; bool ok = answer(f_.cmd, info, p, n);
+        uint8_t p[kMaxReply]; uint16_t n = 0; bool ok = respond(f_, info, p, n);
         out_n = encode(f_.version, f_.cmd, p, ok ? n : 0, !ok, out, cap);
         if (!ok) unknown_++;
         answered_++;
@@ -148,7 +158,7 @@ public:
     // The answer to a request read elsewhere (the OSD's UART, osd/osd.h): the same answers, ESC passthrough always refused there.
     size_t reply(const Frame& f, const Info& info, uint8_t* out, size_t cap) {
         if (f.cmd == SET_PASSTHROUGH) { const uint8_t zero = 0; refused_++; return encode(f.version, SET_PASSTHROUGH, &zero, 1, false, out, cap); }
-        uint8_t p[64]; uint16_t n = 0; const bool ok = answer(f.cmd, info, p, n);
+        uint8_t p[kMaxReply]; uint16_t n = 0; const bool ok = respond(f, info, p, n);
         if (!ok) unknown_++;
         answered_++;
         return encode(f.version, f.cmd, p, ok ? n : 0, !ok, out, cap);
@@ -162,6 +172,11 @@ public:
     const Parser& parser() const { return parser_; }
 
 private:
+    bool respond(const Frame& f, const Info& in, uint8_t* p, uint16_t& n) {
+        bool err = false;
+        if (handler_ && handler_(handler_ctx_, f, p, n, err)) { if (err) n = 0; return !err; }
+        n = 0; return answer(f.cmd, in, p, n);
+    }
     static void u16(uint8_t* p, uint16_t& n, uint16_t v) { p[n++] = (uint8_t)v; p[n++] = (uint8_t)(v >> 8); }
     static void u32(uint8_t* p, uint16_t& n, uint32_t v) { u16(p, n, (uint16_t)v); u16(p, n, (uint16_t)(v >> 16)); }
     static void pstr(uint8_t* p, uint16_t& n, const char* s) { const uint8_t l = (uint8_t)strlen(s); p[n++] = l; memcpy(p + n, s, l); n += l; }
@@ -169,11 +184,11 @@ private:
     bool answer(uint16_t cmd, const Info& in, uint8_t* p, uint16_t& n) {
         switch (cmd) {
         case API_VERSION: p[n++] = 0; p[n++] = 1; p[n++] = 46; return true;
-        case FC_VARIANT: memcpy(p, "BTFL", 4); n = 4; return true;
-        case FC_VERSION: p[n++] = 4; p[n++] = 5; p[n++] = 0; return true;
+        case FC_VARIANT: memcpy(p, in.identity ? "WBRX" : "BTFL", 4); n = 4; return true;
+        case FC_VERSION: if (in.identity) { p[n++] = WB_FW_MAJOR; p[n++] = WB_FW_MINOR; p[n++] = WB_FW_PATCH; } else { p[n++] = 4; p[n++] = 5; p[n++] = 0; } return true;
         case BOARD_INFO:
-            memcpy(p, "WBRX", 4); n = 4; u16(p, n, 0); p[n++] = 0; p[n++] = 0;            // identifier, hardware revision, "FC", capabilities
-            pstr(p, n, in.target); pstr(p, n, "WINDBURST"); pstr(p, n, "");              // target (the chip), board, manufacturer
+            memcpy(p, in.identity ? WB_MCU_BOARD_INFO : "WBRX", 4); n = 4; u16(p, n, 0); p[n++] = 0; p[n++] = 0;   // identifier (as Betaflight: WBRX; as Windburst: the chip), hardware revision, "FC", capabilities
+            pstr(p, n, in.target); pstr(p, n, "IN-DEV"); pstr(p, n, "WINDBURST");              // target (the chip), board, manufacturer
             memset(p + n, 0, 32); n += 32;                                                // signature
             p[n++] = 0xFF; p[n++] = 0;                                                     // MCU type (by name), configuration state
             return true;
@@ -252,6 +267,7 @@ public:
     }
 private:
     Parser parser_; Frame f_; uint8_t pending_version_ = 1; uint32_t answered_ = 0, refused_ = 0;
+    Handler handler_ = nullptr; void* handler_ctx_ = nullptr;
     uint16_t cmds_[kCmdRing] = {}; uint32_t cmd_n_ = 0, unknown_ = 0;
 };
 

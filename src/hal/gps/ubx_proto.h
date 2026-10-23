@@ -232,7 +232,7 @@ inline int decode_svinfo(const Message& m, SatInfo* out, int cap) {
     int n = m.payload[4]; const int avail = (m.len - 8) / 12; if (n > avail) n = avail; if (n > cap) n = cap;
     for (int i = 0; i < n; i++) {
         const uint8_t* q = m.payload + 8 + 12 * i;
-        out[i].gnss_id = 0; out[i].sv_id = q[1]; out[i].flags = q[3]; out[i].cno = q[4]; out[i].elev = (int8_t)q[5]; out[i].azim = i16(q + 6);
+        out[i].gnss_id = 0; out[i].sv_id = q[1]; out[i].flags = (uint32_t)((q[3] & 7) | ((q[2] & 1) << 3)); out[i].cno = q[4];        // (flags as NAV-SAT: quality, bit 3 used) out[i].elev = (int8_t)q[5]; out[i].azim = i16(q + 6);
     }
     return n;
 }
