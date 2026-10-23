@@ -186,8 +186,15 @@ public:
     static constexpr int kLoopWords = 48;          // the whole receive memory: our frame (16 words) and maybe the ESC's answer after it
 
 private:
+    // A frame went out and no reply came back: that is a lost reply, reported like a garbled one (kGcrInvalid). The telemetry
+    // statistics count it as an error then - Betaflight's "invalid" packets: an ESC without bidirectional firmware is 100 %,
+    // not 0 % (up to 0.33 a silent line handed nothing up, and the error rate never saw it).
+    WB_FAST void lost(int c) {
+        if (silent_[c] < 0xFFFF) silent_[c]++;
+        reply_[c] = kGcrInvalid; has_reply_[c] = true;
+    }
     WB_FAST void harvest(int c) {
-        if (!rx_on_[c]) { if (silent_[c] < 0xFFFF) silent_[c]++; return; }
+        if (!rx_on_[c]) { if (started_) lost(c); return; }      // (the line was never handed over: the timer interrupt came late)
         rx_on_[c] = false;
         uint32_t w[kDshotRxWords];
         const int n = port_->rx_stop(c, w, kDshotRxWords);
@@ -201,7 +208,7 @@ private:
             if (d1 == 0) break;
             runs[nr++] = {(uint8_t)(w[i] >> 31), d1 << 4};
         }
-        if (nr == 0) { if (silent_[c] < 0xFFFF) silent_[c]++; return; }        // the line never moved: no reply
+        if (nr == 0) { lost(c); return; }                                        // the line never moved: no reply
         const ReplyDecode r = reply_from_runs(runs, nr, reply_bit_q4_);
         reply_[c] = r.gcr; has_reply_[c] = true;
         stats_.replies++;

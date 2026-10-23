@@ -556,6 +556,10 @@ table#logs td:last-child, table#bb-sessions td:last-child { white-space: nowrap;
 .sat-legend .legend-item i { background: var(--gc, var(--muted)); }
 @media (max-width: 860px) { .sat-row { grid-template-columns: minmax(0, 1fr); } .skyplot { max-width: 260px; margin: 0 auto; } }
 
+/* ---- a read-out that is out of range (motor tab: ESC telemetry errors) */
+[data-level="warn"].num { color: var(--warn); font-weight: 600; }
+[data-level="bad"].num { color: var(--bad); font-weight: 700; }
+
 /* ==== themes (picker at the foot of the rail, js/theme.js). Each one sets the tokens, then only what its style changes. ==== */
 
 /* ---- HUD: a cockpit head-up display. Fine cyan lines on the dark, corner brackets, glowing numbers, monospaced read-outs */

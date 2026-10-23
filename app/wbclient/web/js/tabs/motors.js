@@ -309,7 +309,11 @@ function perMotor() {
         h('td', {}, readout('motors', (mo) => Math.round(mo.cmd[i] * 100) + ' %')),
         // '–' while the rpm is stale (rpm_ok bit clear): a 0 there would read as "motor stopped"
         h('td', {}, readout('motors', (mo) => (!(m.bidirectional || m.esc_sensor || m.protocol === 'DRONECAN') ? '–' : mo.rpm_ok === undefined || ((mo.rpm_ok >> i) & 1) ? String(mo.rpm[i]) : '–'))),
-        h('td', {}, readout('motors', (mo) => (m.bidirectional ? mo.err[i] + ' %' : '–'))),
+        h('td', {}, (() => {                       // the share of frames without a good reply: amber from 1 %, red from 10 % (100 %: the ESC does not answer)
+          const el = readout('motors', (mo) => (m.bidirectional ? mo.err[i] + ' %' : '–'));
+          el.dataset.motorErr = String(i);
+          listen('stream:motors', (mo) => { const e = m.bidirectional ? mo.err[i] : 0; el.dataset.level = e >= 10 ? 'bad' : e >= 1 ? 'warn' : ''; });
+          return el; })()),
         h('td', {}, readout('motors', (mo) => (mo.temp[i] ? mo.temp[i] + ' °C' : '–'))),
         h('td', {}, readout('motors', (mo) => (mo.amps && mo.amps[i] ? mo.amps[i].toFixed(1) + ' A' : '–'))),
         h('td', {}, slotSelect(i)),

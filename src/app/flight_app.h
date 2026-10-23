@@ -614,7 +614,7 @@ public:
             if (edt_wanted_) {
                 bool any = false; for (int i = 0; i < motors.cfg().count; i++) any |= motors.escAnswers(motors.cfg().order[i]);
                 if (!any) edt_asked_ = false;                                     // (noticed armed too: asked again after disarming)
-                else if (!edt_asked_ && !now_armed) edt_asked_ = motors.manager().enable_extended_telemetry(true);
+                else if (!edt_asked_ && !now_armed && !motors.manager().testing(micros())) edt_asked_ = motors.manager().enable_extended_telemetry(true);   // (not into a running motor test)
             }
 
             // a gyro calibration that failed at boot (the craft was moved) is retried until it succeeds, like Betaflight
@@ -779,6 +779,8 @@ private:
                 core.emergency_disarm();
                 last_out_ = fc::CoreOutput(); last_out_.arm_blockers = fc::AB_NO_IMU;
                 motors.update(now_us, last_out_.motor, false);
+                motors.pollTelemetry(millis());           // (the frames still go out - motor test, beeps: their replies are read here too, or a
+                                                          //  board without IMU would show no rpm and 0 % ESC errors whatever the ESCs do)
                 tel_.loop_us = 0; if (++pub_n_ >= pub_div_) { pub_n_ = 0; fill_fast(); link.publish(tel_); }
             }
             return false;

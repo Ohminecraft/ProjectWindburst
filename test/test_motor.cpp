@@ -173,6 +173,32 @@ static void t_commands() {
         for (uint32_t u = 0; u < 300000; u += 250) { Frame g = run_once(q, u, {0, 0, 0, 0}, false); for (int s = 0; s < 4; s++) if (g.send) {
             const uint16_t v = g.value[s]; saw21 |= v == 21; saw20 |= v == 20; n7 += v == 7; n8 += v == 8; n12 += v == 12; } } }
     CHECK(!saw21 && !saw20 && n8 == 10 && n7 == 10 && n12 == 20, "dir_cmd_extended on: still DShot 8 / 7 + save (the stored direction), never 20 / 21 (%d %d %d)", n8, n7, n12);
+    {   // 0.33.2: a direction command while the motor test spins that motor: zero throttle until it has run down, the command,
+        // then the test's throttle again (the app keeps the slider alive every 0.2 s)
+        MotorOutputManager q; q.cfg.protocol = PROTO_DSHOT300; q.begin();
+        uint32_t u = 0; Frame g;
+        for (; u < 300000; u += 250) { if (u % 200000 == 0) q.test_motor(0, 0.4f, u); g = run_once(q, u, {0, 0, 0, 0}, false); }
+        const uint16_t spin = g.value[0];
+        CHECK(spin > 48 + 700, "(the test drives motor 1: %u)", spin);
+        q.request_direction(0, true); const uint32_t t0 = u;
+        bool zeros = true; uint32_t first_cmd = 0, back = 0; int n8 = 0, n12 = 0;
+        for (; u < t0 + 2000000; u += 250) {
+            if (u % 200000 == 0) q.test_motor(0, 0.4f, u);
+            g = run_once(q, u, {0, 0, 0, 0}, false);
+            if (u < t0 + 999000 && (!g.send || g.value[0] != 0)) zeros = false;          // (1 s from the last frame that drove it, one cycle before the request)
+            if (g.send && (g.value[0] == 8 || g.value[0] == 12)) { if (!first_cmd) first_cmd = u; n8 += g.value[0] == 8; n12 += g.value[0] == 12; }
+            if (!back && first_cmd && !q.commands_pending() && g.value[0] == spin) back = u;
+        }
+        CHECK(zeros, "for 1 s after the request: zero-throttle frames (the motor runs down; the line is never silent)");
+        CHECK(first_cmd >= t0 + 1009000 && n8 == 10 && n12 == 10, "then the 10 ms pause and the commands: reverse x10, save x10 (first at +%u ms)", (unsigned)((first_cmd - t0) / 1000));
+        CHECK(back && back - first_cmd < 100000, "afterwards the test's throttle is back where it was (%u)", spin); }
+    {   // 0.33.4: only a direction change waits for the motor to run down - a beacon (the "Beep" button) during the test goes out at once
+        MotorOutputManager q; q.cfg.protocol = PROTO_DSHOT300; q.begin();
+        uint32_t u = 0; Frame g;
+        for (; u < 300000; u += 250) { if (u % 200000 == 0) q.test_motor(0, 0.4f, u); g = run_once(q, u, {0, 0, 0, 0}, false); }
+        q.beacon(1, 2); const uint32_t t0 = u; uint32_t first = 0;
+        for (; u < t0 + 200000 && !first; u += 250) { if (u % 200000 == 0) q.test_motor(0, 0.4f, u); g = run_once(q, u, {0, 0, 0, 0}, false); if (g.send && g.value[q.cfg.order[1]] == 2) first = u; }
+        CHECK(first && first - t0 < 20000, "a beacon during the test: out after the usual 10 ms (%u us), no 1 s stop", (unsigned)(first - t0)); }
     MotorOutputManager a; a.cfg.protocol = PROTO_DSHOT300; a.begin(); a.beacon(2, 3); run_once(a, 0, {0, 0, 0, 0}, false);
     run_once(a, 20000, {0, 0, 0, 0}, true);
     CHECK(!a.commands_pending(), "arming discards queued commands (motors must never see a command in flight)");

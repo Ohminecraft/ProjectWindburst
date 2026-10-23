@@ -128,12 +128,22 @@ static void t_loop() {
       r->request(MSG_SETTINGS_SAVE); r->request(MSG_REBOOT); r->run(2.0); r->stream(STR_MOTORS, 50); r->run(0.2);
       CHECK(r->latest(STR_MOTORS, mo) && mo.bidir == BIDIR_STATE_ACTIVE && mo.answers == 0x0F && (r->tel().health & HEALTH_ESC_TELEMETRY), "bidirectional on: ACTIVE, all four ESCs answer (0x%x)", mo.answers);
       CHECK(mo.rpm_ok == 0x0F && mo.no_start == 0 && mo.bad_bits == 0 && mo.bad_crc == 0, "every rpm fresh (0x%x), no reply rejected (%u %u %u)", mo.rpm_ok, mo.no_start, mo.bad_bits, mo.bad_crc);
+      CHECK(mo.err[0] == 0 && mo.err[3] == 0, "every ESC answers every frame: 0 %% errors");
       r->board.esc_silent[2] = true; r->run(0.5); r->clear_inbox(); r->run(0.1);
       CHECK(r->latest(STR_MOTORS, mo) && mo.answers == 0x0B && !(r->tel().health & HEALTH_ESC_TELEMETRY), "the ESC of motor 3 stops answering: shown per motor (0x%x)", mo.answers);
       CHECK(mo.rpm_ok == 0x0B && mo.rpm[2] == 0, "its rpm is marked stale (rpm_ok 0x%x), the app shows '-' instead of 0", mo.rpm_ok);
+      r->run(1.0); r->clear_inbox(); r->run(0.1); r->latest(STR_MOTORS, mo);
+      CHECK(mo.err[2] >= 95 && mo.err[0] == 0, "a silent ESC (no bidirectional firmware, a broken wire): its error rate goes to 100 %% (%u %%), not 0", mo.err[2]);
       r->board.esc_silent[2] = false; r->run(0.2); r->clear_inbox(); r->run(0.1);
       CHECK(r->latest(STR_MOTORS, mo) && mo.answers == 0x0F, "and when it is back");
       arm_switch_setup(*r); r->board.rc[4] = 2000; r->run(0.5); CHECK(r->tel().armed && r->board.motor_frac[0] > 0.03f, "armed with bidirectional DShot: the motors run"); }
+    { // 0.33.1: a board without an IMU (ESCs on the bench) still sends DShot frames - and reads their replies (it did not: no rpm, 0 %% errors)
+      auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { s.motors.bidirectional = 1; b.has_imu = false; }); r->run(1.0); T_motors mo;
+      r->stream(STR_MOTORS, 20); r->run(1.5); r->clear_inbox(); r->run(0.1);
+      CHECK(r->tel().blockers & ARM_BLOCKER_NO_IMU, "(no IMU: cannot arm)");
+      CHECK(r->latest(STR_MOTORS, mo) && mo.rpm_ok == 0x0F && mo.err[0] == 0 && mo.answers == 0x0F, "no IMU: the ESCs' replies are read all the same (rpm_ok 0x%x, errors %u %%)", mo.rpm_ok, mo.err[0]);
+      r->board.esc_silent[1] = true; r->run(1.5); r->clear_inbox(); r->run(0.1); r->latest(STR_MOTORS, mo);
+      CHECK(mo.err[1] >= 95 && mo.err[0] == 0, "and an ESC that stops answering shows ~100 %% errors there too (%u %%)", mo.err[1]); }
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------
@@ -387,6 +397,24 @@ static void t_settings() {
 
 static void t_motor_test() {
     printf("[motor test] one motor, watchdog, arming interlock, direction / beacon commands\n");
+    {   // 0.33.4 (on a board: the test motor stopped and ran again in a loop): an ESC that answers only at standstill (Bluejay on
+        // that board) made the firmware ask for extended telemetry over and over, and 0.33.3 stopped the motor for every command.
+        // Now only a direction change stops it, and extended telemetry is not asked for into a running test.
+        auto q = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.motors.bidirectional = 1; s.motors.edt = 1; }); q->run(2.0);
+        VirtualBoard& qb = q->board; int low = 0, n = 0;
+        for (int i = 0; i < 400; i++) {                       // 4 s, all four at 25 %, the sliders refreshed like the app does
+            if (i % 20 == 0) for (uint8_t m = 0; m < 4; m++) q->command(CMD_MOTOR_TEST, {m, 250, 0});
+            // the ESCs go silent while they turn, with a short burst of replies now and then (what the board showed)
+            for (int k = 0; k < 4; k++) qb.esc_silent[k] = qb.motor_frac[k] > 0.05f && (i % 50) > 8;
+            q->run(0.01); if (i > 20) { n++; if (qb.motor_frac[0] < 0.2f) low++; }
+        }
+        CHECK(low == 0, "the test motors keep turning: %d of %d samples below the test throttle", low, n);
+        // a direction change: zero for about 1 s, then the test throttle again
+        for (int k = 0; k < 4; k++) qb.esc_silent[k] = false;
+        CHECK(q->command(CMD_MOTOR_DIRECTION, {0, 1}).err == ERR_OK, "direction change requested during the test");
+        int zero_ms = 0; bool back = false;
+        for (int i = 0; i < 250; i++) { if (i % 20 == 0) q->command(CMD_MOTOR_TEST, {0, 250, 0}); q->run(0.01); if (qb.motor_frac[0] < 0.01f) zero_ms += 10; else if (zero_ms) back = true; }
+        CHECK(zero_ms >= 950 && zero_ms <= 1200 && back && qb.motor_frac[0] > 0.2f, "the motor stops for the change (%d ms), then turns again at the test throttle", zero_ms); }
     auto r = fresh(); r->run(1.5); arm_switch_setup(*r);
     VirtualBoard& b = r->board;
     CHECK(r->command(CMD_MOTOR_TEST, {2, 200, 0}).err == ERR_OK, "MOTOR_TEST motor 2 at 20 %%");
@@ -1004,7 +1032,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.33.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.33.4" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }

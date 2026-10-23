@@ -128,7 +128,7 @@ public:
     bool request_direction(int logical, bool reversed) {
         if (!is_dshot(cfg.protocol) || logical < 0 || logical >= cfg.count) return false;
         const uint8_t cmd = reversed ? CMD_SPIN_DIRECTION_2 : CMD_SPIN_DIRECTION_1;
-        return push(cfg.order[logical], cmd) && push(cfg.order[logical], CMD_SAVE_SETTINGS);
+        return push(cfg.order[logical], cmd, true) && push(cfg.order[logical], CMD_SAVE_SETTINGS, true);     // (the motor is stopped first)
     }
     bool apply_directions() { bool ok = is_dshot(cfg.protocol); for (int i = 0; i < cfg.count && ok; i++) ok = request_direction(i, cfg.reversed[i]); return ok; }
     bool beacon(int logical, int n = 2) {              // identify a motor (motor-reorder tab)
@@ -180,7 +180,7 @@ public:
         const bool testing = (int32_t)(test_until_us_ - now_us) > 0;
         for (int i = 0; i < cfg.count; i++) {
             float v = e.disarm;
-            if (testing && test_frac_[i] > 0.0f) { v = to_value(test_frac_[i], e); out_frac_[i] = test_frac_[i]; }
+            if (testing && test_frac_[i] > 0.0f) { v = to_value(test_frac_[i], e); out_frac_[i] = test_frac_[i]; spun_us_ = now_us; spun_ = true; }
             out.value[cfg.order[i]] = (uint16_t)round_pos(v);
         }
         ask_telemetry(out);
@@ -291,8 +291,9 @@ public:
 
 private:
     static constexpr uint32_t kTestTimeoutUs = 500000;
+    static constexpr uint32_t kSpinDownUs = 1000000;           // a test-driven motor gets this long at zero throttle before a command
     struct Slot { float rpm = 0, volt = 0, amps = 0; uint8_t temp = 0; uint32_t rpm_ms = 0, volt_ms = 0, amps_ms = 0; bool rpm_seen = false, amps_seen = false; uint16_t total = 0, invalid = 0; };
-    struct QCmd { uint8_t slot, cmd; };
+    struct QCmd { uint8_t slot, cmd; bool stop; };              // stop: the motor must stand still first (a direction change)
 
     WB_FAST float to_value(float f, const Endpoints& e) const {
         f = f < 0 ? 0 : (f > 1 ? 1 : f);
@@ -309,10 +310,10 @@ private:
         out.telem_request[cfg.order[m]] = true; tlm_ask_ = -1;
     }
     int logical_of(int slot) const { for (int i = 0; i < cfg.count; i++) if (cfg.order[i] == slot) return i; return -1; }
-    bool push(uint8_t slot, uint8_t cmd) {
+    bool push(uint8_t slot, uint8_t cmd, bool stop = false) {
         const uint8_t n = (uint8_t)((q_tail_ + 1) % kQ);
         if (n == q_head_) return false;
-        q_[q_tail_] = {slot, cmd}; q_tail_ = n; return true;
+        q_[q_tail_] = {slot, cmd, stop}; q_tail_ = n; return true;
     }
     // returns true when it produced this cycle's frame (or a deliberate gap)
     bool run_commands(uint32_t now_us, Frame& out) {
@@ -322,6 +323,12 @@ private:
             cmd_active_ = true; phase_ = 0; t_phase_ = now_us; sent_ = 0; repeats_ = cmd_repeats(cur_.cmd);
         }
         out.send = false;
+        // A direction change while the motor test turns the motors: the ESC takes it only at standstill. So first zero throttle
+        // until the motor has run down (kSpinDownUs after the last frame that drove it), then the commands; the test's own throttle
+        // comes back by itself afterwards (the app keeps the slider alive). Zero frames, not silence: a silent line is a lost signal
+        // to the ESC. Only for a direction change (stop): any other command (extended telemetry, a beacon) goes out as before.
+        if (cur_.stop && spun_ && (now_us - spun_us_) < kSpinDownUs) { out.send = true; for (int i = 0; i < cfg.count; i++) out.value[cfg.order[i]] = 0; t_phase_ = now_us; return true; }
+        if (cur_.stop) spun_ = false;
         if (phase_ == 0) { if (now_us - t_phase_ < kCmdInitialDelayUs) return true; phase_ = 1; next_due_ = now_us; }
         if (phase_ == 1) {
             if ((int32_t)(now_us - next_due_) < 0) return true;
@@ -343,7 +350,8 @@ private:
     QCmd q_[kQ]; uint8_t q_head_ = 0, q_tail_ = 0;
     int8_t tlm_ask_ = -1;
     uint32_t crc_bad_ = 0;
-    bool cmd_active_ = false; QCmd cur_{0, 0}; uint8_t phase_ = 0, sent_ = 0, repeats_ = 0; uint32_t t_phase_ = 0, next_due_ = 0, post_ = 0;
+    bool cmd_active_ = false; QCmd cur_{0, 0, false}; uint8_t phase_ = 0, sent_ = 0, repeats_ = 0; uint32_t t_phase_ = 0, next_due_ = 0, post_ = 0;
+    bool spun_ = false; uint32_t spun_us_ = 0;                 // a motor test drove a motor; when it last did
     float test_frac_[kMaxMotors] = {}; uint32_t test_until_us_ = 0; float out_frac_[kMaxMotors] = {};
 };
 

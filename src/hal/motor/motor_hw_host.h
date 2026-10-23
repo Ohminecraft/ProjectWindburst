@@ -19,7 +19,11 @@ public:
     }
     void write(const motor::Frame& f) override {
         last = f; frames++;
-        for (int i = 0; i < count && i < 8; i++) { if (has_reply[i]) silent[i] = 0; else if (silent[i] < 0xFFFF) silent[i]++; }   // (the simulator injects a reply before each frame)
+        for (int i = 0; i < count && i < 8; i++) {                // (the simulator injects a reply before each frame)
+            if (has_reply[i] && reply[i] != motor::kGcrInvalid) { silent[i] = 0; continue; }
+            if (silent[i] < 0xFFFF) silent[i]++;
+            if (bidir && frames > 1) { reply[i] = motor::kGcrInvalid; has_reply[i] = true; }      // no answer to the last frame: a lost reply, as DshotDirect reports it
+        }
         if (on_write) on_write();
     }
     void (*on_write)() = nullptr;                                  // tests: e.g. let the output take time

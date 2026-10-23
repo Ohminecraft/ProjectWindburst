@@ -4,6 +4,7 @@ Mục cần làm:
 - lưu ý làm: lần này sẽ dựa vào ardupilot và px4
 
 Cần test:
+- lỗi ESC telemetry (tab Motor, cột Lỗi): BLHeli_S không bidir mà bật bidir -> phải hiện ~100 % đỏ; Bluejay khi quay motor test -> xem cột Lỗi và các số replies / garbled / no start / bad bits / bad crc / late / skipped (nếu lỗi ~100 % khi quay = ESC thôi trả lời; nếu "late" lớn = firmware nhả chân trễ)
 - OSD 0.33: bật vài mục mới (thanh la bàn, thanh bên, vĩ/kinh độ, thanh pin cần battery.capacity_mah) xem đúng chỗ trong kính; bay xong disarm xem bảng thống kê
 - MSP 0.33: Betaflight Configurator 10.10 qua USB (tab Setup, Receiver, Modes, PID, Rates; sửa PID rồi Save, mở lại app Windburst xem giá trị); app SpeedyBee nếu có module Bluetooth; module GPS/la bàn MSP và receiver MSP nếu có (xem docs/MSP.md)
 - giao diện mới: thử 5 theme (Carbon, HUD buồng lái, Kính mờ, Thụy Sĩ, Ngoài trời) ở chân thanh tab, xem từng tab, cửa sổ hẹp; hình 3D quay đúng theo máy (nghiêng phải = roll dương), mượt khi để lâu

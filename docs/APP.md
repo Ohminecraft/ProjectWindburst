@@ -171,3 +171,19 @@ Tab **Receiver** và tab **Rate** có khối "Máy bay theo cần": hình 3D c�
 - **Angle** (mặc định ở tab Receiver): góc nghiêng roll / pitch bằng góc đích của `AngleController` (giới hạn góc × rate / max rate). Cần yaw xoay hướng mũi.
 - Nút "Về cân bằng" đặt máy về thăng bằng, mũi hướng ra xa người xem. Khi mất sóng thì máy đứng yên và trang báo "Chưa có tín hiệu".
 - **Kiểm chứng:** `test_gui_math::test_stick_preview_flies_like_the_firmware` so `acroStep` với `Ahrs` của firmware chỉ dùng gyro (6 đoạn quay nối nhau), và so `angleTarget` với `AngleController` (198 trường hợp, có cả độ nhạy giữa lớn hơn max rate). `test_gui_browser::test_stick_preview` đã viết nhưng chưa chạy được ở máy này.
+
+## Chương trình chạy riêng (cửa sổ riêng, không mở trình duyệt)
+
+`dist/Windburst.exe` (khoảng 14 MB) là một file chạy được ngay. Trong file đã có sẵn Python, wbclient, trang web và schema. Mở lên thì hiện **cửa sổ riêng**, không mở trình duyệt và không có cửa sổ dòng lệnh.
+
+- **Bên trong:** cửa sổ dùng Edge WebView2 của Windows (thư viện pywebview). Windows 11 có sẵn WebView2; Windows 10 có nếu đã cập nhật.
+- **Server:** chỉ chạy trên 127.0.0.1, ở một cổng còn trống. Đóng cửa sổ thì server dừng và cổng serial được thả ra.
+- **Lưu cài đặt của trang** (theme, ngôn ngữ, baud): nằm ở `%LOCALAPPDATA%\Windburst\webview`, nên mở lại vẫn còn. Log bay vẫn lưu ở chỗ cũ (`~/Windburst/logs`).
+- **Chạy từ mã nguồn, không cần build:** `python -m wbclient app` (cần `pip install pywebview`). Lệnh `python -m wbclient gui` vẫn mở bằng trình duyệt như trước.
+- **Build lại**, chạy trong thư mục `app`:
+  ```
+  pip install pywebview pyinstaller pyserial
+  python packaging/build_exe.py
+  ```
+  Kết quả ra ở `app/dist/Windburst.exe`. `dist/` và `build/` không đưa vào git.
+- **Icon:** `packaging/windburst.ico`, vẽ bằng `packaging/make_icon.py` (cần Pillow).

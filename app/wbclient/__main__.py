@@ -378,6 +378,9 @@ def main(argv=None):
     if a.command == "gui":
         from .gui import run
         return run(a.port, a.baud, a.http, not a.no_browser, a.logs)
+    if a.command == "app":                           # the same page in a window of its own (needs pywebview)
+        from .desktop import run as run_app
+        return run_app(a.logs)
     if a.command == "blackbox" and a.args and a.args[0] in ("info", "csv", "tune"):
         if len(a.args) < 2:
             ap.error("blackbox %s needs a file name" % a.args[0])

@@ -371,8 +371,9 @@ static void t_bidir() {
       r.run(15, 250);
       CHECK(r.d.responsive(0), "not judged on the first few silent frames");
       r.run(10, 250);
-      bool ok = true; for (int c = 0; c < 4; c++) ok = ok && !r.d.responsive(c) && r.got[c] == 0 && r.bad[c] == 0 && r.w.ch[c].bad == 0;
+      bool ok = true; for (int c = 0; c < 4; c++) ok = ok && !r.d.responsive(c) && r.got[c] == 0 && r.bad[c] == 24 && r.w.ch[c].bad == 0;
       CHECK(ok && r.good(0) == 25, "silent ESCs: reported as not answering after 20 frames, motors still get every frame");
+      CHECK(r.bad[0] == 24, "every frame after the first one: a lost reply handed up (%d) - the error rate counts it", r.bad[0]);
       CHECK(r.d.stats().replies == 0, "nothing captured"); }
     { Rig r; r.begin(PROTO_DSHOT300, true); r.w.esc_answers[1] = false; r.w.esc_answers[2] = false; r.run(100, 250);
       CHECK(r.d.responsive(0) && !r.d.responsive(1) && !r.d.responsive(2) && r.d.responsive(3), "per motor: 1 and 4 answer, 2 and 3 do not");
