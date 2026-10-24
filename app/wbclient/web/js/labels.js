@@ -306,6 +306,7 @@ export const BB_FIELDS = {
   GPS: { label: 'GPS', help: '10 lần mỗi giây.' },
   MAG: { label: 'La bàn', help: '10 lần mỗi giây.' },
   NAV: { label: 'Vị trí và điều hướng', help: 'Ước lượng vị trí, optical flow, Position Hold, GPS Rescue (10 lần mỗi giây).' },
+  NAV_DEBUG: { label: 'Dữ liệu dẫn đường chi tiết', help: 'Gia tốc NED, rung, clip, baro, GPS ở mỗi bản ghi nhanh - để chỉnh Altitude / Position Hold.' },
 };
 
 // The beeper conditions (schema enum beeper_cond), in the firmware's priority order.

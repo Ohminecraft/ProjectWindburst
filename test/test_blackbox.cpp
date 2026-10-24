@@ -29,9 +29,9 @@ static void t_format() {
     const uint32_t dflt = (1u << G_GYRO) | (1u << G_SETPOINT) | (1u << G_PID) | (1u << G_RC) | (1u << G_MOTORS) | (1u << G_ATTITUDE) | (1u << G_TIMING) | (1u << G_ALT) | (1u << G_BATTERY) | (1u << G_GPS) | (1u << G_NAV);
     { wbp::S_blackbox d; wbp::defaults(d); CHECK(d.fields == dflt, "the settings' default groups: gyro, setpoint, PID, RC, motors, attitude, timing, altitude, battery, GPS, navigation (0x%x)", (unsigned)d.fields); }
     p.build(dflt, 4); CHECK(p.fast_size == 4 + 6 + 6 + 24 + 10 + 8 + 6 + 9 && p.slow_size == 4 + 23 + 12 + 8 + 22 + 33 + 27, "default groups, quad: %u-byte fast record, %u-byte slow record (battery: voltage, cell, current, mAh)", p.fast_size, p.slow_size);
-    p.build(0xFFFFFFFFu, 8); CHECK(p.fast_size == 4 + 18 + 24 + 10 + 16 + 6 + 6 + 16 + 9 && p.slow_size == 4 + 23 + 12 + 8 + 22 + 6 + 33 + 27, "everything, 8 motors: %u / %u bytes", p.fast_size, p.slow_size);
+    p.build(0xFFFFFFFFu, 8); CHECK(p.fast_size == 4 + 18 + 24 + 10 + 16 + 6 + 6 + 16 + 9 + 38 && p.slow_size == 4 + 23 + 12 + 8 + 22 + 6 + 33 + 27, "everything, 8 motors: %u / %u bytes", p.fast_size, p.slow_size);
     p.build(0xFFFFFFFFu, 20); CHECK(p.motors == 8, "motor count capped at 8");
-    CHECK(p.fast_size + 1 <= 128 && p.slow_size + 1 <= 160, "the largest records fit the recorder's buffers");
+    CHECK(p.fast_size + 1 <= 192 && p.slow_size + 1 <= 160, "the largest records fit the recorder's buffers");
 
     // ---- fast packing: [t][gyro x3][motor x4], little-endian, value / scale rounded
     { p.build((1u << G_GYRO) | (1u << G_MOTORS), 4);
@@ -57,7 +57,10 @@ static void t_format() {
       FastSample s; s.t_us = 123456; s.gyro = gyro; s.gyro_raw = raw; s.setpoint = sp; s.pid_p = pp; s.pid_i = pi; s.pid_d = pd; s.pid_f = pf; s.stick = stick; s.throttle = 0.55f; s.motor = motor; s.rpm = rpm; s.acc = acc;
       s.roll = 10.5f; s.pitch = -20.25f; s.yaw = 170.75f; s.loop_us = 77; s.gap_us = 999;
       s.t_lock_us = 152; s.t_imu_us = 39; s.t_core_us = 96; s.t_est_us = 300; s.t_motor_us = 5000;
-      uint8_t b[128]; const uint16_t n = pack_fast(p, s, b);
+      fc::nav::Log nl; nl.acc_ned[0] = 0.25f; nl.acc_ned[1] = -1.5f; nl.acc_ned[2] = 9.0f; nl.vib = 3.21f; nl.clip = 7; nl.baro_alt = -123.45f;
+      nl.gps_pos[0] = 15000.5f; nl.gps_pos[1] = -20.25f; nl.gps_pos[2] = -55.5f; nl.gps_vel[0] = 1.5f; nl.gps_vel[1] = -2.5f; nl.gps_vel[2] = 0.75f;
+      nl.gps_hacc = 1.23f; nl.gps_sacc = 0.45f; nl.gps_sats = 17; nl.gps_flags = 5; nl.gps_seq = 201; s.nav = &nl;
+      uint8_t b[192]; const uint16_t n = pack_fast(p, s, b);
       char txt[4096]; TextOut to(txt, sizeof(txt)); describe_fields(to, "fast", p, kFast, kFastDefs); int size = 0;
       std::string line(txt); line.pop_back(); const std::vector<RField> f = parse_fields(line, size);
       auto val = [&](const std::string& name) { for (const RField& x : f) if (x.name == name) return rd(b + x.offset, x); return (double)NAN; };
@@ -69,7 +72,11 @@ static void t_format() {
       bool st = true; for (int i = 0; i < 4; i++) if (fabs(val(std::string("stick[") + char('0' + i) + "]") - stick[i]) > 1e-6) st = false;
       bool mo = true; for (int i = 0; i < 8; i++) if (fabs(val(std::string("motor[") + char('0' + i) + "]") - motor[i]) > 1e-6 || fabs(val(std::string("rpm[") + char('0' + i) + "]") - rpm[i]) > 1e-6) mo = false;
       CHECK(st && fabs(val("throttle") - 0.55) < 1e-6 && mo, "sticks, throttle, 8 motors, 8 rpm values");
-      CHECK(fabs(val("roll") - 10.5) < 1e-6 && fabs(val("pitch") + 20.25) < 1e-6 && fabs(val("yaw") - 170.75) < 1e-6 && vec3("acc", acc, 1e-6) && val("loop_us") == 77 && val("gap_us") == 999, "attitude, accelerometer, timing"); }
+      CHECK(fabs(val("roll") - 10.5) < 1e-6 && fabs(val("pitch") + 20.25) < 1e-6 && fabs(val("yaw") - 170.75) < 1e-6 && vec3("acc", acc, 1e-6) && val("loop_us") == 77 && val("gap_us") == 999, "attitude, accelerometer, timing");
+      CHECK(vec3("nav_acc", nl.acc_ned, 1e-4) && fabs(val("nav_vib") - 3.21) < 1e-4 && val("nav_clip") == 7 && fabs(val("nav_baro") + 123.45) < 1e-4, "NAV_DEBUG: acceleration N/E/D, vibration, clipping, baro (%g)", val("nav_baro"));
+      CHECK(vec3("nav_gps_pos", nl.gps_pos, 1e-3) && vec3("nav_gps_vel", nl.gps_vel, 1e-4) && fabs(val("nav_gps_hacc") - 1.23) < 1e-4 && fabs(val("nav_gps_sacc") - 0.45) < 1e-4
+            && val("nav_gps_sats") == 17 && val("nav_gps_flags") == 5 && val("nav_gps_seq") == 201, "NAV_DEBUG: GPS position (15 km keeps its cm), velocity, accuracies, satellites, flags, fix counter");
+      s.nav = nullptr; pack_fast(p, s, b); CHECK(val("nav_acc[2]") == 0 && val("nav_gps_seq") == 0, "no nav log given: the nav fields read 0"); }
 
     // ---- slow packing from the telemetry snapshot
     { p.build((1u << G_GPS) | (1u << G_ALT) | (1u << G_BATTERY) | (1u << G_MAG) | (1u << G_NAV), 4);

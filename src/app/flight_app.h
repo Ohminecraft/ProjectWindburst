@@ -840,6 +840,7 @@ private:
             fs.pid_p = last_out_.pid_p; fs.pid_i = last_out_.pid_i; fs.pid_d = last_out_.pid_d; fs.pid_f = last_out_.pid_f;
             fs.stick = last_out_.stick; fs.throttle = last_out_.throttle; fs.motor = mo; fs.rpm = in.motors.rpm; fs.acc = tel_.acc;
             fs.roll = last_out_.est.att.roll; fs.pitch = last_out_.est.att.pitch; fs.yaw = app::heading360(last_out_.est.att.yaw);
+            fs.nav = &core.navlog();
             fs.loop_us = micros() - now_us;
             fs.t_lock_us = peak_.lock; fs.t_imu_us = peak_.imu; fs.t_core_us = peak_.core; fs.t_est_us = peak_.est; fs.t_motor_us = peak_.motor; peak_ = StagePeaks();
             blackbox.log_fast(fs);

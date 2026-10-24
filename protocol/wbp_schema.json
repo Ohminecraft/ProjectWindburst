@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0xA48C55FA",
+ "hash": "0xCB86B504",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -248,7 +248,8 @@
    "BATTERY",
    "GPS",
    "MAG",
-   "NAV"
+   "NAV",
+   "NAV_DEBUG"
   ],
   "sd_mode": [
    "SPI",

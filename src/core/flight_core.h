@@ -18,6 +18,7 @@
 #include "poshold.h"
 #include "rescue.h"
 #include "acro_trainer.h"
+#include "nav/nav_log.h"
 
 // ============================================================================
 // FlightCore - the whole flight stack behind two entry points, shaped around what the hardware drivers actually deliver:
@@ -99,6 +100,7 @@ struct CoreConfig {
     bool ekf_nav = false;                            // Position Hold / GPS Rescue take position, velocity, heading from the EKF (on_ekf) when it is aiding
     float gps_alt_max_sigma = 8.0f;                  // a GPS height less sure than this (vAcc, m) is not used
     float gps_vz_sigma_scale = 1.5f;                 // GPS vertical velocity sigma = the module's speed accuracy x this (vertical is the worse axis)
+    float acc_clip_g = 15.5f;                        // an accelerometer sample this far out counts as clipped (the IMUs run at +-16 g)
     float ground_effect_s = 1.5f;                    // the barometer counts for less from arming until the craft has been in the air this long
     AccelGainSchedule::Config ahrs_ground;           // how much more the accelerometer counts while disarmed (standing still it really shows gravity)
     // ---- navigation
@@ -232,6 +234,7 @@ public:
         gf_.apply(g_f_, in.motors.rpm_valid ? in.motors.rpm : nullptr);
         // the estimators' sums take every sample, each for the time it stands for
         acc_sum_.x += in.acc_g.x * in.dt; acc_sum_.y += in.acc_g.y * in.dt; acc_sum_.z += in.acc_g.z * in.dt; est_dt_ += in.dt;
+        if ((fabsf(in.acc_g.x) > cfg.acc_clip_g || fabsf(in.acc_g.y) > cfg.acc_clip_g || fabsf(in.acc_g.z) > cfg.acc_clip_g) && clip_n_ < 255) clip_n_++;
         gyro_sum_.x += in.gyro_dps.x * in.dt; gyro_sum_.y += in.gyro_dps.y * in.dt;
         if (denom_ <= 1) { CoreOutput o = control(in, in.gyro_dps, in.acc_g, in.dt); return o; }
         // the attitude of a control cycle is integrated over the mean rate of its window (the rate times the time that really passed)
@@ -520,6 +523,7 @@ private:
 public:
     const Ahrs& ahrs() const { return ahrs_; }
     const VerticalEstimator& vertical() const { return vert_; }
+    const nav::Log& navlog() const { return navlog_; }            // the navigation stack's inputs / state for the blackbox (nav/nav_log.h)
     const HorizontalEstimator& horizontal() const { return horiz_; }
     const AltHold& althold() const { return alt_; }
     const PidController& pid() const { return pid_; }
@@ -589,7 +593,12 @@ private:
             // GPS vertical velocity: measured gps_delay_s ago - brought forward with the acceleration since (as the horizontal estimator does)
             if (cfg.gps_vel_z && gps_.vd_valid)
                 vert_.update_gps_vel(-gps_.vd + (aup - vert_.accel_bias()) * cfg.horizontal.gps_delay_s, gps_.sigma_vel * cfg.gps_vz_sigma_scale);
+            navlog_.gps_seq++; navlog_.gps_flags = (uint8_t)(1u | (gps_.vd_valid ? 2u : 0u));
+            navlog_.gps_pos[0] = gps_.north_m; navlog_.gps_pos[1] = gps_.east_m; navlog_.gps_pos[2] = -gps_.alt_m;
+            navlog_.gps_vel[0] = gps_.vn; navlog_.gps_vel[1] = gps_.ve; navlog_.gps_vel[2] = gps_.vd_valid ? gps_.vd : 0.0f;
+            navlog_.gps_hacc = gps_.sigma_pos; navlog_.gps_sacc = gps_.sigma_vel; navlog_.gps_sats = gps_.sats;
             if (heading_ok_ || !flow_fresh) {
+                navlog_.gps_flags |= 4u;
                 horiz_.fuse_gps(gps_.north_m, gps_.east_m, gps_.vn, gps_.ve, gps_.sigma_pos, gps_.sigma_vel);
                 if (heading_ok_ && gps_.sigma_vel <= cfg.aid_max_sigma_vel) tilt_aid_.on_velocity(gps_.vn, gps_.ve, cfg.horizontal.gps_delay_s);
                 gps_xy_ms_ = now; have_gps_xy_ = true;
@@ -612,6 +621,7 @@ private:
                 flow_ok_ms_ = now; have_flow_ = true;
             }
         }
+        nav_log_inputs(an, ae, aup, dt_est);
         const VerticalState vs = vert_.state();
         est_.z = vs.z; est_.vz = vs.v; est_.z_sigma = vert_.z_sigma();
         est_.gps_alt_used = vs.gps_used; est_.gps_vz_used = vs.gps_vel_used;
@@ -634,6 +644,19 @@ private:
     EulerDeg att_; Estimate est_;
     int denom_ = 1, pid_n_ = 0; float win_dt_ = 0.0f; Vec3 win_g_, win_a_; CoreOutput last_;     // the gyro samples of the control cycle to come
     Vec3 acc_sum_, gyro_sum_; int acc_n_ = 0, decim_ = 8; float est_dt_ = 0.0f, ground_t_ = 0.0f;
+    nav::Log navlog_; Vec3 vib_mean_; uint8_t clip_n_ = 0;
+    // The inputs of each estimator step, for the blackbox: the acceleration in NED with gravity taken away, how much it shakes
+    // (|a - its 2 Hz mean|, low-passed at 5 Hz - the 'vibration' ArduPilot and PX4 judge an accelerometer by), clipped samples,
+    // the barometer. (The GPS part is filled where a fix comes in.)
+    void nav_log_inputs(float an, float ae, float aup, float dt) {
+        navlog_.acc_ned[0] = an; navlog_.acc_ned[1] = ae; navlog_.acc_ned[2] = -aup;
+        const float km = dt / (dt + 1.0f / (2.0f * kPi * 2.0f)), kv = dt / (dt + 1.0f / (2.0f * kPi * 5.0f));
+        vib_mean_.x += (an - vib_mean_.x) * km; vib_mean_.y += (ae - vib_mean_.y) * km; vib_mean_.z += (-aup - vib_mean_.z) * km;
+        const float dx = an - vib_mean_.x, dy = ae - vib_mean_.y, dz = -aup - vib_mean_.z;
+        navlog_.vib += (sqrtf(dx * dx + dy * dy + dz * dz) - navlog_.vib) * kv;
+        navlog_.clip = clip_n_; clip_n_ = 0;
+        navlog_.baro_alt = baro_alt_;
+    }
     TiltAid tilt_aid_; GyroHistory gyro_hist_; FlowSample flow_; bool flow_new_ = false, flow_seen_ = false, have_flow_ = false, have_gps_xy_ = false, heading_ok_ = false; uint32_t flow_ms_ = 0, flow_ok_ms_ = 0, gps_xy_ms_ = 0;
     PosHold ph_; PosControlNE rctl_; Rescue rescue_; RescueOutput rescue_out_; bool was_poshold_ = false, nav_lean_ = false, ph_unavail_ = false, ph_slow_gps_ = false, rescue_ok_ = false; float nav_tgt_[2] = {0, 0};
     EkfNav ekf_; uint32_t ekf_ms_ = 0; bool ekf_in_use_ = false;

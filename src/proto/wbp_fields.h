@@ -32,7 +32,7 @@ static const char* const kE_beeper_cond[] = {"GYRO_CALIBRATED", "RX_LOST", "RX_L
 static const char* const kE_bb_device[] = {"NONE", "FLASH", "SDCARD"};
 static const char* const kE_bb_trigger[] = {"SWITCH", "ARMED", "ALWAYS"};
 static const char* const kE_bb_state[] = {"OFF", "NO_STORAGE", "NEEDS_ERASE", "IDLE", "LOGGING", "STREAMING", "ERASING", "FULL"};
-static const char* const kE_bb_field[] = {"GYRO", "GYRO_RAW", "SETPOINT", "PID", "RC", "MOTORS", "ATTITUDE", "ACC", "RPM", "TIMING", "ALT", "BATTERY", "GPS", "MAG", "NAV"};
+static const char* const kE_bb_field[] = {"GYRO", "GYRO_RAW", "SETPOINT", "PID", "RC", "MOTORS", "ATTITUDE", "ACC", "RPM", "TIMING", "ALT", "BATTERY", "GPS", "MAG", "NAV", "NAV_DEBUG"};
 static const char* const kE_sd_mode[] = {"SPI", "SDMMC_1BIT"};
 static const char* const kE_lpf_type[] = {"PT1", "BIQUAD", "PT2", "PT3"};
 static const char* const kE_iterm_relax[] = {"OFF", "RP", "RPY", "RP_INC", "RPY_INC"};
@@ -305,7 +305,7 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_BLACKBOX, "device", 0, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_bb_device, 3},
     {SEC_BLACKBOX, "trigger", 1, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_bb_trigger, 3},
     {SEC_BLACKBOX, "rate_hz", 2, FT_U16, 1, FF_RANGE, 1.0f, 10.0f, 2000.0f, nullptr, 0},
-    {SEC_BLACKBOX, "fields", 4, FT_U32, 1, FF_BITS, 1.0f, 0.0f, 0.0f, kE_bb_field, 15},
+    {SEC_BLACKBOX, "fields", 4, FT_U32, 1, FF_BITS, 1.0f, 0.0f, 0.0f, kE_bb_field, 16},
     {SEC_BLACKBOX, "sd_mode", 8, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_sd_mode, 2},
     {SEC_BLACKBOX, "sd_mhz", 9, FT_U8, 1, FF_RANGE, 1.0f, 1.0f, 40.0f, nullptr, 0},
     {SEC_FILTERS, "slider_gyro", 0, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},

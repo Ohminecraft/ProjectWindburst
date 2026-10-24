@@ -60,6 +60,13 @@ export function presetsFor(names, motors) {
       { id: 'navpos', min: 2, title: tr('Vị trí và điểm đang giữ'), unit: 'm', series: pick([{ field: 'pos_n', name: tr('Vị trí, bắc') }, { field: 'pos_e', name: tr('Vị trí, đông') }, { field: 'nav_target_n', name: tr('Điểm giữ, bắc') }, { field: 'nav_target_e', name: tr('Điểm giữ, đông') }]) },
       { id: 'navlean', min: 4, title: tr('Góc nghiêng autopilot yêu cầu'), unit: '°', series: pick([{ field: 'nav_roll', name: 'Roll' }, { field: 'nav_pitch', name: 'Pitch' }]) },
       { id: 'flowq', title: tr('Chất lượng bề mặt (optical flow)'), unit: '%', range: [0, 100], series: pick([{ field: 'flow_quality', name: tr('Chất lượng') }]) }] },
+    { id: 'navdbg', label: tr('Dẫn đường chi tiết'), panels: [
+      { id: 'navacc', min: 0.5, title: tr('Gia tốc NED (đã bỏ trọng lực)'), unit: 'm/s²', series: pick([{ field: 'nav_acc[0]', name: tr('Bắc') }, { field: 'nav_acc[1]', name: tr('Đông') }, { field: 'nav_acc[2]', name: tr('Xuống') }]) },
+      { id: 'navvib', min: 1, title: tr('Rung và clip'), unit: '', series: pick([{ field: 'nav_vib', name: tr('Rung (m/s²)') }, { field: 'nav_clip', name: 'Clip' }]) },
+      { id: 'navbaro', min: 1, title: tr('Độ cao barometer'), unit: 'm', series: pick([{ field: 'nav_baro', name: 'Barometer' }]) },
+      { id: 'navgpos', min: 2, title: tr('Vị trí GPS từ home'), unit: 'm', series: pick([{ field: 'nav_gps_pos[0]', name: tr('Bắc') }, { field: 'nav_gps_pos[1]', name: tr('Đông') }]) },
+      { id: 'navgvel', min: 0.5, title: tr('Vận tốc GPS'), unit: 'm/s', series: pick([{ field: 'nav_gps_vel[0]', name: tr('Bắc') }, { field: 'nav_gps_vel[1]', name: tr('Đông') }, { field: 'nav_gps_vel[2]', name: tr('Xuống') }]) },
+      { id: 'navgacc', min: 1, title: tr('Độ chính xác GPS'), unit: '', series: pick([{ field: 'nav_gps_hacc', name: tr('Vị trí (m)') }, { field: 'nav_gps_sacc', name: tr('Vận tốc (m/s)') }]) }], needs: 'nav_acc[0]' },
     { id: 'link', label: 'Receiver', panels: [{ id: 'rssi', title: 'RSSI', unit: '%', range: [0, 100], series: pick([{ field: 'rssi', name: 'RSSI' }]) },
       { id: 'rcrate', min: 20, title: tr('Khung receiver mỗi giây'), unit: 'Hz', series: pick([{ field: 'rc_rate', name: tr('Khung/s') }]) }] },
     { id: 'mag', label: tr('La bàn'), panels: [{ id: 'mag', min: 0.1, title: tr('La bàn'), unit: 'gauss', series: pick([{ field: 'mag[0]', name: 'X' }, { field: 'mag[1]', name: 'Y' }, { field: 'mag[2]', name: 'Z' }]) }] },

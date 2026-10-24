@@ -1949,6 +1949,36 @@ export const EN = {
     "Position and navigation",
   "Ước lượng vị trí, optical flow, Position Hold, GPS Rescue (10 lần mỗi giây).":
     "Position estimate, optical flow, Position Hold, GPS Rescue (10 times a second).",
+  "Dữ liệu dẫn đường chi tiết":
+    "Navigation debug data",
+  "Dẫn đường chi tiết":
+    "Navigation debug",
+  "Gia tốc NED (đã bỏ trọng lực)":
+    "NED acceleration (gravity removed)",
+  "Bắc":
+    "North",
+  "Đông":
+    "East",
+  "Xuống":
+    "Down",
+  "Rung và clip":
+    "Vibration and clipping",
+  "Rung (m/s²)":
+    "Vibration (m/s²)",
+  "Độ cao barometer":
+    "Barometer height",
+  "Vị trí GPS từ home":
+    "GPS position from home",
+  "Vận tốc GPS":
+    "GPS velocity",
+  "Độ chính xác GPS":
+    "GPS accuracy",
+  "Vị trí (m)":
+    "Position (m)",
+  "Vận tốc (m/s)":
+    "Velocity (m/s)",
+  "Gia tốc NED, rung, clip, baro, GPS ở mỗi bản ghi nhanh - để chỉnh Altitude / Position Hold.":
+    "NED acceleration, vibration, clipping, baro, GPS in every fast record - for tuning Altitude / Position Hold.",
   "MSP qua UART (MicoAir MTF, Matek)":
     "MSP on a UART (MicoAir MTF, Matek)",
   "đang dùng":

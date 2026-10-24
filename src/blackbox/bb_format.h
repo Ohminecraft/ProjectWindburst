@@ -4,6 +4,7 @@
 
 #pragma once
 #include "../config/fast_code.h"
+#include "../core/nav/nav_log.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -43,11 +44,12 @@ inline uint8_t type_size(uint8_t t) { return t == T_U8 ? 1 : (t == T_I16 || t ==
 inline const char* type_name(uint8_t t) { static const char* n[] = {"u8", "i16", "u16", "i32", "u32"}; return t <= T_U32 ? n[t] : "?"; }
 
 // Field groups = bits of the settings field blackbox.fields (schema enum bb_field)
-enum Group : uint8_t { G_GYRO, G_GYRO_RAW, G_SETPOINT, G_PID, G_RC, G_MOTORS, G_ATTITUDE, G_ACC, G_RPM, G_TIMING, G_ALT, G_BATTERY, G_GPS, G_MAG, G_NAV, G_COUNT, G_ALWAYS = 255 };
+enum Group : uint8_t { G_GYRO, G_GYRO_RAW, G_SETPOINT, G_PID, G_RC, G_MOTORS, G_ATTITUDE, G_ACC, G_RPM, G_TIMING, G_ALT, G_BATTERY, G_GPS, G_MAG, G_NAV, G_NAV_DEBUG, G_COUNT, G_ALWAYS = 255 };
 
 // ---- fast record: what changes every control cycle
 enum FastId : uint8_t {
-    F_GYRO, F_GYRO_RAW, F_SETPOINT, F_PID_P, F_PID_I, F_PID_D, F_PID_F, F_STICK, F_THROTTLE, F_MOTOR, F_ROLL, F_PITCH, F_YAW, F_ACC, F_RPM, F_LOOP_US, F_GAP_US, F_T_LOCK, F_T_IMU, F_T_CORE, F_T_EST, F_T_MOTOR, F_COUNT
+    F_GYRO, F_GYRO_RAW, F_SETPOINT, F_PID_P, F_PID_I, F_PID_D, F_PID_F, F_STICK, F_THROTTLE, F_MOTOR, F_ROLL, F_PITCH, F_YAW, F_ACC, F_RPM, F_LOOP_US, F_GAP_US, F_T_LOCK, F_T_IMU, F_T_CORE, F_T_EST, F_T_MOTOR,
+    F_NAV_ACC, F_NAV_VIB, F_NAV_CLIP, F_NAV_BARO, F_NAV_GPS_POS, F_NAV_GPS_VEL, F_NAV_GPS_HACC, F_NAV_GPS_SACC, F_NAV_GPS_SATS, F_NAV_GPS_FLAGS, F_NAV_GPS_SEQ, F_COUNT
 };
 struct FieldDef { uint8_t id; const char* name; uint8_t count; uint8_t type; double scale; float inv; const char* unit; uint8_t group; bool per_motor; };
 #define BB_FIELD(id, name, count, type, scale, unit, group, per_motor) {id, name, count, type, scale, (float)(1.0 / (scale)), unit, group, per_motor}
@@ -76,6 +78,18 @@ constexpr FieldDef kFast[] = {
     BB_FIELD(F_T_CORE, "t_core", 1, T_U8, 4.0, "us", G_TIMING, false),               // filters, PID, mixer - in the cycles that did not step the estimators
     BB_FIELD(F_T_EST, "t_est", 1, T_U8, 4.0, "us", G_TIMING, false),                 // the same in the cycles that did (0: none in this interval)
     BB_FIELD(F_T_MOTOR, "t_motor", 1, T_U8, 4.0, "us", G_TIMING, false),             // motor output and ESC replies
+    // the navigation stack's inputs at every record (src/core/nav/nav_log.h; NED, origin at home, down +) - for tuning it from a log
+    BB_FIELD(F_NAV_ACC, "nav_acc", 3, T_I16, 0.01, "m/s2", G_NAV_DEBUG, false),       // acceleration N, E, D with gravity taken away
+    BB_FIELD(F_NAV_VIB, "nav_vib", 1, T_U16, 0.01, "m/s2", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_CLIP, "nav_clip", 1, T_U8, 1.0, "", G_NAV_DEBUG, false),           // accelerometer samples at the end of the range
+    BB_FIELD(F_NAV_BARO, "nav_baro", 1, T_I32, 0.01, "m", G_NAV_DEBUG, false),        // barometer height above take-off (up +)
+    BB_FIELD(F_NAV_GPS_POS, "nav_gps_pos", 3, T_I32, 0.01, "m", G_NAV_DEBUG, false),  // from home N, E, D
+    BB_FIELD(F_NAV_GPS_VEL, "nav_gps_vel", 3, T_I16, 0.01, "m/s", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_GPS_HACC, "nav_gps_hacc", 1, T_U16, 0.01, "m", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_GPS_SACC, "nav_gps_sacc", 1, T_U16, 0.01, "m/s", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_GPS_SATS, "nav_gps_sats", 1, T_U8, 1.0, "", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_GPS_FLAGS, "nav_gps_flags", 1, T_U8, 1.0, "", G_NAV_DEBUG, false), // bit 0 a fix has come, 1 vertical velocity measured, 2 used for XY
+    BB_FIELD(F_NAV_GPS_SEQ, "nav_gps_seq", 1, T_U8, 1.0, "", G_NAV_DEBUG, false),     // steps by one at each fix
 };
 constexpr int kFastDefs = sizeof(kFast) / sizeof(kFast[0]);
 
@@ -88,7 +102,24 @@ struct FastSample {                         // filled by the flight loop for one
     float roll = 0, pitch = 0, yaw = 0;
     uint32_t loop_us = 0, gap_us = 0;
     uint16_t t_lock_us = 0, t_imu_us = 0, t_core_us = 0, t_est_us = 0, t_motor_us = 0;
+    const fc::nav::Log* nav = nullptr;      // the nav fields read 0 without it
 };
+WB_FAST inline float nav_value(const fc::nav::Log& n, uint8_t id, int i) {
+    switch (id) {
+    case F_NAV_ACC: return n.acc_ned[i];
+    case F_NAV_VIB: return n.vib;
+    case F_NAV_CLIP: return (float)n.clip;
+    case F_NAV_BARO: return n.baro_alt;
+    case F_NAV_GPS_POS: return n.gps_pos[i];
+    case F_NAV_GPS_VEL: return n.gps_vel[i];
+    case F_NAV_GPS_HACC: return n.gps_hacc;
+    case F_NAV_GPS_SACC: return n.gps_sacc;
+    case F_NAV_GPS_SATS: return (float)n.gps_sats;
+    case F_NAV_GPS_FLAGS: return (float)n.gps_flags;
+    case F_NAV_GPS_SEQ: return (float)n.gps_seq;
+    default: return 0.0f;
+    }
+}
 WB_FAST inline float fast_value(const FastSample& s, uint8_t id, int i) {
     switch (id) {
     case F_GYRO: return s.gyro[i];
@@ -113,7 +144,7 @@ WB_FAST inline float fast_value(const FastSample& s, uint8_t id, int i) {
     case F_T_CORE: return (float)s.t_core_us;
     case F_T_EST: return (float)s.t_est_us;
     case F_T_MOTOR: return (float)s.t_motor_us;
-    default: return 0.0f;
+    default: return s.nav ? nav_value(*s.nav, id, i) : 0.0f;
     }
 }
 
