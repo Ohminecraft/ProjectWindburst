@@ -47,9 +47,10 @@ static const char* const kE_flow_type[] = {"NONE", "PMW3901", "MSP"};
 static const char* const kE_flow_align[] = {"CW0", "CW90", "CW180", "CW270"};
 static const char* const kE_flow_reject[] = {"OK", "QUALITY", "HEIGHT", "TILT", "TURNING", "NO_GYRO", "NO_SAMPLE"};
 static const char* const kE_ph_axis[] = {"PILOT", "BRAKE", "BRAKE_READY", "TO_LOITER", "LOITER", "TO_PILOT"};
-static const char* const kE_rescue_phase[] = {"IDLE", "CLIMB", "ROTATE", "FLY_HOME", "DESCENT", "LANDING", "FAILED"};
+static const char* const kE_rescue_phase[] = {"IDLE", "CLIMB", "ROTATE", "FLY_HOME", "DESCENT", "LANDING", "FAILED", "LOITER"};
 static const char* const kE_rescue_fail[] = {"NONE", "NO_POSITION", "NO_HEADING", "NO_ALTITUDE", "GPS_LOST", "LOW_SATS", "STALLED", "FLYAWAY"};
-static const char* const kE_rescue_alt[] = {"MAX", "FIXED", "CURRENT"};
+static const char* const kE_rescue_alt[] = {"MAX", "FIXED", "CURRENT", "CONE"};
+static const char* const kE_rescue_mode[] = {"RTL", "SMART_RTL", "LAND"};
 static const char* const kE_fs_procedure[] = {"LAND", "RESCUE", "HOLD", "DROP"};
 static const char* const kE_fs_action[] = {"NONE", "WARN", "HOLD", "RTL", "LAND", "DROP"};
 static const char* const kE_fs_batt_low[] = {"WARN", "RTL", "LAND"};
@@ -79,10 +80,10 @@ static const char* const kB_health[] = {"IMU", "GYRO_CAL", "BARO", "RANGE", "GPS
 static const char* const kB_settings_flags[] = {"DIRTY", "REBOOT_REQUIRED"};
 static const char* const kB_est_valid[] = {"ALT", "POS", "YAW_FROM_MAG", "VEL", "FLOW", "TILT_AIDED", "GPS_ALT", "GPS_VZ"};
 static const char* const kB_fs_cause[] = {"LINK", "SWITCH", "BATTERY", "BATTERY_LOW"};
-static const char* const kB_nav_flags[] = {"POSHOLD", "POSHOLD_UNAVAILABLE", "RESCUE", "RESCUE_AVAILABLE", "NAV_LEAN", "POSHOLD_SLOW_GPS"};
+static const char* const kB_nav_flags[] = {"POSHOLD", "POSHOLD_UNAVAILABLE", "RESCUE", "RESCUE_AVAILABLE", "NAV_LEAN", "POSHOLD_SLOW_GPS", "FENCE"};
 static const char* const kB_ekf_flags[] = {"ALIGNED", "GPS_AIDING", "HEADING_OK", "USED_FOR_NAV"};
 static const char* const kB_imu_src[] = {"IMU1", "IMU2"};
-constexpr int kFieldCount = 346;
+constexpr int kFieldCount = 354;
 static const FieldInfo kFields[kFieldCount] = {
     {SEC_GENERAL, "loop_hz", 0, FT_U16, 1, FF_RANGE, 1.0f, 500.0f, 8000.0f, nullptr, 0},
     {SEC_GENERAL, "est_hz", 2, FT_U16, 1, FF_RANGE, 1.0f, 100.0f, 1000.0f, nullptr, 0},
@@ -221,6 +222,7 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_SENSORS, "imu2_align", 17, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_align, 8},
     {SEC_SENSORS, "baro_model", 18, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_baro_model, 3},
     {SEC_SENSORS, "baro_primary", 19, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_baro_primary, 2},
+    {SEC_SENSORS, "esc_boot_wait", 20, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 100.0f, nullptr, 0},
     {SEC_GPS, "provider", 0, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_gps_provider, 5},
     {SEC_GPS, "baud", 1, FT_U32, 1, FF_RANGE, 1.0f, 9600.0f, 230400.0f, nullptr, 0},
     {SEC_GPS, "rate_hz", 5, FT_U8, 1, FF_RANGE, 1.0f, 1.0f, 25.0f, nullptr, 0},
@@ -359,7 +361,7 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_NAV, "vel_i", 13, FT_U8, 1, FF_RANGE, 0.1f, 0.0f, 30.0f, nullptr, 0},
     {SEC_NAV, "vel_d", 14, FT_U8, 1, FF_RANGE, 0.01f, 0.0f, 100.0f, nullptr, 0},
     {SEC_NAV, "fs_procedure", 15, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_fs_procedure, 4},
-    {SEC_NAV, "rescue_alt_mode", 16, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_rescue_alt, 3},
+    {SEC_NAV, "rescue_alt_mode", 16, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_rescue_alt, 4},
     {SEC_NAV, "rescue_initial_climb", 17, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 100.0f, nullptr, 0},
     {SEC_NAV, "rescue_return_alt", 18, FT_U8, 1, FF_RANGE, 1.0f, 5.0f, 150.0f, nullptr, 0},
     {SEC_NAV, "rescue_ascend_rate", 19, FT_U8, 1, FF_RANGE, 0.1f, 10.0f, 100.0f, nullptr, 0},
@@ -377,6 +379,13 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_NAV, "fs_hold_s", 31, FT_U8, 1, FF_RANGE, 1.0f, 1.0f, 255.0f, nullptr, 0},
     {SEC_NAV, "batt_low_action", 32, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_fs_batt_low, 3},
     {SEC_NAV, "batt_crit_action", 33, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_fs_batt_crit, 2},
+    {SEC_NAV, "fence_alt_max", 34, FT_U16, 1, FF_RANGE, 1.0f, 0.0f, 5000.0f, nullptr, 0},
+    {SEC_NAV, "fence_radius", 36, FT_U16, 1, FF_RANGE, 1.0f, 0.0f, 10000.0f, nullptr, 0},
+    {SEC_NAV, "rescue_cone", 38, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 85.0f, nullptr, 0},
+    {SEC_NAV, "rescue_descend_alt", 39, FT_U8, 1, FF_RANGE, 1.0f, 2.0f, 100.0f, nullptr, 0},
+    {SEC_NAV, "rescue_loiter", 40, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 255.0f, nullptr, 0},
+    {SEC_NAV, "rescue_land_speed", 41, FT_U8, 1, FF_RANGE, 0.1f, 2.0f, 20.0f, nullptr, 0},
+    {SEC_NAV, "rescue_mode", 42, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_rescue_mode, 3},
     {SEC_SERVO, "source", 0, FT_U8, 4, 0, 1.0f, 0.0f, 0.0f, kE_servo_source, 17},
     {SEC_SERVO, "min_us", 4, FT_U16, 4, FF_RANGE, 1.0f, 500.0f, 2500.0f, nullptr, 0},
     {SEC_SERVO, "max_us", 12, FT_U16, 4, FF_RANGE, 1.0f, 500.0f, 2500.0f, nullptr, 0},

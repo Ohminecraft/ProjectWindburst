@@ -113,7 +113,7 @@ public:
     void configure(wbp::Settings& s) {
         s_ = &s;
         wbp::apply_core(s, core.cfg, core.rc);
-        ekf_mode_ = s.nav.ekf; ekf_.cfg.gps_delay_s = core.cfg.horizontal.gps_delay_s;
+        ekf_mode_ = s.nav.ekf; ekf_.cfg.gps_delay_s = core.cfg.pos_est.gps_delay_s;
         wbp::apply_motors(s, motors.cfg()); motors_run_ = s.motors;
         wbp::apply_gps(s, gnss.config());
         apply_battery(); apply_beeper(); apply_servo();
@@ -186,7 +186,8 @@ public:
         period_us_ = (uint32_t)(1e6f / hz + 0.5f);
         pub_div_ = (uint16_t)(hz / 1000.0f + 0.5f); if (pub_div_ < 1) pub_div_ = 1;
         cal_samples_ = hz > 8000.0f ? 8000 : (uint16_t)hz;                         // ~1 s of samples
-        if (status.imu) { apply_alignment(); start_gyro_cal(); cal_kind_ = wbp::CAL_KIND_GYRO; }
+        // (the gyro calibration itself waits for the ESCs: below, after the motor outputs are started)
+        if (status.imu) { apply_alignment(); gyro_cal_wait_ = true; cal_kind_ = wbp::CAL_KIND_GYRO; }
         {   char clk_txt[32] = "", rate_txt[64] = "";       // (SPI: the read clock, and "direct" when it is read past the Arduino library - bus_spi.h)
             if (imu_spi && status.imu) snprintf(clk_txt, sizeof(clk_txt), " (%.0f MHz%s)", (double)(imu.spiClockHz() / 1e6f), imu.spiDirect() ? " direct" : "");
             if (status.imu && (uint32_t)(hz + 0.5f) != (uint32_t)s.general.loop_hz)
@@ -401,6 +402,12 @@ public:
         core.configure();
         motors.setCanNode(status.can ? &can_node : nullptr);               // (protocol DRONECAN: the ESCs' commands go out on the bus)
         status.motors = motors.begin(1.0f / core.cfg.pid_hz());          // a motor command per control cycle
+        // The boot gyro calibration starts only once the ESCs have had the signal for a while: an ESC that powers up plays its
+        // start-up tones (the motors buzz) and arms only after it has seen zero-throttle frames - calibrated during that, the gyro
+        // would take the buzz for its bias, or the calibration fail for motion. Bidirectional DShot: when every ESC answers (+ a
+        // short settling time); otherwise after sensors.esc_boot_wait (Betaflight waits for its ESCs the same way before it calibrates).
+        esc_wait_ms_ = millis(); esc_wait_len_ms_ = status.motors && !motor::is_can(motors.cfg().protocol) ? 100u * s.sensors.esc_boot_wait : 0; esc_answered_ms_ = 0; esc_answered_ = false;
+        if (gyro_cal_wait_ && !esc_wait_len_ms_) { gyro_cal_wait_ = false; start_gyro_cal(); }      // nothing to wait for: at once, as before
         esc_poll_.begin(esc_uart_ ? motors.cfg().count : 0, millis());
         {   // why the outputs did not start, as precisely as it can be said
             static char why[150]; why[0] = 0;
@@ -617,6 +624,18 @@ public:
                 else if (!edt_asked_ && !now_armed && !motors.manager().testing(micros())) edt_asked_ = motors.manager().enable_extended_telemetry(true);   // (not into a running motor test)
             }
 
+            // the boot gyro calibration, once the ESCs are there (see begin)
+            if (gyro_cal_wait_ && status.imu) {
+                bool all = motors.cfg().bidirectional && motors.cfg().count > 0;
+                for (int i = 0; all && i < motors.cfg().count; i++) all = motors.escAnswers(motors.cfg().order[i]);
+                if (all && !esc_answered_) { esc_answered_ = true; esc_answered_ms_ = now_ms; }
+                if ((esc_answered_ && (uint32_t)(now_ms - esc_answered_ms_) >= kEscSettleMs) || (uint32_t)(now_ms - esc_wait_ms_) >= esc_wait_len_ms_) {
+                    gyro_cal_wait_ = false; start_gyro_cal();
+                    char line[kReportLen]; snprintf(line, sizeof(line), "gyro: calibration started %lu ms after the motor outputs (%s)", (unsigned long)(now_ms - esc_wait_ms_),
+                                                    !esc_wait_len_ms_ ? "no ESCs to wait for" : esc_answered_ ? "every ESC answered" : "ESC start-up time");
+                    add_report(line);
+                }
+            }
             // a gyro calibration that failed at boot (the craft was moved) is retried until it succeeds, like Betaflight
             if (!imu.gyroCalibrated() && imu.gyroCalState() == CalState::FAILED && !now_armed && status.imu) imu.startGyroCalibration(cal_samples_);
             if (!imu2.gyroCalibrated() && imu2.gyroCalState() == CalState::FAILED && !now_armed && status.imu2) imu2.startGyroCalibration(cal2_samples());
@@ -1195,8 +1214,16 @@ private:
         osd_was_armed_ = t.armed; osd_dt_ms_ = now_ms; o.dist_m = osd_dist_m_;
         for (int i = 0; i < 8; i++) if (t.esc_temp[i] > o.esc_temp_c) o.esc_temp_c = t.esc_temp[i];
         // the warning: the most important one only (Betaflight's order, roughly)
+        // a rescue that flies: its kind and the way still to go home, before anything else (osd::rescue_text)
+        if (t.nav_flags & wbp::NAV_FLAGS_RESCUE) {
+            o.rescue = (uint8_t)(osd::RESC_RTL + (t.rescue_mode <= fc::RESCUE_MODE_LAND ? t.rescue_mode : 0));
+            o.rescue_stage = t.rescue_phase == (uint8_t)fc::RescuePhase::LANDING ? osd::RSTAGE_LANDING
+                           : t.rescue_phase == (uint8_t)fc::RescuePhase::DESCENT || t.rescue_phase == (uint8_t)fc::RescuePhase::LOITER ? osd::RSTAGE_HOME : osd::RSTAGE_WAY;
+            o.rescue_left_m = t.rescue_left;
+        }
         const char* w = o.failsafe ? "FAILSAFE" : o.batt_level == 2 ? "LAND NOW" : o.batt_level == 1 ? "LOW BATTERY" : !t.rc_link ? "RXLOSS" : nullptr;
-        if (w) snprintf(o.warning, sizeof(o.warning), "%s", w);
+        if (o.rescue) osd::rescue_text(o, o.warning, sizeof(o.warning));
+        else if (w) snprintf(o.warning, sizeof(o.warning), "%s", w);
         else if (!t.armed && t.blockers) {
             for (int b = 0; b < 32; b++) if ((t.blockers >> b) & 1u) {
                 const char* name = b < (int)(sizeof(wbp::kB_arm_blocker) / sizeof(wbp::kB_arm_blocker[0])) ? wbp::kB_arm_blocker[b] : "?";
@@ -1306,7 +1333,7 @@ private:
         tel_.gps_alt_used = e.gps_alt_used; tel_.gps_vz_used = e.gps_vz_used;
     }
     void fill_slow(uint32_t now_ms) {
-        tel_.z_resets = app::sat_u16(core.vertical().baro_resets());
+        tel_.z_resets = app::sat_u16(core.alt_estimator().baro_resets());
         {   const EkfOut& e = ekf_out_; uint8_t f = 0;
             if (ekf_.aligned()) f |= wbp::EKF_FLAGS_ALIGNED;
             if (ekf_nav_.gps_aiding) f |= wbp::EKF_FLAGS_GPS_AIDING;
@@ -1323,13 +1350,15 @@ private:
           if (o.rescue_available) f |= wbp::NAV_FLAGS_RESCUE_AVAILABLE;
           if (o.nav_lean) f |= wbp::NAV_FLAGS_NAV_LEAN;
           if (o.poshold_slow_gps) f |= wbp::NAV_FLAGS_POSHOLD_SLOW_GPS;
+          if (o.fence) f |= wbp::NAV_FLAGS_FENCE;
           tel_.nav_flags = f; tel_.flow_quality = flow_quality_; tel_.flow_reject = e.flow_reject; tel_.flow_rate = flow.rateHz();
           // the speed the flow sensor measures, for the eye: single samples of these sensors are coarse (an MSP sensor counts in steps of 0.5 rad/s), so a quarter second of them is averaged
           { const uint32_t d = now_ms - flow_tel_ms_; flow_tel_ms_ = now_ms; const float k = d >= 250u ? 1.0f : (float)d / 250.0f;
             tel_.flow_fwd += k * ((e.flow_valid ? e.flow_forward : 0.0f) - tel_.flow_fwd); tel_.flow_right += k * ((e.flow_valid ? e.flow_right : 0.0f) - tel_.flow_right); }
           tel_.ph_state[0] = o.ph_state[0]; tel_.ph_state[1] = o.ph_state[1]; tel_.nav_roll = o.nav_lean ? o.nav_roll : 0.0f; tel_.nav_pitch = o.nav_lean ? o.nav_pitch : 0.0f;
           tel_.nav_target_n = o.nav_target_n; tel_.nav_target_e = o.nav_target_e; tel_.nav_wind_n = o.nav_wind_n; tel_.nav_wind_e = o.nav_wind_e; tel_.nav_home_dist = o.nav_home_dist;
-          tel_.rescue_phase = o.rescue_phase; tel_.rescue_fail = o.rescue_fail; tel_.rescue_return_alt = core.rescue().return_height(); }
+          tel_.rescue_phase = o.rescue_phase; tel_.rescue_fail = o.rescue_fail; tel_.rescue_return_alt = core.rescue().return_height();
+          tel_.rescue_mode = o.rescue_mode; tel_.rescue_left = o.rescue_left; }
         for (int i = 0; i < 16; i++) tel_.rc[i] = rc_[i];
         tel_.rc_link = rc_link_; tel_.rssi = rc.linkQuality(); tel_.rc_rate = rc.rateHz();
         // ---- live state of the filters and the PID helpers (the app's tuning stream)
@@ -1338,7 +1367,7 @@ private:
           for (int a = 0; a < 3; a++) for (int p = 0; p < 3; p++) tel_.dyn_notch_hz[a * 3 + p] = p < gf.dyn_notch().count() ? gf.dyn_notch().center_hz(a, p) : 0.0f;
           for (int m = 0; m < 8; m++) tel_.rpm_notch_hz[m] = gf.rpm_filter().active() && gf.rpm_filter().notch_weight(m, 0) > 0.0f ? gf.rpm_filter().notch_hz(m, 0) : 0.0f;
           tel_.tpa = pc.tpa_factor(); tel_.anti_gravity = pc.anti_gravity(); tel_.rc_smoothed_hz = core.setpoints().rx_rate().smoothed_hz(); tel_.rc_cutoff_hz = core.setpoints().setpoint_cutoff_hz();
-          tel_.air_state = !last_out_.armed || last_out_.ground_idle ? wbp::AIR_STATE_GROUND : last_out_.airmode_active ? wbp::AIR_STATE_AIRMODE : wbp::AIR_STATE_AIR; tel_.hover_throttle = core.althold().hover_throttle();
+          tel_.air_state = !last_out_.armed || last_out_.ground_idle ? wbp::AIR_STATE_GROUND : last_out_.airmode_active ? wbp::AIR_STATE_AIRMODE : wbp::AIR_STATE_AIR; tel_.hover_throttle = core.alt_hold().hover_throttle();
           for (int a = 0; a < 3; a++) tel_.pid_sum[a] = last_out_.pid_p[a] + last_out_.pid_i[a] + last_out_.pid_d[a] + last_out_.pid_f[a]; }
         uint16_t h = 0;
         if (imu_sel_.in_use()) h |= wbp::HEALTH_IMU;
@@ -1440,6 +1469,8 @@ private:
     app::Telemetry tel_;
     AccCalibrator acc_cal_; bool acc_session_ = false, acc_done_ = false; CalState mag_cal_state_ = CalState::IDLE; uint8_t cal_kind_ = 0, mag_result_ = 0;
     MagAutoCal mag_auto_; app::StickCommands sticks_; uint16_t cal_samples_ = 1000;
+    static constexpr uint32_t kEscSettleMs = 500;      // every ESC answers: this much more before the boot gyro calibration
+    bool gyro_cal_wait_ = false, esc_answered_ = false; uint32_t esc_wait_ms_ = 0, esc_wait_len_ms_ = 0, esc_answered_ms_ = 0;
     uint16_t rc_[16] = {1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
     uint32_t rc_seq_ = 0;
     bool rc_link_ = false, was_armed_ = false, reboot_pending_ = false, land_on_critical_ = true, acc_was_running_ = false; uint16_t capacity_mah_ = 0; bool edt_wanted_ = false, edt_asked_ = false;

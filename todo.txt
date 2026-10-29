@@ -1,19 +1,15 @@
-Mục cần làm:
- - tôi vừa test bidir dshot trên esc bluejay ver 1.18.1 với mã là J-L-30 thì nó khá bất ổn, khi tôi gửi lệnh test motor thì ngay lập tức esc không trả lời nữa, khung ban đầu là ~3900 sau khi gửi lệnh thì lập tức tụt xuống ~170 và nó cứ trả lời và không trả lời cho đến khi nó không thể trả lời lại nữa (liệu đây là do esc?)
-
-- lưu ý làm: lần này sẽ dựa vào ardupilot và px4
 
 Cần test:
-- lỗi ESC telemetry (tab Motor, cột Lỗi): BLHeli_S không bidir mà bật bidir -> phải hiện ~100 % đỏ; Bluejay khi quay motor test -> xem cột Lỗi và các số replies / garbled / no start / bad bits / bad crc / late / skipped (nếu lỗi ~100 % khi quay = ESC thôi trả lời; nếu "late" lớn = firmware nhả chân trễ)
+- 0.36.0 rescue mới (ArduPilot / PX4): RTL, SmartRTL, LAND bằng công tắc trước rồi mới failsafe; xem OSD báo "RTL ..M" giảm dần; làm theo bước 6 cuối docs/NAV_ROADMAP.md, bật nhóm blackbox "Dữ liệu dẫn đường chi tiết" và gửi log
+- 0.35.1: cắm pin -> nghe ESC phát nhạc khởi động xong mới tới hiệu chỉnh gyro (boot report: "gyro: calibration started ... ms after the motor outputs"); test motor kéo nhanh 0 <-> 100 % xem motor theo kịp, kéo về 0 thì dừng ngay; animation chuyển tab ở từng theme
+- ALT HOLD / POS HOLD viết lại (0.35.0): làm theo 6 bước cuối docs/NAV_ROADMAP.md (cầm tay, ALT HOLD, trần độ cao, POS HOLD, hàng rào bán kính, GPS Rescue), bật nhóm blackbox "Dữ liệu dẫn đường chi tiết" và gửi log từng bước
 - OSD 0.33: bật vài mục mới (thanh la bàn, thanh bên, vĩ/kinh độ, thanh pin cần battery.capacity_mah) xem đúng chỗ trong kính; bay xong disarm xem bảng thống kê
-- MSP 0.33: Betaflight Configurator 10.10 qua USB (tab Setup, Receiver, Modes, PID, Rates; sửa PID rồi Save, mở lại app Windburst xem giá trị); app SpeedyBee nếu có module Bluetooth; module GPS/la bàn MSP và receiver MSP nếu có (xem docs/MSP.md)
-- giao diện mới: thử 5 theme (Carbon, HUD buồng lái, Kính mờ, Thụy Sĩ, Ngoài trời) ở chân thanh tab, xem từng tab, cửa sổ hẹp; hình 3D quay đúng theo máy (nghiêng phải = roll dương), mượt khi để lâu
-- bidir dshot bluejay J-L-30 (EFM8BB1 24MHz): (a) DShot300 + PID 2kHz xem còn mất trả lời không; (b) lúc ESC thôi trả lời motor còn quay không (còn quay = ESC không theo kịp, dừng/kêu = ESC mất tín hiệu); (c) chụp số replies / garbled / no_start / bad_bits / bad_crc / late / skipped ở tab Motor lúc lỗi
-- app tự kết nối lại sau "Lưu và khởi động lại" với bản rx_esp32_s3 (TinyUSB): thanh trên báo đang chờ cổng, rồi "đã kết nối lại", cấu hình tải lại
-- app tự kết nối lại khi mạch tự reset (bấm nút reset trên mạch khi đang kết nối)
-- danh sách cổng hiện tên iProduct (Windburst-...) thay cho "USB Serial Device"
 
 Hoàn Thành:
+- rescue viết lại theo ArduPilot / PX4: RTL (hình nón PX4, bay theo đường có giới hạn gia tốc, hạ xuống độ cao chờ, chờ rồi hạ cánh), SmartRTL (bay về theo đường cũ), LAND (hạ tại chỗ giữ vị trí); OSD hiện số mét còn lại (completed nhưng chưa thử trên mạch, 0.36.0)
+- app: animation chuyển tab theo theme, công tắc, giá trị "giải mã" ASCII khi hiện lần đầu (completed nhưng chưa thử trên máy, 0.35.1)
+- app: hộp kết nối ở giữa (nền mờ, các bước tìm thiết bị / đã kết nối / đọc cấu hình, thanh timeout) (completed nhưng chưa thử với mạch thật, 0.35.1)
+- fw: lúc khởi động gửi tín hiệu cho ESC trước rồi mới hiệu chỉnh gyro (sensors.esc_boot_wait); test motor kéo nhanh / về 0 phản ứng ngay (completed nhưng chưa thử trên mạch, 0.35.1)
 - osd: thêm 8 mục như betaflight (công suất, quãng đường, vĩ/kinh độ, thanh la bàn, thanh bên, G, thanh pin), bảng thống kê sau chuyến bay, tab OSD xem trước như trong kính (nền camera nghiêng theo máy, ký hiệu vẽ theo ô chữ, số liệu thật) (completed nhưng chưa thử với kính, 0.33)
 - msp: cổng MSP chung cho GPS / la bàn / khí áp kế / receiver / optical flow MSP (như ArduPilot), Betaflight Configurator / SpeedyBee đọc và sửa PID, rate, mode, map kênh, tên, lưu, khởi động lại; section msp (xưng là Betaflight / Windburst, cho phép sửa) (completed nhưng chưa thử, 0.33)
 - redesign ui app (khung carbon, panel, đèn báo arm, nhóm tab + icon, màn hẹp) + model 3d vẽ lại bằng WebGL (khung 2 tầng, stack, camera, pin, motor, cánh 3 lá) (completed, chỉ xem qua ảnh chụp trên PC)
@@ -65,6 +61,6 @@ Hoàn Thành:
 - thay ledc qua api bằng ledc_ll
 - thêm led máy bay... (completed nhưng chưa test) (cần update thêm mode nữa là manual, mode này sẽ để user nhập có bao nhiêu led, set led 1..2..N gán với chức năng nào hay chỉ cho dùng effect có sẵn như breathe, rainbow, v.v)
 
-Loại bỏ:
+not planned:
 - tăng tốc độ ghi của blackbox lên >1khz nếu khả thi
 - set pid/gyro loop ở 5000hz thì bị lock ở 4000hz và khi set trên ~5500hz thì không thể lên được nữa làm tôi thắc mắc rằng sao stm32 sử dụng betaflight có thể loop được 8khz

@@ -8,7 +8,7 @@
 // Error-state extended Kalman filter: attitude, velocity, position and the IMU's biases in ONE filter (0.9.0).
 //
 // Why another estimator. The rest of the firmware estimates in separate pieces: the attitude (ahrs.h, a Mahony filter), then the
-// position and velocity with that attitude taken as true (horizontal_est.h / vertical_est.h, linear Kalman filters). A heading
+// position and velocity with that attitude taken as true (nav/pos_estimator.h / nav/alt_estimator.h, linear Kalman filters). A heading
 // that is wrong - a compass disturbed by the motor current, as in the log of 2026-10-11 - is invisible to the position filter: it
 // rotates the measured acceleration the wrong way and blames the GPS. Here the attitude is a state of the same filter as the
 // velocity, and the correlation between them is kept: when the GPS velocity disagrees with what the accelerometer integrated

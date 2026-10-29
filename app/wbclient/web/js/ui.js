@@ -3,6 +3,7 @@
 import { store, on, fieldDef, fieldRange, setField, command } from './store.js';
 import { FIELDS, ENUM_LABELS, NOT_IMPLEMENTED, ERRORS } from './labels.js';
 import { tr } from './i18n.js';
+import { decodeText } from './anim.js';
 
 export function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
@@ -219,7 +220,7 @@ export function cmdButton(label, name, args, opts = {}) {
 // A value that follows a telemetry stream: readout('status', v => v.loop_us + ' µs')
 export function readout(stream, render, cls = 'num') {
   const el = h('span', { class: cls }, '–');
-  const up = (v) => { const t = render(v); if (t !== undefined && el.textContent !== t) el.textContent = t; };
+  const up = (v) => { const t = render(v); if (t !== undefined && el.textContent !== t) decodeText(el, t, el.textContent === '–'); };      // (the first value comes in decoded: anim.js)
   listen('stream:' + stream, up);
   if (store.streams[stream]) up(store.streams[stream]);
   return el;

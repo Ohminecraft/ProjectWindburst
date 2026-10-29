@@ -103,27 +103,34 @@ function motorTest() {
   const master = h('input', { type: 'range', min: 0, max: 100, step: 1, value: 0, id: 'test-all', disabled: true, 'aria-label': tr('Tất cả motor') });
   const masterVal = h('span', { class: 'num' }, '0 %');
   const stop = h('button', { type: 'button', class: 'btn danger', id: 'test-stop' }, tr('Dừng tất cả'));
-  let inputs = [], timer = null, sending = false, failed = false;
+  let inputs = [], timer = null, sending = false, failed = false, dirty = false, live = false;
 
   const zero = () => { values.fill(0); inputs.forEach((x) => { x.input.value = 0; x.val.textContent = '0 %'; }); master.value = 0; masterVal.textContent = '0 %'; };
   const enable = () => { const on = safe.checked && !store.armed; inputs.forEach((x) => { x.input.disabled = !on; }); master.disabled = !on; };
-  const halt = async () => { zero(); try { await command('MOTOR_STOP'); } catch (e) { /* not connected: nothing is spinning through us */ } };
+  const halt = async () => { zero(); live = false; try { await command('MOTOR_STOP'); } catch (e) { /* not connected: nothing is spinning through us */ } };
 
   // The firmware stops a motor that is not refreshed for 0.5 s, so a frozen page can never leave a motor running.
+  // A slider moved while a command is on its way is not dropped: the newest values go out as soon as that command is answered
+  // (dragged from 0 to 100 % in one go, the motor gets 100 % at once, not at the next 200 ms refresh). Brought back to 0, the
+  // motors are stopped at once (before 0.35.1 nothing was sent: they ran on at the old value until the 0.5 s timeout).
   async function tick() {
-    if (sending || !safe.checked) return;
+    if (!safe.checked) return;
+    if (sending) { dirty = true; return; }
     const count = n(), active = values.slice(0, count);
-    if (!active.some((v) => v > 0)) return;
-    sending = true;
+    const on = active.some((v) => v > 0);
+    if (!on && !live) return;
+    sending = true; dirty = false;
     try {
-      if (active.every((v) => v === active[0])) await command('MOTOR_TEST', { motor: 255, value: active[0] * 10 });
+      if (!on) await command('MOTOR_STOP');
+      else if (active.every((v) => v === active[0])) await command('MOTOR_TEST', { motor: 255, value: active[0] * 10 });
       else for (let i = 0; i < count; i++) await command('MOTOR_TEST', { motor: i, value: active[i] * 10 });
-      failed = false;
+      live = on; failed = false;
     } catch (e) {
       if (!failed) showError(e);
-      failed = true; zero();
+      failed = true; zero(); live = false;
     }
     sending = false;
+    if (dirty) tick();
   }
 
   const build = () => {

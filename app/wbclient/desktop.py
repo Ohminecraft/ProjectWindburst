@@ -13,6 +13,9 @@ import sys
 from .gui import GuiServer
 
 TITLE = "Windburst Configurator"
+# The page's own storage (theme, size, language, baud rate) belongs to its origin, port included: a new random port at every
+# start would forget it. A fixed port (or the next free of the 20 after it) keeps the same origin from one start to the next.
+DESKTOP_PORT = 48765
 
 
 def _storage_dir():
@@ -28,7 +31,7 @@ def run(log_dir=None, debug=False):
     except ImportError:
         sys.stderr.write("The desktop window needs pywebview (pip install pywebview); `python -m wbclient gui` opens the browser instead.\n")
         return 2
-    srv = GuiServer(http_port=0, log_dir=log_dir).start()
+    srv = GuiServer(http_port=DESKTOP_PORT, log_dir=log_dir).start()
     webview.settings["ALLOW_DOWNLOADS"] = True            # backups, CSV exports, downloaded logs: saved like in a browser
     win = webview.create_window(TITLE, srv.url, width=1440, height=920, min_size=(900, 600), background_color="#171c21", text_select=True)
 

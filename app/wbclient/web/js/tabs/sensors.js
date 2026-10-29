@@ -168,7 +168,7 @@ export default {
       h('div', {},
         block(tr('IMU và vòng điều khiển'),
           fields('general', ['board_align', 'board_trim_roll', 'board_trim_pitch', 'board_trim_yaw', 'loop_hz', 'pid_denom', 'est_hz', 'max_arm_angle', 'airmode', 'airmode_start_throttle']),
-          fields('sensors', ['gyro_use', 'imu2_align']),
+          fields('sensors', ['gyro_use', 'imu2_align', 'esc_boot_wait']),
           kv([[tr('IMU thứ hai'), h('span', { id: 'imu2-state' }, readout('sensors', (s) => imu2Text(s)))],
             [tr('Đang chạy'), h('span', { id: 'rates-now' }, readout('status', (s) => (s.pid_target ? tr('gyro {gyro} Hz, PID {pid} Hz', { gyro: s.loop_target, pid: s.pid_target }) : '–')))]]),
           note(tr('Các mục này có hiệu lực sau khi lưu và khởi động lại.'))),

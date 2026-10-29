@@ -549,8 +549,8 @@ def test_gps_rescue_brings_the_craft_home(sim, fc):
     """Failsafe procedure RESCUE with GPS + compass: arming rules, the flight home after a lost link, what the nav stream says."""
     fc.set("sensors", mag_enabled=True)
     fc.set("calibration", mag_valid=1, mag_radius=0.48)
-    nav = fc.set("nav", fs_procedure="RESCUE", rescue_initial_climb=5, rescue_min_start_dist=5, rescue_descent_dist=10)
-    assert nav["fs_procedure"] == "RESCUE" and nav["rescue_ground_speed"] == pytest.approx(7.5)
+    nav = fc.set("nav", fs_procedure="RESCUE", rescue_initial_climb=5, rescue_min_start_dist=5, rescue_return_alt=15)
+    assert nav["fs_procedure"] == "RESCUE" and nav["rescue_ground_speed"] == pytest.approx(7.5) and nav["rescue_mode"] == "RTL" and nav["rescue_alt_mode"] == "CONE"
     fc.save(); fc.reboot(); sim.sleep(1.5)
     fc.subscribe("nav", 20); fc.subscribe("status", 20); fc.subscribe("estimate", 10)
     st = fc.wait_stream("status")
@@ -567,15 +567,18 @@ def test_gps_rescue_brings_the_craft_home(sim, fc):
     assert "POS" in e["valid"] and "YAW_FROM_MAG" in e["valid"] and (e["pos_n"] ** 2 + e["pos_e"] ** 2) ** 0.5 == pytest.approx(out, abs=2.5)
     sim.do("tx off"); sim.sleep(1.5)
     n, st = fc.wait_stream("nav"), fc.wait_stream("status")
-    assert st["failsafe"] == "DESCENT" and st["fs_cause"] == ["LINK"] and "RESCUE" in n["flags"] and n["rescue_phase"] == "CLIMB" and n["return_alt"] == pytest.approx(z0 + 5, abs=1.0), (st, n)
-    seen = []
+    assert st["failsafe"] == "DESCENT" and st["fs_cause"] == ["LINK"] and "RESCUE" in n["flags"] and n["rescue_phase"] == "CLIMB" and n["return_alt"] == pytest.approx(15, abs=0.05), (st, n)
+    seen, left = [], []
     def phase():
-        p = fc.wait_stream("nav")["rescue_phase"]
+        v = fc.wait_stream("nav"); p = v["rescue_phase"]
         if not seen or seen[-1] != p:
             seen.append(p)
+        if p == "FLY_HOME":
+            left.append(v["rescue_left"])
         return fc.wait_stream("status")["armed"] == 0
-    assert _wait(sim, phase, 60.0, step=0.2), "still armed; phases %s, %s" % (seen, sim.state())
-    assert seen[:5] == ["CLIMB", "ROTATE", "FLY_HOME", "DESCENT", "LANDING"], seen
+    assert _wait(sim, phase, 90.0, step=0.2), "still armed; phases %s, %s" % (seen, sim.state())
+    assert seen[:5] == ["CLIMB", "FLY_HOME", "DESCENT", "LOITER", "LANDING"], seen          # (0.36: PX4 RTL)
+    assert left and left[0] == pytest.approx(out, abs=4.0) and left[-1] < left[0] - 15, "the way still to fly home, as the OSD shows it: %s" % left[:3]
     assert _dist(sim) < 2.0 and float(sim.state()["z"]) < 0.05, "landed %.1f m from the take-off point" % _dist(sim)
     sim.do("tx on"); sim.do("rc 5 1000"); sim.sleep(1.0)
     # back to LAND, with the craft switched on: the rescue arming rules go with it

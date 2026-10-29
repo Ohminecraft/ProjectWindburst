@@ -6,7 +6,7 @@
 #include <random>
 #include <vector>
 #include "../src/hal/range/range_base.h"
-#include "../src/core/vertical_est.h"
+#include "../src/core/nav/alt_estimator.h"
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(cond, ...) do { if (cond) g_pass++; else { g_fail++; printf("  FAIL line %d: %s   ", __LINE__, #cond); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -78,34 +78,34 @@ static void t_clearance() {
 // 1-D plant + the real Kalman filter: baro drifts, lidar available only below 3 m
 static void t_closed_loop() {
     printf("[kalman] baro drift corrected by the lidar; velocity must not ramp\n");
-    fc::VerticalEstimator kf; kf.reset(0); RangeHeight rh; rh.begin(0.04f, 4.0f); rh.cfg.ground_clearance_m = 0.06f; rh.reset();
+    fc::nav::AltEstimator kf; kf.reset(0); RangeHeight rh; rh.begin(0.04f, 4.0f); rh.cfg.ground_clearance_m = 0.06f; rh.reset();
     const float dt = 0.005f; float z = 2.0f, drift = 0, maxv = 0, maxe = 0; kf.reset(2.0f); uint32_t ms = 0;
     for (int i = 0; i < 24000; i++) {                                       // 2 min hovering at 2 m
         const float t = i * dt; ms = (uint32_t)(t * 1000);
         drift = 0.10f * t * 0.2f + 0.3f * sinf(t * 0.05f);                  // 2 cm/s walk + thermal swing
-        kf.predict(0.25f + gauss(0.3f), dt);                                // accel bias 0.25 m/s^2
+        kf.predict(-(0.25f + gauss(0.3f)), dt);                                // accel bias 0.25 m/s^2
         if (i % 4 == 0) kf.update_baro(z + drift + gauss(0.3f));
         if (i % 6 == 0) {
             RangeReading r; r.distance_m = (z + 0.06f) + gauss(0.02f); r.quality_pct = 90;
             if (rh.update(r, 1.0f, ms, true)) { kf.update_range(rh.height_m(), rh.sigma_m()); }
         }
-        if (t > 20) { maxv = fmaxf(maxv, fabsf(kf.state().v)); maxe = fmaxf(maxe, fabsf(kf.state().z - z)); }
+        if (t > 20) { maxv = fmaxf(maxv, fabsf(kf.climb_rate())); maxe = fmaxf(maxe, fabsf(kf.height() - z)); }
     }
     CHECK(maxe < 0.12f, "height error with a drifting baro: %.3f m", maxe);
     CHECK(maxv < 0.25f, "no velocity ramp while baro and lidar disagree: %.3f m/s", maxv);
     // climb above the lidar range: estimate continues on baro with the learned offset, no jump
-    float z_before = kf.state().z; float jump = 0, last = z_before; const float drift_at_loss = drift;
+    float z_before = kf.height(); float jump = 0, last = z_before; const float drift_at_loss = drift;
     for (int i = 0; i < 4000; i++) {
         const float t = 120 + i * dt; ms = (uint32_t)(t * 1000);
         z = 2.0f + fminf(i * dt * 0.8f, 5.0f);                               // up to 7 m (beyond the 3.6 m usable lidar range)
         drift = 0.10f * t * 0.2f + 0.3f * sinf(t * 0.05f);
-        kf.predict(gauss(0.3f) + 0.25f, dt);
+        kf.predict(-(gauss(0.3f) + 0.25f), dt);
         if (i % 4 == 0) kf.update_baro(z + drift + gauss(0.3f));
         if (i % 6 == 0) { RangeReading r; r.distance_m = z + 0.06f; r.quality_pct = 90; if (rh.update(r, 1.0f, ms, true)) kf.update_range(rh.height_m()); }
-        jump = fmaxf(jump, fabsf(kf.state().z - last - kf.state().v * dt) ); last = kf.state().z;
+        jump = fmaxf(jump, fabsf(kf.height() - last - kf.climb_rate() * dt) ); last = kf.height();
     }
     // with no drift-free source the remaining error is exactly the baro drift accrued since the lidar dropped out - nothing can observe it
-    CHECK(fabsf(kf.state().z - z) < fabsf(drift - drift_at_loss) + 0.3f, "above lidar range: error %.2f m vs drift accrued %.2f m (est %.2f true %.2f)", fabsf(kf.state().z - z), fabsf(drift - drift_at_loss), kf.state().z, z);
+    CHECK(fabsf(kf.height() - z) < fabsf(drift - drift_at_loss) + 0.3f, "above lidar range: error %.2f m vs drift accrued %.2f m (est %.2f true %.2f)", fabsf(kf.height() - z), fabsf(drift - drift_at_loss), kf.height(), z);
     CHECK(jump < 0.15f, "no jump when the lidar drops out: %.3f", jump);
 }
 

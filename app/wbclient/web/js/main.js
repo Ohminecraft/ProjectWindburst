@@ -1,10 +1,12 @@
 // Page chrome: connection bar (port, baud, language), arm-readiness line, save buttons, tab rail. The tabs live in js/tabs/.
-import { api } from './api.js';
+import { api, ApiError } from './api.js';
 import { store, on, loadSchema, loadSettings, reloadSection, wantStreams, pushStreams, flushAll, handleEvent } from './store.js';
 import { h, clear, toast, showError, disposeScope, errorText, failsafeText } from './ui.js';
 import { BLOCKERS } from './labels.js';
 import { tr, LANGS, getLang, setLang } from './i18n.js';
-import { THEMES, getTheme, setTheme } from './theme.js';
+import { THEMES, getTheme, setTheme, ZOOMS, getZoom, setZoom, stepZoom } from './theme.js';
+import { enterView } from './anim.js';
+import { BUDGET, linkIsOpen, linkOpen, linkStep, linkDone, linkSuccess, linkFail } from './linkbox.js';
 import overview from './tabs/overview.js';
 import receiver from './tabs/receiver.js';
 import modes from './tabs/modes.js';
@@ -66,6 +68,7 @@ const revertBtn = h('button', { type: 'button', class: 'btn quiet', id: 'revert'
 const banner = h('div', { class: 'banner', id: 'banner', hidden: true });
 const langSel = h('select', { id: 'lang', class: 'lang', 'aria-label': 'Ngôn ngữ / Language' }, Object.entries(LANGS).map(([k, name]) => h('option', { value: k }, name)));
 const themeSel = h('select', { id: 'theme', class: 'lang', 'aria-label': tr('Giao diện') }, Object.entries(THEMES).map(([k, name]) => h('option', { value: k }, name)));
+const zoomSel = h('select', { id: 'zoom', class: 'lang', 'aria-label': tr('Cỡ giao diện'), title: tr('Cỡ giao diện (Ctrl + / Ctrl - / Ctrl 0, hoặc Ctrl + lăn chuột)') }, ZOOMS.map((z) => h('option', { value: z }, z + ' %')));
 
 function buildBar() {
   $('bar').append(
@@ -80,6 +83,19 @@ function buildBar() {
   langSel.addEventListener('change', () => setLang(langSel.value));
   themeSel.value = getTheme();
   themeSel.addEventListener('change', () => setTheme(themeSel.value));
+  zoomSel.value = String(getZoom());
+  // Applied once more after the page is up: WebView2 (the desktop window) works out 100vh before the zoom set in index.html
+  // counts, and keeps that height until something changes the zoom - the frame came out too tall at start-up.
+  const rezoom = () => { const z = getZoom(); if (z !== 100) { const st = document.documentElement.style; st.removeProperty('zoom'); void document.body.offsetHeight; setZoom(z); } };
+  requestAnimationFrame(() => requestAnimationFrame(rezoom)); window.addEventListener('load', rezoom, { once: true });
+  zoomSel.addEventListener('change', () => setZoom(Number(zoomSel.value)));
+  const zoomBy = (dir) => { zoomSel.value = String(setZoom(dir ? stepZoom(getZoom(), dir) : 100)); };
+  window.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (e.key === '+' || e.key === '=') zoomBy(1); else if (e.key === '-' || e.key === '_') zoomBy(-1); else if (e.key === '0') zoomBy(0); else return;
+    e.preventDefault();
+  });
+  window.addEventListener('wheel', (e) => { if (!e.ctrlKey) return; e.preventDefault(); zoomBy(e.deltaY < 0 ? 1 : -1); }, { passive: false });
   refreshBtn.addEventListener('click', () => refreshPorts());
   portSel.addEventListener('change', pickCustom);
   baudSel.addEventListener('change', () => { try { localStorage.setItem('wb-baud', baudSel.value); } catch (e) { /* not remembered */ } });
@@ -137,12 +153,16 @@ async function refreshPorts(force, quiet) {
 async function connect() {
   if (!portSel.value || portSel.value === '__custom__') { toast(tr('Chưa có cổng nào để kết nối. Cắm cáp USB rồi bấm "Tìm cổng".'), 'warn'); return; }
   busy = true; lastFailure = null; paintBar();
+  const port = portSel.value;
+  linkOpen(port);
+  // (a bar that runs out is shown at once; the server's own answer follows and gives the reason)
+  linkStep('find', tr('Đang tìm thiết bị trên {port}…', { port }), BUDGET.find, () => linkFail(tr('Hết thời gian: không có firmware Windburst nào trả lời trên cổng này.'), true));
   try {
-    try { localStorage.setItem('wb-port', portSel.value); } catch (e) { /* not remembered */ }
-    await api.post('/api/connect', { port: portSel.value, baud: Number(baudSel.value) || 115200 });
+    try { localStorage.setItem('wb-port', port); } catch (e) { /* not remembered */ }
+    await api.post('/api/connect', { port, baud: Number(baudSel.value) || 115200 });
   } catch (e) {
     lastFailure = e;
-    showError(e);
+    linkFail(errorText(e), e.code === 'NO_ANSWER');
     if (!store.conn.connected) show(current);
   }
   busy = false; paintBar();
@@ -255,7 +275,7 @@ function buildRail() {
     tabs.forEach(add);
   }
   TABS.filter((t) => !placed.has(t.id)).forEach(add);          // (a tab nobody put in a group still gets its place)
-  $('rail').append(h('div', { class: 'rail-foot' }, themeSel, langSel));       // language: at the foot of the rail, out of the way of the status bar
+  $('rail').append(h('div', { class: 'rail-foot' }, themeSel, zoomSel, langSel));       // language: at the foot of the rail, out of the way of the status bar
 }
 function tabFromHash() {
   const id = location.hash.replace('#', '');
@@ -263,8 +283,11 @@ function tabFromHash() {
 }
 function show(id) {
   disposeScope();
+  // which way the new tab lies on the rail from the old one: it slides in from that side (anim.js)
+  const order = [...$('rail').querySelectorAll('a.tab')].map((a) => a.dataset.tab), dir = current ? Math.sign(order.indexOf(id) - order.indexOf(current)) : 0;
   current = id;
-  const view = clear($('view'));
+  const view = clear($('view')); view.scrollTop = 0;
+  enterView(view, dir);
   for (const a of $('rail').querySelectorAll('a.tab')) { a.classList.toggle('active', a.dataset.tab === id); a.setAttribute('aria-current', a.dataset.tab === id ? 'page' : 'false'); }
   const tab = TABS.find((x) => x.id === id);
   document.title = `${tab.title} - Windburst`;
@@ -321,13 +344,28 @@ async function onConn({ before }) {
     lastFailure = null;
     refreshPorts(true);                   // a page opened on an existing connection shows the port that is in use
     settingsReady = false; show(current);
+    // (also when the page opens on a link that is already up, or the port came back by itself: the box starts at "connected")
+    if (!linkIsOpen()) linkOpen(c.port);
+    linkDone('find', tr('Đã tìm thấy thiết bị'));
+    linkDone('link', c.info ? tr('Đã kết nối: {fw}', { fw: `${c.info.name} ${c.info.version}` }) : tr('Đã kết nối'));
+    let late = 0;
+    linkStep('read', tr('Đang đọc cấu hình…'), BUDGET.read);
     try {
-      await loadSettings();
+      await Promise.race([loadSettings(), new Promise((_, no) => { late = setTimeout(() => no(new ApiError('READ_TIMEOUT', tr('Hết thời gian: không đọc được cấu hình từ thiết bị.'))), BUDGET.read); })]);
+      clearTimeout(late);
       settingsReady = true;
+      linkSuccess(tr('Đã đọc cấu hình'));
       wantStreams('global', { status: 10, rc: 5 });
       await pushStreams(true);
       show(current);
-    } catch (e) { showError(e); }
+    } catch (e) {
+      clearTimeout(late);
+      if (!store.conn.connected) { linkFail(errorText(e)); return; }
+      // a board whose settings can not be read is of no use to the page: let go of it, the welcome screen says why
+      lastFailure = e;
+      linkFail(errorText(e), e.code === 'READ_TIMEOUT');
+      disconnect();
+    }
   }
 }
 

@@ -1032,7 +1032,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.33.4" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.36.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -1682,7 +1682,7 @@ static void t_nav_uarts() {
 
 
 static void gps_compass(wbp::Settings& s, VirtualBoard&) { s.sensors.mag_enabled = 1; s.calibration.mag_valid = 1; s.calibration.mag_radius = 0.48f; }
-static void rescue_setup(wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.nav.fs_procedure = FS_PROCEDURE_RESCUE; s.nav.rescue_initial_climb = 5; s.nav.rescue_min_start_dist = 5; s.nav.rescue_descent_dist = 10; }
+static void rescue_setup(wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.nav.fs_procedure = FS_PROCEDURE_RESCUE; s.nav.rescue_initial_climb = 5; s.nav.rescue_min_start_dist = 5; s.nav.rescue_return_alt = 15; }
 // Take off, climb to about 5 m, fly north for `out_s` seconds with the stick at 0.6, stop.
 static void fly_out(Rig& r, double out_s = 6.0) {
     VirtualBoard& b = r.board; b.rc[5] = 2000; b.rc[6] = 2000; r.run(0.3); b.rc[4] = 2000; r.run(0.5); b.rc[2] = 1800; r.run(6.0); b.rc[2] = 1500; r.run(2.0);
@@ -1691,12 +1691,12 @@ static void fly_out(Rig& r, double out_s = 6.0) {
 struct RescueSeen { std::string order; float max_z = 0, t = 0, yaw_err_fly = 0, closest = 1e9f; };
 // Runs until the craft is disarmed (or `timeout` s): the order of the rescue phases, the highest point, how well the nose pointed home on the way.
 static void rescue_watch(Rig& r, double timeout, RescueSeen& s, bool until_disarm = true) {
-    static const char* names[] = {"IDLE", "CLIMB", "ROTATE", "FLY_HOME", "DESCENT", "LANDING", "FAILED"}; int last = -1; double fly_t = 0;
+    static const char* names[] = {"IDLE", "CLIMB", "ROTATE", "FLY_HOME", "DESCENT", "LANDING", "FAILED", "LOITER"}; int last = -1; double fly_t = 0;
     for (double t = 0; t < timeout; t += 0.05) {
         r.run(0.05); s.t += 0.05f; const app::Telemetry& tl = r.tel(); const Plant& p = r.board.plant;
-        if (tl.rescue_phase != last) { last = tl.rescue_phase; if (!s.order.empty()) s.order += " "; s.order += names[last < 7 ? last : 0]; fly_t = 0; }
+        if (tl.rescue_phase != last) { last = tl.rescue_phase; if (!s.order.empty()) s.order += " "; s.order += names[last < 8 ? last : 0]; fly_t = 0; }
         s.max_z = fmaxf(s.max_z, p.z); s.closest = fminf(s.closest, hypotf(p.pn, p.pe));
-        if (last == RESCUE_PHASE_FLY_HOME) { fly_t += 0.05; if (fly_t > 1.5 && hypotf(p.pn, p.pe) > 15.0f) { float e = p.yaw_deg() - atan2f(-p.pe, -p.pn) * fc::kRad2Deg; while (e > 180) e -= 360; while (e < -180) e += 360; s.yaw_err_fly = fmaxf(s.yaw_err_fly, fabsf(e)); } }
+        if (last == RESCUE_PHASE_FLY_HOME) { fly_t += 0.05; if (fly_t > 3.5 && hypotf(p.pn, p.pe) > 10.0f) { float e = p.yaw_deg() - atan2f(-p.pe, -p.pn) * fc::kRad2Deg; while (e > 180) e -= 360; while (e < -180) e += 360; s.yaw_err_fly = fmaxf(s.yaw_err_fly, fabsf(e)); } }
         if (until_disarm && !tl.armed) break;
     }
 }
@@ -1744,12 +1744,12 @@ static void t_nav_gps() {
       fly_out(*r); const float d0 = hypotf(b.plant.pn, b.plant.pe), z0 = b.plant.z;
       CHECK(d0 > 30.0f && z0 > 3.0f && nav_now(*r, n) && (n.flags & NAV_FLAGS_RESCUE_AVAILABLE) && !(n.flags & NAV_FLAGS_RESCUE) && fabsf(n.home_dist * 0.1f - d0) < 2.0f, "flown %.0f m north, %.1f m up; nav stream: a rescue is possible, home is %.1f m away", d0, z0, n.home_dist * 0.1);
       b.tx_on = false; r->run(1.5);
-      CHECK(r->tel().failsafe == FAILSAFE_DESCENT && status_now(*r, st) && st.fs_cause == FS_CAUSE_LINK && nav_now(*r, n) && (n.flags & NAV_FLAGS_RESCUE) && n.rescue_phase == RESCUE_PHASE_CLIMB && fabsf(n.return_alt * 0.1f - (z0 + 5.0f)) < 1.0f,
-            "transmitter off: failsafe (cause LINK) starts the rescue - climbing to %.1f m (highest point of the flight + 5)", n.return_alt * 0.1);
+      CHECK(r->tel().failsafe == FAILSAFE_DESCENT && status_now(*r, st) && st.fs_cause == FS_CAUSE_LINK && nav_now(*r, n) && (n.flags & NAV_FLAGS_RESCUE) && n.rescue_phase == RESCUE_PHASE_CLIMB && fabsf(n.return_alt * 0.1f - 15.0f) < 0.05f,
+            "transmitter off: failsafe (cause LINK) starts the rescue - climbing to %.1f m (the cone: further out than rescue_min_start_dist, so rescue_return_alt)", n.return_alt * 0.1);
       RescueSeen s; rescue_watch(*r, 90.0, s);
-      CHECK(s.order == "CLIMB ROTATE FLY_HOME DESCENT LANDING IDLE", "phases: %s", s.order.c_str());
-      CHECK(!r->tel().armed && b.plant.z < 0.05f && hypotf(b.plant.pn, b.plant.pe) < 1.5f && s.t < 45.0f && b.motor_frac[0] == 0, "landed %.2f m from where it took off, %.0f s after the link was lost; disarmed, motors off", hypotf(b.plant.pn, b.plant.pe), s.t + 1.6f);
-      CHECK(s.max_z > z0 + 4.0f && s.max_z < z0 + 6.5f && s.yaw_err_fly < 15.0f, "it climbed to %.1f m first and flew home nose first (never more than %.0f deg off)", s.max_z, s.yaw_err_fly);
+      CHECK(s.order == "CLIMB FLY_HOME DESCENT LOITER LANDING IDLE", "phases (PX4 RTL): %s", s.order.c_str());
+      CHECK(!r->tel().armed && b.plant.z < 0.05f && hypotf(b.plant.pn, b.plant.pe) < 1.5f && s.t < 60.0f && b.motor_frac[0] == 0, "landed %.2f m from where it took off, %.0f s after the link was lost; disarmed, motors off", hypotf(b.plant.pn, b.plant.pe), s.t + 1.6f);
+      CHECK(s.max_z > 14.4f && s.max_z < 16.5f && s.yaw_err_fly < 15.0f, "it climbed to %.1f m first and flew home nose first once it had turned (never more than %.0f deg off after 3.5 s)", s.max_z, s.yaw_err_fly);
       b.tx_on = true; r->run(1.5); CHECK(!r->tel().armed && r->tel().blockers, "link back with the arm switch still on: stays disarmed"); }
     { // the link comes back on the way home: the rescue goes on until the pilot moves a stick
       auto r = nav_rig(rescue_setup, false); VirtualBoard& b = r->board; T_nav n{}; r->run(6.0); fly_out(*r);
@@ -1761,7 +1761,7 @@ static void t_nav_gps() {
       const float lean0 = b.plant.nose_down_deg(); b.rc[1] = 1800; r->run(1.5);
       CHECK(fabsf(lean0) < 3.0f && b.plant.nose_down_deg() > 10.0f, "it was level; stick forwards: the nose goes down (%.1f deg)", b.plant.nose_down_deg()); }
     { // RESCUE on a switch
-      auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.modes.mode[4] = MODE_RESCUE; s.modes.aux[4] = 4; s.modes.lo[4] = 1700; s.modes.hi[4] = 2100; s.nav.rescue_initial_climb = 5; s.nav.rescue_min_start_dist = 5; }, false);
+      auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.modes.mode[4] = MODE_RESCUE; s.modes.aux[4] = 4; s.modes.lo[4] = 1700; s.modes.hi[4] = 2100; s.nav.rescue_initial_climb = 5; s.nav.rescue_min_start_dist = 5; s.nav.rescue_return_alt = 15; }, false);
       VirtualBoard& b = r->board; T_nav n{}; r->run(1.5);
       CHECK(r->tel().blockers & ARM_BLOCKER_RESCUE_NO_FIX, "RESCUE on a switch counts as 'a rescue is set up': no arming without a fix");
       r->run(4.5); fly_out(*r); b.rc[8] = 2000; r->run(1.0);
@@ -1772,8 +1772,8 @@ static void t_nav_gps() {
       // the GPS dies during a rescue the pilot switched on: it gives up, and the pilot (who is there) has the craft
       b.rc[8] = 2000; r->run(3.0); const bool again = nav_now(*r, n) && (n.flags & NAV_FLAGS_RESCUE); b.gps.responds = false; for (int i = 0; i < 400 && r->tel().rescue_phase != RESCUE_PHASE_FAILED; i++) r->run(0.05);
       r->run(3.0);
-      CHECK(again && nav_now(*r, n) && n.rescue_phase == RESCUE_PHASE_FAILED && n.rescue_fail != RESCUE_FAIL_NONE && !(n.flags & NAV_FLAGS_RESCUE) && r->tel().armed && r->tel().failsafe == FAILSAFE_NONE && b.plant.z > 3.0f && fabsf(b.plant.nose_down_deg()) < 3.0f,
-            "GPS module dead during a rescue on the switch: the rescue gives up (reason %u) and the pilot has the craft, level in Altitude Hold at %.1f m", n.rescue_fail, b.plant.z);
+      CHECK(again && nav_now(*r, n) && n.rescue_phase == RESCUE_PHASE_FAILED && n.rescue_fail != RESCUE_FAIL_NONE && !(n.flags & NAV_FLAGS_RESCUE) && r->tel().armed && r->tel().failsafe == FAILSAFE_NONE && b.plant.z > 3.0f && fabsf(b.plant.nose_down_deg()) < 6.0f,
+            "GPS module dead during a rescue on the switch: the rescue gives up (reason %u) and the pilot has the craft, level in Altitude Hold at %.1f m (%.1f deg nose up: the GPS died while the path accelerated the craft, and without it the attitude estimate settles slowly)", n.rescue_fail, b.plant.z, -b.plant.nose_down_deg());
       b.rc[0] = 1750; r->run(1.5); CHECK(b.plant.right_down_deg() > 8.0f, "the sticks work (%.1f deg)", b.plant.right_down_deg()); }
     { // ... and during a rescue the failsafe started: nobody is there, so it lands where it is
       auto r = nav_rig(rescue_setup, false); VirtualBoard& b = r->board; r->run(6.0); fly_out(*r);
@@ -1837,6 +1837,45 @@ static std::vector<CrsfOut> crsf_out(const std::vector<uint8_t>& b, int& bad) {
 }
 static int be16(const std::vector<uint8_t>& p, int o) { return (int16_t)((p[o] << 8) | p[o + 1]); }
 static uint32_t be32(const std::vector<uint8_t>& p, int o) { return ((uint32_t)p[o] << 24) | ((uint32_t)p[o + 1] << 16) | ((uint32_t)p[o + 2] << 8) | p[o + 3]; }
+
+// 0.34.0 (nav rewrite P0): what the navigation stack is fed, as the blackbox's NAV_DEBUG group shows it
+static void t_nav_log() {
+    printf("[nav log] the navigation inputs at rest and in a climb: NED acceleration, vibration, baro, GPS\n");
+    auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); }, false); VirtualBoard& b = r->board;
+    r->run(6.0);
+    const fc::nav::Log& l = r->app().core.navlog();
+    CHECK(fabsf(l.acc_ned[0]) < 0.3f && fabsf(l.acc_ned[1]) < 0.3f && fabsf(l.acc_ned[2]) < 0.3f && l.clip == 0 && l.vib < 0.5f,
+          "standing: acceleration %.2f / %.2f / %.2f m/s^2 (gravity taken away), vibration %.2f, nothing clipped", l.acc_ned[0], l.acc_ned[1], l.acc_ned[2], l.vib);
+    CHECK(l.gps_seq == 0 && l.gps_flags == 0, "no GPS before a home point is set (at arming): the estimators get none");
+    b.rc[7] = 2000; float up_max = 0; b.rc[5] = 2000; b.rc[6] = 2000; r->run(0.3); b.rc[4] = 2000; r->run(0.5); b.rc[2] = 1800;
+    for (int i = 0; i < 1500; i++) { r->run(0.001); up_max = fmaxf(up_max, -l.acc_ned[2]); }
+    b.rc[2] = 1500; r->run(4.0);
+    CHECK(up_max > 1.0f, "taking off: the acceleration goes up (down negative: %.1f m/s^2 up at most)", up_max);
+    CHECK(r->tel().armed && b.plant.z > 0.3f && fabsf(l.baro_alt - b.plant.z) < 0.6f && fabsf(l.acc_ned[2]) < 1.0f,
+          "hovering at %.1f m: the barometer says %.2f m, the acceleration %.2f m/s^2", b.plant.z, l.baro_alt, l.acc_ned[2]);
+    CHECK((l.gps_flags & 1) && (l.gps_flags & 4) && l.gps_sats > 4 && fabsf(l.gps_pos[0] - b.plant.pn) < 3.0f && fabsf(l.gps_pos[1] - b.plant.pe) < 3.0f && l.gps_hacc > 0 && hypotf(l.gps_vel[0], l.gps_vel[1]) < 0.5f,
+          "GPS: a fix used for XY, %u satellites, %.1f / %.1f m from home (true %.1f / %.1f), accuracy %.1f m", l.gps_sats, l.gps_pos[0], l.gps_pos[1], b.plant.pn, b.plant.pe, l.gps_hacc);
+    const uint8_t seq0 = l.gps_seq; r->run(2.0); const int fixes = (uint8_t)(l.gps_seq - seq0);
+    CHECK(fixes >= 8 && fixes <= 30, "the fix counter steps with every fix: %d in 2 s", fixes);
+    b.rc[1] = 1750; r->run(2.5); b.rc[1] = 1500; r->run(3.0);
+    CHECK(hypotf(b.plant.pn, b.plant.pe) > 2.0f && fabsf(l.gps_pos[0] - b.plant.pn) < 2.0f && fabsf(l.gps_pos[1] - b.plant.pe) < 2.0f,
+          "flown forwards: the GPS position follows (%.1f / %.1f m, true %.1f / %.1f)", l.gps_pos[0], l.gps_pos[1], b.plant.pn, b.plant.pe);
+}
+
+// 0.35.1: at power-up the ESCs get their signal first (start-up tones, arming), the gyro is calibrated after
+static void t_esc_boot_wait() {
+    printf("[esc boot wait] the motor outputs start first, the gyro calibration waits for the ESCs\n");
+    for (int bidir = 0; bidir < 2; bidir++) {
+        g_stub_us = 0; g_stub_delay_advances = true; Rig r; r.provision();
+        { wbp::Settings s; wbp::SettingsStore st(r.flash); st.load(s); s.sensors.esc_boot_wait = 20; s.motors.protocol = ESC_PROTOCOL_DSHOT600; s.motors.bidirectional = (uint8_t)bidir; st.save(s); }
+        r.boot(); float t_start = -1;
+        for (int i = 0; i < 400 && t_start < 0; i++) { r.run(0.01); if (r.tel().cal_state == CAL_STATE_RUNNING || r.tel().cal_state == CAL_STATE_DONE) t_start = 0.01f * (i + 1); }
+        const bool line = bidir ? has_line(r, "(every ESC answered)") : has_line(r, "gyro: calibration started 2000 ms after the motor outputs (ESC start-up time)");
+        if (!bidir) CHECK(t_start > 1.9f && t_start < 2.2f && line, "plain DShot: the calibration starts after the 2 s of ESC start-up (%.2f s), the boot report says why", t_start);
+        else CHECK(t_start > 0.4f && t_start < 1.2f && line, "bidirectional DShot: as soon as every ESC answers + 0.5 s (%.2f s)", t_start);
+        r.run(1.5); CHECK(r.tel().cal_state == CAL_STATE_DONE && r.tel().blockers == 0, "then calibrated, nothing blocks arming (0x%x)", r.tel().blockers);
+    }
+}
 
 static void t_gps_baud() {
     printf("[gps baud] a module found at the rate it has and switched to the one in the settings (115200 by default)\n");
@@ -2309,6 +2348,18 @@ static void t_osd() {
         const osd::Stats& sts = r->app().osd_.stats();
         CHECK(!r->tel().armed && r->app().osd_.showing_stats() && dp_has(scr, "--- STATS ---") && !dp_has(scr, "DISARMED") && sts.max_alt_m > 0.5f && sts.fly_s >= 4,
               "disarmed after the flight: the statistics screen (max altitude %.1f m, %u s)", sts.max_alt_m, (unsigned)sts.fly_s); }
+    {   // 0.36: a rescue that flies - the mode RTL, and on the warning line the metres still to fly home (as the nav stream says)
+        auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.modes.mode[4] = MODE_RESCUE; s.modes.aux[4] = 4; s.modes.lo[4] = 1700; s.modes.hi[4] = 2100; s.nav.rescue_min_start_dist = 5; s.nav.rescue_return_alt = 15; });
+        VirtualBoard& b = r->board; T_nav n{}; int bad = 0; r->run(6.0); fly_out(*r); b.rc[8] = 2000;
+        for (int i = 0; i < 400 && r->tel().rescue_phase != RESCUE_PHASE_FLY_HOME; i++) r->run(0.05);
+        r->run(2.0); b.tlm_wire.sent.clear(); r->run(0.5); auto scr = dp_screen(dp_read(b.tlm_wire.sent, bad));
+        const bool got = nav_now(*r, n); const int left = (int)lroundf(n.rescue_left * 0.1f); int shown = -1; std::string line;
+        for (auto& l : scr) { const size_t k = l.find("RTL "); if (k != std::string::npos && isdigit((unsigned char)l[k + 4])) { shown = atoi(l.c_str() + k + 4); line = l; } }
+        CHECK(got && (n.flags & NAV_FLAGS_RESCUE) && left > 10 && shown >= 0 && abs(shown - left) <= 8 && line.back() == 'M' && dp_has(scr, ":RTL"),
+              "rescue on the way home: the mode RTL, the warning line '%s' (the nav stream: %d m still to fly)", line.c_str(), left);
+        b.rc[8] = 1000; r->run(0.3); b.tlm_wire.sent.clear(); r->run(0.5); scr = dp_screen(dp_read(b.tlm_wire.sent, bad));
+        bool any = false; for (auto& l : scr) if (l.find("RTL") != std::string::npos) any = true;
+        CHECK(!any, "switched off: gone from the screen"); }
     {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.telemetry.protocol = TELEMETRY_PROTOCOL_MAVLINK; s.telemetry.tx_pin = 38; s.telemetry.wifi = 0; });
         CHECK(has_line(*r, "osd: MSP DisplayPort on UART0") && has_line(*r, "telemetry: FAILED - no UART left (GPS, receiver, flow sensor, ESC wire and OSD have them)"), "OSD and MAVLink both on AUTO: the OSD has the last UART"); }
     {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.ports.assign = PORT_ASSIGN_TABLE; s.ports.function[0] = PORT_FUNCTION_NONE; s.ports.function[1] = PORT_FUNCTION_GPS; s.ports.function[2] = PORT_FUNCTION_SERIAL_RX; });
@@ -2827,6 +2878,8 @@ int main() {
     if (const char* only = getenv("WB_ONLY")) {            // one group alone (while working on it): WB_ONLY=nav ./build/test_fw
         if (!strcmp(only, "nav")) { t_nav_flow(); t_nav_mounting(); t_nav_uarts(); }
         if (!strcmp(only, "gps")) t_nav_gps();
+        if (!strcmp(only, "navlog")) t_nav_log();
+        if (!strcmp(only, "escwait")) t_esc_boot_wait();
         if (!strcmp(only, "servo")) t_servo();
         if (!strcmp(only, "current")) t_current();
         if (!strcmp(only, "receivers")) t_receivers();
@@ -2878,7 +2931,7 @@ int main() {
     t_blackbox(); t_log_stage_times();
     t_blackbox_card();
     t_pins_and_load();
-    t_nav_flow(); t_nav_mounting(); t_nav_uarts(); t_nav_gps();
+    t_nav_flow(); t_nav_mounting(); t_nav_uarts(); t_nav_gps(); t_nav_log(); t_esc_boot_wait();
     t_servo();
     t_current();
     t_receivers();

@@ -33,6 +33,16 @@ static void t_elements() {
     CHECK(text(E_CURRENT, s) == "12.35" + sym({SYM_AMP}) && text(E_MAH, s) == "1234" + sym({SYM_MAH}), "current, mAh");
     s.mode = MODE_ALTHOLD; CHECK(text(E_MODE, s) == "ALTH", "flight mode");
     s.failsafe = true; CHECK(text(E_MODE, s) == "!FS!", "failsafe wins"); s.failsafe = false;
+    // 0.36: a rescue that flies - ArduPilot's mode names, and on the warning line the way still to fly home
+    { State r = s; char w[24];
+      r.rescue = RESC_RTL; r.rescue_left_m = 123.4f; rescue_text(r, w, sizeof(w)); CHECK(text(E_MODE, r) == "RTL" && std::string(w) == "RTL 123M", "RTL on the way: mode RTL, '%s'", w);
+      r.rescue = RESC_SMART_RTL; rescue_text(r, w, sizeof(w)); CHECK(text(E_MODE, r) == "SRTL" && std::string(w) == "SRTL 123M", "SmartRTL: SRTL, '%s' (along the way it came)", w);
+      r.rescue_stage = RSTAGE_HOME; rescue_text(r, w, sizeof(w)); const std::string home = w; r.rescue_stage = RSTAGE_LANDING; rescue_text(r, w, sizeof(w));
+      CHECK(home == "SRTL HOME" && std::string(w) == "SRTL LAND", "over home: '%s', then '%s'", home.c_str(), w);
+      r.rescue = RESC_LAND; r.alt_valid = true; r.alt_m = 12.4f; rescue_text(r, w, sizeof(w)); const std::string land = w; r.alt_valid = false; rescue_text(r, w, sizeof(w));
+      CHECK(text(E_MODE, r) == "LAND" && land == "LAND 12M" && std::string(w) == "LAND", "LAND: the height still to come down ('%s'; without a height '%s')", land.c_str(), w);
+      r.rescue = RESC_RTL; r.rescue_stage = RSTAGE_WAY; r.rescue_left_m = 1e6f; rescue_text(r, w, sizeof(w)); CHECK(std::string(w) == "RTL 65000M", "never more digits than fit (%s)", w);
+      r.failsafe = true; CHECK(text(E_MODE, r) == "!FS!", "a failsafe rescue: the mode says !FS! (the warning line says RTL)"); }
     CHECK(text(E_NAME, s) == "WINDBURST", "craft name");
     s.fly_s = 125; s.on_s = 3599; CHECK(text(E_FLY_TIME, s) == sym({SYM_FLY_M}) + "02:05" && text(E_ON_TIME, s) == sym({SYM_ON_M}) + "59:59", "timers mm:ss");
     s.rc_link = true; s.rssi_pct = 100; CHECK(text(E_RSSI, s) == sym({SYM_LINK_QUALITY}) + "99", "link quality, at most 99");

@@ -63,6 +63,9 @@ constexpr uint8_t kAttrBlink = 0x40;                  // DISPLAYPORT_MSP_ATTR_BL
 constexpr int kMaxString = 30;                        // MSP_OSD_MAX_STRING_LENGTH
 
 enum Mode : uint8_t { MODE_ACRO, MODE_ANGLE, MODE_STAB, MODE_ALTHOLD, MODE_POSHOLD, MODE_RESCUE };
+// a GPS Rescue that flies (nav.rescue_mode + 1), and where it is: on the way home, over home (coming down, waiting), landing
+enum RescueShown : uint8_t { RESC_NONE, RESC_RTL, RESC_SMART_RTL, RESC_LAND };
+enum RescueStage : uint8_t { RSTAGE_WAY, RSTAGE_HOME, RSTAGE_LANDING };
 
 // What is shown, in the units it is shown in (metric)
 struct State {
@@ -84,6 +87,7 @@ struct State {
     float g_force = 1.0f;                             // length of the measured acceleration, g
     uint8_t batt_remaining = 255;                     // % of the pack left; 255 = unknown
     float dist_m = 0;                                 // distance flown since arming (ground track)
+    uint8_t rescue = RESC_NONE, rescue_stage = RSTAGE_WAY; float rescue_left_m = 0;     // the way the rescue still has to fly home (m)
 };
 
 // Betaflight's statistics of one flight (osd.c statistic_t)
@@ -126,8 +130,19 @@ inline uint8_t direction_symbol(float deg) {           // osdGetDirectionSymbolF
 }
 inline const char* mode_name(const State& s) {
     if (s.failsafe) return "!FS!";
+    if (s.rescue) { static const char* const r[] = {"", "RTL", "SRTL", "LAND"}; return s.rescue <= RESC_LAND ? r[s.rescue] : "RESC"; }    // (ArduPilot's mode names)
     static const char* const n[] = {"ACRO", "ANGL", "STAB", "ALTH", "POSH", "RESC"};
     return s.mode < 6 ? n[s.mode] : "ACRO";
+}
+// The warning line while a rescue flies (it comes before every other warning: the failsafe that started it shows in the mode):
+// "RTL 123M" on the way - the metres still to fly home, along the way it flies (SmartRTL: the way the flight came) -, "RTL HOME"
+// over home (coming down, waiting), "RTL LAND" landing; LAND: "LAND 12M", the height still to come down
+inline void rescue_text(const State& s, char* b, size_t cap) {
+    const char* n = s.rescue == RESC_SMART_RTL ? "SRTL" : s.rescue == RESC_LAND ? "LAND" : "RTL";
+    if (s.rescue == RESC_LAND) { if (s.alt_valid) snprintf(b, cap, "LAND %uM", (unsigned)lroundf(s.alt_m > 0 ? s.alt_m : 0.0f)); else snprintf(b, cap, "LAND"); return; }
+    if (s.rescue_stage == RSTAGE_LANDING) snprintf(b, cap, "%s LAND", n);
+    else if (s.rescue_stage == RSTAGE_HOME) snprintf(b, cap, "%s HOME", n);
+    else snprintf(b, cap, "%s %uM", n, (unsigned)lroundf(s.rescue_left_m > 0 ? (s.rescue_left_m < 65000.0f ? s.rescue_left_m : 65000.0f) : 0.0f));
 }
 inline void mmss(char* b, size_t cap, uint8_t sym, uint32_t sec) { snprintf(b, cap, "%c%02u:%02u", sym, (unsigned)(sec / 60u % 100u), (unsigned)(sec % 60u)); }
 

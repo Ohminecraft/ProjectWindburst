@@ -142,7 +142,7 @@ public:
     }
     WB_FAST void log_fast(FastSample& s) {
         s.gap_us = gap_max_; gap_max_ = 0;
-        uint8_t rec[192];                                   // largest fast record: 1 + 4 + 143 bytes with every group and 8 motors (test_blackbox)
+        uint8_t rec[224];                                   // largest fast record: 1 + 4 + 186 bytes with every group and 8 motors (test_blackbox)
         rec[0] = 'F';
         const uint16_t n = pack_fast(plan_, s, rec + 1);
         ring_.push(rec, (uint8_t)(n + 1));

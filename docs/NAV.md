@@ -65,15 +65,49 @@ Bộ điều khiển vị trí là tầng của `AC_PosControl`: sai lệch vị
 
 ## 4. GPS Rescue
 
-Trình tự của Betaflight (`flight/gps_rescue.c`):
+Từ 0.36 rescue bay như ArduPilot và PX4. Code viết lại sau khi đọc nguồn của họ: PX4 `navigator/rtl.cpp` (`computeReturnAltitude`) và `rtl_direct.cpp`; ArduCopter `mode_rtl.cpp`, `mode_smart_rtl.cpp`, `mode_land.cpp` và `libraries/AP_SmartRTL`. Ô **"Kiểu rescue"** (`nav.rescue_mode`) có 3 lựa chọn.
 
-1. **Leo** tới độ cao bay về: điểm cao nhất của chuyến bay + "Leo thêm" (mặc định), hoặc độ cao cố định, hoặc độ cao hiện tại + "Leo thêm". Vài mét cuối leo chậm lại để không vọt qua.
-2. **Quay mũi** về điểm cất cánh (máy đứng tại chỗ trong lúc quay).
-3. **Bay về** với "Tốc độ bay về", chậm dần trong 2 × "Bắt đầu hạ khi cách home" cuối.
-4. **Hạ dần** khi còn cách home dưới mức đó: trên cao hạ nhanh (tới 3 lần "Tốc độ hạ"), gần đất hạ chậm.
-5. **Hạ cánh**: dưới "Độ cao bắt đầu hạ chậm"; chạm đất thì motor tắt và máy disarm.
+**Bay về (RTL)**, mặc định:
 
-Bắt đầu gần home hơn "Khoảng cách tối thiểu để bay về": leo lên rồi hạ tại chỗ.
+1. **Leo** thẳng đứng tới độ cao bay về, giữ yên tại *điểm dừng được*. Nếu máy đang bay nhanh, điểm này nằm phía trước, ở chỗ máy phanh kịp với gia tốc 2 m/s² (ArduPilot `build_path`); máy không bị giật ngược lại. Vài mét cuối leo chậm lại để không vọt qua.
+   - Độ cao bay về, kiểu **Hình nón** (mặc định, PX4 `RTL_CONE_ANG`): bằng "Độ cao bay về" (`RTL_RETURN_ALT`, mặc định 30 m).
+     - Nếu gần home hơn "Khoảng cách dùng hình nón" (`RTL_MIN_DIST`), máy chỉ lên tới khoảng cách / tan(góc nón). Với góc 45°, cách 10 m thì lên 10 m.
+     - Không bao giờ thấp hơn 2 lần bán kính chấp nhận (4 m).
+     - Góc nón = 0: luôn lên "Độ cao bay về".
+   - Các kiểu cũ vẫn còn: Cố định, Điểm cao nhất của chuyến bay + leo thêm, Độ cao hiện tại + leo thêm.
+   - Máy đang cao hơn độ cao bay về thì giữ nguyên độ cao, không hạ trước (trừ kiểu Cố định).
+2. **Bay về** theo đường thẳng ở độ cao bay về.
+   - Một *điểm đích* chạy dọc đường bay: tăng tốc rồi giảm tốc với 2 m/s² và dừng đúng trên home. Bộ điều khiển vị trí bám theo điểm này, lấy vận tốc của nó làm feed-forward (giống `AC_WPNav`).
+   - Nếu máy tụt lại sau quá 5 m (ví dụ gió ngược), điểm đích chờ máy.
+   - Mũi quay dần theo hướng bay, tối đa 90°/s (PX4 `MPC_YAW_MODE` 0). Không còn pha "quay mũi đứng tại chỗ" như Betaflight.
+3. **Hạ xuống trên home** tới "Độ cao chờ trên home" (`RTL_DESCEND_ALT`, mặc định 10 m) nếu đang cao hơn. Trên cao hạ nhanh, tới 3 lần "Tốc độ hạ".
+4. **Chờ** "Thời gian chờ trên home" (`RTL_LAND_DELAY`, mặc định 5 s), giữ vị trí. Đặt 255 thì máy chờ mãi và không tự hạ cánh.
+5. **Hạ cánh** thẳng xuống, giữ vị trí trên home. Dưới "Độ cao bắt đầu hạ chậm" thì hạ bằng "Tốc độ hạ cánh" (ArduPilot `LAND_SPEED`, mặc định 0,5 m/s). Chạm đất thì motor tắt và máy disarm.
+
+**Bay về theo đường cũ (SmartRTL)**, theo ArduPilot SmartRTL:
+- Từ lúc arm, firmware ghi lại đường bay: mỗi 2 m một điểm, tối đa 128 điểm.
+  - Vòng lặp được cắt bỏ: khi đoạn mới đi qua gần một đoạn cũ dưới 0,99 × 2 m, cả vòng ở giữa thay bằng một điểm.
+  - Khi bộ nhớ đầy, đường được rút gọn bằng Ramer-Douglas-Peucker với sai số 1 m.
+- Lúc rescue, máy bay ngược lại đường đó: vòng qua những chỗ đã vòng, ở độ cao đã bay, không leo trước.
+  - Điểm cuối là home, cao 2 m.
+  - Ở các khúc quẹo máy chậm lại: độ đổi vận tốc không quá 1 giây gia tốc, và máy nhìn trước đủ xa để kịp giảm tốc.
+  - Tới home thì chờ và hạ cánh như RTL.
+- Rơi về bay thẳng (RTL) khi:
+  - đường quá rối, bộ nhớ đầy suốt 15 s (`SMARTRTL_TIMEOUT`);
+  - mất vị trí 15 s khi đang bay;
+  - hoặc lúc bắt đầu đang gần home hơn "Khoảng cách dùng hình nón".
+
+**Hạ cánh tại chỗ (LAND)**, theo ArduPilot LAND:
+- Hạ ngay tại điểm dừng được, giữ vị trí bằng GPS.
+- Không có GPS hoặc la bàn thì vẫn hạ, nhưng không giữ vị trí (`nogps_run`); phi công đang cầm điều khiển có thể đẩy máy.
+- Chỉ cần ước lượng độ cao.
+
+**OSD** (MSP DisplayPort) khi rescue đang bay:
+- Ô chế độ hiện `RTL`, `SRTL` hoặc `LAND` (khi failsafe vẫn là `!FS!`).
+- Dòng cảnh báo hiện số mét còn phải bay về, tính dọc theo đường bay: `RTL 123M` (với SmartRTL là đường đã đi, không phải đường chim bay).
+- Trên home dòng này hiện `RTL HOME`, lúc hạ cánh hiện `RTL LAND`.
+- Kiểu LAND hiện độ cao còn lại, ví dụ `LAND 12M`.
+- Tab Vị trí của app có dòng "Còn phải bay về" (trường `rescue_left` của stream `nav`).
 
 **Chạy khi nào**: công tắc GPS Rescue bật, hoặc failsafe (mất sóng / công tắc Failsafe) nếu thủ tục failsafe là Rescue.
 

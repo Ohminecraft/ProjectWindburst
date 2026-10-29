@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0xCB86B504",
+ "hash": "0xBC5CB67F",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -337,7 +337,8 @@
    "FLY_HOME",
    "DESCENT",
    "LANDING",
-   "FAILED"
+   "FAILED",
+   "LOITER"
   ],
   "rescue_fail": [
    "NONE",
@@ -352,7 +353,13 @@
   "rescue_alt": [
    "MAX",
    "FIXED",
-   "CURRENT"
+   "CURRENT",
+   "CONE"
+  ],
+  "rescue_mode": [
+   "RTL",
+   "SMART_RTL",
+   "LAND"
   ],
   "fs_procedure": [
    "LAND",
@@ -567,7 +574,8 @@
    "RESCUE",
    "RESCUE_AVAILABLE",
    "NAV_LEAN",
-   "POSHOLD_SLOW_GPS"
+   "POSHOLD_SLOW_GPS",
+   "FENCE"
   ],
   "ekf_flags": [
    "ALIGNED",
@@ -1707,10 +1715,19 @@
      "d": 0,
      "enum": "baro_primary",
      "desc": "two barometers (ArduPilot BARO_PRIMARY): FIRST = the first found (SPI on pins.baro_cs, else I2C 0x76, then 0x77) flies, SECOND = the second; the other takes over while the one in use is unhealthy (in flight: back after 2 s valid), the altitude carried on without a jump"
+    },
+    {
+     "n": "esc_boot_wait",
+     "t": "u8",
+     "d": 20,
+     "min": 0,
+     "max": 100,
+     "desc": "at power-up the motor outputs start first and the gyro is calibrated only when the ESCs have had the signal this long (0.1 s; bidirectional DShot: as soon as every ESC answers + 0.5 s) - an ESC playing its start-up tones shakes the craft. 0 = calibrate at once"
     }
    ],
    "live": false,
    "compat": [
+    20,
     19,
     18,
     16
@@ -2789,9 +2806,9 @@
     {
      "n": "rescue_alt_mode",
      "t": "u8",
-     "d": 0,
+     "d": 3,
      "enum": "rescue_alt",
-     "desc": "return height: MAX = highest point of this flight + rescue_initial_climb, FIXED = rescue_return_alt, CURRENT = the present height + rescue_initial_climb"
+     "desc": "return height: CONE (default, PX4) = rescue_return_alt, but close to home (rescue_min_start_dist) only what the cone rescue_cone needs; MAX = highest point of this flight + rescue_initial_climb, FIXED = rescue_return_alt, CURRENT = the present height + rescue_initial_climb. A craft that is higher already keeps its height (not with FIXED)"
     },
     {
      "n": "rescue_initial_climb",
@@ -2807,7 +2824,7 @@
      "d": 30,
      "min": 5,
      "max": 150,
-     "desc": "m above the take-off point (FIXED)"
+     "desc": "m above the take-off point (FIXED; the most CONE climbs to)"
     },
     {
      "n": "rescue_ascend_rate",
@@ -2825,7 +2842,7 @@
      "min": 5,
      "max": 50,
      "scale": 0.1,
-     "desc": "m/s near the ground; up to three times as fast high up"
+     "desc": "m/s near the ground; up to three times as fast high up (coming down over home)"
     },
     {
      "n": "rescue_ground_speed",
@@ -2834,7 +2851,7 @@
      "min": 20,
      "max": 200,
      "scale": 0.1,
-     "desc": "m/s on the way home"
+     "desc": "m/s along the way home"
     },
     {
      "n": "rescue_descent_dist",
@@ -2842,7 +2859,7 @@
      "d": 20,
      "min": 5,
      "max": 100,
-     "desc": "m from home: closer than this the craft starts to come down"
+     "desc": "not used since 0.36 (the way home slows down by itself before home)"
     },
     {
      "n": "rescue_min_start_dist",
@@ -2850,7 +2867,7 @@
      "d": 15,
      "min": 5,
      "max": 30,
-     "desc": "m: a rescue started closer to home than this climbs and comes down on the spot"
+     "desc": "m: within this of home the return height is only what the cone needs (PX4 RTL_MIN_DIST); SMART_RTL started closer than this flies as RTL"
     },
     {
      "n": "rescue_landing_alt",
@@ -2858,7 +2875,7 @@
      "d": 4,
      "min": 1,
      "max": 15,
-     "desc": "m: below this the last, slow part of the descent begins"
+     "desc": "m: below this the last, slow part of the landing (rescue_land_speed) begins"
     },
     {
      "n": "rescue_min_sats",
@@ -2923,12 +2940,69 @@
      "d": 0,
      "enum": "fs_batt_crit",
      "desc": "the pack at its MINIMUM (ArduPilot BATT_FS_CRT_ACT): LAND where it is (the pilot keeps roll / pitch / yaw), or RTL = fly home first (only if it is close: there may be no energy for more)"
+    },
+    {
+     "n": "fence_alt_max",
+     "t": "u16",
+     "d": 0,
+     "min": 0,
+     "max": 5000,
+     "desc": "height ceiling in Altitude Hold and the hold modes (m above the take-off point; 0 = none): the climb is slowed so the craft stops half a metre below it, above it the craft descends (ArduPilot FENCE_ALT_MAX)"
+    },
+    {
+     "n": "fence_radius",
+     "t": "u16",
+     "d": 0,
+     "min": 0,
+     "max": 10000,
+     "desc": "circle around home in Position Hold (m; 0 = none): where the craft could not stop before it, the sticks are no longer followed and it holds on the circle; a stick pointing home gives it back (ArduPilot FENCE_RADIUS, with a hold instead of RTL)"
+    },
+    {
+     "n": "rescue_cone",
+     "t": "u8",
+     "d": 45,
+     "min": 0,
+     "max": 85,
+     "desc": "deg: half-angle of the cone over home (CONE, PX4 RTL_CONE_ANG): within rescue_min_start_dist the craft climbs only to distance / tan(angle); 0 = always rescue_return_alt"
+    },
+    {
+     "n": "rescue_descend_alt",
+     "t": "u8",
+     "d": 10,
+     "min": 2,
+     "max": 100,
+     "desc": "m: over home the craft comes down to this height (if higher) and waits there before landing (PX4 RTL_DESCEND_ALT)"
+    },
+    {
+     "n": "rescue_loiter",
+     "t": "u8",
+     "d": 5,
+     "min": 0,
+     "max": 255,
+     "desc": "s it waits over home before landing (PX4 RTL_LAND_DELAY); 255 = it stays there until the pilot takes over, never lands by itself"
+    },
+    {
+     "n": "rescue_land_speed",
+     "t": "u8",
+     "d": 5,
+     "min": 2,
+     "max": 20,
+     "scale": 0.1,
+     "desc": "m/s for the last metres of the landing (ArduPilot LAND_SPEED)"
+    },
+    {
+     "n": "rescue_mode",
+     "t": "u8",
+     "d": 0,
+     "enum": "rescue_mode",
+     "desc": "what the rescue does (a RESCUE switch, the failsafe procedure RESCUE, a battery action RTL): RTL = climb (the cone), straight home, wait, land (PX4 / ArduPilot RTL); SMART_RTL = the way this flight came, backwards (ArduPilot SmartRTL: around what it flew around, at the heights it flew there; a path that could not be kept falls back to RTL); LAND = down where the craft is, holding that point (ArduPilot LAND; without GPS only the descent)"
     }
    ],
    "compat": [
+    38,
+    34,
     31,
-    30,
-    29
+    30
    ]
   },
   {
@@ -4438,6 +4512,12 @@
      "t": "u16",
      "scale": 0.1,
      "desc": "the height the rescue flies home at (m)"
+    },
+    {
+     "n": "rescue_left",
+     "t": "u16",
+     "scale": 0.1,
+     "desc": "m the rescue still has to fly home (along its path; 0 once over home, and when landing where it is)"
     }
    ]
   },

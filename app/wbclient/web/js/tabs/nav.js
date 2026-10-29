@@ -117,23 +117,24 @@ export default {
           block('Position Hold',
             h('p', { class: 'help' }, tr('Buông cần roll / pitch thì máy tự phanh rồi đứng tại chỗ, chống lại gió; đẩy cần thì bay như Angle. Cần một trong hai: optical flow + lidar (trong nhà, bay thấp), hoặc GPS đã fix + la bàn đã hiệu chuẩn. Gán công tắc ở tab Mode và nên bật cùng Altitude Hold.')),
             kv([
-              [tr('Trạng thái'), pill('ph-state', 'nav', (n) => (has(n.flags, 'POSHOLD') ? ['ok', tr('đang giữ vị trí')] : has(n.flags, 'POSHOLD_SLOW_GPS') ? ['warn', tr('GPS gửi quá ít lời giải mỗi giây để giữ vị trí (xem tần số GPS ở tab Cảm biến)')] : has(n.flags, 'POSHOLD_UNAVAILABLE') ? ['warn', tr('công tắc đang bật nhưng chưa có gì để giữ vị trí')] : ['off', tr('tắt')]))],
+              [tr('Trạng thái'), pill('ph-state', 'nav', (n) => (has(n.flags, 'FENCE') ? ['warn', tr('chạm hàng rào: đang giữ ở mép, đẩy cần về phía home để bay tiếp')] : has(n.flags, 'POSHOLD') ? ['ok', tr('đang giữ vị trí')] : has(n.flags, 'POSHOLD_SLOW_GPS') ? ['warn', tr('GPS gửi quá ít lời giải mỗi giây để giữ vị trí (xem tần số GPS ở tab Cảm biến)')] : has(n.flags, 'POSHOLD_UNAVAILABLE') ? ['warn', tr('công tắc đang bật nhưng chưa có gì để giữ vị trí')] : ['off', tr('tắt')]))],
               ['Roll / Pitch', withId('ph-axes', readout('nav', (n) => (has(n.flags, 'POSHOLD') ? `${label('ph_axis', n.ph_roll)} / ${label('ph_axis', n.ph_pitch)}` : '–')))],
               [tr('Góc nghiêng autopilot yêu cầu (roll / pitch)'), withId('ph-lean', readout('nav', (n) => (has(n.flags, 'NAV_LEAN') ? pair(n.lean_roll, n.lean_pitch, 1, '°') : '–')))],
               [tr('Điểm đang giữ (bắc / đông)'), withId('ph-target', readout('nav', (n) => (has(n.flags, 'POSHOLD') ? pair(n.target_n, n.target_e, 1, 'm') : '–')))],
               [tr('Bù gió đã học (bắc / đông)'), withId('ph-wind', readout('nav', (n) => (has(n.flags, 'POSHOLD') ? pair(n.wind_n, n.wind_e, 2, 'm/s²') : '–')))],
             ]),
-            fields('nav', ['ph_angle_max', 'ph_brake_rate', 'ph_brake_angle', 'pos_p', 'vel_p', 'vel_i', 'vel_d', 'ph_min_gps_hz'])),
+            fields('nav', ['ph_angle_max', 'ph_brake_rate', 'ph_brake_angle', 'pos_p', 'vel_p', 'vel_i', 'vel_d', 'ph_min_gps_hz', 'fence_radius', 'fence_alt_max'])),
           block(tr('GPS Rescue và failsafe'),
-            h('p', { class: 'help' }, tr('Rescue: máy leo lên độ cao bay về, quay mũi về điểm cất cánh, bay về, hạ dần rồi hạ cánh và tắt motor. Chạy khi bật công tắc GPS Rescue (tab Mode), hoặc khi mất sóng nếu chọn ở ô dưới. Sóng trở lại giữa chừng: gạt cần roll hoặc pitch quá 30 % để lấy lại quyền điều khiển. Pin dưới mức tối thiểu thì luôn hạ cánh tại chỗ.')),
+            h('p', { class: 'help' }, tr('Rescue, theo cách của ArduPilot và PX4. Bay về (RTL): leo lên độ cao bay về (gần home thì leo ít, theo hình nón), bay thẳng về home với mũi hướng theo đường bay, hạ xuống độ cao chờ, chờ vài giây, hạ cánh và tắt motor. Bay về theo đường cũ (SmartRTL): lần ngược lại đường vừa bay, vòng qua những chỗ đã vòng, ở độ cao đã bay. Hạ cánh tại chỗ: hạ ngay chỗ đang bay, giữ vị trí bằng GPS. Chạy khi bật công tắc GPS Rescue (tab Mode), hoặc khi mất sóng nếu chọn ở ô dưới. Sóng trở lại giữa chừng: gạt cần roll hoặc pitch quá 30 % để lấy lại quyền điều khiển. Pin dưới mức tối thiểu thì luôn hạ cánh tại chỗ.')),
             kv([
               [tr('Sẵn sàng bay về'), pill('rescue-ready', 'nav', (n) => (has(n.flags, 'RESCUE_AVAILABLE') ? ['ok', tr('có')] : ['off', tr('chưa')]))],
               [tr('Giai đoạn'), withId('rescue-phase', readout('nav', (n) => label('rescue_phase', n.rescue_phase) + (n.rescue_fail && n.rescue_fail !== 'NONE' ? ': ' + label('rescue_fail', n.rescue_fail) : '')))],
+              [tr('Còn phải bay về'), withId('rescue-left', readout('nav', (n) => (has(n.flags, 'RESCUE') && n.rescue_left > 0 ? f(n.rescue_left, 0) + ' m' : '–')))],
               [tr('Khoảng cách tới home'), withId('rescue-home', readout('nav', (n) => (has((store.streams.estimate || {}).valid, 'POS') ? f(n.home_dist, 1) + ' m' : '–')))],
               [tr('Độ cao bay về lần này'), withId('rescue-alt', readout('nav', (n) => (n.return_alt > 0 ? f(n.return_alt, 1) + ' m' : '–')))],
             ]),
             h('p', { class: 'help' }, tr('"Sẵn sàng" chỉ có khi máy đang bay với điểm home (GPS đã fix lúc arm), la bàn và ước lượng độ cao. Đã cài Rescue (công tắc hoặc failsafe) thì firmware không cho arm khi GPS chưa fix hoặc không có la bàn.')),
-            fields('nav', ['fs_procedure', 'fs_hold_s', 'batt_low_action', 'batt_crit_action', 'rescue_alt_mode', 'rescue_initial_climb', 'rescue_return_alt', 'rescue_ascend_rate', 'rescue_descend_rate', 'rescue_ground_speed', 'rescue_descent_dist', 'rescue_min_start_dist',
-              'rescue_landing_alt', 'rescue_min_sats', 'rescue_allow_no_fix'])))));
+            fields('nav', ['fs_procedure', 'fs_hold_s', 'batt_low_action', 'batt_crit_action', 'rescue_mode', 'rescue_alt_mode', 'rescue_return_alt', 'rescue_cone', 'rescue_min_start_dist', 'rescue_initial_climb',
+              'rescue_ascend_rate', 'rescue_ground_speed', 'rescue_descend_alt', 'rescue_loiter', 'rescue_descend_rate', 'rescue_landing_alt', 'rescue_land_speed', 'rescue_min_sats', 'rescue_allow_no_fix'])))));
   },
 };

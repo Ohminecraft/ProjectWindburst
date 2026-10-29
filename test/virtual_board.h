@@ -131,6 +131,7 @@ struct VirtualBoard {
         for (int i = 0; i < 4; i++) s.pins.motor[i] = kMotorPin[i];
         s.pins.batt_adc = kBattAdc; s.pins.buzzer = kBuzzer;
         s.battery.divider = (uint16_t)(kBattDivider * 100.0f + 0.5f);
+        s.sensors.esc_boot_wait = 0;          // (the tests start from a calibrated gyro a second after power-up; the wait has a test of its own)
     }
 
     // One simulation step: time advances by dt_us, the firmware runs, the plant reacts to the motor outputs.

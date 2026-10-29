@@ -1,5 +1,5 @@
 // Unit tests of the navigation blocks: optical flow -> velocity (flow.h), the tilt from a measured acceleration (tilt_aid.h), the
-// horizontal position controller (poscontrol.h) and Position Hold (poshold.h). Each block alone, against a model that is written
+// horizontal position controller (nav/pos_control.h), Position Hold (nav/pos_hold.h), the return home (rescue.h, nav/breadcrumbs.h). Each block alone, against a model that is written
 // here from the physics (a point mass that leans, with drag and wind), not from the code under test.
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,10 +11,9 @@
 #include "../src/core/flow.h"
 #include "../src/core/ahrs.h"
 #include "../src/core/tilt_aid.h"
-#include "../src/core/poscontrol.h"
-#include "../src/core/poshold.h"
+#include "../src/core/nav/pos_hold.h"
 #include "../src/core/rescue.h"
-#include "../src/core/horizontal_est.h"
+#include "../src/core/nav/pos_estimator.h"
 using namespace fc;
 
 static int g_pass = 0, g_fail = 0;
@@ -106,7 +105,7 @@ struct AidRig {
 // the horizontal estimate with a velocity that arrives late (optical flow): it is moved to "now" with the acceleration
 static void t_flow_fusion() {
     printf("[horizontal estimate] a velocity measured 0.1 s ago, while the craft accelerates\n");
-    auto run = [](float delay, float told) { HorizontalEstimator h; h.reset(); const float dt = 0.002f, a = 2.0f; float v = 0, worst = 0; std::vector<float> past;
+    auto run = [](float delay, float told) { nav::PosEstimator h; h.reset(); const float dt = 0.002f, a = 2.0f; float v = 0, worst = 0; std::vector<float> past;
         for (int i = 0; i < 1500; i++) { const float t = i * dt; const float acc = t < 2.0f ? a : 0.0f; v += acc * dt; past.push_back(v); h.predict(acc, 0, dt);
             if (i % 10 == 9) { const size_t back = (size_t)(delay / dt + 0.5f); const float vm = past.size() > back ? past[past.size() - 1 - back] : 0.0f; h.fuse_velocity(vm, 0, 0.1f, told); }
             if (t > 0.5f && t < 2.0f) worst = fmaxf(worst, fabsf(h.vel_n() - v)); }
@@ -204,7 +203,7 @@ struct Mass {
     float pn = 0, pe = 0, vn = 0, ve = 0, yaw = 0, roll = 0, pitch = 0, drag = 0.35f, wind_n = 0, wind_e = 0, lag = 0.12f;       // wind: m/s of air over the ground
     void step(float roll_cmd, float pitch_cmd, float dt) {
         roll += (roll_cmd - roll) * dt / lag; pitch += (pitch_cmd - pitch) * dt / lag;
-        float af, ar; lean_to_accel(roll, pitch, af, ar); float an, ae; body_to_ne(af, ar, yaw, an, ae);
+        float af, ar; nav::lean_to_accel(roll, pitch, af, ar); float an, ae; nav::body_to_ne(af, ar, yaw, an, ae);
         an += -drag * (vn - wind_n); ae += -drag * (ve - wind_e);
         vn += an * dt; ve += ae * dt; pn += vn * dt; pe += ve * dt;
     }
@@ -213,74 +212,74 @@ struct Mass {
 
 static void t_poscontrol() {
     printf("[position controller] position -> velocity -> acceleration -> lean (ArduPilot's cascade)\n");
-    { CHECK(fabsf(sqrt_controller(0.5f, 1.0f, 2.5f) - 0.5f) < 1e-6f && fabsf(sqrt_controller(-2.0f, 1.0f, 2.5f) + 2.0f) < 1e-6f, "near the target: speed = error x P (0.5 m -> 0.5 m/s, -2 m -> -2 m/s)");
+    { CHECK(fabsf(nav::sqrt_controller(0.5f, 1.0f, 2.5f) - 0.5f) < 1e-6f && fabsf(nav::sqrt_controller(-2.0f, 1.0f, 2.5f) + 2.0f) < 1e-6f, "near the target: speed = error x P (0.5 m -> 0.5 m/s, -2 m -> -2 m/s)");
       // linear up to accel / p^2 = 2.5 m; beyond: sqrt(2 a (e - 1.25))
-      CHECK(fabsf(sqrt_controller(2.5f, 1.0f, 2.5f) - 2.5f) < 1e-5f && fabsf(sqrt_controller(6.25f, 1.0f, 2.5f) - 5.0f) < 1e-5f && fabsf(sqrt_controller(-6.25f, 1.0f, 2.5f) + 5.0f) < 1e-5f,
-            "further out a square-root curve: 6.25 m -> %.2f m/s (a speed from which 2.5 m/s^2 still stops in time), same at the joint (2.5 m -> %.2f)", sqrt_controller(6.25f, 1.0f, 2.5f), sqrt_controller(2.5f, 1.0f, 2.5f));
-      CHECK(sqrt_controller(3.0f, 2.0f, 0.0f) == 6.0f, "no acceleration given: plain P"); }
-    { float r, p; accel_to_lean(kG0, 0, r, p); const float p45 = p; accel_to_lean(0, kG0 * tanf(20 * kDeg2Rad), r, p);
+      CHECK(fabsf(nav::sqrt_controller(2.5f, 1.0f, 2.5f) - 2.5f) < 1e-5f && fabsf(nav::sqrt_controller(6.25f, 1.0f, 2.5f) - 5.0f) < 1e-5f && fabsf(nav::sqrt_controller(-6.25f, 1.0f, 2.5f) + 5.0f) < 1e-5f,
+            "further out a square-root curve: 6.25 m -> %.2f m/s (a speed from which 2.5 m/s^2 still stops in time), same at the joint (2.5 m -> %.2f)", nav::sqrt_controller(6.25f, 1.0f, 2.5f), nav::sqrt_controller(2.5f, 1.0f, 2.5f));
+      CHECK(nav::sqrt_controller(3.0f, 2.0f, 0.0f) == 6.0f, "no acceleration given: plain P"); }
+    { float r, p; nav::accel_to_lean(kG0, 0, r, p); const float p45 = p; nav::accel_to_lean(0, kG0 * tanf(20 * kDeg2Rad), r, p);
       CHECK(fabsf(p45 - 45.0f) < 1e-3f && fabsf(r - 20.0f) < 1e-3f && fabsf(p) < 1e-5f, "1 g forwards = 45 deg nose down (pitch +); g tan 20 to the right = 20 deg right side down (roll +)");
-      float af, ar; lean_to_accel(-12.0f, 25.0f, af, ar); accel_to_lean(af, ar, r, p);
+      float af, ar; nav::lean_to_accel(-12.0f, 25.0f, af, ar); nav::accel_to_lean(af, ar, r, p);
       CHECK(fabsf(r + 12.0f) < 1e-3f && fabsf(p - 25.0f) < 1e-3f && af > 0 && ar < 0, "and back: a lean of -12 / 25 deg is %.2f m/s^2 forwards, %.2f to the right", af, ar);
-      float f, rt; ne_to_body(1.0f, 0.0f, 90.0f, f, rt); float n, e; body_to_ne(f, rt, 90.0f, n, e);
+      float f, rt; nav::ne_to_body(1.0f, 0.0f, 90.0f, f, rt); float n, e; nav::body_to_ne(f, rt, 90.0f, n, e);
       CHECK(fabsf(f) < 1e-6f && fabsf(rt + 1.0f) < 1e-6f && fabsf(n - 1.0f) < 1e-6f && fabsf(e) < 1e-6f, "nose pointing east: north is to the LEFT (forward %.1f, right %.1f)", f, rt); }
     const float dt = 0.002f;
     // 1.8 m to go
-    { Mass m; PosControlNE c; c.init(0, 0, 0, 0, 0, 0, 0); c.set_target(1.8f, 0); float peak_v = 0, over = 0, t_arrive = -1, worst_east = 0;
+    { Mass m; nav::PosController c; c.init(0, 0, 0, 0, 0, 0, 0); c.set_target(1.8f, 0); float peak_v = 0, over = 0, t_arrive = -1, worst_east = 0;
       for (int i = 0; i < 6000; i++) { c.update(m.pn, m.pe, m.vn, m.ve, dt, true); float r, p; c.lean(m.yaw, r, p); m.step(r, p, dt);
           peak_v = fmaxf(peak_v, m.speed()); over = fmaxf(over, m.pn - 1.8f); worst_east = fmaxf(worst_east, fabsf(m.pe)); if (t_arrive < 0 && fabsf(m.pn - 1.8f) < 0.1f) t_arrive = i * dt; }
       CHECK(t_arrive > 1.0f && t_arrive < 5.0f && over < 0.2f && fabsf(m.pn - 1.8f) < 0.03f && m.speed() < 0.02f && worst_east < 0.01f, "a target 1.8 m north: there after %.1f s, %.2f m past it at most, then still (%.3f m off)", t_arrive, over, m.pn - 1.8f);
       CHECK(peak_v > 0.6f && peak_v < 1.9f, "on the way never faster than the position error allows (1.8 m x P 1.0; %.2f m/s)", peak_v); }
     // the same with the nose pointing south-west: the leans change, the path does not
-    { Mass m; m.yaw = 225; PosControlNE c; c.init(0, 0, 0, 0, 0, 0, m.yaw); c.set_target(1.8f, 0); float first_r = 0, first_p = 0;
+    { Mass m; m.yaw = 225; nav::PosController c; c.init(0, 0, 0, 0, 0, 0, m.yaw); c.set_target(1.8f, 0); float first_r = 0, first_p = 0;
       for (int i = 0; i < 6000; i++) { c.update(m.pn, m.pe, m.vn, m.ve, dt, true); float r, p; c.lean(m.yaw, r, p); if (i == 100) { first_r = r; first_p = p; } m.step(r, p, dt); }
       CHECK(first_p < -1.0f && first_r > 1.0f && fabsf(m.pn - 1.8f) < 0.03f && fabsf(m.pe) < 0.03f, "nose south-west, target to the north: it leans back and to the right (pitch %.1f, roll %.1f) and arrives all the same", first_p, first_r); }
     // far away: the target is pulled along, 2 m ahead of the craft
-    { Mass m; PosControlNE c; c.init(0, 0, 0, 0, 0, 0, 0); c.set_target(0, 50.0f); c.update(m.pn, m.pe, m.vn, m.ve, dt, true);
-      CHECK(fabsf(c.target_e() - 2.0f) < 1e-4f && fabsf(c.pos_error() - 2.0f) < 1e-4f && fabsf(c.vel_target_e() - sqrt_controller(2.0f, 1.0f, 2.5f)) < 1e-4f, "a target 50 m away is pulled back to 2 m from the craft (%.2f): no race towards it", c.target_e());
-      PosControlNE s; s.cfg.pos_p = 3.0f; s.init(0, 0, 0, 0, 0, 0, 0); s.set_target(0, 50.0f); s.update(0, 0, 0, 0, dt, true);
-      CHECK(sqrt_controller(2.0f, 3.0f, 2.5f) > 2.5f && fabsf(s.vel_target_e() - 2.0f) < 1e-4f, "with a stiffer P (3.0) the speed it flies a position error out with is still at most 2 m/s (%.2f; the curve alone would give %.2f)", s.vel_target_e(), sqrt_controller(2.0f, 3.0f, 2.5f)); }
+    { Mass m; nav::PosController c; c.init(0, 0, 0, 0, 0, 0, 0); c.set_target(0, 50.0f); c.update(m.pn, m.pe, m.vn, m.ve, dt, true);
+      CHECK(fabsf(c.target_e() - 2.0f) < 1e-4f && fabsf(c.pos_error() - 2.0f) < 1e-4f && fabsf(c.vel_target_e() - nav::sqrt_controller(2.0f, 1.0f, 2.5f)) < 1e-4f, "a target 50 m away is pulled back to 2 m from the craft (%.2f): no race towards it", c.target_e());
+      nav::PosController s; s.cfg.pos_p = 3.0f; s.init(0, 0, 0, 0, 0, 0, 0); s.set_target(0, 50.0f); s.update(0, 0, 0, 0, dt, true);
+      CHECK(nav::sqrt_controller(2.0f, 3.0f, 2.5f) > 2.5f && fabsf(s.vel_target_e() - 2.0f) < 1e-4f, "with a stiffer P (3.0) the speed it flies a position error out with is still at most 2 m/s (%.2f; the curve alone would give %.2f)", s.vel_target_e(), nav::sqrt_controller(2.0f, 3.0f, 2.5f)); }
     // wind: the integrator learns the lean that stands against it
-    { Mass m; m.wind_n = -6.0f; m.vn = 0; PosControlNE c; c.init(0, 0, 0, 0, 0, 0, 0); float worst = 0;
+    { Mass m; m.wind_n = -6.0f; m.vn = 0; nav::PosController c; c.init(0, 0, 0, 0, 0, 0, 0); float worst = 0;
       for (int i = 0; i < 15000; i++) { c.update(m.pn, m.pe, m.vn, m.ve, dt, true); float r, p; c.lean(m.yaw, r, p); m.step(r, p, dt); worst = fmaxf(worst, fabsf(m.pn)); }
       // the air moves 6 m/s southwards: drag pushes with 0.35 x 6 = 2.1 m/s^2; the craft must accelerate 2.1 m/s^2 north to stand still
       CHECK(fabsf(m.pn) < 0.05f && fabsf(c.i_n() - 2.1f) < 0.1f && worst < 1.6f && fabsf(m.pitch - atanf(2.1f / kG0) * kRad2Deg) < 0.5f, "a head wind of 6 m/s from the north: blown back %.2f m at most, then back on the spot (%.3f m), leaning %.1f deg into it (integrator %.2f m/s^2)", worst, m.pn, m.pitch, c.i_n()); }
     // the limit: more than the lean limit gives is not asked for, and the integrator does not wind up meanwhile
-    { PosControlNE c; c.cfg.angle_max_deg = 20; c.init(0, 0, 0, 0, 0, 0, 0); const float amax = kG0 * tanf(20 * kDeg2Rad);
+    { nav::PosController c; c.cfg.angle_max_deg = 20; c.init(0, 0, 0, 0, 0, 0, 0); const float amax = kG0 * tanf(20 * kDeg2Rad);
       for (int i = 0; i < 3000; i++) c.update(0, 0, -8.0f, 0, dt, false, 4.0f, 0);           // wants 4 m/s north, is blown south at 8 m/s and stays so: error 12 m/s for 6 s
       const float len = hypotf(c.accel_n(), c.accel_e()); float r, p; c.lean(0, r, p);
       CHECK(c.limited() && fabsf(len - amax) < 1e-3f && fabsf(p - 20.0f) < 0.05f, "a demand beyond the lean limit: %.2f m/s^2 = 20 deg (limit %.2f)", len, amax);
       CHECK(fabsf(c.i_n()) < 0.05f, "and the integrator has not grown while the output was at the limit (%.3f m/s^2 after 6 s of 12 m/s error)", c.i_n());
-      PosControlNE d; d.cfg.angle_max_deg = 20; d.init(0, 0, 4.0f, 0, 0, 0, 0);               // (taken over at 4 m/s: the shaped velocity starts there)
+      nav::PosController d; d.cfg.angle_max_deg = 20; d.init(0, 0, 4.0f, 0, 0, 0, 0);               // (taken over at 4 m/s: the shaped velocity starts there)
       for (int i = 0; i < 3000; i++) d.update(0, 0, 3.9f, 0, dt, false, 4.0f, 0);            // a small error, not limited: it does integrate
       CHECK(!d.limited() && fabsf(d.i_n() - 0.1f * 1.0f * 6.0f) < 0.02f, "(unlimited it integrates: 0.1 m/s of error x I 1.0 x 6 s = %.2f m/s^2)", d.i_n());
       {   // 0.28: a new wanted velocity is shaped (jerk-limited) and its acceleration fed forward
-          PosControlNE s; s.cfg.angle_max_deg = 30; s.init(0, 0, 0, 0, 0, 0, 0);
+          nav::PosController s; s.cfg.angle_max_deg = 30; s.init(0, 0, 0, 0, 0, 0, 0);
           s.update(0, 0, 0, 0, dt, false, 5.0f, 0);
           CHECK(fabsf(s.accel_n()) < 0.5f, "5 m/s north wanted from a standstill: the first step asks for %.3f m/s^2, not a velocity step x P", s.accel_n());
           float amid = 0; for (int i = 0; i < 500; i++) { s.update(0, 0, s.vel_desired_n(), 0, dt, false, 5.0f, 0); if (i == 250) amid = s.accel_n(); }
           CHECK(amid > 1.5f && amid < 2.6f, "tracking the shaped velocity exactly (no error), the acceleration it asks for is the shaping's own (%.2f m/s^2): the feed-forward", amid); }
-      PosControlNE w; w.cfg.angle_max_deg = 60; w.init(0, 0, 0, 0, 0, 0, 0); for (int i = 0; i < 20000; i++) w.update(0, 0, 0.4f, 0.3f, dt, false);
+      nav::PosController w; w.cfg.angle_max_deg = 60; w.init(0, 0, 0, 0, 0, 0, 0); for (int i = 0; i < 20000; i++) w.update(0, 0, 0.4f, 0.3f, dt, false);
       CHECK(fabsf(hypotf(w.i_n(), w.i_e()) - 5.0f) < 1e-3f, "the integrator itself stops at 5 m/s^2 (%.2f)", hypotf(w.i_n(), w.i_e())); }
     // no jump when it takes over from a craft that already leans
-    { PosControlNE c; c.init(5, -3, 0, 0, 10.0f, -6.0f, 30.0f); c.update(5, -3, 0, 0, dt, true); float r, p; c.lean(30.0f, r, p);
+    { nav::PosController c; c.init(5, -3, 0, 0, 10.0f, -6.0f, 30.0f); c.update(5, -3, 0, 0, dt, true); float r, p; c.lean(30.0f, r, p);
       CHECK(fabsf(r - 10.0f) < 0.3f && fabsf(p + 6.0f) < 0.3f && c.target_n() == 5 && c.target_e() == -3, "taking over a craft that leans 10 / -6 deg: the first output is that lean (%.2f / %.2f), the target is where it is", r, p);
-      PosControlNE big; big.init(0, 0, 0, 0, 0, 60.0f, 0); CHECK(fabsf(hypotf(big.i_n(), big.i_e()) - 5.0f) < 1e-3f, "(a lean beyond what the integrator may hold is cut to its limit)"); }
+      nav::PosController big; big.init(0, 0, 0, 0, 0, 60.0f, 0); CHECK(fabsf(hypotf(big.i_n(), big.i_e()) - 5.0f) < 1e-3f, "(a lean beyond what the integrator may hold is cut to its limit)"); }
     // velocity only (GPS Rescue): the target follows the craft
-    { Mass m; PosControlNE c; c.init(0, 0, 0, 0, 0, 0, 0);
+    { Mass m; nav::PosController c; c.init(0, 0, 0, 0, 0, 0, 0);
       for (int i = 0; i < 5000; i++) { c.update(m.pn, m.pe, m.vn, m.ve, dt, false, 3.0f, -4.0f); float r, p; c.lean(m.yaw, r, p); m.step(r, p, dt); }
       CHECK(fabsf(m.vn - 3.0f) < 0.05f && fabsf(m.ve + 4.0f) < 0.05f && c.pos_error() == 0.0f && c.target_n() == m.pn - m.vn * dt, "velocity wanted 3 / -4 m/s, no position target: it flies %.2f / %.2f m/s and the target stays with the craft", m.vn, m.ve); }
     // relax
-    { PosControlNE c; c.init(0, 0, 0, 0, 20.0f, 0, 0); const float a0 = c.accel_e(); for (int i = 0; i < 80; i++) c.relax(dt);
+    { nav::PosController c; c.init(0, 0, 0, 0, 20.0f, 0, 0); const float a0 = c.accel_e(); for (int i = 0; i < 80; i++) c.relax(dt);
       CHECK(a0 > 3.0f && fabsf(c.accel_e() / a0 - expf(-1.0f)) < 0.02f && fabsf(c.i_e() / a0 - expf(-1.0f)) < 0.02f, "relax(): what it holds fades with a time constant of 0.16 s (%.0f %% after 0.16 s)", c.accel_e() / a0 * 100); }
     // taking over with a velocity error already there (a gust, the rescue's first command): the filters start from it, no kick
-    { PosControlNE c; c.cfg.vel_i = 0; c.init(0, 0, 0, 0, 0, 0, 0); c.update(0, 0, -1.0f, 0, dt, false); const float a1 = c.accel_n(); c.update(0, 0, -1.0f, 0, dt, false); const float a2 = c.accel_n();
+    { nav::PosController c; c.cfg.vel_i = 0; c.init(0, 0, 0, 0, 0, 0, 0); c.update(0, 0, -1.0f, 0, dt, false); const float a1 = c.accel_n(); c.update(0, 0, -1.0f, 0, dt, false); const float a2 = c.accel_n();
       CHECK(fabsf(a1 - 2.0f) < 1e-3f && fabsf(a2 - 2.0f) < 1e-3f, "1 m/s of velocity error from the first step on: P x error at once and nothing from the D part (%.3f, %.3f m/s^2)", a1, a2); }
     // the filters: a step in the velocity error reaches the output through a 5 Hz low-pass; the D part is the low-passed slope
-    { PosControlNE c; c.cfg.vel_i = 0; c.cfg.vel_d = 0; c.init(0, 0, 0, 0, 0, 0, 0); c.update(0, 0, 0, 0, dt, false);
+    { nav::PosController c; c.cfg.vel_i = 0; c.cfg.vel_d = 0; c.init(0, 0, 0, 0, 0, 0, 0); c.update(0, 0, 0, 0, dt, false);
       int n63 = -1; for (int i = 0; i < 200; i++) { c.update(0, 0, -1.0f, 0, dt, false); if (n63 < 0 && c.accel_n() >= 2.0f * (1.0f - expf(-1.0f))) n63 = i + 1; }
       CHECK(abs(n63 - 16) <= 1 && fabsf(c.accel_n() - 2.0f) < 0.01f, "velocity error 1 m/s: P 2.0 gives 2 m/s^2, through a 5 Hz low-pass (63 %% after %d ms; 1 / (2 pi 5) = 32 ms)", n63 * 2);
-      PosControlNE d; d.cfg.vel_i = 0; d.cfg.vel_p = 0; d.init(0, 0, 0, 0, 0, 0, 0); float v = 0; d.update(0, 0, 0, 0, dt, false);
+      nav::PosController d; d.cfg.vel_i = 0; d.cfg.vel_p = 0; d.init(0, 0, 0, 0, 0, 0, 0); float v = 0; d.update(0, 0, 0, 0, dt, false);
       for (int i = 0; i < 1000; i++) { v -= 2.0f * dt; d.update(0, 0, v, 0, dt, false); }
       CHECK(fabsf(d.accel_n() - 0.25f * 2.0f) < 0.01f, "a velocity error that grows 2 m/s per second: D 0.25 gives %.2f m/s^2", d.accel_n()); }
 }
@@ -289,7 +288,7 @@ static void t_poscontrol() {
 // Position Hold
 // ---------------------------------------------------------------------------------------------------------------------
 struct PhRig {
-    Mass m; PosHold ph; PosHoldInput in; float roll = 0, pitch = 0, t = 0, max_step = 0; const float dt = 0.0025f;
+    Mass m; nav::PosHoldMode ph; nav::PosHoldInput in; float roll = 0, pitch = 0, t = 0, max_step = 0; const float dt = 0.0025f;
     PhRig() { in.airborne = true; ph.init(in); }
     // sticks: lean asked for (deg); 0 = centred
     void run(float seconds, float stick_roll, float stick_pitch) {
@@ -305,7 +304,7 @@ struct PhRig {
 };
 
 static void t_poshold() {
-    printf("[position hold] the pilot flies, lets go, it brakes and stays (ArduCopter PosHold)\n");
+    printf("[position hold] the pilot flies, lets go, it brakes and stays (ArduCopter nav::PosHoldMode)\n");
     // flying: the stick is the lean
     { PhRig r; r.run(0.5f, 0, 12.0f);
       CHECK(r.ph.state(1) == PhAxis::PILOT && fabsf(r.pitch - 12.0f) < 1e-4f && fabsf(r.roll) < 0.5f && !r.ph.holding(), "stick forward: 12 deg nose down, as in Angle (pitch axis PILOT)");
@@ -373,7 +372,7 @@ static void t_poshold() {
     { PhRig r; r.run(1.0f, 10.0f, 0); r.run(0.1f, 0, 0); const float after = r.roll; r.run(0.4f, 0, 0); const bool still_his = r.ph.state(0) == PhAxis::PILOT; r.run(0.1f, 0, 0);
       // 10 deg: taken back by 5 /s of what is left (10 x e^-0.5 = 6.1 after 0.1 s) down to 1.6 deg (0.37 s), from there at 8 deg/s: gone after 0.57 s
       CHECK(fabsf(after - 10.0f * expf(-0.5f)) < 0.3f && still_his && r.ph.state(0) == PhAxis::BRAKE, "stick let go from 10 deg: %.1f deg are still held 0.1 s later; after 0.57 s the lean is gone and the brake has the axis", after);
-      PhRig lin; lin.ph.cfg.smooth_rate = 0; lin.run(1.0f, 10.0f, 0); lin.run(0.5f, 0, 0);
+      PhRig lin; lin.ph.cfg.smooth_rate_hz = 0; lin.run(1.0f, 10.0f, 0); lin.run(0.5f, 0, 0);
       CHECK(fabsf(lin.roll - 6.0f) < 0.1f && lin.ph.state(0) == PhAxis::PILOT, "(at least at brake speed: with the 5 /s off, 8 deg/s x 0.5 s leave %.1f of 10 deg)", lin.roll);
       PhRig rev; rev.run(1.0f, 10.0f, 0); rev.run(0.0025f, -3.0f, 0);
       CHECK(fabsf(rev.roll + 3.0f) < 1e-3f, "stick to the other side: followed at once (%.1f)", rev.roll);
@@ -393,92 +392,175 @@ static void t_poshold() {
 // ---------------------------------------------------------------------------------------------------------------------
 // GPS Rescue
 // ---------------------------------------------------------------------------------------------------------------------
-// A craft that does what it is told, with a little lag: the velocity over the ground, the climb rate, the yaw rate.
+// A craft that does what it is told, with a little lag: it flies to the target point (the target's velocity + 1 m/s per metre
+// off it, against the wind, at most vmax through the air), the climb rate, the yaw rate.
 struct RescSim {
-    Rescue r; RescueInput in; RescueOutput out; float t = 0, wind_n = 0, wind_e = 0, climb_factor = 1.0f, vz = 0; const float dt = 0.01f;
-    std::vector<RescuePhase> seen; float max_speed = 0, max_yaw_rate = 0, max_z = 0, turned = 0;
+    Rescue r; RescueInput in; RescueOutput out; float t = 0, wind_n = 0, wind_e = 0, climb_factor = 1.0f, vz = 0, vmax = 12.0f; const float dt = 0.01f;
+    std::vector<RescuePhase> seen; float max_speed = 0, max_yaw_rate = 0, max_z = 0, turned = 0, max_lead = 0;
     RescSim(float pn, float pe, float z, float yaw) { in.armed = in.airborne = true; in.pos_valid = in.alt_valid = in.heading_valid = true; in.sats = 12; in.pos_n = pn; in.pos_e = pe; in.z = z; in.yaw_deg = yaw; }
     void step() {
         out = r.update(in, dt); t += dt;
         if (seen.empty() || seen.back() != r.phase()) seen.push_back(r.phase());
         if (!out.active) return;
-        in.vel_n += (out.vel_n + wind_n - in.vel_n) * dt / 0.8f; in.vel_e += (out.vel_e + wind_e - in.vel_e) * dt / 0.8f;
+        // the velocity over the ground asked for, flown against the wind (as the controller's integrator does) with at most vmax through the air
+        float an = -wind_n, ae = -wind_e;
+        if (out.horizontal) { an = out.vel_n + (out.tgt_n - in.pos_n) - wind_n; ae = out.vel_e + (out.tgt_e - in.pos_e) - wind_e; }
+        const float c = hypotf(an, ae); if (c > vmax) { an *= vmax / c; ae *= vmax / c; }
+        in.vel_n += (an + wind_n - in.vel_n) * dt / 0.8f; in.vel_e += (ae + wind_e - in.vel_e) * dt / 0.8f;
         in.pos_n += in.vel_n * dt; in.pos_e += in.vel_e * dt;
         vz += (out.climb_mps * climb_factor - vz) * dt / 0.4f; in.z = fmaxf(in.z + vz * dt, 0.0f);
         if (out.yaw_control) { in.yaw_deg = Rescue::wrap180(in.yaw_deg + out.yaw_rate_dps * dt); turned += out.yaw_rate_dps * dt; }
         max_speed = fmaxf(max_speed, hypotf(in.vel_n, in.vel_e)); max_yaw_rate = fmaxf(max_yaw_rate, fabsf(out.yaw_rate_dps)); max_z = fmaxf(max_z, in.z);
+        if (out.horizontal) max_lead = fmaxf(max_lead, hypotf(out.tgt_n - in.pos_n, out.tgt_e - in.pos_e));
     }
     void run(float seconds) { for (int i = 0; i < (int)(seconds / dt + 0.5f); i++) step(); }
     bool until(RescuePhase p, float timeout) { for (float e = 0; e < timeout && r.phase() != p; e += dt) step(); return r.phase() == p; }
     float dist() const { return hypotf(in.pos_n, in.pos_e); }
+    // before the rescue: the pilot flies the craft along a line to (n, e, z) at 5 m/s (the way is remembered)
+    void fly_to(float n, float e, float z) {
+        const float dn = n - in.pos_n, de = e - in.pos_e, dz = z - in.z, l = sqrtf(dn * dn + de * de + dz * dz); const int k = (int)(l / (5.0f * dt)) + 1;
+        const float n0 = in.pos_n, e0 = in.pos_e, z0 = in.z;
+        for (int i = 1; i <= k; i++) { in.pos_n = n0 + dn * i / k; in.pos_e = e0 + de * i / k; in.z = z0 + dz * i / k; out = r.update(in, dt); t += dt; }
+    }
 };
-static const char* phase_name(RescuePhase p) { static const char* n[] = {"IDLE", "CLIMB", "ROTATE", "FLY_HOME", "DESCENT", "LANDING", "FAILED"}; return n[(int)p]; }
+static const char* phase_name(RescuePhase p) { static const char* n[] = {"IDLE", "CLIMB", "ROTATE", "FLY_HOME", "DESCENT", "LANDING", "FAILED", "LOITER"}; return n[(int)p]; }
+static std::string phases(const RescSim& s) { std::string o; for (RescuePhase p : s.seen) { o += phase_name(p); o += ' '; } return o; }
+// how far the point (n, e) is from the polyline through pts
+static float off_path(float n, float e, const std::vector<std::pair<float, float>>& pts) {
+    float best = 1e9f;
+    for (size_t i = 0; i + 1 < pts.size(); i++) { nav::Crumb x, a, b; x.n = n; x.e = e; a.n = pts[i].first; a.e = pts[i].second; b.n = pts[i + 1].first; b.e = pts[i + 1].second; best = fminf(best, sqrtf(nav::point_segment2(x, a, b))); }
+    return best;
+}
+
+static void t_breadcrumbs() {
+    printf("[breadcrumbs] the way the flight came (ArduPilot AP_SmartRTL): a point every 2 m, loops cut out, simplified when full\n");
+    using nav::Crumb;
+    { auto C = [](float n, float e, float z) { Crumb c; c.n = n; c.e = e; c.z = z; return c; }; Crumb a, b;
+      const float cross = nav::segment_gap2(C(-5, 0, 0), C(5, 0, 0), C(0, -5, 0), C(0, 5, 0), a, b), par = nav::segment_gap2(C(0, 0, 0), C(10, 0, 0), C(2, 3, 0), C(8, 3, 0), a, b);
+      const float skew = nav::segment_gap2(C(-5, 0, 0), C(5, 0, 0), C(0, -5, 4), C(0, 5, 4), a, b); const float az = a.z, bz = b.z, an = a.n, be = b.e;
+      const float apart = nav::segment_gap2(C(0, 0, 0), C(1, 0, 0), C(5, 0, 0), C(6, 0, 0), a, b);
+      CHECK(cross < 1e-6f && fabsf(par - 9.0f) < 1e-4f && fabsf(skew - 16.0f) < 1e-4f && fabsf(az) < 1e-5f && fabsf(bz - 4.0f) < 1e-5f && fabsf(an) < 1e-5f && fabsf(be) < 1e-5f && fabsf(apart - 16.0f) < 1e-4f,
+            "closest approach of two segments: crossing 0, parallel 3 m apart 9 (m^2), crossing 4 m above each other 16, in a line with a 4 m gap 16");
+      CHECK(fabsf(nav::point_segment2(C(5, 2, 0), C(0, 0, 0), C(10, 0, 0)) - 4.0f) < 1e-5f && fabsf(nav::point_segment2(C(-3, 4, 0), C(0, 0, 0), C(10, 0, 0)) - 25.0f) < 1e-5f, "a point from a segment: beside it 2 m, beyond its end 5 m"); }
+    { nav::Breadcrumbs<64> b; b.reset(); for (int i = 0; i <= 100; i++) b.record(0.5f * i, 0, 10);      // 50 m north in 0.5 m steps
+      CHECK(b.size() == 26 && b.ok() && fabsf(b.at(25).n - 50.0f) < 1e-4f && b.loops_cut() == 0, "50 m in a line: a point every 2 m (%d points), nothing taken for a loop", b.size()); }
+    // out 40 m, a circle of 10 m radius that comes back over itself, on another 40 m: the circle is cut out
+    { nav::Breadcrumbs<128> b; b.reset(); for (int i = 0; i <= 80; i++) b.record(0.5f * i, 0, 10);
+      for (int i = 0; i <= 200; i++) { const float a = 2.0f * kPi * i / 200.0f; b.record(40.0f + 10.0f * sinf(a), 10.0f - 10.0f * cosf(a), 10); }
+      for (int i = 0; i <= 80; i++) b.record(40.0f + 0.5f * i, 0, 10);
+      float len = 0, far = 0; for (int i = 1; i < b.size(); i++) len += hypotf(b.at(i).n - b.at(i - 1).n, b.at(i).e - b.at(i - 1).e); for (int i = 0; i < b.size(); i++) far = fmaxf(far, fabsf(b.at(i).e));
+      CHECK(b.ok() && b.loops_cut() >= 1 && len < 84.0f && far < 2.5f, "a loop flown on the way: cut out (%u cut), the path is %.0f m long (80 m straight; the circle was 63 m more), at most %.1f m off the line", b.loops_cut(), len, far); }
+    // a long gentle wiggle: more points than the store holds - simplified, kept
+    { nav::Breadcrumbs<32> b; b.reset(); bool all = true; for (int i = 0; i <= 2000; i++) all &= b.record(0.5f * i, 0.4f * sinf(0.05f * i), 10);
+      CHECK(all && b.ok() && b.size() < 32 && b.simplified() >= 1 && fabsf(b.at(b.size() - 1).n - 1000.0f) < 2.5f, "1000 m of a line that wiggles 0.4 m in a store of 32: simplified %u times (tolerance 1 m = half the accuracy), %d points", b.simplified(), b.size()); }
+    // a zig-zag far too wide to simplify: the store stays full, the points are refused (the caller gives up after 15 s)
+    { nav::Breadcrumbs<32> b; b.reset(); int refused = 0; for (int i = 0; i < 60; i++) refused += b.record(10.0f * i, (i & 1) ? 40.0f : -40.0f, 10) ? 0 : 1;
+      CHECK(refused > 20 && b.size() == 32 && b.ok(), "a zig-zag 80 m wide, 60 corners, in a store of 32: full, %d points refused", refused);
+      nav::Breadcrumbs<32> g; g.reset(); g.record(0, 0, 5); g.record(10, 0, 5); g.give_up(); g.record(20, 0, 5); const bool off = !g.ok() && g.size() == 2; b.reset(); CHECK(off && b.ok() && b.size() == 0, "given up: not ok, nothing more recorded; reset: empty and usable again"); }
+}
 
 static void t_rescue() {
-    printf("[gps rescue] climb, turn towards home, fly there, come down (Betaflight's sequence)\n");
+    printf("[gps rescue] PX4 / ArduPilot RTL: climb (the cone), a path home, down over home, wait, land; SmartRTL; LAND\n");
     using P = RescuePhase;
-    // 150 m out to the north-east, 20 m up, nose pointing away; the flight had been up to 35 m
-    { RescSim s(106, 106, 35, 45); s.run(1.0f); s.in.z = 20; s.run(1.0f);
-      CHECK(s.r.phase() == P::IDLE && !s.out.active && fabsf(s.r.max_height() - 35.0f) < 1e-3f, "not asked for: idle, it only remembers how high the flight went (%.0f m)", s.r.max_height());
+    // 150 m out to the north-east, 20 m up, nose pointing away
+    { RescSim s(106, 106, 20, 45); s.run(1.0f);
+      CHECK(s.r.phase() == P::IDLE && !s.out.active && s.r.remaining() == 0, "not asked for: idle");
       s.in.request = true; s.step();
-      CHECK(s.r.phase() == P::CLIMB && s.out.active && fabsf(s.r.return_height() - 45.0f) < 1e-3f && s.out.climb_mps == 5.0f && s.out.vel_n == 0 && !s.out.yaw_control, "asked for: climb at 5 m/s to the highest point of the flight + 10 m (%.0f m), standing still", s.r.return_height());
-      const bool rot = s.until(P::ROTATE, 20); const float t_climb = s.t - 2.0f, z_rot = s.in.z, d_rot = s.dist();
-      // 20 m at 5 m/s take 4 s; the last 5 m are flown at "1 m/s per metre left" (5 .. 0.5 m/s): about 2.3 s more, and it is
-      // within half a metre of the return height when it gets there - not past it
-      CHECK(rot && t_climb > 5.2f && t_climb < 7.5f && z_rot >= 44.4f && z_rot <= 45.2f && fabsf(d_rot - 150.0f) < 0.5f, "after %.1f s at %.1f m: turning", t_climb, z_rot);
-      const bool fly = s.until(P::FLY_HOME, 20); const float yaw_fly = s.in.yaw_deg, t_rot = s.t;
-      // home lies to the south-west: heading -135. From 45 that is half a turn; the nose must be within 30 deg before it flies
-      CHECK(fly && fabsf(Rescue::wrap180(yaw_fly + 135.0f)) < 30.0f && s.max_yaw_rate <= 90.0f + 1e-3f && s.max_yaw_rate > 80.0f && s.dist() > 149.0f, "turned to within 30 deg of the way home (heading %.0f, home at -135) at 90 deg/s at most, without leaving the spot", yaw_fly);
-      s.run(0.25f); const float v_q = hypotf(s.out.vel_n, s.out.vel_e); s.run(0.75f); const float v_1s = hypotf(s.out.vel_n, s.out.vel_e);
-      CHECK(fabsf(v_q - 7.5f * 0.25f) < 0.15f, "the speed is eased in over the first second of flying home (%.2f m/s after 0.25 s)", v_q);
-      s.run(5.0f); const float v_cmd = hypotf(s.out.vel_n, s.out.vel_e), dir = atan2f(s.out.vel_e, s.out.vel_n) * kRad2Deg;
-      CHECK(fabsf(v_1s - 7.5f) < 0.05f && fabsf(v_cmd - 7.5f) < 1e-3f && fabsf(Rescue::wrap180(dir + 135.0f)) < 0.5f && fabsf(Rescue::wrap180(s.in.yaw_deg + 135.0f)) < 2.0f && s.out.climb_mps == 0,
-            "flying home: 7.5 m/s towards -135 deg (reached within a second: %.1f), the nose on the way (%.0f), the height held", v_1s, s.in.yaw_deg);
-      (void)t_rot;
-      // slowing down over the last 40 m
-      while (s.dist() > 30.0f && s.r.phase() == P::FLY_HOME) s.step();
-      CHECK(fabsf(hypotf(s.out.vel_n, s.out.vel_e) - 7.5f * 30.0f / 40.0f) < 0.1f, "30 m from home: %.2f m/s (7.5 x 30 / 40)", hypotf(s.out.vel_n, s.out.vel_e));
-      const bool desc = s.until(P::DESCENT, 20); const float d_desc = s.dist();
-      CHECK(desc && fabsf(d_desc - 20.0f) < 0.3f && s.max_z < 45.5f, "20 m from home the descent begins (%.1f m out, %.1f m up; never higher than %.1f m: the climb did not shoot past the return height)", d_desc, s.in.z, s.max_z);
-      s.step(); const float sink_45 = -s.out.climb_mps;
-      CHECK(fabsf(sink_45 - 1.5f * (0.6f + 2.4f * (s.in.z - 10.0f) / 40.0f)) < 0.01f && sink_45 > 3.5f, "sinking %.2f m/s at %.0f m: the higher the faster (1.5 x 0.6 below 10 m ... x 3 from 50 m on)", sink_45, s.in.z);
-      const bool land = s.until(P::LANDING, 60); const float z_land = s.in.z, d_land = s.dist(); s.step();
-      CHECK(land && fabsf(z_land - 4.0f) < 0.1f && fabsf(-s.out.climb_mps - 0.9f) < 1e-3f && !s.out.yaw_control, "below 4 m: landing at 0.9 m/s, %.1f m from home, no more turning", d_land);
-      s.run(8.0f);
-      CHECK(s.in.z == 0.0f && s.dist() < 2.5f && s.r.phase() == P::LANDING && s.out.active, "down %.1f m from home after %.0f s (it keeps asking for the descent: the landing detection of Altitude Hold ends the flight)", s.dist(), s.t);
-      std::string order; for (P p : s.seen) { order += phase_name(p); order += ' '; }
-      CHECK(order == "IDLE CLIMB ROTATE FLY_HOME DESCENT LANDING ", "the phases in order: %s", order.c_str()); }
-    // the other ways to choose the height; coming from above
+      CHECK(s.r.phase() == P::CLIMB && s.out.active && s.out.horizontal && fabsf(s.r.return_height() - 30.0f) < 1e-3f && s.out.climb_mps == 5.0f && s.out.vel_n == 0 && !s.out.yaw_control && fabsf(s.out.tgt_n - 106.0f) < 0.1f && fabsf(s.out.tgt_e - 106.0f) < 0.1f,
+            "asked for: 150 m out (beyond RTL_MIN_DIST), the return height 30 m; it climbs at 5 m/s, holding the place where it was");
+      CHECK(fabsf(s.r.remaining() - 150.0f) < 1.0f, "the way home: %.1f m", s.r.remaining());
+      const float n0 = s.in.pos_n, e0 = s.in.pos_e; const bool fly = s.until(P::FLY_HOME, 20); const float z_fly = s.in.z;
+      CHECK(fly && z_fly >= 29.4f && z_fly <= 30.2f && hypotf(s.in.pos_n - n0, s.in.pos_e - e0) < 0.2f && !s.r.smart(), "at %.1f m: on the way home (it has not moved while climbing)", z_fly);
+      s.run(1.0f); const float v1 = hypotf(s.out.vel_n, s.out.vel_e), dir = atan2f(s.out.vel_e, s.out.vel_n) * kRad2Deg;
+      CHECK(fabsf(v1 - 2.0f) < 0.05f && fabsf(Rescue::wrap180(dir + 135.0f)) < 0.5f, "the target moves towards home (-135 deg) and speeds up at 2 m/s^2: %.2f m/s after a second", v1);
+      s.run(6.0f); const float vc = hypotf(s.out.vel_n, s.out.vel_e), rem = s.r.remaining();
+      CHECK(fabsf(vc - 7.5f) < 1e-3f && fabsf(Rescue::wrap180(s.in.yaw_deg + 135.0f)) < 2.0f && s.max_yaw_rate <= 90.0f + 1e-3f && fabsf(s.in.z - 30.0f) < 0.5f,
+            "flying home at 7.5 m/s, the nose turned along the way (%.0f) at 90 deg/s at most, the height held (%.1f m)", s.in.yaw_deg, s.in.z);
+      CHECK(fabsf(rem - s.dist()) < 1.0f && rem < 120.0f, "the way still to go (for the OSD): %.1f m, the craft is %.1f m from home", rem, s.dist());
+      while (s.r.phase() == P::FLY_HOME && s.r.path_left() > 9.0f) s.step();
+      CHECK(fabsf(hypotf(s.out.vel_n, s.out.vel_e) - 6.0f) < 0.1f, "9 m before home the target is down to %.2f m/s (it stops at home with 2 m/s^2: sqrt(2 x 2 x 9) = 6)", hypotf(s.out.vel_n, s.out.vel_e));
+      const bool desc = s.until(P::DESCENT, 20);
+      CHECK(desc && s.dist() < 2.0f && s.out.tgt_n == 0 && s.out.tgt_e == 0 && s.max_z < 30.6f && s.r.remaining() == 0, "over home (%.1f m off, within the acceptance radius): coming down, the position held on home", s.dist());
+      s.step(); const float sink30 = -s.out.climb_mps;
+      CHECK(fabsf(sink30 - 1.5f * (0.6f + 2.4f * (s.in.z - 10.0f) / 40.0f)) < 0.01f, "sinking %.2f m/s at %.0f m (the higher the faster)", sink30, s.in.z);
+      const bool loiter = s.until(P::LOITER, 30); const float z_l = s.in.z, t_l = s.t;
+      CHECK(loiter && z_l > 9.4f && z_l < 10.6f, "down to 10 m over home (RTL_DESCEND_ALT; %.1f m), waiting", z_l);
+      const bool land = s.until(P::LANDING, 10); s.step();
+      CHECK(land && fabsf(s.t - t_l - 5.0f) < 0.1f && fabsf(-s.out.climb_mps - 1.5f * (0.6f + 2.4f * fmaxf(s.in.z - 10.0f, 0.0f) / 40.0f)) < 1e-3f && -s.out.climb_mps < 1.0f, "after 5 s (RTL_LAND_DELAY): landing, %.2f m/s above 4 m", -s.out.climb_mps);
+      while (s.in.z > 3.5f) { s.step(); }
+      s.step();
+      CHECK(fabsf(-s.out.climb_mps - 0.5f) < 1e-3f, "below 4 m: 0.5 m/s (LAND_SPD)");
+      s.run(10.0f);
+      CHECK(s.in.z == 0.0f && s.dist() < 1.0f && s.r.phase() == P::LANDING && s.out.active, "down %.2f m from home (it keeps asking for the descent: the landing detection of Altitude Hold ends the flight)", s.dist());
+      CHECK(phases(s) == "IDLE CLIMB FLY_HOME DESCENT LOITER LANDING ", "the phases in order: %s", phases(s).c_str()); }
+    // a craft flying fast when the rescue starts: the path begins where it can stop (ArduPilot build_path)
+    { RescSim s(100, 0, 30, 0); s.in.vel_n = 8.0f; s.in.request = true; s.step();
+      CHECK(fabsf(s.out.tgt_n - (100.0f + 8.0f * 8.0f / 4.0f)) < 0.2f && fabsf(s.out.tgt_e) < 1e-3f, "8 m/s away from home at 100 m: it climbs over the point 16 m on, where it can stop at 2 m/s^2 (%.1f m)", s.out.tgt_n); }
+    // the cone (PX4 RTL::computeReturnAltitude): only within RTL_MIN_DIST
+    { auto rz = [](float n, float z, float cone = 45.0f) { RescSim s(n, 0, z, 0); s.r.cfg.cone_deg = cone; s.in.request = true; s.step(); return s.r.return_height(); };
+      CHECK(rz(10, 2) == 10.0f && rz(3, 1) == 4.0f && rz(1.5f, 0.5f) == 3.0f && rz(20, 5) == 30.0f && rz(300, 50) == 50.0f,
+            "cone 45 deg: 10 m out -> 10 m; 3 m out -> 4 m (twice the acceptance radius); 1.5 m out (inside it) -> twice the distance; 20 m out (beyond 15 m) -> 30 m; a craft at 50 m keeps its 50");
+      CHECK(rz(10, 2, 0) == 30.0f && rz(1.5f, 0.5f, 0) == 30.0f && fabsf(rz(12, 2, 30) - 12.0f / tanf(30.0f * kDeg2Rad)) < 1e-3f && rz(10, 14) == 14.0f, "cone 0: always 30 m (even right over home); cone 30 deg: 12 m out -> %.1f m; never down first (14 m)", rz(12, 2, 30));
+      RescSim fx(10, 0, 2, 0); fx.r.cfg.alt_mode = RESCUE_ALT_FIXED; fx.in.request = true; fx.step();
+      CHECK(fx.r.return_height() == 30.0f, "FIXED close to home: still the fixed 30 m (no cone)");
+      RescSim n(8, 0, 3, 0); n.in.request = true; n.until(P::LANDING, 30);
+      CHECK(n.r.return_height() == 8.0f && phases(n) == "CLIMB FLY_HOME LOITER LANDING " && n.max_z < 8.3f, "8 m from home at 3 m: up to 8 m only, home, no descent before the wait (%s)", phases(n).c_str()); }
+    // the other ways to choose the height (as before)
     { RescSim s(0, -200, 50, 90); s.r.cfg.alt_mode = RESCUE_ALT_FIXED; s.in.request = true; s.step();
-      CHECK(s.r.return_height() == 30.0f && fabsf(s.out.climb_mps + 1.5f) < 1e-6f, "fixed return height 30 m, the craft is at 50: it comes DOWN to it at 1.5 m/s first");
-      const bool rot = s.until(P::ROTATE, 30); CHECK(rot && s.in.z <= 30.6f && s.in.z > 29.4f, "and turns when it is there (%.1f m; slower over the last metre)", s.in.z);
-      const bool fly = s.until(P::FLY_HOME, 5); CHECK(fly && s.t < 16.5f, "the nose already points home (east): no time lost turning");
-      RescSim c(300, 0, 12, 0); c.run(0.5f); c.in.z = 25; c.run(0.5f); c.in.z = 12; c.r.cfg.alt_mode = RESCUE_ALT_CURRENT; c.in.request = true; c.step();
-      CHECK(c.r.return_height() == 22.0f, "\"present height + margin\": 12 + 10 = %.0f m (it had been at 25)", c.r.return_height()); }
-    // started close to home
-    { RescSim s(6, 5, 2, 10); s.in.request = true; s.step(); const float rz = s.r.return_height(); s.until(P::ROTATE, 10); s.step();
-      CHECK(rz == 12.0f && s.r.phase() == P::DESCENT, "8 m from home, 2 m up: up by the margin (to %.0f m), then straight into the descent - no turning, no flying", rz);
-      RescSim low(3, 0, -4.5f, 0); low.in.z = -4.5f; low.in.request = true; low.step(); CHECK(low.r.return_height() == 7.5f, "(never lower than 7.5 m)");
-      s.until(P::LANDING, 30); s.run(10.0f); CHECK(s.in.z == 0.0f && s.dist() < 2.5f, "and down, %.1f m from home", s.dist()); }
-    // the turn: the short way round, eased in over a second
-    { RescSim s(-100, 0, 40, -100); s.r.cfg.alt_mode = RESCUE_ALT_FIXED; s.r.cfg.return_alt_m = 40; s.in.z = 40.5f; s.in.request = true; s.until(P::ROTATE, 5);
-      s.run(0.25f); const float early = s.out.yaw_rate_dps, off = -s.in.yaw_deg; s.until(P::FLY_HOME, 10);
-      // home is to the north (heading 0); the nose points to -100: turn right (+). Rate = 1.8 deg/s per degree, eased in over the first second
-      CHECK(fabsf(early - off * 1.8f * 0.25f) < 2.0f && early < 50.0f && s.turned > 60.0f && s.turned < 100.0f, "nose at -100, home to the north: it turns right, the short way (%.0f deg turned); a quarter second in, a quarter of the rate (%.0f deg/s for %.0f deg off)", s.turned, early, off);
-      RescSim o(-100, 0, 40.5f, 100); o.r.cfg.alt_mode = RESCUE_ALT_FIXED; o.r.cfg.return_alt_m = 40; o.in.request = true; o.until(P::FLY_HOME, 15);
-      CHECK(o.turned < -60.0f, "nose at +100: left (%.0f deg)", o.turned);
-      RescSim stuck(-100, 0, 40.5f, 170); stuck.r.cfg.alt_mode = RESCUE_ALT_FIXED; stuck.r.cfg.return_alt_m = 40; stuck.r.cfg.max_yaw_rate_dps = 0.001f; stuck.in.request = true; stuck.until(P::ROTATE, 5); const float t0 = stuck.t; const bool fly = stuck.until(P::FLY_HOME, 15);
-      CHECK(fly && fabsf(stuck.t - t0 - 10.0f) < 0.1f, "a craft that does not turn: after 10 s it flies home anyway (the velocity is steered over the ground, the nose is not needed for it)"); }
-    // the nose and home on the two sides of south: the error is taken the short way across +-180
-    { RescSim s(100, -1, 40.5f, -170); s.r.cfg.alt_mode = RESCUE_ALT_FIXED; s.r.cfg.return_alt_m = 40; s.in.request = true; s.until(P::FLY_HOME, 10); s.run(3.0f);
-      // home lies at a heading of 179.4 deg (south, a little east); the nose points to -170 (190): 10.6 deg to the left
-      CHECK(s.turned < -5.0f && s.turned > -15.0f, "nose at -170, home at 179: it turns %.1f deg to the left, not 349 to the right", s.turned); }
+      CHECK(s.r.return_height() == 30.0f && fabsf(s.out.climb_mps + 1.5f) < 1e-6f, "FIXED 30 m, the craft is at 50: it comes DOWN to it at 1.5 m/s first");
+      RescSim m(300, 0, 12, 0); m.run(0.5f); m.in.z = 25; m.run(0.5f); m.in.z = 12; m.r.cfg.alt_mode = RESCUE_ALT_MAX; m.in.request = true; m.step();
+      RescSim c(300, 0, 12, 0); c.r.cfg.alt_mode = RESCUE_ALT_CURRENT; c.in.request = true; c.step();
+      CHECK(m.r.return_height() == 35.0f && c.r.return_height() == 22.0f, "MAX: the highest point of the flight + 10 = %.0f m; CURRENT: 12 + 10 = %.0f m", m.r.return_height(), c.r.return_height()); }
+    // a fast descent over home stops at the waiting height, not under it (the last metre slowly)
+    { RescSim s(0, 0, 40, 0); s.r.cfg.descend_mps = 5.0f; s.in.request = true; s.until(P::LOITER, 60); float low = s.in.z; for (int i = 0; i < 200; i++) { s.step(); low = fminf(low, s.in.z); }
+      CHECK(low > 9.4f && low < 10.6f && s.max_z < 40.5f, "40 m over home, 5 m/s descent rate: down to the 10 m waiting height, %.2f m at the lowest", low); }
+    // waiting for good; a slow craft
+    { RescSim s(60, 0, 10, 0); s.r.cfg.loiter_s = -1.0f; s.in.request = true; s.until(P::LOITER, 60); s.run(60.0f);
+      CHECK(s.r.phase() == P::LOITER && s.out.climb_mps == 0 && s.dist() < 1.0f, "RTL_LAND_DELAY -1 (rescue_loiter 255): a minute later it still waits over home (never lands by itself)");
+      RescSim w(200, 0, 30, 180); w.vmax = 3.0f; w.r.cfg.alt_mode = RESCUE_ALT_FIXED; w.in.request = true; w.until(P::FLY_HOME, 10); w.run(30.0f);
+      CHECK(w.max_lead < 5.6f && w.dist() < 115.0f, "a craft that can only do 3 m/s: the target waits for it (%.1f m ahead at most - the leash is 5 m); %.0f m to go after 30 s", w.max_lead, w.dist()); }
+    // SmartRTL: the way the flight came
+    { RescSim s(0, 0, 0, 0); s.r.cfg.mode = RESCUE_MODE_SMART_RTL; s.run(0.1f); s.fly_to(0, 0, 3); s.fly_to(100, 0, 15); s.fly_to(100, 100, 15);
+      CHECK(s.r.crumbs().ok() && s.r.crumbs().size() > 50 && s.r.crumbs().at(0).n == 0 && s.r.crumbs().at(0).z == 0, "out 100 m north, then 100 m east, at 15 m: %d points kept, the first one home (where it was armed)", s.r.crumbs().size());
+      s.in.request = true; s.step();
+      CHECK(s.r.smart() && s.r.phase() == P::FLY_HOME && fabsf(s.r.return_height() - 15.0f) < 1e-3f && s.out.climb_mps < 0.1f && fabsf(s.r.remaining() - 200.0f) < 4.0f,
+            "SMART_RTL: no climb, straight onto the way back (%d points, %.0f m to fly - straight home would be 141)", s.r.route_points(), s.r.remaining());
+      const std::vector<std::pair<float, float>> L = {{0, 0}, {100, 0}, {100, 100}}; float off = 0, corner = 1e9f, slowest = 99;
+      while (s.r.phase() == P::FLY_HOME && s.t < 200) { s.step(); off = fmaxf(off, off_path(s.in.pos_n, s.in.pos_e, L)); corner = fminf(corner, hypotf(s.in.pos_n - 100.0f, s.in.pos_e)); if (hypotf(s.out.tgt_n - 100.0f, s.out.tgt_e) < 3.0f) slowest = fminf(slowest, hypotf(s.out.vel_n, s.out.vel_e)); }
+      const float z_home = s.in.z;
+      CHECK(off < 3.0f && corner < 3.0f && slowest < 2.0f, "back along the L it came (never more than %.1f m off it; %.1f m from the corner; the target turns the corner at %.1f m/s - straight home would cut 70 m inside it)", off, corner, slowest);
+      CHECK(z_home > 1.5f && z_home < 2.5f, "the last point is home 2 m up (AP mode_smart_rtl): %.1f m when it gets there", z_home);
+      s.until(P::LANDING, 60); s.run(30.0f);
+      CHECK(s.in.z == 0.0f && s.dist() < 1.0f && phases(s) == "IDLE FLY_HOME LOITER LANDING ", "and down at home: %s", phases(s).c_str()); }
+    // the way back climbs: the height along the path is flown with its feed-forward; home is reached at the height of its point
+    { RescSim s(0, 0, 0, 0); s.r.cfg.mode = RESCUE_MODE_SMART_RTL; s.run(0.1f); s.fly_to(0, 0, 25); s.fly_to(60, 0, 5); s.in.request = true; s.step(); float worst = 0;
+      while (s.r.phase() == P::FLY_HOME && s.t < 100) { s.step(); if (s.in.pos_n > 10.0f && s.in.pos_n < 50.0f) worst = fmaxf(worst, fabsf(s.in.z - (5.0f + 20.0f * (60.0f - s.in.pos_n) / 60.0f))); }
+      const float z_end = s.in.z; const P next = s.r.phase();
+      CHECK(worst < 1.2f, "back up the slope it came down (5 -> 25 m over 60 m): never more than %.2f m off its height", worst);
+      CHECK(next == P::LOITER && z_end < 2.6f, "then down the take-off column to home 2 m up before it counts as there (%.1f m, then %s)", z_end, phase_name(next)); }
+    { RescSim s(0, 0, 0, 0); s.r.cfg.mode = RESCUE_MODE_SMART_RTL; s.run(0.1f); s.fly_to(0, 0, 5); for (int i = 0; i < 300; i++) s.fly_to(20.0f + 3.0f * i, (i & 1) ? 60.0f : -60.0f, 15);
+      s.in.request = true; s.step();
+      CHECK(!s.r.crumbs().ok() && !s.r.smart() && s.r.phase() == P::CLIMB, "a path too winding to keep (300 zig-zags 120 m wide: the store full for 15 s): SMART_RTL flies as RTL (it climbs first)"); }
+    { RescSim s(0, 0, 0, 0); s.r.cfg.mode = RESCUE_MODE_SMART_RTL; s.run(0.1f); s.fly_to(0, 0, 5); s.fly_to(60, 0, 5); s.in.pos_valid = false; s.run(16.0f); s.in.pos_valid = true; s.step();
+      const bool lost = !s.r.crumbs().ok(); RescSim c(0, 0, 0, 0); c.r.cfg.mode = RESCUE_MODE_SMART_RTL; c.run(0.1f); c.fly_to(0, 0, 5); c.fly_to(10, 0, 8); c.in.request = true; c.step();
+      CHECK(lost && !c.r.smart(), "no position for 15 s in the air: the path is given up; SMART_RTL closer than 15 m to home: flown as RTL"); }
+    // LAND: down where it is (ArduPilot mode_land)
+    { RescSim s(50, 20, 30, 0); s.r.cfg.mode = RESCUE_MODE_LAND; s.in.vel_n = 4.0f; s.in.request = true; s.step();
+      CHECK(s.r.phase() == P::LANDING && s.out.horizontal && fabsf(s.out.tgt_n - 54.0f) < 0.1f && fabsf(s.out.tgt_e - 20.0f) < 0.1f && fabsf(-s.out.climb_mps - 2.7f) < 0.01f && s.r.remaining() == 0,
+            "LAND at 30 m, 4 m/s north: down at once, holding the point where it can stop (54 / 20), 2.7 m/s high up");
+      s.run(60.0f);
+      CHECK(s.in.z == 0.0f && hypotf(s.in.pos_n - 54.0f, s.in.pos_e - 20.0f) < 0.5f && phases(s) == "LANDING ", "down %.2f m from that point; no flight home (%s)", hypotf(s.in.pos_n - 54.0f, s.in.pos_e - 20.0f), phases(s).c_str());
+      RescSim g(50, 20, 20, 0); g.r.cfg.mode = RESCUE_MODE_LAND; g.in.pos_valid = false; g.in.heading_valid = false; g.in.request = true; g.step();
+      CHECK(g.r.available(g.in) && g.out.active && !g.out.horizontal && g.out.climb_mps < -1.0f, "LAND without GPS or compass: it starts all the same, only the descent (nogps_run)");
+      RescSim h(50, 20, 20, 0); h.r.cfg.mode = RESCUE_MODE_LAND; h.in.request = true; h.run(2.0f); h.in.pos_valid = false; h.run(2.0f); const bool on = h.out.active && !h.out.horizontal;
+      h.in.alt_valid = false; h.step();
+      CHECK(on && h.r.failure() == RescueFail::NO_ALTITUDE, "the GPS lost while landing: it carries on without the hold; the height lost: failed (NO_ALTITUDE)"); }
     // it does not start without what it needs
     { auto start = [](int what) { RescSim s(100, 0, 20, 0); if (what == 0) s.in.pos_valid = false; if (what == 1) s.in.heading_valid = false; if (what == 2) s.in.alt_valid = false; s.in.request = true; s.step(); return s; };
       RescSim a = start(0), b = start(1), c = start(2);
       CHECK(a.r.phase() == P::FAILED && a.r.failure() == RescueFail::NO_POSITION && !a.out.active && b.r.failure() == RescueFail::NO_HEADING && c.r.failure() == RescueFail::NO_ALTITUDE,
             "no position / no compass heading / no height: it fails at once and says which (the caller lands the plain way)");
-      CHECK(!Rescue::available(a.in) && !Rescue::available(b.in) && !Rescue::available(c.in) && Rescue::available(RescSim(1, 1, 1, 0).in), "available() tells beforehand");
+      CHECK(!a.r.available(a.in) && !b.r.available(b.in) && !c.r.available(c.in) && RescSim(1, 1, 1, 0).r.available(RescSim(1, 1, 1, 0).in), "available() tells beforehand");
       a.in.pos_valid = true; a.run(1.0f); const bool still = a.r.phase() == P::FAILED, still_active = a.out.active; a.in.request = false; a.step(); const bool idle = a.r.phase() == P::IDLE && a.r.failure() == RescueFail::NONE; a.in.request = true; a.step();
       CHECK(still && !still_active && idle && a.r.phase() == P::CLIMB, "a failure stays until the request is taken back (and nothing is flown meanwhile); asked again with a position, it starts"); }
     // lost on the way
@@ -490,22 +572,22 @@ static void t_rescue() {
       CHECK(yet && s.r.failure() == RescueFail::LOW_SATS && fabsf(s.t - t0 - 15.0f) < 1.1f, "fewer than 5 satellites for 15 s: failed (after %.0f s)", s.t - t0);
       RescSim b(2000, 0, 30, 180); b.r.cfg.alt_mode = RESCUE_ALT_FIXED; b.in.request = true; b.until(P::FLY_HOME, 10);
       for (int k = 0; k < 10; k++) { b.in.sats = 4; b.run(10.0f); b.in.sats = 9; b.run(10.0f); }
-      CHECK(b.r.phase() == P::FLY_HOME || b.r.phase() == P::DESCENT, "10 s of few satellites, 10 s of enough, again and again: the count goes down again, it carries on"); }
+      CHECK(b.r.phase() == P::FLY_HOME, "10 s of few satellites, 10 s of enough, again and again: the count goes down again, it carries on"); }
     // not getting anywhere
     { RescSim s(300, 0, 5, 0); s.r.cfg.alt_mode = RESCUE_ALT_FIXED; s.r.cfg.return_alt_m = 100; s.climb_factor = 0.3f; s.in.request = true; s.step(); const float t0 = s.t; s.until(P::FAILED, 30);
       CHECK(s.r.failure() == RescueFail::STALLED && fabsf(s.t - t0 - 10.0f) < 1.1f, "climbing at less than half the wanted rate (1.5 of 5 m/s) for 10 s: failed (STALLED, after %.0f s)", s.t - t0);
-      RescSim ok(300, 0, 5, 0); ok.climb_factor = 0.6f; ok.in.request = true; const bool rot = ok.until(P::ROTATE, 30); CHECK(rot, "at 60 %% of the rate it is slow but gets there"); }
-    { RescSim s(500, 0, 30, 180); s.r.cfg.alt_mode = RESCUE_ALT_FIXED; s.wind_n = 7.0f; s.in.request = true; s.until(P::FLY_HOME, 10); const float t0 = s.t; s.until(P::FAILED, 40);
-      CHECK(s.r.failure() == RescueFail::FLYAWAY && fabsf(s.t - t0 - 20.0f) < 2.5f && s.dist() > 480.0f, "a head wind that leaves 0.5 of the 7.5 m/s: after 20 s of closing in at less than a fifth of the wanted speed, failed (FLYAWAY, after %.0f s)", s.t - t0);
-      RescSim ok(500, 0, 30, 180); ok.r.cfg.alt_mode = RESCUE_ALT_FIXED; ok.wind_n = 5.0f; ok.in.request = true; ok.until(P::FLY_HOME, 10); ok.run(60.0f);
+      RescSim ok(300, 0, 5, 0); ok.climb_factor = 0.6f; ok.in.request = true; const bool fly = ok.until(P::FLY_HOME, 30); CHECK(fly, "at 60 %% of the rate it is slow but gets there"); }
+    { RescSim s(500, 0, 30, 180); s.r.cfg.alt_mode = RESCUE_ALT_FIXED; s.vmax = 7.5f; s.wind_n = 7.0f; s.in.request = true; s.until(P::FLY_HOME, 10); const float t0 = s.t; s.until(P::FAILED, 40);
+      CHECK(s.r.failure() == RescueFail::FLYAWAY && fabsf(s.t - t0 - 20.0f) < 2.5f && s.dist() > 480.0f, "a head wind that leaves 0.5 of the 7.5 m/s: after 20 s of closing in at less than a fifth of the speed, failed (FLYAWAY, after %.0f s)", s.t - t0);
+      RescSim ok(500, 0, 30, 180); ok.r.cfg.alt_mode = RESCUE_ALT_FIXED; ok.vmax = 7.5f; ok.wind_n = 5.0f; ok.in.request = true; ok.until(P::FLY_HOME, 10); ok.run(60.0f);
       CHECK(ok.r.phase() == P::FLY_HOME && ok.dist() < 380.0f, "one that leaves 2.5 m/s (a third): slow, but it carries on (%.0f m to go after a minute)", ok.dist()); }
     // disarmed: everything forgotten
-    { RescSim s(100, 0, 40, 0); s.run(0.5f); s.in.request = true; s.run(2.0f); s.in.armed = false; s.step();
-      CHECK(s.r.phase() == P::IDLE && s.r.max_height() == 0 && !s.out.active, "disarmed: idle, the highest point of the flight forgotten"); }
+    { RescSim s(100, 0, 40, 0); s.r.cfg.mode = RESCUE_MODE_SMART_RTL; s.fly_to(150, 0, 40); s.in.request = true; s.run(2.0f); s.in.armed = false; s.step();
+      CHECK(s.r.phase() == P::IDLE && s.r.max_height() == 0 && !s.out.active && s.r.crumbs().size() == 0, "disarmed: idle, the highest point and the way of the flight forgotten"); }
 }
 
 int main() {
-    t_flow(); t_flow_fusion(); t_tilt_aid(); t_poscontrol(); t_poshold(); t_rescue();
+    t_flow(); t_flow_fusion(); t_tilt_aid(); t_poscontrol(); t_poshold(); t_breadcrumbs(); t_rescue();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

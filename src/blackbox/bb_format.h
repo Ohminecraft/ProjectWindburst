@@ -49,7 +49,9 @@ enum Group : uint8_t { G_GYRO, G_GYRO_RAW, G_SETPOINT, G_PID, G_RC, G_MOTORS, G_
 // ---- fast record: what changes every control cycle
 enum FastId : uint8_t {
     F_GYRO, F_GYRO_RAW, F_SETPOINT, F_PID_P, F_PID_I, F_PID_D, F_PID_F, F_STICK, F_THROTTLE, F_MOTOR, F_ROLL, F_PITCH, F_YAW, F_ACC, F_RPM, F_LOOP_US, F_GAP_US, F_T_LOCK, F_T_IMU, F_T_CORE, F_T_EST, F_T_MOTOR,
-    F_NAV_ACC, F_NAV_VIB, F_NAV_CLIP, F_NAV_BARO, F_NAV_GPS_POS, F_NAV_GPS_VEL, F_NAV_GPS_HACC, F_NAV_GPS_SACC, F_NAV_GPS_SATS, F_NAV_GPS_FLAGS, F_NAV_GPS_SEQ, F_COUNT
+    F_NAV_ACC, F_NAV_VIB, F_NAV_CLIP, F_NAV_BARO, F_NAV_GPS_POS, F_NAV_GPS_VEL, F_NAV_GPS_HACC, F_NAV_GPS_SACC, F_NAV_GPS_SATS, F_NAV_GPS_FLAGS, F_NAV_GPS_SEQ,
+    F_NAV_EST_Z, F_NAV_EST_VZ, F_NAV_EST_BIAS, F_NAV_EST_BARO_OFF, F_NAV_BARO_RATIO, F_NAV_GPS_RATIO, F_NAV_RESETS, F_NAV_EST_POS, F_NAV_EST_VEL,
+    F_NAV_TGT_Z, F_NAV_TGT_VZ, F_NAV_HOVER, F_NAV_TGT_POS, F_NAV_CTL, F_COUNT
 };
 struct FieldDef { uint8_t id; const char* name; uint8_t count; uint8_t type; double scale; float inv; const char* unit; uint8_t group; bool per_motor; };
 #define BB_FIELD(id, name, count, type, scale, unit, group, per_motor) {id, name, count, type, scale, (float)(1.0 / (scale)), unit, group, per_motor}
@@ -90,6 +92,22 @@ constexpr FieldDef kFast[] = {
     BB_FIELD(F_NAV_GPS_SATS, "nav_gps_sats", 1, T_U8, 1.0, "", G_NAV_DEBUG, false),
     BB_FIELD(F_NAV_GPS_FLAGS, "nav_gps_flags", 1, T_U8, 1.0, "", G_NAV_DEBUG, false), // bit 0 a fix has come, 1 vertical velocity measured, 2 used for XY
     BB_FIELD(F_NAV_GPS_SEQ, "nav_gps_seq", 1, T_U8, 1.0, "", G_NAV_DEBUG, false),     // steps by one at each fix
+    // ... the estimates (0.35.0), NED from home
+    BB_FIELD(F_NAV_EST_Z, "nav_est_pd", 1, T_I32, 0.01, "m", G_NAV_DEBUG, false),       // height estimate, DOWN +
+    BB_FIELD(F_NAV_EST_VZ, "nav_est_vd", 1, T_I16, 0.01, "m/s", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_EST_BIAS, "nav_est_bias", 1, T_I16, 0.001, "m/s2", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_EST_BARO_OFF, "nav_baro_off", 1, T_I16, 0.01, "m", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_BARO_RATIO, "nav_baro_ratio", 1, T_U8, 0.05, "", G_NAV_DEBUG, false), // test ratio, > 1 = rejected (saturates at 12.75)
+    BB_FIELD(F_NAV_GPS_RATIO, "nav_gps_ratio", 1, T_U8, 0.05, "", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_RESETS, "nav_resets", 2, T_U8, 1.0, "", G_NAV_DEBUG, false),         // reset counters: height, position
+    BB_FIELD(F_NAV_EST_POS, "nav_est_pos", 2, T_I32, 0.01, "m", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_EST_VEL, "nav_est_vel", 2, T_I16, 0.01, "m/s", G_NAV_DEBUG, false),
+    // ... the controllers' targets
+    BB_FIELD(F_NAV_TGT_Z, "nav_tgt_pd", 1, T_I32, 0.01, "m", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_TGT_VZ, "nav_tgt_vd", 1, T_I16, 0.01, "m/s", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_HOVER, "nav_hover", 1, T_U16, 0.0001, "", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_TGT_POS, "nav_tgt_pos", 2, T_I32, 0.01, "m", G_NAV_DEBUG, false),
+    BB_FIELD(F_NAV_CTL, "nav_ctl", 1, T_U8, 1.0, "", G_NAV_DEBUG, false),              // bit 0 Altitude Hold, 1 Position Hold, 2 holding, 3 fence
 };
 constexpr int kFastDefs = sizeof(kFast) / sizeof(kFast[0]);
 
@@ -117,6 +135,20 @@ WB_FAST inline float nav_value(const fc::nav::Log& n, uint8_t id, int i) {
     case F_NAV_GPS_SATS: return (float)n.gps_sats;
     case F_NAV_GPS_FLAGS: return (float)n.gps_flags;
     case F_NAV_GPS_SEQ: return (float)n.gps_seq;
+    case F_NAV_EST_Z: return n.est_pos_d;
+    case F_NAV_EST_VZ: return n.est_vel_d;
+    case F_NAV_EST_BIAS: return n.est_bias_d;
+    case F_NAV_EST_BARO_OFF: return n.est_baro_off;
+    case F_NAV_BARO_RATIO: return n.baro_ratio;
+    case F_NAV_GPS_RATIO: return n.gps_ratio;
+    case F_NAV_RESETS: return (float)(i == 0 ? n.alt_resets : n.pos_resets);
+    case F_NAV_EST_POS: return n.est_pos[i];
+    case F_NAV_EST_VEL: return n.est_vel[i];
+    case F_NAV_TGT_Z: return n.alt_tgt_pos_d;
+    case F_NAV_TGT_VZ: return n.alt_tgt_vel_d;
+    case F_NAV_HOVER: return n.hover;
+    case F_NAV_TGT_POS: return n.pos_tgt[i];
+    case F_NAV_CTL: return (float)n.ctl_flags;
     default: return 0.0f;
     }
 }

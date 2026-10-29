@@ -334,6 +334,16 @@ def test_motor_tab_and_test_sliders(gui):
     pg.click("#test-stop")
     gui.wait(lambda: float(gui.sim.state()["m1"]) == 0.0, what="stop")
     assert pg.locator('[data-test="1"]').input_value() == "0"
+    # 0.35.1: a slider dragged hard from 0 to 100 % and back. The last value goes out as soon as the command before it is answered
+    # (not at the next 200 ms refresh), and back at 0 the motors stop at once (before: they ran on until the 0.5 s watchdog)
+    drag = "([a, b]) => { const s = document.getElementById('test-all'); for (let v = a; a < b ? v <= b : v >= b; v += a < b ? 1 : -1) { s.value = v; s.dispatchEvent(new Event('input', { bubbles: true })); } }"
+    t0 = time.monotonic(); pg.evaluate(drag, [0, 100])
+    gui.wait(lambda: all(float(gui.sim.state()["m%d" % i]) > 0.95 for i in range(4)), what="all motors at 100 %")
+    up = time.monotonic() - t0
+    t0 = time.monotonic(); pg.evaluate(drag, [100, 0])
+    gui.wait(lambda: all(float(gui.sim.state()["m%d" % i]) == 0.0 for i in range(4)), what="stopped")
+    down = time.monotonic() - t0
+    assert up < 0.4 and down < 0.4, "a fast drag is followed at once: up %.2f s, down %.2f s" % (up, down)
     # all motors, then leave the tab: nothing may keep spinning
     pg.evaluate("() => { const s = document.getElementById('test-all'); s.value = 8; s.dispatchEvent(new Event('input', { bubbles: true })); }")
     gui.wait(lambda: all(0.06 < float(gui.sim.state()["m%d" % i]) < 0.10 for i in range(4)), what="all motors at 8 %")
@@ -745,6 +755,16 @@ def test_position_tab(gui):
     assert geo[1]["full"] == 1 and geo[1]["x"] == 138 and geo[1]["y"] == 100, geo
     assert not gui.field("nav.ph_angle_max").is_disabled() and gui.field("nav.ph_angle_max").input_value() == "30" and gui.field("nav.rescue_ground_speed").input_value() == "7.5"
     assert gui.field("nav.gps_alt").input_value() == "FALLBACK" and gui.field("nav.gps_vel_z").is_checked(), "GPS height: by default only without a barometer; the GPS vertical velocity on"
+    # 0.36: the rescue the way ArduPilot / PX4 do it - three kinds, the PX4 cone by default, the way still to fly home
+    opts = [o.inner_text() for o in pg.locator('[data-field="nav.rescue_mode"] option').all()]
+    assert opts == ["Bay về (RTL)", "Bay về theo đường cũ (SmartRTL)", "Hạ cánh tại chỗ"] and gui.field("nav.rescue_mode").input_value() == "RTL", opts
+    assert gui.field("nav.rescue_alt_mode").input_value() == "CONE" and gui.field("nav.rescue_cone").input_value() == "45" and gui.field("nav.rescue_descend_alt").input_value() == "10"
+    assert gui.field("nav.rescue_loiter").input_value() == "5" and gui.field("nav.rescue_land_speed").input_value() == "0.5" and txt("#rescue-left") == "–"
+    assert pg.locator('[data-field="nav.rescue_descent_dist"]').count() == 0, "not used since 0.36: not shown"
+    pg.select_option('[data-field="nav.rescue_mode"]', "SMART_RTL")
+    gui.wait(lambda: gui.setting("nav", "rescue_mode") == "SMART_RTL", what="rescue_mode written to the firmware")
+    pg.select_option('[data-field="nav.rescue_mode"]', "RTL")
+    gui.wait(lambda: gui.setting("nav", "rescue_mode") == "RTL", what="and back")
     assert txt("#est-gps-alt") == "không dùng lúc này" and txt("#est-gps-vz") == "không dùng lúc này", "disarmed there is no home point, so no GPS height either"
     # ---- choose the sensor: read at power-up
     pg.select_option('[data-field="flow.type"]', "MSP")
@@ -1345,11 +1365,13 @@ def test_a_port_that_does_not_answer_is_explained(gui_en):
         assert "baud rate must match the firmware" in text and "ESP-ROM:esp32s3-20210327" in pg.inner_text("#failure-raw")
         assert pg.inner_text("#connect") == "Connect" and not pg.locator("#port").is_disabled()
         no_vietnamese(gui, "failure help")
+        pg.click("#linkbox-close")
         # a port that can not be opened at all
         gui.choose_port("/dev/ttyDOES_NOT_EXIST")
         pg.click("#connect")
         pg.wait_for_function("/Cannot open the port \\/dev\\/ttyDOES_NOT_EXIST/.test((document.getElementById('failure') || {}).textContent || '')", timeout=8000)
         assert "another program holding the port" in pg.inner_text("#failure") and pg.locator("#failure-raw").count() == 0
+        pg.click("#linkbox-close")
         # then the right port: the explanation goes away
         gui.connect()
         assert pg.locator("#failure").count() == 0
@@ -1877,6 +1899,82 @@ def test_theme_picker_switches_and_is_remembered(gui):
     assert pg.evaluate("document.documentElement.dataset.theme") == "swiss" and pg.input_value("#theme") == "swiss"
     pg.select_option("#theme", "")
     assert pg.evaluate("document.documentElement.dataset.theme") is None
+
+
+def test_interface_size_picker_keys_and_reload(gui):
+    """0.35.1: the desktop window has no browser zoom menu - the page zooms itself (picker at the foot of the rail, Ctrl + / - / 0,
+    Ctrl + mouse wheel), remembered over a reload and applied before the first paint."""
+    pg = gui.page
+    pg.goto(gui.srv.url)
+    pg.wait_for_selector("#zoom")
+    width = lambda: pg.evaluate("document.getElementById('rail').getBoundingClientRect().width")
+    w100 = width()
+    filled = "document.getElementById('app').getBoundingClientRect().bottom / innerHeight"      # (the rectangle is in window pixels, zoom applied)
+    assert pg.input_value("#zoom") == "100" and pg.evaluate("document.documentElement.style.zoom") == ""
+    assert abs(pg.evaluate(filled) - 1.0) < 0.02, "nothing stored: the frame is the window's height (0.35.1 first build: --zoom 0, the frame millions of px tall)"
+    pg.select_option("#zoom", "75")
+    assert pg.evaluate("document.documentElement.style.zoom") == "0.75" and abs(width() - 0.75 * w100) < 2
+    # the frame still fills the whole window (100vh is the window under CSS zoom: before the fix it filled only 75 % of it)
+    assert abs(pg.evaluate(filled) - 1.0) < 0.02, pg.evaluate(filled)
+    pg.reload()
+    pg.wait_for_selector("#zoom")
+    assert pg.input_value("#zoom") == "75" and pg.evaluate("document.documentElement.style.zoom") == "0.75"
+    assert abs(pg.evaluate(filled) - 1.0) < 0.02, "applied before the first paint, the frame fills the window too"
+    pg.keyboard.press("Control+Minus")
+    assert pg.input_value("#zoom") == "67"
+    pg.keyboard.press("Control+Equal")
+    pg.keyboard.press("Control+Equal")
+    assert pg.input_value("#zoom") == "80"
+    pg.mouse.move(400, 300)
+    pg.keyboard.down("Control"); pg.mouse.wheel(0, 100); pg.keyboard.up("Control")
+    pg.wait_for_function("document.getElementById('zoom').value === '75'")
+    pg.keyboard.press("Control+0")
+    assert pg.input_value("#zoom") == "100" and pg.evaluate("document.documentElement.style.zoom") == ""
+
+
+def test_connection_box_steps_failure_and_timeout(gui):
+    """0.35.1: "Kết nối" opens a box in the middle of the window over the blurred page: find the device, connected (which
+    firmware), read the settings, with a bar under them that runs down over the time the step may take - empty = timed out."""
+    pg = gui.page
+    step = lambda s: pg.get_attribute('#linkbox li[data-step="%s"]' % s, "data-state")
+    text = lambda s: pg.inner_text('#linkbox li[data-step="%s"]' % s)
+    # a port that does not exist: the step fails at once with the reason, the bar stops red, the box waits to be closed
+    pg.goto(gui.srv.url)
+    gui.choose_port("COM_DOES_NOT_EXIST")
+    pg.click("#connect")
+    pg.wait_for_selector('#linkbox[data-state="fail"]', timeout=8000)
+    assert pg.is_visible("#linkbox") and step("find") == "fail" and step("read") == "wait"
+    assert "Không mở được cổng COM_DOES_NOT_EXIST" in pg.inner_text("#linkbox-msg") and "bad" in pg.get_attribute("#link-timer", "class")
+    assert pg.evaluate("getComputedStyle(document.getElementById('linkbox')).backdropFilter").startswith("blur"), "the page behind is blurred"
+    pg.click("#linkbox-close")
+    assert pg.is_hidden("#linkbox") and pg.is_visible("#failure"), "the welcome screen keeps the explanation"
+    # a port that does not answer in time: the bar runs out and the box says so before the server gives up
+    real = gui.hub.connect
+    def slow(port, baud=230400):
+        time.sleep(BOX_FIND_S + 1.0)
+        return real("COM_DOES_NOT_EXIST", baud)
+    gui.hub.connect = slow
+    pg.click("#connect")
+    pg.wait_for_selector('#linkbox[data-state="run"]')
+    assert step("find") == "run" and "Đang tìm thiết bị trên COM_DOES_NOT_EXIST" in text("find") and "running" in pg.get_attribute("#link-timer", "class")
+    pg.wait_for_selector("#link-timer.out", timeout=int(BOX_FIND_S * 1000) + 1500)
+    assert step("find") == "fail" and "Hết thời gian" in pg.inner_text("#linkbox-msg") and pg.is_visible("#linkbox-close")
+    pg.wait_for_function("/Không mở được cổng/.test(document.getElementById('linkbox-msg').textContent)", timeout=4000)      # then the server's reason
+    pg.keyboard.press("Escape")
+    assert pg.is_hidden("#linkbox")
+    gui.hub.connect = real
+    # the real board: every step done, the firmware named, and the box goes away by itself
+    gui.choose_port(gui.sim.url)
+    pg.click("#connect")
+    pg.wait_for_selector("#arm-pill.ok, #arm-pill.warn", timeout=15000)
+    pg.wait_for_selector("#linkbox", state="hidden", timeout=3000)
+    assert [step(s) for s in ("find", "link", "read")] == ["done"] * 3 and "Đã kết nối: Windburst RX" in text("link") and "ok" in pg.get_attribute("#link-timer", "class")
+    gui.tab("overview")                                       # nothing left over the page
+    pg.click("#tab-sensors")
+    pg.wait_for_selector("#tab-sensors.active")
+
+
+BOX_FIND_S = 4.5                                              # js/linkbox.js BUDGET.find
 
 
 def test_readings_tabs_usage_bars_compass_tape_and_satellites(gui):

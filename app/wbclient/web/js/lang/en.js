@@ -110,6 +110,32 @@ export const EN = {
     "Flash the firmware built from this project folder (same protocol/wbp_schema.json), or use the app that came with that firmware.",
   "Lần kết nối vừa rồi không được":
     "The last connection attempt failed",
+  "Kết nối {port}":
+    "Connecting to {port}",
+  "Tìm thiết bị":
+    "Find the device",
+  "Đọc cấu hình":
+    "Read the settings",
+  "Đang tìm thiết bị trên {port}…":
+    "Looking for the device on {port}…",
+  "Đã tìm thấy thiết bị":
+    "Device found",
+  "Đã kết nối: {fw}":
+    "Connected: {fw}",
+  "Đã kết nối":
+    "Connected",
+  "Đang đọc cấu hình…":
+    "Reading the settings…",
+  "Đã đọc cấu hình":
+    "Settings read",
+  "Hết thời gian: không có firmware Windburst nào trả lời trên cổng này.":
+    "Timed out: no Windburst firmware answered on this port.",
+  "Hết thời gian: không đọc được cấu hình từ thiết bị.":
+    "Timed out: the settings could not be read from the device.",
+  "Thời gian chờ còn lại":
+    "Time left",
+  "Đóng":
+    "Close",
   "Cổng đã gửi về những dữ liệu sau (không phải khung WBP). Chữ đọc được là log khởi động hoặc lỗi của ESP32; toàn ký tự lạ thường là sai baud.":
     "The port sent the data below (not WBP frames). Readable text is the boot log or an error of the ESP32; only odd characters usually means the wrong baud rate.",
   "Cổng không gửi về byte nào.":
@@ -1815,8 +1841,8 @@ export const EN = {
     "Wind compensation learned (north / east)",
   "GPS Rescue và failsafe":
     "GPS Rescue and failsafe",
-  "Rescue: máy leo lên độ cao bay về, quay mũi về điểm cất cánh, bay về, hạ dần rồi hạ cánh và tắt motor. Chạy khi bật công tắc GPS Rescue (tab Mode), hoặc khi mất sóng nếu chọn ở ô dưới. Sóng trở lại giữa chừng: gạt cần roll hoặc pitch quá 30 % để lấy lại quyền điều khiển. Pin dưới mức tối thiểu thì luôn hạ cánh tại chỗ.":
-    "Rescue: the craft climbs to its return height, turns its nose to the take-off point, flies there, comes down gradually, lands and stops the motors. It runs when the GPS Rescue switch is on (Modes tab), or when the link is lost if chosen in the box below. Link back on the way: move the roll or pitch stick by more than 30 % to take control again. A battery below its minimum always lands on the spot.",
+  "Rescue, theo cách của ArduPilot và PX4. Bay về (RTL): leo lên độ cao bay về (gần home thì leo ít, theo hình nón), bay thẳng về home với mũi hướng theo đường bay, hạ xuống độ cao chờ, chờ vài giây, hạ cánh và tắt motor. Bay về theo đường cũ (SmartRTL): lần ngược lại đường vừa bay, vòng qua những chỗ đã vòng, ở độ cao đã bay. Hạ cánh tại chỗ: hạ ngay chỗ đang bay, giữ vị trí bằng GPS. Chạy khi bật công tắc GPS Rescue (tab Mode), hoặc khi mất sóng nếu chọn ở ô dưới. Sóng trở lại giữa chừng: gạt cần roll hoặc pitch quá 30 % để lấy lại quyền điều khiển. Pin dưới mức tối thiểu thì luôn hạ cánh tại chỗ.":
+    "Rescue, the way ArduPilot and PX4 do it. Fly home (RTL): climbs to the return height (less close to home, by the cone), flies straight home with the nose along the way, comes down to the waiting height, waits a few seconds, lands and stops the motors. Fly home the way it came (SmartRTL): retraces the path just flown, around what it flew around, at the heights it flew there. Land where it is: comes down on the spot, holding the position with the GPS. It runs when the GPS Rescue switch is on (Modes tab), or when the link is lost if chosen in the box below. Link back on the way: move the roll or pitch stick by more than 30 % to take control again. A battery below its minimum always lands on the spot.",
   "Sẵn sàng bay về":
     "Ready to fly home",
   "chưa":
@@ -1907,24 +1933,56 @@ export const EN = {
     "Extra climb",
   "Cộng vào điểm cao nhất của chuyến bay, hoặc vào độ cao hiện tại.":
     "Added to the highest point of the flight, or to the present height.",
-  "Độ cao cố định":
-    "Fixed height",
-  "So với điểm cất cánh; dùng khi chọn \"Cố định\".":
-    "Above the take-off point; used when \"Fixed\" is chosen.",
+  "Hình nón: trong phạm vi \"Khoảng cách dùng hình nón\" quanh home, máy chỉ leo tới khoảng cách chia tan(góc); 45° = leo cao bằng khoảng cách. 0 = luôn lên độ cao bay về (PX4 RTL_CONE_ANG).":
+    "Cone: within \"Distance where the cone applies\" of home the craft only climbs to the distance divided by tan(angle); 45° = as high as it is far. 0 = always the return height (PX4 RTL_CONE_ANG).",
+  "Kiểu rescue":
+    "Kind of rescue",
+  "Bay về (RTL): leo, bay thẳng về home, chờ, hạ cánh. Bay về theo đường cũ (SmartRTL): lần ngược đường đã bay, ở độ cao đã bay; đường quá rối hoặc mất GPS lâu thì bay thẳng. Hạ cánh tại chỗ: hạ ngay chỗ đang bay, giữ vị trí bằng GPS (không có GPS thì chỉ hạ).":
+    "Fly home (RTL): climb, fly straight home, wait, land. Fly home the way it came (SmartRTL): retrace the path flown, at the heights flown; a path too winding, or the GPS lost for long, flies straight. Land where it is: comes down on the spot, holding the position with the GPS (without a GPS it only comes down).",
+  "Độ cao chờ trên home":
+    "Waiting height over home",
+  "Tới home thì hạ xuống độ cao này (nếu đang cao hơn) rồi chờ (PX4 RTL_DESCEND_ALT).":
+    "Over home the craft comes down to this height (if higher) and waits (PX4 RTL_DESCEND_ALT).",
+  "Thời gian chờ trên home":
+    "Waiting time over home",
+  "Chờ bao lâu rồi mới hạ cánh (PX4 RTL_LAND_DELAY). 255 = chờ mãi, không tự hạ cánh: phi công phải lấy lại máy.":
+    "How long it waits before landing (PX4 RTL_LAND_DELAY). 255 = waits for good, never lands by itself: the pilot has to take over.",
+  "Tốc độ hạ cánh":
+    "Landing speed",
+  "Mấy mét cuối, dưới \"Độ cao bắt đầu hạ chậm\" (ArduPilot LAND_SPEED).":
+    "The last metres, below \"Height where the slow descent begins\" (ArduPilot LAND_SPEED).",
+  "Trên đường về. Máy tăng tốc và giảm tốc êm, chậm lại ở các khúc quẹo và dừng đúng trên home.":
+    "On the way home. The craft speeds up and slows down smoothly, slows down at the turns and stops right over home.",
+  "Dưới độ cao này máy hạ bằng \"Tốc độ hạ cánh\".":
+    "Below this height the craft comes down at \"Landing speed\".",
+  "đang chờ trên home":
+    "waiting over home",
+  "Hình nón (PX4): gần home thì leo ít":
+    "Cone (PX4): less climb close to home",
+  "Bay về (RTL)":
+    "Fly home (RTL)",
+  "Bay về theo đường cũ (SmartRTL)":
+    "Fly home the way it came (SmartRTL)",
+  "Còn phải bay về":
+    "Still to fly home",
+  "Cách chọn độ cao bay về":
+    "How the return height is chosen",
+  "So với điểm cất cánh. Hình nón: độ cao bay về khi ở xa home; Cố định: luôn là độ cao này. Máy đang cao hơn thì giữ độ cao (trừ Cố định).":
+    "Above the take-off point. Cone: the return height when far from home; Fixed: always this height. A craft that is higher keeps its height (not with Fixed).",
   "Tốc độ leo":
     "Climb rate",
   "Tốc độ hạ":
     "Descent rate",
-  "Ở gần mặt đất. Trên cao máy hạ nhanh hơn, tối đa gấp ba.":
-    "Near the ground. Higher up the craft descends faster, up to three times as fast.",
+  "Khi hạ xuống trên home, ở gần mặt đất. Trên cao máy hạ nhanh hơn, tối đa gấp ba.":
+    "Coming down over home, near the ground. Higher up the craft comes down faster, up to three times as fast.",
   "Tốc độ bay về":
     "Speed on the way home",
-  "Bắt đầu hạ khi cách home":
-    "Start descending at this distance from home",
-  "Khoảng cách tối thiểu để bay về":
-    "Minimum distance for flying home",
-  "Gần home hơn mức này thì máy leo lên rồi hạ tại chỗ.":
-    "Closer to home than this the craft climbs and comes down on the spot.",
+  "Góc hình nón":
+    "Cone angle",
+  "Khoảng cách dùng hình nón":
+    "Distance where the cone applies",
+  "Gần home hơn mức này: độ cao bay về chỉ là mức hình nón cần (PX4 RTL_MIN_DIST). Bay về theo đường cũ mà gần hơn mức này thì bay thẳng.":
+    "Closer to home than this, the return height is only what the cone needs (PX4 RTL_MIN_DIST). Flying home the way it came, closer than this flies straight.",
   "Độ cao bắt đầu hạ chậm":
     "Height where the slow landing begins",
   "Số vệ tinh tối thiểu khi rescue":
@@ -1951,6 +2009,26 @@ export const EN = {
     "Position estimate, optical flow, Position Hold, GPS Rescue (10 times a second).",
   "Dữ liệu dẫn đường chi tiết":
     "Navigation debug data",
+  "Hàng rào: bán kính quanh home":
+    "Fence: radius around home",
+  "0 = tắt. Trong Position Hold: nơi máy không còn kịp dừng trước vòng tròn thì cần không còn được theo, máy giữ ở mép; đẩy cần về phía home để lấy lại.":
+    "0 = off. In Position Hold: where the craft could no longer stop before the circle, the sticks are not followed and it holds at the edge; push a stick towards home to take it back.",
+  "Hàng rào: trần độ cao":
+    "Fence: height ceiling",
+  "0 = tắt. Trong Altitude Hold và các chế độ giữ: leo chậm lại để dừng dưới trần nửa mét; cao hơn trần thì tự hạ xuống.":
+    "0 = off. In Altitude Hold and the hold modes: the climb slows to stop half a metre below the ceiling; above it the craft descends.",
+  "chạm hàng rào: đang giữ ở mép, đẩy cần về phía home để bay tiếp":
+    "fence reached: holding at the edge, push a stick towards home to fly on",
+  "Chờ ESC trước khi hiệu chỉnh gyro":
+    "Wait for the ESCs before the gyro calibration",
+  "Lúc cắm pin: tín hiệu motor bật trước, ESC phát nhạc khởi động (rung máy), gyro chỉ được hiệu chỉnh sau khoảng này. DShot hai chiều: ngay khi mọi ESC trả lời + 0,5 s. 0 = hiệu chỉnh ngay.":
+    "At power-up the motor signal starts first and the ESCs play their start-up tones (the craft shakes); the gyro is calibrated only after this time. Bidirectional DShot: as soon as every ESC answers + 0.5 s. 0 = calibrate at once.",
+  "0,1 s":
+    "0.1 s",
+  "Cỡ giao diện":
+    "Interface size",
+  "Cỡ giao diện (Ctrl + / Ctrl - / Ctrl 0, hoặc Ctrl + lăn chuột)":
+    "Interface size (Ctrl + / Ctrl - / Ctrl 0, or Ctrl + mouse wheel)",
   "Dẫn đường chi tiết":
     "Navigation debug",
   "Gia tốc NED (đã bỏ trọng lực)":
@@ -2011,8 +2089,8 @@ export const EN = {
     "turning the nose home",
   "đang bay về":
     "flying home",
-  "đang hạ dần về home":
-    "descending towards home",
+  "đang hạ xuống trên home":
+    "coming down over home",
   "đang hạ cánh":
     "landing",
   "bỏ cuộc":

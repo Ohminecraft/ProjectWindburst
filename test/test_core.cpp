@@ -7,12 +7,10 @@
 #include "sim_plant.h"
 #include "../src/core/filters.h"
 #include "../src/core/ahrs.h"
-#include "../src/core/vertical_est.h"
-#include "../src/core/horizontal_est.h"
 #include "../src/core/rc.h"
 #include "../src/core/mixer.h"
 #include "../src/core/safety.h"
-#include "../src/core/althold.h"
+#include "../src/core/nav/alt_control.h"
 using namespace fc;
 
 static int g_pass = 0, g_fail = 0;
@@ -187,198 +185,6 @@ static void t_ahrs_trust() {
       CHECK(fabsf(a.euler_aero().roll) < 0.01f && fabsf(e.roll + 5.0f) < 0.05f && fabsf(e.pitch + 3.0f) < 0.05f, "accel_euler_aero(): the low-passed accelerometer by itself (roll %.2f, pitch %.2f for a reading 5 deg left wing down, 3 deg nose down) while the estimate says %.2f", e.roll, e.pitch, a.euler_aero().roll);
       a.reset_to_accel({0, sinf(10 * kDeg2Rad), -cosf(10 * kDeg2Rad)});
       CHECK(fabsf(a.accel_euler_aero().roll + 10.0f) < 0.01f && fabsf(a.euler_aero().roll + 10.0f) < 0.01f, "reset_to_accel() takes the reading over at once, in the low-pass too (%.2f)", a.accel_euler_aero().roll); }
-}
-
-static void t_vertical() {
-    printf("[vertical estimator]\n");
-    const float dt = 0.005f, bias = 0.3f;
-    { VerticalEstimator kf; kf.reset(2.0f); float drift = 0, maxerr = 0, maxv = 0;
-      for (int i = 0; i < 12000; i++) { const float t = i * dt; drift = 0.05f * t; kf.predict(bias + gauss(0.3f), dt);
-          if (i % 20 == 0) kf.update_baro(2.0f + drift + gauss(0.3f), 0.3f);
-          if (i % 40 == 0) kf.update_range(2.0f + gauss(0.03f), 0.03f);
-          if (t > 15) { maxerr = fmaxf(maxerr, fabsf(kf.state().z - 2.0f)); maxv = fmaxf(maxv, fabsf(kf.state().v)); } }
-      CHECK(maxerr < 0.15f && maxv < 0.2f, "baro drifting 5 cm/s + lidar: height error %.3f, |v| %.3f (the old firmware ramped to -95 cm/s)", maxerr, maxv);
-      CHECK(fabsf(kf.baro_offset() - 3.0f) < 0.4f && fabsf(kf.accel_bias() - bias) < 0.15f, "learned baro offset %.2f, accel bias %.2f", kf.baro_offset(), kf.accel_bias()); }
-    { VerticalEstimator kf; kf.reset(0.0f); float maxv = 0;
-      for (int i = 0; i < 6000; i++) { kf.predict(gauss(0.3f), dt); if (i % 20 == 0) kf.update_baro(3.0f + gauss(0.3f), 0.3f); if (i % 40 == 0) kf.update_range(gauss(0.03f), 0.03f); if (i > 2000) maxv = fmaxf(maxv, fabsf(kf.state().v)); }
-      CHECK(maxv < 0.15f && fabsf(kf.state().z) < 0.15f, "baro/lidar disagree by 3 m: follows the lidar, no velocity ramp"); }
-    { VerticalEstimator kf; kf.reset(1.0f); for (int i = 0; i < 2000; i++) { kf.predict(0, dt); if (i % 20 == 0) kf.update_range(1.0f + gauss(0.03f), 0.03f); }
-      const bool acc = kf.update_range(6.0f, 0.03f); CHECK(!acc && fabsf(kf.state().z - 1.0f) < 0.1f, "lidar outlier gated"); }
-    { VerticalEstimator kf; kf.reset(0); float z = 0, v = 0; for (int i = 0; i < 1600; i++) { const float t = i * dt; const float a = (t < 1) ? 1.0f : 0.0f; if (t < 1) v += a * dt; z += v * dt;
-          kf.predict(a + gauss(0.2f), dt); if (i % 20 == 0) kf.update_baro(z + gauss(0.3f), 0.3f); }
-      CHECK(fabsf(kf.state().z - z) < 0.5f, "tracks a climb: est %.2f true %.2f", kf.state().z, z); }
-    { VerticalEstimator kf; kf.reset(0); for (int i = 0; i < 4000; i++) { kf.predict(0, dt); if (i % 20 == 0) kf.update_baro(gauss(0.05f), 0.05f); }
-      VerticalEstimator kg; kg.reset(0); for (int i = 0; i < 4000; i++) { kg.predict(0, dt); if (i % 20 == 0) kg.update_baro(gauss(0.05f), 5.0f); }
-      CHECK(kf.z_sigma() < kg.z_sigma(), "a smaller sigma from the sensor layer gives a tighter estimate (%.3f vs %.3f)", kf.z_sigma(), kg.z_sigma()); }
-
-    // ---- the estimate runs away (an accelerometer that clipped on a hard landing), the barometer stays at 0
-    // (the generator is put back afterwards: the tests below were tuned on its sequence)
-    const std::mt19937 rng_saved = rng;
-    { VerticalEstimator kf; kf.reset(0); const float dt2 = 0.0005f; int n_ok = 0; float worst_after = 0;
-      for (int i = 0; i < 4000; i++) { kf.predict(gauss(0.1f), dt2); if (i % 40 == 0) kf.update_baro(gauss(0.2f), 0.3f); }
-      for (int i = 0; i < 200; i++) kf.predict(-40.0f, dt2);                          // 0.1 s of -4 g: v -4 m/s
-      for (int i = 0; i < 6000; i++) kf.predict(gauss(0.1f), dt2);                   // ... and 3 s without a baro reading: z -12 m
-      const float v_kick = kf.state().v; const uint32_t r0 = kf.baro_resets();
-      for (int i = 0; i < 8000; i++) { kf.predict(gauss(0.1f), dt2); if (i % 40 == 0 && kf.update_baro(gauss(0.2f), 0.3f)) n_ok++;
-          if (i * dt2 > 2.0f) worst_after = fmaxf(worst_after, fabsf(kf.state().z)); }
-      CHECK(v_kick < -3.0f && kf.baro_resets() >= r0 + 1 && kf.baro_resets() <= r0 + 2 && worst_after < 0.6f && fabsf(kf.state().v) < 0.3f,
-            "kicked to %.1f m/s: after %.1f s of rejected baro readings z is reset to the baro (resets %u, |z| after 2 s <= %.2f m, v %.2f) - the old filter ran to -290 m",
-            v_kick, kf.cfg.baro_reset_s, (unsigned)(kf.baro_resets() - r0), worst_after, kf.state().v); }
-    { VerticalEstimator kf; kf.reset(0); const float dt2 = 0.0005f; float maxv = 0;
-      for (int i = 0; i < 40000; i++) { kf.predict(0.3f, dt2); if (i % 40 == 0) { kf.update_baro(gauss(0.5f), 1.0f); kf.update_still(); } if (i > 20000) maxv = fmaxf(maxv, fabsf(kf.state().v)); }
-      CHECK(maxv < 0.15f && kf.baro_resets() <= 1, "disarmed with a 0.3 m/s^2 accel error and a noisy baro: the zero-velocity update keeps |v| <= %.2f", maxv); }
-    for (int still = 0; still < 2; still++) {                // the touch-down spike, disarmed: the zero-velocity update takes it out at once
-      VerticalEstimator kf; kf.reset(0); const float dt2 = 0.0005f;
-      for (int i = 0; i < 4000; i++) { kf.predict(0, dt2); if (i % 40 == 0) { kf.update_baro(gauss(0.1f), 0.3f); if (still) kf.update_still(); } }
-      for (int i = 0; i < 200; i++) kf.predict(-40.0f, dt2);
-      for (int i = 0; i < 400; i++) { kf.predict(0, dt2); if (i % 40 == 0) { kf.update_baro(gauss(0.1f), 0.3f); if (still) kf.update_still(); } }
-      if (still) CHECK(fabsf(kf.state().v) < 0.5f && fabsf(kf.state().z) < 0.5f, "a -4 m/s spike at disarm: 0.2 s later v %.2f m/s, z %.2f m (the zero-velocity update is not gated)", kf.state().v, kf.state().z);
-      else CHECK(kf.state().v < -2.0f, "(without it the same spike is still at %.1f m/s 0.2 s later)", kf.state().v); }
-    rng = rng_saved;
-    // ---- with a barometer, the range finder measures from the ground under the craft - and that ground changes
-    // the craft moves from z0 to z1 (above the take-off point) in `seconds`, over ground lying `ground` above the take-off point
-    auto fly = [&](VerticalEstimator& kf, float z0, float z1, float ground, float seconds, bool baro = true, bool range = true, bool relative = true) {
-        const int n = (int)(seconds / dt + 0.5f);
-        for (int i = 0; i < n; i++) { const float z = z0 + (z1 - z0) * (float)(i + 1) / (float)n; kf.predict(gauss(0.1f), dt);
-            if (baro && i % 4 == 0) kf.update_baro(z + gauss(0.2f), 0.3f);
-            if (range && i % 8 == 0) kf.update_range(z - ground + gauss(0.02f), 0.03f, relative); } };
-    { VerticalEstimator kf; kf.reset(0); fly(kf, 1.5f, 1.5f, 0.0f, 10.0f);
-      CHECK(fabsf(kf.state().z - 1.5f) < 0.05f && kf.range_reanchors() == 0 && kf.range_anchor() == 0.0f && kf.state().range_used, "over the ground it took off from, the range finder gives the height itself (%.3f of 1.5 m, anchor %.2f)", kf.state().z, kf.range_anchor());
-      // a table 0.5 m high comes under it: the readings drop to 1.0 m
-      const float z0 = kf.state().z; bool any = false; for (int i = 0; i < 9; i++) { kf.predict(0, dt * 8); any |= kf.update_range(1.0f, 0.03f, true); }
-      CHECK(!any && kf.range_reanchors() == 0 && kf.range_anchor() == 0.0f && fabsf(kf.state().z - z0) < 0.02f, "a table 0.5 m high comes under it: nine readings in a row do not fit - not believed, not used (z %.3f)", kf.state().z);
-      kf.predict(0, dt * 8); const bool tenth = kf.update_range(1.0f, 0.03f, true);
-      CHECK(!tenth && kf.range_reanchors() == 1 && fabsf(kf.range_anchor() - (1.0f - kf.state().z)) < 1e-5f && fabsf(kf.state().z - z0) < 0.02f,
-            "the tenth: the GROUND is taken to have changed (anchor %.2f m), the height has not (%.3f m) - fused as a height it would have dropped half a metre, and Altitude Hold would have climbed by as much", kf.range_anchor(), kf.state().z);
-      kf.predict(0, dt * 8); kf.update_range(0.4f, 0.03f, true);
-      CHECK(kf.range_reanchors() == 1, "one odd reading right after that (a hand): it is the first of a new count, the anchor stays");
-      kf.predict(0, dt * 8); CHECK(kf.update_range(1.0f, 0.03f, true), "the next reading fits and is used");
-      fly(kf, 1.5f, 1.5f, 0.5f, 4.0f); CHECK(fabsf(kf.state().z - 1.5f) < 0.07f && kf.range_reanchors() == 1, "hovering over the table: z %.3f", kf.state().z);
-      fly(kf, 1.5f, 2.1f, 0.5f, 3.0f); CHECK(fabsf(kf.state().z - 2.1f) < 0.10f && kf.range_reanchors() == 1, "a climb of 0.2 m/s over the table is a climb, not a change of the ground: z %.3f of 2.1, still one anchor move", kf.state().z);
-      fly(kf, 2.1f, 2.1f, 0.0f, 2.0f); CHECK(fabsf(kf.state().z - 2.1f) < 0.10f && kf.range_reanchors() == 2 && fabsf(kf.range_anchor()) < 0.12f, "off the table again: the anchor is back at the floor (%.2f m), z %.3f", kf.range_anchor(), kf.state().z); }
-    { VerticalEstimator kf; kf.reset(0); fly(kf, 1.5f, 1.5f, 0.0f, 10.0f);          // a hand under the sensor now and then
-      for (int k = 0; k < 2; k++) { for (int i = 0; i < 9; i++) { kf.predict(0, dt * 8); kf.update_range(0.4f, 0.03f, true); } kf.predict(0, dt * 8); kf.update_range(kf.state().z, 0.03f, true); }
-      CHECK(kf.range_reanchors() == 0, "nine odd readings, a good one, nine odd ones: the count starts again with every reading that fits"); }
-    { VerticalEstimator kf; kf.reset(0); fly(kf, 1.5f, 1.5f, 0.0f, 10.0f); fly(kf, 1.5f, 1.5f, 0.0f, 0.4f, true, false);
-      const bool used = kf.state().range_used; kf.update_range(1.0f, 0.03f, true);
-      CHECK(used && kf.range_reanchors() == 0, "no reading for 0.4 s (a steep bank), then one that does not fit: still the same stretch of ground - it only counts as an odd one");
-      VerticalEstimator kg; kg.reset(0); fly(kg, 1.5f, 1.5f, 0.0f, 10.0f); fly(kg, 1.5f, 1.5f, 0.0f, 0.6f, true, false);
-      const bool stale = !kg.state().range_used; const float z0 = kg.state().z; const bool first = kg.update_range(1.0f, 0.03f, true);
-      CHECK(stale && !first && kg.range_reanchors() == 1 && kg.state().z == z0 && fabsf(kg.range_anchor() - (1.0f - z0)) < 1e-5f, "no reading for 0.6 s: the next one starts from a new anchor at once, whatever it says - z does not move (%.3f)", kg.state().z);
-      kg.predict(0, dt * 8); CHECK(kg.update_range(1.0f, 0.03f, true) && kg.state().range_used, "... and the readings after it are used"); }
-    { VerticalEstimator kf; kf.reset(0); fly(kf, 1.5f, 1.5f, 0.0f, 6.0f, false, true, false);          // a craft without barometer
-      fly(kf, 1.5f, 1.5f, 0.5f, 6.0f, false, true, false);
-      CHECK(kf.range_reanchors() == 0 && kf.range_anchor() == 0.0f && fabsf(kf.state().z - 1.0f) < 0.1f, "without a barometer the range finder is the only height there is: no anchor, z follows it (%.3f, readings 1.0)", kf.state().z);
-      VerticalEstimator kg; kg.reset(0); fly(kg, 1.5f, 1.5f, 0.0f, 6.0f, false, true, false); fly(kg, 1.5f, 1.5f, 0.0f, 2.0f, false, false); kg.update_range(1.0f, 0.03f, false);
-      CHECK(kg.range_reanchors() == 0, "... nor after a pause"); }
-    // ---- what the barometer's own noise figure may say
-    { auto run = [&](float sigma, bool ground_effect) { VerticalEstimator k; k.reset(0);
-          for (int i = 0; i < 2000; i++) { k.predict(0.05f * sinf(i * 0.01f), dt); if (i % 4 == 0) k.update_baro(0.3f * sinf(i * 0.003f) + 0.1f * sinf(i * 0.7f), sigma, ground_effect); } return k.state().z; };
-      CHECK(run(0.05f, false) == run(0.3f, false) && run(0.29f, false) == run(0.3f, false) && run(0.31f, false) != run(0.3f, false), "a barometer that reports 5 cm of noise (a quiet minute indoors) is taken at 30 cm: the air in flight is not that quiet");
-      CHECK(run(3.0f, false) == run(1.0f, false) && run(0.99f, false) != run(1.0f, false), "one that reports 3 m (the craft was carried about) at 1 m");
-      CHECK(run(0.0f, false) == run(0.4f, false), "none reported: the configured 0.4 m");
-      CHECK(run(0.3f, true) == run(0.6f, false) && run(0.3f, true) != run(0.3f, false), "near the ground with the motors running it counts half (sigma x 2)"); }
-    // ---- odd calls
-    { VerticalEstimator kf; kf.reset(1.0f); kf.predict(2.0f, NAN); kf.predict(2.0f, 0.2f); kf.predict(2.0f, -0.01f); kf.predict(2.0f, 0.0f);
-      CHECK(kf.state().z == 1.0f && kf.state().v == 0.0f && !kf.state().range_used && !kf.state().gps_used, "a time step that is not a number, too long, negative or zero changes nothing");
-      kf.update_gps(1.0f, 2.0f); const bool now = kf.state().gps_used; for (int i = 0; i < 500; i++) kf.predict(0, dt);
-      CHECK(now && !kf.state().gps_used, "'GPS used' means within the last two seconds, not ever"); }
-}
-
-// GPS in the height estimate (vertical_est.h "GPS"): vertical velocity, the height as the only source, blended with a drifting barometer
-static void t_vertical_gps() {
-    printf("[vertical estimator: GPS]\n");
-    const float dt = 0.005f;
-    // GPS height error: wanders (first-order, ~1 m, 30 s) plus 0.5 m of noise on every reading - what a u-blox does outdoors
-    struct Wander { float e = 0; float next(float step_s) { e += -e * step_s / 30.0f + gauss(1.0f * sqrtf(2.0f * step_s / 30.0f)); return e + gauss(0.5f); } };
-    // climbs and descents of +-3 m/s, a 0.3 m/s^2 accelerometer bias, a noisy barometer (prop wash): RMS error of v
-    auto climbs = [&](bool baro, bool gps_vel, float& z_rms) {
-        VerticalEstimator kf; kf.reset(0); float z = 0, v = 0, e2 = 0, ez2 = 0; int n = 0;
-        for (int i = 0; i < 12000; i++) { const float t = i * dt, a = 3.0f * 0.6f * cosf(0.6f * t); v += a * dt; z += v * dt;
-            kf.predict(a + 0.3f + gauss(0.3f), dt);
-            if (baro && i % 8 == 0) kf.update_baro(z + gauss(0.6f), 0.6f);
-            if (gps_vel && i % 20 == 0) kf.update_gps_vel(v + gauss(0.1f), 0.15f);
-            if (t > 10) { e2 += (kf.state().v - v) * (kf.state().v - v); ez2 += (kf.state().z - z) * (kf.state().z - z); n++; } }
-        z_rms = sqrtf(ez2 / n); return sqrtf(e2 / n); };
-    { float zb, zg, zv; const float only_baro = climbs(true, false, zb), with_gps = climbs(true, true, zg), gps_alone = climbs(false, true, zv);
-      CHECK(with_gps < 0.6f * only_baro && with_gps < 0.12f, "climbing and descending at 3 m/s: climb-rate error %.3f m/s with the GPS vertical velocity, %.3f with the barometer alone", with_gps, only_baro);
-      CHECK(zg <= zb * 1.05f, "... and the height is no worse for it (%.2f vs %.2f m RMS)", zg, zb);
-      CHECK(gps_alone < 0.15f, "the GPS vertical velocity alone (no height at all) keeps the climb rate: %.3f m/s RMS", gps_alone); }
-    { VerticalEstimator kf; kf.reset(0); for (int i = 0; i < 2000; i++) { kf.predict(0, dt); if (i % 8 == 0) kf.update_baro(gauss(0.3f), 0.3f); if (i % 20 == 0) kf.update_gps_vel(gauss(0.1f), 0.15f); }
-      const bool took = kf.update_gps_vel(8.0f, 0.15f);
-      CHECK(!took && fabsf(kf.state().v) < 0.1f && kf.state().gps_vel_used, "a GPS vertical velocity of 8 m/s while hovering is gated out"); }
-
-    // hovering at 10 m for 5 minutes, the barometer drifting 1 m a minute (weather, the board warming)
-    auto hover = [&](int mode /*0 baro alone, 1 blend*/, float gps_offset, float jump_at_s, float jump_m, float& worst) {
-        VerticalEstimator kf; kf.reset(10.0f); Wander w; worst = 0;
-        for (int i = 0; i < 60000; i++) { const float t = i * dt, drift = t / 60.0f;
-            kf.predict(gauss(0.3f), dt);
-            if (i % 8 == 0) kf.update_baro(10.0f + drift + gauss(0.3f), 0.3f);
-            if (mode && i % 20 == 0) { const float g = 10.0f + gps_offset + w.next(0.1f) + (jump_at_s > 0 && t >= jump_at_s ? jump_m : 0.0f);
-                kf.update_gps_relative(g, fmaxf(1.5f, kf.cfg.gps_blend_sigma_min), true); }
-            if (t > 30) worst = fmaxf(worst, fabsf(kf.state().z - 10.0f)); }
-        return fabsf(kf.state().z - 10.0f); };
-    { float wb, wg; const float baro = hover(0, 0, 0, 0, wb), blend = hover(1, 0, 0, 0, wg);
-      CHECK(baro > 4.0f && blend < 1.5f && wg < 2.0f, "baro drifting 1 m/min for 5 min: off by %.1f m alone, by %.2f m with the GPS blended in (worst %.2f after the first 30 s)", baro, blend, wg); }
-    { float w; hover(1, 25.0f, 0, 0, w); float w0; hover(1, 0, 0, 0, w0);
-      CHECK(w < w0 + 0.3f, "a GPS height 25 m off from the start (home taken long ago, MSL vs. take-off): the reference takes it out (worst %.2f vs %.2f m)", w, w0); }
-    { auto jump = [&](float gate_m, uint32_t& resets) { VerticalEstimator kf; kf.cfg.gps_jump_m = gate_m; kf.reset(10.0f); Wander w; float worst = 0;
-          for (int i = 0; i < 24000; i++) { const float t = i * dt; kf.predict(gauss(0.3f), dt); if (i % 8 == 0) kf.update_baro(10.0f + gauss(0.3f), 0.3f);
-              if (i % 20 == 0) kf.update_gps_relative(10.0f + w.next(0.1f) + (t >= 60.0f ? 8.0f : 0.0f), 3.0f, true);
-              if (t >= 60) worst = fmaxf(worst, fabsf(kf.state().z - 10.0f)); }
-          resets = kf.gps_resets(); return worst; };
-      uint32_t r1 = 0, r2 = 0; const float kept = jump(4.0f, r1), dragged = jump(1e6f, r2);
-      CHECK(kept < 1.0f && r1 >= 1 && dragged > 2.5f, "the GPS height jumps by 8 m and stays there: a new reference, the estimate stays within %.2f m (resets %u); taken as a correction it would have moved %.1f m", kept, (unsigned)r1, dragged); }
-    { VerticalEstimator kf; kf.reset(0); int fused = 0;
-      for (int i = 0; i < 4000; i++) { kf.predict(0, dt); if (i % 8 == 0) kf.update_baro(gauss(0.3f), 0.3f); if (i % 20 == 0) fused += kf.update_gps_relative(gauss(0.5f), 1.0f, true); }
-      const int before = fused; for (int i = 0; i < 2000; i++) { kf.predict(0, dt); if (i % 8 == 0) kf.update_baro(gauss(0.3f), 0.3f); }      // 10 s without GPS
-      kf.update_gps_relative(5.0f, 1.0f, true);
-      CHECK(before == 200 - kf.cfg.gps_ref_samples && !kf.gps_ref_ok() && fabsf(kf.state().z) < 0.3f, "the first %d readings only set the reference (%d of 200 fused); after 10 s without GPS it starts again", kf.cfg.gps_ref_samples, before); }
-
-    // the barometer goes silent in flight: the GPS takes over from the reference it kept (FALLBACK), no step
-    { VerticalEstimator kf; kf.reset(0); Wander w; float z = 0, at = 0, worst = 0, end = 0;
-      for (int i = 0; i < 36000; i++) { const float t = i * dt; z = t < 20 ? t * 0.5f : 10.0f; const bool baro = t < 60;
-          kf.predict((t < 20 ? 0.0f : 0.0f) + gauss(0.3f), dt);
-          if (baro && i % 8 == 0) kf.update_baro(z + t / 60.0f + gauss(0.3f), 0.3f);
-          if (i % 20 == 0) { const float g = z + w.next(0.1f); if (baro) kf.update_gps_relative(g, 1.5f, false); else kf.update_gps_relative(g, 1.5f, true); }
-          if (i % 20 == 0) kf.update_gps_vel((t < 20 ? 0.5f : 0.0f) + gauss(0.1f), 0.15f);
-          if (fabsf(t - 59.99f) < dt) at = kf.state().z;
-          if (t > 60 && t < 62) worst = fmaxf(worst, fabsf(kf.state().z - at));
-          end = kf.state().z - z; }
-      CHECK(worst < 0.5f && kf.state().gps_used && fabsf(end) < 3.0f, "baro silent after 60 s: the estimate moves %.2f m in the next 2 s (the reference followed GPS - z), %.1f m off truth after 2 more minutes on GPS alone", worst, end); }
-
-    // a craft with GPS and nothing else: the GPS height IS the height
-    { VerticalEstimator kf; kf.reset(0); Wander w; float worst = 0;
-      for (int i = 0; i < 12000; i++) { const float t = i * dt; kf.predict(gauss(0.3f), dt);
-          if (i % 20 == 0) { kf.update_gps(5.0f + w.next(0.1f), 1.5f); kf.update_gps_vel(gauss(0.1f), 0.15f); }
-          if (t > 10) worst = fmaxf(worst, fabsf(kf.state().z - 5.0f)); }
-      CHECK(worst < 3.5f && kf.z_sigma() < 1.5f, "GPS alone, hovering at 5 m for a minute: within %.2f m (sigma %.2f)", worst, kf.z_sigma());
-      for (int i = 0; i < 400; i++) { kf.predict(gauss(0.3f), dt); if (i % 20 == 0) kf.update_gps(35.0f, 1.5f); }
-      CHECK(kf.gps_resets() == 1 && fabsf(kf.state().z - 35.0f) < 0.5f, "it jumps by 30 m and stays: after %d readings outside the gate the height is set to it (nothing better exists)", kf.cfg.gps_reref_after); }
-}
-
-static void t_horizontal() {
-    printf("[horizontal estimator]\n");
-    auto run = [&](float delay_cfg, bool maneuver, float outage_from, float outage_to, float& pos_err, float& vel_err, float& max_pos_err) {
-        HorizontalEstimator h; h.cfg.gps_delay_s = delay_cfg; const float dt = 0.002f, gps_dt = 0.1f, true_delay = 0.15f;
-        auto truth = [&](double t, double& p, double& v, double& a) { if (maneuver) { v = 5 + 3 * sin(0.5 * t); a = 1.5 * cos(0.5 * t); p = 5 * t - 6 * cos(0.5 * t) + 6; } else { v = 5; a = 0; p = 5 * t; } };
-        h.reset(0, 0, 5, 0); double next_gps = 0; max_pos_err = 0; pos_err = vel_err = 0;
-        for (int i = 0; i < 15000; i++) {
-            const double t = i * dt; double p, v, a; truth(t, p, v, a);
-            h.predict((float)(a + 0.3 + gauss(0.2f)), 0.0f + gauss(0.2f), dt);                    // north accel bias 0.3 m/s^2
-            if (t >= next_gps) { next_gps += gps_dt; double pp, vv, aa; truth(t - true_delay, pp, vv, aa);
-                if (!(t > outage_from && t < outage_to)) h.fuse_gps((float)(pp + gauss(0.8f)), gauss(0.8f), (float)(vv + gauss(0.1f)), gauss(0.1f), 0.8f, 0.1f); }
-            if (t > 10) { pos_err = fabsf(h.pos_n() - (float)p); vel_err = fabsf(h.vel_n() - (float)v); max_pos_err = fmaxf(max_pos_err, pos_err); }
-        }
-    };
-    float pe, ve, mpe;
-    run(0.15f, false, 1e9, 1e9, pe, ve, mpe); CHECK(mpe < 1.5f && ve < 0.3f, "cruise at 5 m/s with noisy delayed GPS and an accel bias: max pos error %.2f m, vel error %.2f m/s", mpe, ve);
-    float pe0, ve0, mpe0; run(0.0f, true, 1e9, 1e9, pe0, ve0, mpe0); float pe1, ve1, mpe1; run(0.15f, true, 1e9, 1e9, pe1, ve1, mpe1);
-    CHECK(mpe1 < mpe0 * 0.8f, "latency compensation helps while accelerating: %.2f m vs %.2f m without", mpe1, mpe0);
-    run(0.15f, false, 6.0f, 9.0f, pe, ve, mpe); CHECK(mpe < 4.0f, "3 s GPS outage bridged by prediction: max error %.2f m", mpe);
-    { HorizontalEstimator h; h.reset(); for (int i = 0; i < 500; i++) { h.predict(0, 0, 0.002f); if (i % 50 == 0) h.fuse_gps(0, 0, 0, 0, 0.8f, 0.1f); }
-      h.fuse_gps(60.0f, 0, 0, 0, 0.8f, 0.1f); CHECK(fabsf(h.pos_n()) < 1.0f, "a 60 m GPS glitch is rejected (%.2f)", h.pos_n()); }
-    { HorizontalEstimator h; h.reset(); h.fuse_gps(10, -4, 1, 2, 1.0f, 0.2f); CHECK(h.initialised() && fabsf(h.pos_n() - 10) < 0.5f && fabsf(h.vel_e() - 2) < 0.2f, "first fix initialises the state"); }
 }
 
 static void t_rc() {
@@ -660,6 +466,43 @@ struct Lift {
     }
 };
 
+// ---- Altitude Hold's unit tests were written for the controller before 0.35 (up positive, AhInput). They now run against
+//      nav::AltHoldMode (NED) through this thin adapter, so every scenario keeps testing the rewritten code.
+struct AhInput { bool armed = false; float stick01 = 0, z = 0, v = 0, up_cos = 1.0f, a_up = 0; bool failsafe_descent = false, ext_climb = false; float climb_mps = 0; bool pilot_absent = false, alt_valid = true; };
+struct AltHold {
+    nav::AltConfig cfg; nav::AltHoldMode m;
+    void init() { m.cfg = cfg; m.init(); }
+    void set_limits(float idle, float top) { m.set_limits(idle, top); }
+    float update(const AhInput& in, float dt) {
+        m.cfg = cfg; m.apply_config();
+        nav::AltInput a; a.armed = in.armed; a.stick01 = in.stick01; a.pos_d = -in.z; a.vel_d = -in.v; a.acc_d = -in.a_up; a.up_cos = in.up_cos;
+        a.failsafe_descent = in.failsafe_descent; a.ext_climb = in.ext_climb; a.climb_mps = in.climb_mps; a.pilot_absent = in.pilot_absent;
+        return m.update(a, dt);
+    }
+    void learn(float thr, float up_cos, float a_up, float dt) { m.learn(thr, up_cos, -a_up, dt); }
+    void begin_flight(float z, float thr, float up_cos, float v = 0, float a_up = 0) { m.cfg = cfg; m.begin_flight(-z, -v, -a_up, thr, up_cos); }
+    AhState get_state() const { return m.state(); }
+    bool lifted() const { return m.lifted(); }
+    float hover() const { return m.hover(); }
+    float hover_throttle(float scale = 1.0f) const { return m.hover_throttle(scale); }
+    float to_motor(float thr) const { return m.to_output(thr); }
+    float to_throttle(float out) const { return m.controller().to_throttle(out); }
+    float integrator() const { return -m.controller().acc_integrator(); }
+    void set_hover(float v) { m.cfg = cfg; m.apply_config(); m.set_hover(v); }
+    float stick_rate(float st) const { return nav::AltSetpoint::stick_climb(cfg, st); }
+    float target_z() const { return -m.controller().pos_target_d(); }
+    float target_v() const { return -m.controller().vel_target_d(); }
+    float target_a() const { return -m.controller().acc_target_d(); }
+};
+struct HoverEstimator {      // (up positive, as the tests were written)
+    nav::HoverEstimator h; float min = 0.06f, max = 0.85f;
+    void sync() { h.min = min; h.max = max; }
+    void reset(float v) { sync(); h.reset(v); }
+    void seed(float out, float up_cos, float a_up) { sync(); h.seed(out, up_cos, -a_up); }
+    void update(float out, float up_cos, float a_up, float dt, bool slow = false) { sync(); h.update(out, up_cos, -a_up, dt, slow); }
+    float value() const { return h.value(); }
+};
+
 static void t_althold_unit() {
     printf("[althold] state machine\n");
     AltHold ah; ah.init(); AhInput in; const float dt = 0.004f; float thr = 0;
@@ -675,7 +518,7 @@ static void t_althold_unit() {
       CHECK(m.stick_rate(0.5f) == 0 && m.stick_rate(0.549f) == 0 && m.stick_rate(0.451f) == 0 && fabsf(m.stick_rate(1.0f) - 2.0f) < 1e-5f && fabsf(m.stick_rate(0.06f) + 1.2f) < 1e-5f && fabsf(m.stick_rate(0.0f) + 1.2f) < 1e-5f,
             "defaults: centre +-5 %% holds, full stick 2 m/s up, the bottom 1.2 m/s down - the same as before 0.8.8");
       CHECK(fabsf(m.stick_rate(0.775f) - 1.0f) < 1e-4f, "half way between the deadband and the top: half the climb rate (%.3f)", m.stick_rate(0.775f));
-      m.cfg.mid_stick = 0.40f; m.cfg.deadband = 0.03f; m.cfg.max_stick = 0.90f; m.cfg.max_climb_mps = 3.0f; m.cfg.max_descend_mps = 1.0f;
+      m.cfg.mid_stick = 0.40f; m.cfg.deadband = 0.03f; m.cfg.max_stick = 0.90f; m.cfg.climb_max_mps = 3.0f; m.cfg.descend_max_mps = 1.0f;
       CHECK(m.stick_rate(0.40f) == 0 && m.stick_rate(0.42f) == 0 && fabsf(m.stick_rate(0.90f) - 3.0f) < 1e-5f && fabsf(m.stick_rate(0.95f) - 3.0f) < 1e-5f && fabsf(m.stick_rate(0.06f) + 1.0f) < 1e-5f && m.stick_rate(0.30f) < -0.2f,
             "hover at 40 %% of the stick, +-3 %%, full climb at 90 %%: 3 m/s from 90 %% up, 1 m/s down at the bottom");
       AhInput t; t.armed = true; AltHold k; k.init(); k.cfg = m.cfg; t.stick01 = 0.0f; k.update(t, dt); for (int i = 0; i < 50; i++) k.update(t, dt);
@@ -685,7 +528,7 @@ static void t_althold_unit() {
     // ---- throttle <-> motor output (the mixer's own mapping: idle at zero throttle)
     { AltHold m; m.init(); m.set_limits(0.055f, 1.0f); CHECK(fabsf(m.to_motor(0) - 0.055f) < 1e-6f && fabsf(m.to_motor(1) - 1.0f) < 1e-6f && fabsf(m.to_motor(0.5f) - 0.5275f) < 1e-6f && fabsf(m.to_throttle(0.5275f) - 0.5f) < 1e-6f && m.to_throttle(0.01f) == 0 && m.to_throttle(2) == 1,
           "throttle 0 .. 1 is motor output idle .. limit");
-      m.hover = 0.30f; CHECK(fabsf(m.to_motor(m.hover_throttle()) - 0.30f) < 1e-6f && fabsf(m.to_motor(m.hover_throttle(0.85f)) - 0.255f) < 1e-6f, "hover_throttle(k) = the throttle for k x the weight of thrust");
+      m.set_hover(0.30f); CHECK(fabsf(m.to_motor(m.hover_throttle()) - 0.30f) < 1e-6f && fabsf(m.to_motor(m.hover_throttle(0.85f)) - 0.255f) < 1e-6f, "hover_throttle(k) = the throttle for k x the weight of thrust");
       m.set_limits(0.12f, 0.8f); CHECK(fabsf(m.to_motor(0.5f) - 0.46f) < 1e-6f, "dynamic idle and the output limit move the mapping");
       m.set_limits(0.5f, 0.2f); CHECK(m.to_motor(1.0f) > 0.5f, "a nonsense range is not divided by"); }
 }
@@ -697,19 +540,19 @@ static void t_hover_estimator() {
     for (float H : {0.12f, 0.30f, 0.55f, 0.75f}) for (float guess : {0.40f, 0.06f, 0.85f}) {
         HoverEstimator e; e.reset(guess); Lift c(H); c.z = 5; c.out = H; float t_ok = -1;
         for (int i = 0; i < 4000; i++) { const float t = i * dt, out_cmd = H * (1.0f + 0.15f * sinf(2 * kPi * 0.7f * t) + 0.05f * sinf(2 * kPi * 3.1f * t));      // a pilot working the throttle around the hover point
-            c.out += (out_cmd - c.out) * (dt / c.lag); c.a = kG0 * (c.out / H - 1); e.update(out_cmd, 1.0f, c.a + gauss(0.8f), dt); if (t_ok < 0 && fabsf(e.value - H) < 0.05f * H) t_ok = t; }
-        CHECK(fabsf(e.value - H) < 0.04f * H && t_ok >= 0 && t_ok < 2.5f, "true hover output %.2f, first guess %.2f: found within 5 %% after %.1f s, %.3f in the end", H, guess, t_ok, e.value);
+            c.out += (out_cmd - c.out) * (dt / c.lag); c.a = kG0 * (c.out / H - 1); e.update(out_cmd, 1.0f, c.a + gauss(0.8f), dt); if (t_ok < 0 && fabsf(e.value() - H) < 0.05f * H) t_ok = t; }
+        CHECK(fabsf(e.value() - H) < 0.04f * H && t_ok >= 0 && t_ok < 2.5f, "true hover output %.2f, first guess %.2f: found within 5 %% after %.1f s, %.3f in the end", H, guess, t_ok, e.value());
     }
     { HoverEstimator e; e.reset(0.40f); for (int i = 0; i < 3000; i++) { e.update(0.22f, 1.0f, 0.0f, dt); }
-      CHECK(fabsf(e.value - 0.22f) < 0.005f, "standing on the ground with the motors at 22 %%: the reading is 22 %% - the craft hovers at that or more, never less (%.3f)", e.value);
-      auto fed = [&](float out, float cosv, float a) { HoverEstimator x; x.reset(0.22f); for (int i = 0; i < 3000; i++) x.update(out, cosv, a, dt); return x.value; };
+      CHECK(fabsf(e.value() - 0.22f) < 0.005f, "standing on the ground with the motors at 22 %%: the reading is 22 %% - the craft hovers at that or more, never less (%.3f)", e.value());
+      auto fed = [&](float out, float cosv, float a) { HoverEstimator x; x.reset(0.22f); for (int i = 0; i < 3000; i++) x.update(out, cosv, a, dt); return x.value(); };
       CHECK(fed(0.02f, 1.0f, 0.0f) == 0.22f, "motors barely turning (2 %%): not a measurement");
       CHECK(fed(0.60f, 1.0f, 9.0f) == 0.22f && fed(0.05f, 1.0f, -6.0f) == 0.22f, "a punch (0.9 g up) and a drop (0.6 g down) are not used: thrust is not proportional to the output that far from hover");
       CHECK(fed(0.50f, 0.6f, 0.0f) == 0.22f, "tilted 53 degrees: not a hover");
       CHECK(fabsf(fed(0.30f / 0.9f, 0.9f, 0.0f) - 0.30f) < 0.003f && fabsf(fed(0.30f * 1.2f, 1.0f, 0.2f * kG0) - 0.30f) < 0.003f, "tilted 26 degrees and holding height with 33 %%, or level and climbing with 0.2 g at 36 %%: the hover is 30 %% both times");
-      e.seed(0.50f, 1.0f, 0.25f * kG0); CHECK(fabsf(e.value - 0.40f) < 1e-4f, "seed at lift-off: 50 %% while already accelerating up with 0.25 g means a hover at 40 %%");
-      e.seed(0.02f, 1.0f, 0.0f); CHECK(e.value == e.min, "never below the minimum"); e.reset(5.0f); CHECK(e.value == e.max, "nor above the maximum");
-      const float before = e.value; e.update(0.3f, 1.0f, 0.0f, 0.0f); CHECK(e.value == before, "dt 0: nothing"); }
+      e.seed(0.50f, 1.0f, 0.25f * kG0); CHECK(fabsf(e.value() - 0.40f) < 1e-4f, "seed at lift-off: 50 %% while already accelerating up with 0.25 g means a hover at 40 %%");
+      e.seed(0.02f, 1.0f, 0.0f); CHECK(e.value() == e.min, "never below the minimum"); e.reset(5.0f); CHECK(e.value() == e.max, "nor above the maximum");
+      const float before = e.value(); e.update(0.3f, 1.0f, 0.0f, 0.0f); CHECK(e.value() == before, "dt 0: nothing"); }
 }
 
 // Take-off in Altitude Hold: the throttle is raised until the craft leaves the ground - whatever it weighs.
@@ -723,9 +566,9 @@ static void t_althold_takeoff() {
         in.stick01 = 0.8f;
         for (int i = 0; i < 6000; i++) { const float t = i * dt; if (t > 0.5f) in.stick01 = 0.5f;
             in.z = c.z; in.v = c.v; in.a_up = c.a; thr = ah.update(in, dt); ah.learn(thr, 1.0f, c.a, dt); c.step(thr, dt);
-            peak = fmaxf(peak, c.z); vmax = fmaxf(vmax, c.v); if (t_lift < 0 && c.z > 0.01f) t_lift = t; if (hover_at_lift == 0 && c.z > 0.12f) hover_at_lift = ah.hover; }
+            peak = fmaxf(peak, c.z); vmax = fmaxf(vmax, c.v); if (t_lift < 0 && c.z > 0.01f) t_lift = t; if (hover_at_lift == 0 && c.z > 0.12f) hover_at_lift = ah.hover(); }
         CHECK(ah.get_state() == AhState::FLYING && fabsf(c.z - 0.6f) < 0.08f && peak < 0.85f && vmax < 1.6f, "hover output %.3f: off the ground after %.2f s, up to %.2f m at most (target 0.6), fastest %.2f m/s, then %.2f m", H, t_lift, peak, vmax, c.z);
-        CHECK(fabsf(hover_at_lift - H) < 0.25f * H + 0.02f && fabsf(ah.hover - H) < 0.05f * H + 0.005f, "... the hover output read at lift-off is %.3f, %.3f after 12 s (true %.3f)", hover_at_lift, ah.hover, H);
+        CHECK(fabsf(hover_at_lift - H) < 0.25f * H + 0.02f && fabsf(ah.hover() - H) < 0.05f * H + 0.005f, "... the hover output read at lift-off is %.3f, %.3f after 12 s (true %.3f)", hover_at_lift, ah.hover(), H);
     }
     // it never leaves the ground (held down, props missing): the throttle does not keep rising
     { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); Lift c(0.3f); c.held = true; AhInput in; in.armed = true; float thr = 0, top = 0;
@@ -741,23 +584,23 @@ static void t_althold_takeoff() {
     { AltHold ah; ah.init(); AhInput in; in.armed = true; float thr = 0; for (int i = 0; i < 100; i++) ah.update(in, dt); in.stick01 = 0.3f; for (int i = 0; i < 100; i++) ah.update(in, dt); in.stick01 = 0.8f;
       for (int i = 0; i < 100; i++) { thr = ah.update(in, dt); }
       CHECK(ah.get_state() == AhState::TAKEOFF && fabsf(thr - 0.4f * 0.2f) < 0.01f, "the ramp: 40 %% of throttle per second (%.3f after 0.2 s)", thr);
-      const float h0 = ah.hover; ah.learn(thr, 1.0f, 0.0f, dt); CHECK(ah.hover == h0, "the ramp itself is not taken for a hover measurement");
+      const float h0 = ah.hover(); ah.learn(thr, 1.0f, 0.0f, dt); CHECK(ah.hover() == h0, "the ramp itself is not taken for a hover measurement");
       in.stick01 = 0; thr = ah.update(in, dt); CHECK(ah.get_state() == AhState::LANDED_PRE_TAKEOFF && thr == 0, "stick down during the ramp: back to idle at once"); }
     // the throttle can go far enough down to bring a craft with a lot of thrust back
-    { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.hover = 0.133f; ah.begin_flight(10.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 10; in.v = 3.0f; const float thr = ah.update(in, dt);
+    { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.set_hover(0.133f); ah.begin_flight(10.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 10; in.v = 3.0f; const float thr = ah.update(in, dt);
       CHECK(ah.to_motor(thr) < 0.5f * 0.133f + 0.03f, "hovering at 13 %% and climbing at 3 m/s unasked: the output goes down to %.3f (a fifth of the hover output, or idle)", ah.to_motor(thr)); }
     // ... but not all the way: 0.8 g of deceleration, so the attitude loop keeps motors to work with
-    { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.hover = 0.5f; ah.begin_flight(10.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 10; in.v = 5.0f; const float thr = ah.update(in, dt);
+    { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.set_hover(0.5f); ah.begin_flight(10.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 10; in.v = 5.0f; const float thr = ah.update(in, dt);
       CHECK(fabsf(ah.to_motor(thr) - 0.5f * (1.0f - 7.8f / kG0)) < 0.004f, "hovering at 50 %% and shooting up at 5 m/s: output %.3f = hover x (1 - 0.8) - the strongest braking it asks for", ah.to_motor(thr));
-      AltHold b; b.init(); b.set_limits(0.055f, 1.0f); b.hover = 0.5f; b.begin_flight(10.0f, b.hover_throttle(), 1.0f); AhInput i2; i2.armed = true; i2.stick01 = 0.5f; i2.z = 10; i2.up_cos = 0.866f; const float tilted = b.update(i2, dt);
+      AltHold b; b.init(); b.set_limits(0.055f, 1.0f); b.set_hover(0.5f); b.begin_flight(10.0f, b.hover_throttle(), 1.0f); AhInput i2; i2.armed = true; i2.stick01 = 0.5f; i2.z = 10; i2.up_cos = 0.866f; const float tilted = b.update(i2, dt);
       CHECK(fabsf(b.to_motor(tilted) - 0.5f / 0.866f) < 0.003f, "holding height while tilted 30 degrees needs 1 / cos more thrust: output %.3f", b.to_motor(tilted)); }
     // the hover output stays inside the limits of the settings, however it is measured
-    { HoverEstimator e; e.reset(0.40f); for (int i = 0; i < 4000; i++) e.update(0.95f, 1.0f, 0.0f, dt); const float hi = e.value; for (int i = 0; i < 4000; i++) e.update(0.045f, 1.0f, 0.0f, dt);
-      CHECK(hi == e.max && e.value == e.min, "the estimate never leaves min .. max (%.2f, %.2f)", hi, e.value);
+    { HoverEstimator e; e.reset(0.40f); for (int i = 0; i < 4000; i++) e.update(0.95f, 1.0f, 0.0f, dt); const float hi = e.value(); for (int i = 0; i < 4000; i++) e.update(0.045f, 1.0f, 0.0f, dt);
+      CHECK(hi == e.max && e.value() == e.min, "the estimate never leaves min .. max (%.2f, %.2f)", hi, e.value());
       AltHold ah; ah.cfg.hover_min = 0.20f; ah.cfg.hover_max = 0.50f; ah.init(); ah.set_limits(0.055f, 1.0f); ah.begin_flight(5.0f, 0.5f, 1.0f);
       for (int i = 0; i < 4000; i++) { ah.learn(ah.to_throttle(0.70f), 1.0f, 0.0f, dt); }
-      const float top = ah.hover; for (int i = 0; i < 4000; i++) { ah.learn(ah.to_throttle(0.10f), 1.0f, 0.0f, dt); }
-      CHECK(top == 0.50f && ah.hover == 0.20f, "hover_min / hover_max of the settings are the estimator's limits (%.2f, %.2f)", top, ah.hover); }
+      const float top = ah.hover(); for (int i = 0; i < 4000; i++) { ah.learn(ah.to_throttle(0.10f), 1.0f, 0.0f, dt); }
+      CHECK(top == 0.50f && ah.hover() == 0.20f, "hover_min / hover_max of the settings are the estimator's limits (%.2f, %.2f)", top, ah.hover()); }
     // lift-off is also seen by the height alone (a slow, cushioned start: the climb rate never reaches 0.15 m/s)
     { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); AhInput in; in.armed = true; for (int i = 0; i < 100; i++) ah.update(in, dt); in.stick01 = 0.3f; for (int i = 0; i < 100; i++) ah.update(in, dt); in.stick01 = 0.8f; for (int i = 0; i < 100; i++) ah.update(in, dt);
       const bool before = ah.lifted(); in.v = 0.10f; in.z = 0.10f; ah.update(in, dt);
@@ -770,7 +613,7 @@ static void t_althold_takeoff() {
       fly(0.3f, 0.2f); in.stick01 = 0.8f; in.z = c.z; in.v = c.v; ah.update(in, dt); const float first = ah.update(in, dt); const bool in_ramp = ah.get_state() == AhState::TAKEOFF && !ah.lifted(); fly(0.8f, 0.1f);
       CHECK(in_ramp && first < 0.005f && fabsf(thr - 0.4f * 0.1f) < 0.01f && c.z == 0, "second take-off: the ramp starts at zero again (%.4f, %.3f after 0.1 s) - it does not jump to where the first one ended", first, thr); }
     // a slow descent is not a landing: the motors must really be unloaded (matters for a craft that hovers near idle)
-    { AltHold ah; ah.cfg.land_speed_mps = 0.5f; ah.init(); ah.set_limits(0.055f, 1.0f); Lift c(0.133f); c.z = 2.0f; c.out = 0.133f; ah.hover = 0.133f; ah.hover_est.reset(0.133f); ah.begin_flight(2.0f, ah.hover_throttle(), 1.0f);
+    { AltHold ah; ah.cfg.land_vel_mps = 0.5f; ah.init(); ah.set_limits(0.055f, 1.0f); Lift c(0.133f); c.z = 2.0f; c.out = 0.133f; ah.set_hover(0.133f); ah.begin_flight(2.0f, ah.hover_throttle(), 1.0f);
       AhInput in; in.armed = true; in.stick01 = 0.5f; in.failsafe_descent = true; float z_end = -1, thr = 0;
       for (int i = 0; i < 10000 && z_end < 0; i++) { in.z = c.z; in.v = c.v; in.a_up = c.a; thr = ah.update(in, dt); c.step(thr, dt); if (ah.get_state() != AhState::FLYING) z_end = c.z; }
       CHECK(z_end >= 0 && z_end < 0.02f, "failsafe descent of a craft hovering at 13 %% output, sinking slower than the landing speed threshold for seconds: the motors stay on until it stands on the ground (given up at %.2f m)", z_end); }
@@ -825,27 +668,27 @@ static void t_althold_edges() {
       in.stick01 = 0.0f; ah.update(in, dt); in.stick01 = 0.3f; ah.update(in, dt); CHECK(ah.get_state() == AhState::LANDED_PRE_TAKEOFF, "down, up: ready"); }
 
     // ---- the integrator while the throttle stands at one of its ends
-    { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.hover = 0.70f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 1.0f; in.z = 5.0f; float thr = 0;
+    { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.set_hover(0.70f); ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 1.0f; in.z = 5.0f; float thr = 0;
       for (int i = 0; i < 1500; i++) { thr = ah.update(in, dt); }
       CHECK(thr == 1.0f && ah.integrator() >= 0.0f && ah.integrator() < 0.5f, "a heavy craft held down for 3 s with the stick up: full throttle, and the integrator has not stored the 3 s (%.3f m/s^2; unlimited it would stand at its 6.0 limit)", ah.integrator()); }
-    { AltHold ah; ah.init(); ah.set_limits(0.055f, 0.90f); ah.hover = 0.75f; ah.begin_flight(5.0f, 1.0f, 1.0f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; in.v = 0.1f; in.up_cos = 0.9f;      // asks for 96 % of output: above the 90 % limit, below 100 %
+    { AltHold ah; ah.init(); ah.set_limits(0.055f, 0.90f); ah.set_hover(0.75f); ah.begin_flight(5.0f, 1.0f, 1.0f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; in.v = 0.1f; in.up_cos = 0.9f;      // asks for 96 % of output: above the 90 % limit, below 100 %
       const float i0 = ah.integrator(); float thr = 0; for (int i = 0; i < 50; i++) { thr = ah.update(in, dt); }
       CHECK(i0 > 1.0f && thr == 1.0f && ah.integrator() < i0 - 0.02f, "at the top of the range (leaning in a turn, output limit 90 %%) and climbing a little: the integrator may come DOWN (%.3f -> %.3f)", i0, ah.integrator());
       in.v = -1.0f; ah.update(in, dt); const float i1 = ah.integrator(); for (int i = 0; i < 200; i++) { thr = ah.update(in, dt); }
       CHECK(thr == 1.0f && ah.integrator() <= i1, "... but not up (falling, at the top: %.3f -> %.3f)", i1, ah.integrator()); }
-    { AltHold ah; ah.init(); ah.set_limits(0.055f, 0.90f); ah.hover = 0.75f; ah.begin_flight(5.0f, 1.0f, 0.9f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; in.v = -0.05f; in.up_cos = 0.9f;
+    { AltHold ah; ah.init(); ah.set_limits(0.055f, 0.90f); ah.set_hover(0.75f); ah.begin_flight(5.0f, 1.0f, 0.9f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; in.v = -0.05f; in.up_cos = 0.9f;
       float thr = ah.update(in, dt); const float i1 = ah.integrator(); for (int i = 0; i < 200; i++) { thr = ah.update(in, dt); }
       CHECK(thr == 1.0f && ah.integrator() <= i1 + 1e-6f, "sinking a little and asking for about 93 %% of the output - above the 90 %% limit, below 100 %%: the integrator does not grow (%.3f -> %.3f)", i1, ah.integrator()); }
-    { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.hover = 0.10f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 0.0f; in.z = 5.0f; in.v = -0.4f; float thr = 1;
+    { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.set_hover(0.10f); ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 0.0f; in.z = 5.0f; in.v = -0.4f; float thr = 1;
       for (int i = 0; i < 1500; i++) { thr = ah.update(in, dt); }
       CHECK(ah.get_state() == AhState::FLYING && thr == 0.0f && ah.integrator() <= 0.0f && ah.integrator() > -0.3f, "a light craft in an updraught, sinking slower than the stick at the bottom asks for 3 s: motors at idle, the integrator not wound down (%.3f; unlimited it would stand at -4.0)", ah.integrator());
       in.stick01 = 0.5f; in.v = -2.5f; for (int i = 0; i < 50; i++) { ah.update(in, dt); }
       CHECK(ah.integrator() > 0.0f, "and free to come up again when it falls faster than asked (%.3f)", ah.integrator()); }
-    { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.hover = 0.10f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; in.v = -1.0f; in.up_cos = 0.01f; float thr = 1;
+    { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.set_hover(0.10f); ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; in.v = -1.0f; in.up_cos = 0.01f; float thr = 1;
       for (int i = 0; i < 100; i++) { thr = ah.update(in, dt); }
       CHECK(thr == 0.0f && ah.integrator() > 0.3f, "nearly on its side and falling (the output is held at idle there): the integrator may come UP from the bottom all the same (%.2f)", ah.integrator()); }
     // ---- thrust only helps while the craft is the right way up
-    { auto out_at = [&](float up_cos) { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.hover = 0.30f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; in.up_cos = up_cos; return ah.to_motor(ah.update(in, dt)); };
+    { auto out_at = [&](float up_cos) { AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.set_hover(0.30f); ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; in.up_cos = up_cos; return ah.to_motor(ah.update(in, dt)); };
       CHECK(fabsf(out_at(1.0f) - 0.30f) < 1e-4f && fabsf(out_at(0.5f) - 0.60f) < 1e-4f && fabsf(out_at(0.2f) - 0.60f) < 1e-4f, "level: the hover output; leaning 60 degrees: twice that, and never more (78 degrees: %.2f)", out_at(0.2f));
       CHECK(fabsf(out_at(0.1f) - 0.60f) < 1e-4f && fabsf(out_at(0.05f) - 0.30f) < 1e-4f && fabsf(out_at(0.0f) - 0.055f) < 1e-4f && fabsf(out_at(-0.5f) - 0.055f) < 1e-4f && fabsf(out_at(-1.0f) - 0.055f) < 1e-4f,
             "from 84 degrees on it is taken back (87 degrees: %.2f), and on its side or on its back the craft gets idle: thrust would push it down there", out_at(0.05f)); }
@@ -892,7 +735,7 @@ static void vstep(VPlant& p, AltHold& ah, AhInput& in, float dt) {
 static void t_althold_cascade() {
     printf("[althold 0.28] AC_PosControl's vertical cascade: shaped target, measured-acceleration loop\n");
     const float dt = 0.0025f;
-    auto craft = [&](float hover_est, float hover_true) { AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.hover = hover_est; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); return ah; };
+    auto craft = [&](float hover_est, float hover_true) { AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.set_hover(hover_est); ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f); return ah; };
     {   // the hover estimate 20 % low: the acceleration loop's integrator takes it up, the height is held
         AltHold ah = craft(0.40f, 0.50f); VPlant p; p.hover_true = 0.5f; p.out = 0.4f; AhInput in; in.armed = true; in.stick01 = 0.5f;
         float lo = 5, hi = 5; for (int i = 0; i < 4000; i++) { vstep(p, ah, in, dt); lo = fminf(lo, p.z); hi = fmaxf(hi, p.z); }
@@ -900,7 +743,7 @@ static void t_althold_cascade() {
         CHECK(fabsf(p.z - 5.0f) < 0.03f && fabsf(p.v) < 0.02f && fabsf(ah.integrator() - want_i) < 0.15f, "hover estimate 0.40, true 0.50: holds 5 m (%.3f), the integrator carries %.2f m/s^2 (%.2f is the error)", p.z, ah.integrator(), want_i);
         CHECK(5.0f - lo < 0.5f, "and the sag before it is taken up stays small (%.2f m)", 5.0f - lo); }
     {   // a downdraught of 3 m/s^2 for one second: with the measured-acceleration loop the craft loses less height
-        auto loss = [&](float acc_p, float acc_i) { AltHold ah = craft(0.40f, 0.40f); ah.cfg.acc_p = acc_p; ah.cfg.acc_i = acc_i; ah.cfg.ki_v = acc_i > 0 ? 0.0f : 3.0f;   // (without it: the old velocity integrator)
+        auto loss = [&](float acc_p, float acc_i) { AltHold ah = craft(0.40f, 0.40f); ah.cfg.acc_p = acc_p; ah.cfg.acc_i = acc_i; ah.cfg.vel_i = acc_i > 0 ? 0.0f : 3.0f;   // (without it: the old velocity integrator)
             VPlant p; AhInput in; in.armed = true; in.stick01 = 0.5f; for (int i = 0; i < 800; i++) vstep(p, ah, in, dt);
             float lo = p.z; p.push = -3.0f; for (int i = 0; i < 400; i++) { vstep(p, ah, in, dt); lo = fminf(lo, p.z); } p.push = 0;
             for (int i = 0; i < 2000; i++) { vstep(p, ah, in, dt); lo = fminf(lo, p.z); }
@@ -911,36 +754,36 @@ static void t_althold_cascade() {
         AltHold ah = craft(0.40f, 0.40f); VPlant p; AhInput in; in.armed = true; in.stick01 = 0.5f; for (int i = 0; i < 400; i++) vstep(p, ah, in, dt);
         in.stick01 = 1.0f; float amax = 0, step = 0, prev = ah.to_motor(ah.hover_throttle()); float vmax = 0;
         for (int i = 0; i < 2000; i++) { vstep(p, ah, in, dt); amax = fmaxf(amax, fabsf(ah.target_a())); step = fmaxf(step, fabsf(p.out - prev)); prev = p.out; vmax = fmaxf(vmax, p.v); }
-        CHECK(amax <= ah.cfg.accel_z_mps2 + 1e-3f && fabsf(ah.target_v() - ah.cfg.max_climb_mps) < 0.01f, "full climb: the target's acceleration stays within %.1f m/s^2 (%.3f), its climb rate gets to %.1f m/s", ah.cfg.accel_z_mps2, amax, ah.target_v());
-        CHECK(step < 0.004f && vmax < ah.cfg.max_climb_mps * 1.1f, "the motor output moves at most %.4f per 2.5 ms, the craft climbs at most %.2f m/s", step, vmax);
+        CHECK(amax <= ah.cfg.accel_max_mps2 + 1e-3f && fabsf(ah.target_v() - ah.cfg.climb_max_mps) < 0.01f, "full climb: the target's acceleration stays within %.1f m/s^2 (%.3f), its climb rate gets to %.1f m/s", ah.cfg.accel_max_mps2, amax, ah.target_v());
+        CHECK(step < 0.004f && vmax < ah.cfg.climb_max_mps * 1.1f, "the motor output moves at most %.4f per 2.5 ms, the craft climbs at most %.2f m/s", step, vmax);
         in.stick01 = 0.5f; const float z_rel = p.z; float hi = p.z; for (int i = 0; i < 2000; i++) { vstep(p, ah, in, dt); hi = fmaxf(hi, p.z); }
         CHECK(hi - z_rel < 1.7f && fabsf(p.v) < 0.05f && fabsf(p.z - ah.target_z()) < 0.05f, "stick back to the middle at 2 m/s: stops %.2f m higher (about v^2 / 2a + the jerk ramp) and holds", hi - z_rel); }
     {   // taken over while climbing at 5 m/s (more than the 2 m/s allowed): the over-speed gain stops it briskly
-        AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.hover = 0.4f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f, 5.0f, 0.0f);
+        AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.set_hover(0.4f); ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f, 5.0f, 0.0f);
         VPlant p; p.v = 5.0f; AhInput in; in.armed = true; in.stick01 = 0.5f; float amax = 0, hi = p.z;
         for (int i = 0; i < 2000; i++) { vstep(p, ah, in, dt); amax = fmaxf(amax, fabsf(ah.target_a())); hi = fmaxf(hi, p.z); }
-        CHECK(amax > ah.cfg.accel_z_mps2 * 1.5f && hi - 5.0f < 4.5f && fabsf(p.v) < 0.05f, "over-speed: the target decelerates at up to %.1f m/s^2 (limit %.1f in normal flight), the craft stops %.2f m higher (5^2 / (2 x 2.5) = 5 m without it)", amax, ah.cfg.accel_z_mps2, hi - 5.0f); }
+        CHECK(amax > ah.cfg.accel_max_mps2 * 1.5f && hi - 5.0f < 4.5f && fabsf(p.v) < 0.05f, "over-speed: the target decelerates at up to %.1f m/s^2 (limit %.1f in normal flight), the craft stops %.2f m higher (5^2 / (2 x 2.5) = 5 m without it)", amax, ah.cfg.accel_max_mps2, hi - 5.0f); }
     {   // the measured acceleration: falling at 2 m/s^2 while target, height and climb rate all agree -> more thrust at once
-        AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.hover = 0.4f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f);
+        AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.set_hover(0.4f); ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f);
         AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; in.v = 0.0f; in.a_up = -2.0f; float thr = 0;
         for (int i = 0; i < 20; i++) thr = ah.update(in, dt);
         const float out = ah.to_motor(thr), want = 0.4f * (1.0f + 0.5f * 2.0f / kG0);
         CHECK(out > 0.4f * (1.0f + 0.4f * 2.0f / kG0) && out < want * 1.02f, "the craft starts to sink at 2 m/s^2 (a gust) before height or climb rate show it: the thrust rises at once (%.4f, hover 0.4, P 0.5 x 2 m/s^2 -> %.4f)", out, want); }
     {   // one vibration spike in the accelerometer: the 20 Hz filter takes most of it out
-        AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.hover = 0.4f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f);
+        AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.set_hover(0.4f); ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f);
         AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; for (int i = 0; i < 20; i++) ah.update(in, dt);
         const float before = ah.to_motor(ah.update(in, dt)); in.a_up = 20.0f; const float spike = ah.to_motor(ah.update(in, dt));
         const float raw = 0.4f * 0.5f * 20.0f / kG0;
         CHECK(fabsf(spike - before) < 0.4f * raw, "a single 20 m/s^2 spike moves the thrust by %.4f (unfiltered it would be %.4f)", fabsf(spike - before), raw); }
     {   // the target is not let run away: the craft is held (it does not move), the stick asks for a climb
-        AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.hover = 0.10f; ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f);
+        AltHold ah; ah.init(); ah.set_limits(0.0f, 1.0f); ah.set_hover(0.10f); ah.begin_flight(5.0f, ah.hover_throttle(), 1.0f);
         AhInput in; in.armed = true; in.stick01 = 1.0f; in.z = 5.0f; for (int i = 0; i < 1000; i++) ah.update(in, dt);
         CHECK(ah.target_z() - in.z <= 2.0f + 1e-4f && ah.target_z() - in.z > 1.9f, "held where it is, not saturated (a light craft): the target goes no further than 2 m ahead (%.2f m)", ah.target_z() - in.z);
-        AltHold hv; hv.init(); hv.set_limits(0.0f, 1.0f); hv.hover = 0.70f; hv.begin_flight(5.0f, hv.hover_throttle(), 1.0f);
+        AltHold hv; hv.init(); hv.set_limits(0.0f, 1.0f); hv.set_hover(0.70f); hv.begin_flight(5.0f, hv.hover_throttle(), 1.0f);
         for (int i = 0; i < 1000; i++) hv.update(in, dt);
         CHECK(hv.target_z() - in.z < 0.5f, "a heavy craft at full throttle: the target stops where the motors cannot follow (%.2f m ahead)", hv.target_z() - in.z); }
     {   // the hand-over keeps the throttle
-        AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.hover = 0.4f; const float thr0 = 0.42f; ah.begin_flight(5.0f, thr0, 1.0f, 0.0f, 0.0f);
+        AltHold ah; ah.init(); ah.set_limits(0.055f, 1.0f); ah.set_hover(0.4f); const float thr0 = 0.42f; ah.begin_flight(5.0f, thr0, 1.0f, 0.0f, 0.0f);
         AhInput in; in.armed = true; in.stick01 = 0.5f; in.z = 5.0f; const float thr1 = ah.update(in, 0.0025f);
         CHECK(fabsf(thr1 - thr0) < 0.005f, "Altitude Hold switched on in flight: the throttle continues (%.3f -> %.3f)", thr0, thr1); }
 }
@@ -1006,6 +849,6 @@ int main() {
     t_stall_guard();
     t_fast_math();
     t_minmax();
-    t_filters(); t_ahrs(); t_ahrs_trust(); t_vertical(); t_vertical_gps(); t_horizontal(); t_rc(); t_mixer(); t_layouts(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges(); t_kinematics(); t_althold_cascade(); t_failsafe_actions();
+    t_filters(); t_ahrs(); t_ahrs_trust(); t_rc(); t_mixer(); t_layouts(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges(); t_kinematics(); t_althold_cascade(); t_failsafe_actions();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

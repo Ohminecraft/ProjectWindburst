@@ -52,10 +52,11 @@ WB_SAME(FLOW_REJECT_TURNING, fc::FLOW_TURNING); WB_SAME(FLOW_REJECT_NO_GYRO, fc:
 WB_SAME(PH_AXIS_PILOT, fc::PhAxis::PILOT); WB_SAME(PH_AXIS_BRAKE, fc::PhAxis::BRAKE); WB_SAME(PH_AXIS_BRAKE_READY, fc::PhAxis::BRAKE_READY); WB_SAME(PH_AXIS_TO_LOITER, fc::PhAxis::TO_LOITER);
 WB_SAME(PH_AXIS_LOITER, fc::PhAxis::LOITER); WB_SAME(PH_AXIS_TO_PILOT, fc::PhAxis::TO_PILOT);
 WB_SAME(RESCUE_PHASE_IDLE, fc::RescuePhase::IDLE); WB_SAME(RESCUE_PHASE_CLIMB, fc::RescuePhase::CLIMB); WB_SAME(RESCUE_PHASE_ROTATE, fc::RescuePhase::ROTATE); WB_SAME(RESCUE_PHASE_FLY_HOME, fc::RescuePhase::FLY_HOME);
-WB_SAME(RESCUE_PHASE_DESCENT, fc::RescuePhase::DESCENT); WB_SAME(RESCUE_PHASE_LANDING, fc::RescuePhase::LANDING); WB_SAME(RESCUE_PHASE_FAILED, fc::RescuePhase::FAILED);
+WB_SAME(RESCUE_PHASE_DESCENT, fc::RescuePhase::DESCENT); WB_SAME(RESCUE_PHASE_LANDING, fc::RescuePhase::LANDING); WB_SAME(RESCUE_PHASE_FAILED, fc::RescuePhase::FAILED); WB_SAME(RESCUE_PHASE_LOITER, fc::RescuePhase::LOITER);
 WB_SAME(RESCUE_FAIL_NONE, fc::RescueFail::NONE); WB_SAME(RESCUE_FAIL_NO_POSITION, fc::RescueFail::NO_POSITION); WB_SAME(RESCUE_FAIL_NO_HEADING, fc::RescueFail::NO_HEADING); WB_SAME(RESCUE_FAIL_NO_ALTITUDE, fc::RescueFail::NO_ALTITUDE);
 WB_SAME(RESCUE_FAIL_GPS_LOST, fc::RescueFail::GPS_LOST); WB_SAME(RESCUE_FAIL_LOW_SATS, fc::RescueFail::LOW_SATS); WB_SAME(RESCUE_FAIL_STALLED, fc::RescueFail::STALLED); WB_SAME(RESCUE_FAIL_FLYAWAY, fc::RescueFail::FLYAWAY);
-WB_SAME(RESCUE_ALT_MAX, fc::RESCUE_ALT_MAX); WB_SAME(RESCUE_ALT_FIXED, fc::RESCUE_ALT_FIXED); WB_SAME(RESCUE_ALT_CURRENT, fc::RESCUE_ALT_CURRENT);
+WB_SAME(RESCUE_ALT_MAX, fc::RESCUE_ALT_MAX); WB_SAME(RESCUE_ALT_FIXED, fc::RESCUE_ALT_FIXED); WB_SAME(RESCUE_ALT_CURRENT, fc::RESCUE_ALT_CURRENT); WB_SAME(RESCUE_ALT_CONE, fc::RESCUE_ALT_CONE);
+WB_SAME(RESCUE_MODE_RTL, fc::RESCUE_MODE_RTL); WB_SAME(RESCUE_MODE_SMART_RTL, fc::RESCUE_MODE_SMART_RTL); WB_SAME(RESCUE_MODE_LAND, fc::RESCUE_MODE_LAND);
 WB_SAME(BATT_SOURCE_AUTO, batt::SRC_AUTO); WB_SAME(BATT_SOURCE_ADC, batt::SRC_ADC); WB_SAME(BATT_SOURCE_ESC, batt::SRC_ESC); WB_SAME(BATT_SOURCE_NONE, batt::SRC_NONE); WB_SAME(BATT_SOURCE_DRONECAN, batt::SRC_DRONECAN);
 WB_SAME(CURR_SOURCE_NONE, batt::CUR_NONE); WB_SAME(CURR_SOURCE_DRONECAN, batt::CUR_DRONECAN);
 WB_SAME(BATT_STATE_NOT_PRESENT, batt::State::NOT_PRESENT); WB_SAME(BATT_STATE_OK, batt::State::OK); WB_SAME(BATT_STATE_WARNING, batt::State::WARNING); WB_SAME(BATT_STATE_CRITICAL, batt::State::CRITICAL);
@@ -139,7 +140,9 @@ inline void apply_nav(const Settings& s, fc::CoreConfig& c) {
     c.fs.procedure = n.fs_procedure; c.fs.hold_s = n.fs_hold_s; c.fs.batt_low = n.batt_low_action; c.fs.batt_crit = n.batt_crit_action;
     c.rescue.alt_mode = n.rescue_alt_mode; c.rescue.initial_climb_m = n.rescue_initial_climb; c.rescue.return_alt_m = n.rescue_return_alt;
     c.rescue.ascend_mps = n.rescue_ascend_rate * 0.1f; c.rescue.descend_mps = n.rescue_descend_rate * 0.1f; c.rescue.ground_speed_mps = n.rescue_ground_speed * 0.1f;
-    c.rescue.descent_dist_m = n.rescue_descent_dist; c.rescue.min_start_dist_m = n.rescue_min_start_dist; c.rescue.landing_alt_m = n.rescue_landing_alt;
+    c.rescue.min_start_dist_m = n.rescue_min_start_dist; c.rescue.landing_alt_m = n.rescue_landing_alt;      // (rescue_descent_dist: not used since 0.36)
+    c.rescue.cone_deg = n.rescue_cone; c.rescue.descend_alt_m = n.rescue_descend_alt; c.rescue.loiter_s = n.rescue_loiter == 255 ? -1.0f : (float)n.rescue_loiter;
+    c.rescue.land_speed_mps = n.rescue_land_speed * 0.1f; c.rescue.mode = n.rescue_mode;
     c.rescue.min_sats = n.rescue_min_sats;
     bool on_switch = false;
     for (int i = 0; i < 16; i++) if (s.modes.mode[i] == MODE_RESCUE && s.modes.aux[i] < fc::kAuxCount && s.modes.hi[i] > s.modes.lo[i]) on_switch = true;
@@ -148,15 +151,16 @@ inline void apply_nav(const Settings& s, fc::CoreConfig& c) {
     c.rescue_allow_no_fix = n.rescue_allow_no_fix != 0;
     c.gps_alt = n.gps_alt; c.gps_vel_z = n.gps_vel_z != 0;          // (read by the estimator every step: live)
     c.ph_min_gps_hz = (float)n.ph_min_gps_hz;
+    c.alt.ceiling_m = (float)n.fence_alt_max; c.poshold.fence_radius_m = (float)n.fence_radius;      // the fence (nav/alt_control.h, nav/pos_hold.h)
     c.ekf_nav = n.ekf == EKF_MODE_NAV;
 }
 
 // The althold section: what the throttle stick means in Altitude Hold (live).
-inline void apply_althold(const Settings& s, fc::AltHoldConfig& a) {
+inline void apply_althold(const Settings& s, fc::nav::AltConfig& a) {
     const S_althold& h = s.althold;
     a.mid_stick = h.mid_stick * 0.01f; a.deadband = h.deadband * 0.01f; a.low_stick = h.low_stick * 0.01f; a.max_stick = h.max_stick * 0.01f;
-    a.max_climb_mps = h.climb_rate * 0.1f; a.max_descend_mps = h.descend_rate * 0.1f;
-    a.accel_z_mps2 = h.accel_z * 0.1f; a.jerk_z_mps3 = h.jerk_z * 0.1f; a.acc_p = h.acc_p * 0.01f; a.acc_i = h.acc_i * 0.01f;
+    a.climb_max_mps = h.climb_rate * 0.1f; a.descend_max_mps = h.descend_rate * 0.1f;
+    a.accel_max_mps2 = h.accel_z * 0.1f; a.jerk_max_mps3 = h.jerk_z * 0.1f; a.acc_p = h.acc_p * 0.01f; a.acc_i = h.acc_i * 0.01f;
     if (a.low_stick > a.mid_stick - a.deadband - 0.05f) a.low_stick = fmaxf(0.02f, a.mid_stick - a.deadband - 0.05f);      // (a usable descent travel)
 }
 

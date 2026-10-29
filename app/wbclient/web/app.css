@@ -145,7 +145,7 @@ body { background: var(--paper); color: var(--ink); font: 14px/1.45 var(--ui); }
 [hidden] { display: none !important; }
 .num { font-family: var(--num); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
 
-#app { display: grid; grid-template-columns: 212px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
+#app { display: grid; grid-template-columns: 212px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: calc(100vh / var(--zoom, 1)); }
 
 /* ---- top bar: brand tile (carbon, part of the rail), connection, the annunciator, readiness, save */
 #bar { grid-column: 1 / -1; display: flex; align-items: stretch; min-height: 62px; background: var(--panel); border-bottom: 1px solid var(--line); }
@@ -730,3 +730,65 @@ table#logs td:last-child, table#bb-sessions td:last-child { white-space: nowrap;
 :root[data-theme="field"] .cv.craft { background: #ffffff; }
 :root[data-theme="field"] .chips { border-left: 3px solid #000; }
 :root[data-theme="field"] * { transition: none !important; }
+
+/* ---- motion (js/anim.js): a tab coming on screen, switches, values decoded the first time ---- */
+@property --scan { syntax: "<percentage>"; inherits: true; initial-value: 100%; }
+#view.view-enter { animation: wb-enter 180ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes wb-enter { from { opacity: 0; transform: translateY(var(--enter-dy, 12px)); } to { opacity: 1; transform: none; } }
+:root[data-theme="glass"] #view.view-enter { animation: wb-enter-blur 240ms ease-out both; }
+@keyframes wb-enter-blur { from { opacity: 0; filter: blur(8px); } to { opacity: 1; filter: none; } }
+:root[data-theme="hud"] #view { position: relative; }
+:root[data-theme="hud"] #view.view-enter { animation: wb-scan 320ms linear both; clip-path: inset(0 calc(100% - var(--scan)) 0 0); }
+:root[data-theme="hud"] #view.view-enter::after { content: ""; position: absolute; top: 0; bottom: 0; left: var(--scan); width: 2px; background: var(--blue); box-shadow: 0 0 14px 2px var(--blue); pointer-events: none; }
+@keyframes wb-scan { from { --scan: 0%; } to { --scan: 100%; } }
+:root[data-theme="field"] #view.view-enter { animation: none; }
+input.switch { transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s; }
+input.switch::after { transition: left 0.18s cubic-bezier(0.3, 1.4, 0.5, 1), width 0.12s; }
+input.switch:active::after { width: 21px; }
+input.switch:checked:active::after { left: 15px; }
+:root[data-theme="hud"] input.switch:checked { background: rgba(0, 229, 255, 0.15); box-shadow: 0 0 10px rgba(0, 229, 255, 0.45), inset 0 0 6px rgba(0, 229, 255, 0.3); }
+:root[data-theme="hud"] input.switch:checked::after { background: var(--blue); box-shadow: 0 0 8px var(--blue); }
+.decoding { color: var(--muted, inherit); }
+:root[data-theme="hud"] .decoding { color: var(--blue); }
+@media (prefers-reduced-motion: reduce) {
+  #view.view-enter, :root[data-theme] #view.view-enter { animation: none; clip-path: none; }
+  #view.view-enter::after { content: none; }
+  input.switch, input.switch::after { transition: none; }
+}
+
+/* Connection box (js/linkbox.js): in the middle of the window over the blurred page, the steps of connecting, and a bar that
+   runs down over the time the current step may take - empty means timed out. */
+.linkbox { position: fixed; inset: 0; z-index: 9; display: grid; place-items: center; padding: 16px; background: rgba(10, 14, 18, 0.32); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); animation: wb-fade 160ms ease-out both; }
+.linkbox[hidden] { display: none; }
+.linkbox.closing { pointer-events: none; animation: wb-fade-out 300ms ease-in 150ms both; }
+.linkbox-card { width: min(420px, 100%); padding: 22px 24px 18px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r-panel); box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35); animation: wb-pop 200ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+.linkbox-card h2 { margin: 0 0 14px; font-size: 1.05rem; overflow-wrap: anywhere; }
+.link-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.link-steps li { display: flex; align-items: center; gap: 10px; color: var(--muted); }
+.link-steps li[data-state="run"] { color: var(--ink); font-weight: 600; }
+.link-steps li[data-state="done"] { color: var(--ink); }
+.link-steps li[data-state="fail"] { color: var(--bad); font-weight: 600; }
+.link-steps i { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); font-style: normal; font-size: 12px; font-weight: 700; line-height: 1; box-sizing: border-box; }
+.link-steps li[data-state="run"] i { border-color: var(--line); border-top-color: var(--blue); animation: wb-spin 0.8s linear infinite; }
+.link-steps li[data-state="done"] i { border-color: var(--ok); background: var(--ok); color: var(--panel); }
+.link-steps li[data-state="fail"] i { border-color: var(--bad); background: var(--bad); color: var(--panel); }
+.linkbox-msg { margin: 14px 0 0; padding: 9px 11px; border-radius: var(--r-ctl); background: var(--bad-bg); color: var(--bad); overflow-wrap: anywhere; }
+.link-timer { height: 4px; margin: 18px 0 0; border-radius: 2px; background: var(--off-bg); overflow: hidden; }
+.link-timer i { display: block; height: 100%; background: var(--blue); transform-origin: left; }
+.link-timer.running i { animation: wb-countdown linear both; }
+.link-timer.stopped i { animation: wb-countdown linear both; animation-play-state: paused; }
+.link-timer.ok i { background: var(--ok); }
+.link-timer.bad i { background: var(--bad); }
+.link-timer.out i { background: var(--bad); transform: scaleX(0); animation: none; }
+.linkbox-foot { display: flex; justify-content: flex-end; margin-top: 14px; }
+.linkbox-foot:has(> [hidden]) { display: none; }
+:root[data-theme="hud"] .link-timer i { box-shadow: 0 0 8px var(--blue); }
+@keyframes wb-countdown { 0% { transform: scaleX(1); } 75% { background: var(--blue); } 100% { transform: scaleX(0); background: var(--warn); } }
+@keyframes wb-spin { to { transform: rotate(360deg); } }
+@keyframes wb-fade { from { opacity: 0; } }
+@keyframes wb-fade-out { to { opacity: 0; } }
+@keyframes wb-pop { from { opacity: 0; transform: translateY(8px) scale(0.97); } }
+@media (prefers-reduced-motion: reduce) {
+  .linkbox, .linkbox.closing, .linkbox-card { animation: none; }
+  .link-steps li[data-state="run"] i { animation: none; border-color: var(--blue); }
+}

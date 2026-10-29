@@ -66,8 +66,8 @@ struct Telemetry {
         uint8_t baro_node = 0, batt_node = 0, esc_mask = 0; uint32_t esc_sent = 0; uint16_t esc_dropped = 0;
     } can;
     // ---- navigation: optical flow, Position Hold, GPS Rescue
-    uint8_t nav_flags = 0, flow_quality = 0, flow_reject = wbp::FLOW_REJECT_NO_SAMPLE, flow_rate = 0, ph_state[2] = {}, rescue_phase = 0, rescue_fail = 0;
-    float flow_fwd = 0, flow_right = 0, nav_roll = 0, nav_pitch = 0, nav_target_n = 0, nav_target_e = 0, nav_wind_n = 0, nav_wind_e = 0, nav_home_dist = 0, rescue_return_alt = 0;
+    uint8_t nav_flags = 0, flow_quality = 0, flow_reject = wbp::FLOW_REJECT_NO_SAMPLE, flow_rate = 0, ph_state[2] = {}, rescue_phase = 0, rescue_fail = 0, rescue_mode = 0;
+    float flow_fwd = 0, flow_right = 0, nav_roll = 0, nav_pitch = 0, nav_target_n = 0, nav_target_e = 0, nav_wind_n = 0, nav_wind_e = 0, nav_home_dist = 0, rescue_return_alt = 0, rescue_left = 0;
     // ---- tuning: live state of the filters and the PID helpers
     float gyro_lpf1_hz = 0, dterm_lpf1_hz = 0, dyn_notch_hz[9] = {}, rpm_notch_hz[8] = {}, tpa = 1, anti_gravity = 0, rc_smoothed_hz = 0, rc_cutoff_hz = 0, pid_sum[3] = {}, hover_throttle = 0; uint8_t air_state = false;
     // ---- a section the firmware changed by itself and wants written to flash (in-flight level trim): the link task saves it when seq changes
@@ -198,6 +198,7 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
         o.wind_n = s16(t.nav_wind_n, scale::nav_wind_n); o.wind_e = s16(t.nav_wind_e, scale::nav_wind_e);
         o.rescue_phase = t.rescue_phase; o.rescue_fail = t.rescue_fail;
         o.home_dist = u16(t.nav_home_dist, scale::nav_home_dist); o.return_alt = u16(t.rescue_return_alt, scale::nav_return_alt);
+        o.rescue_left = u16(t.rescue_left, scale::nav_rescue_left);
         memcpy(out, &o, sizeof(o)); break; }
     case STR_TUNING: {
         T_tuning o; o.gyro_lpf1_hz = u16(t.gyro_lpf1_hz, 1.0f); o.dterm_lpf1_hz = u16(t.dterm_lpf1_hz, 1.0f);

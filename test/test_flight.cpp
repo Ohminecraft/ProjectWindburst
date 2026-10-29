@@ -502,7 +502,7 @@ static void t_althold() {
     CHECK(fabsf(r.out.est.z - r.pl.z) < 0.15f && r.out.est.alt_valid, "estimate follows the truth although the baro drifts: est %.3f true %.3f", r.out.est.z, r.pl.z);
     r.run(6.0f, p); const float z0 = r.pl.z; float dev = 0; for (int k = 0; k < 8; k++) { r.run(1.0f, p); dev = fmaxf(dev, fabsf(r.pl.z - z0)); }
     CHECK(dev < 0.12f, "hold: max deviation %.3f m over 8 s with a drifting baro", dev);
-    CHECK(fabsf(r.core.althold().hover - (0.5275f - 0.055f) / 0.945f) < 0.07f, "learned hover throttle %.3f", r.core.althold().hover);
+    CHECK(fabsf(r.core.alt_hold().hover() - (0.5275f - 0.055f) / 0.945f) < 0.07f, "learned hover throttle %.3f", r.core.alt_hold().hover());
     const float zc = r.pl.z; p.thr = 0.75f; r.run(2.0f, p); CHECK(r.pl.z - zc > 1.0f && r.pl.z - zc < 2.6f, "stick above the deadband climbs: +%.2f m in 2 s", r.pl.z - zc);
     p.thr = 0.5f; r.run(4.0f, p); const float z1 = r.pl.z; r.run(2.0f, p); CHECK(fabsf(r.pl.z - z1) < 0.1f, "holds the new altitude");
     p.thr = 0.0f; r.run(14.0f, p); CHECK(r.out.ah_state == AhState::LANDED_IDLE && r.pl.z < 0.05f, "stick low: descends, lands, goes idle (state %d z %.3f)", (int)r.out.ah_state, r.pl.z);
@@ -510,19 +510,19 @@ static void t_althold() {
     { Rig q; q.pl.make_five_inch(); q.baro = true; q.range = true; q.h.baro_ok = true; Pilot s; s.mode = 1; s.althold = true; q.run(1.0f, s); s.arm = true; q.run(0.4f, s); s.thr = 0.8f;
       float peak = 0, vmax = 0; for (int k = 0; k < 100; k++) { if (k == 6) s.thr = 0.5f; q.run(0.1f, s); peak = fmaxf(peak, q.pl.z); vmax = fmaxf(vmax, q.pl.vz); }
       CHECK(q.out.ah_state == AhState::FLYING && fabsf(q.pl.z - 0.6f) < 0.2f && peak < 1.0f && vmax < 1.6f, "a 5-inch quad takes off just as calmly: %.2f m at most (target 0.6), %.2f m/s at most, then %.2f m", peak, vmax, q.pl.z);
-      CHECK(fabsf(q.core.althold().hover - q.pl.hover_cmd()) < 0.012f && fabsf(q.out.hover_throttle - (q.pl.hover_cmd() - 0.055f) / 0.945f) < 0.012f, "its hover output is measured: %.3f (true %.3f) = %.1f %% throttle", q.core.althold().hover, q.pl.hover_cmd(), 100 * q.out.hover_throttle);
+      CHECK(fabsf(q.core.alt_hold().hover() - q.pl.hover_cmd()) < 0.012f && fabsf(q.out.hover_throttle - (q.pl.hover_cmd() - 0.055f) / 0.945f) < 0.012f, "its hover output is measured: %.3f (true %.3f) = %.1f %% throttle", q.core.alt_hold().hover(), q.pl.hover_cmd(), 100 * q.out.hover_throttle);
       const float zc = q.pl.z; s.thr = 0.75f; q.run(2.0f, s); CHECK(q.pl.z - zc > 1.0f && q.pl.z - zc < 2.6f, "climbs with the stick: +%.2f m in 2 s", q.pl.z - zc);
       s.thr = 0.5f; q.run(4.0f, s); const float z1 = q.pl.z; q.run(2.0f, s); CHECK(fabsf(q.pl.z - z1) < 0.1f, "holds the new altitude (%.2f -> %.2f)", z1, q.pl.z);
       s.thr = 0.25f; q.run(1.5f, s); CHECK(q.pl.vz < -0.3f && q.pl.vz > -1.3f, "and comes DOWN with the stick: %.2f m/s (a throttle that could not go below the old 40 %% guess would only climb)", q.pl.vz);
       s.thr = 0.0f; q.run(14.0f, s); CHECK(q.out.ah_state == AhState::LANDED_IDLE && q.pl.z < 0.05f, "lands and goes idle (state %d z %.3f)", (int)q.out.ah_state, q.pl.z); }
     // the hover output read at the moment of lift-off allows for how hard the craft is already accelerating
     { Rig q; q.pl.make_five_inch(); q.baro = true; q.range = true; q.h.baro_ok = true; Pilot s; s.mode = 1; s.althold = true; q.run(1.0f, s); s.arm = true; q.run(0.4f, s); s.thr = 0.8f;
-      int n = 0; while (!q.core.althold().lifted() && n++ < 4000) q.run(0.001f, s);
-      CHECK(n < 4000 && fabsf(q.core.althold().hover / q.pl.hover_cmd() - 1.0f) < 0.12f, "lift-off seen after %.2f s of the throttle ramp, already climbing with %.1f m/s^2: hover output read as %.3f (true %.3f)", n * 0.001f, q.out.est.az, q.core.althold().hover, q.pl.hover_cmd()); }
+      int n = 0; while (!q.core.alt_hold().lifted() && n++ < 4000) q.run(0.001f, s);
+      CHECK(n < 4000 && fabsf(q.core.alt_hold().hover() / q.pl.hover_cmd() - 1.0f) < 0.12f, "lift-off seen after %.2f s of the throttle ramp, already climbing with %.1f m/s^2: hover output read as %.3f (true %.3f)", n * 0.001f, q.out.est.az, q.core.alt_hold().hover(), q.pl.hover_cmd()); }
     // the motor layer has raised the idle and limited the output (dynamic idle, output limit): Altitude Hold works in that range
     { Rig q; q.pl.make_five_inch(); q.lim.idle = 0.10f; q.lim.limit = 0.90f; q.baro = true; q.range = true; q.h.baro_ok = true; Pilot s; s.mode = 1; s.althold = true; q.run(1.0f, s); s.arm = true; q.run(0.4f, s); s.thr = 0.8f; q.run(0.6f, s); s.thr = 0.5f; q.run(8.0f, s);
-      CHECK(q.out.ah_state == AhState::FLYING && fabsf(q.pl.z - 0.6f) < 0.2f && fabsf(q.core.althold().hover - q.pl.hover_cmd()) < 0.012f && fabsf(q.out.hover_throttle - (q.pl.hover_cmd() - 0.10f) / 0.80f) < 0.015f,
-            "idle 10 %%, limit 90 %%: holds %.2f m, hover output %.3f (true %.3f) = %.1f %% of that throttle range", q.pl.z, q.core.althold().hover, q.pl.hover_cmd(), 100 * q.out.hover_throttle); }
+      CHECK(q.out.ah_state == AhState::FLYING && fabsf(q.pl.z - 0.6f) < 0.2f && fabsf(q.core.alt_hold().hover() - q.pl.hover_cmd()) < 0.012f && fabsf(q.out.hover_throttle - (q.pl.hover_cmd() - 0.10f) / 0.80f) < 0.015f,
+            "idle 10 %%, limit 90 %%: holds %.2f m, hover output %.3f (true %.3f) = %.1f %% of that throttle range", q.pl.z, q.core.alt_hold().hover(), q.pl.hover_cmd(), 100 * q.out.hover_throttle); }
     // barometer only (no lidar): the estimator must still give a usable altitude
     { Rig b; b.drift_rate = 0.0f; b.baro = true; b.range = false; b.h.baro_ok = true; Pilot q; q.mode = 1; q.althold = true; b.run(1.5f, q); q.arm = true; b.run(0.3f, q); q.thr = 0.8f; b.run(0.7f, q); q.thr = 0.5f; b.run(8.0f, q);
       CHECK(b.out.ah_state == AhState::FLYING && b.pl.z > 0.25f && b.pl.z < 1.0f && b.out.est.alt_valid && fabsf(b.out.est.z - b.pl.z) < 0.35f, "baro only: takes off and holds (z %.2f, estimate %.2f, state %d)", b.pl.z, b.out.est.z, (int)b.out.ah_state); }
@@ -560,21 +560,21 @@ static void t_althold() {
     // a table comes under the craft: the range finder suddenly reads 35 cm less
     { Rig r; takeoff_to_hover(r); Pilot p; p.mode = 1; p.althold = true; p.arm = true; p.thr = 0.5f; r.run(3.0f, p); const float z0 = r.pl.z; float lo = z0, hi = z0;
       r.ground_level = 0.35f; for (int k = 0; k < 80; k++) { r.run(0.1f, p); lo = fminf(lo, r.pl.z); hi = fmaxf(hi, r.pl.z); }
-      CHECK(r.core.vertical().range_reanchors() == 1 && fabsf(r.core.vertical().range_anchor() + 0.35f) < 0.08f && hi - z0 < 0.12f && z0 - lo < 0.12f && fabsf(r.out.est.z - r.pl.z) < 0.12f,
-            "hovering at %.2f m, a table 35 cm high under it for 8 s: the ground level is moved (%.2f m), the craft is not (%.2f .. %.2f)", z0, r.core.vertical().range_anchor(), lo, hi);
+      CHECK(r.core.alt_estimator().range_reanchors() == 1 && fabsf(r.core.alt_estimator().range_ground() - 0.35f) < 0.08f && hi - z0 < 0.12f && z0 - lo < 0.12f && fabsf(r.out.est.z - r.pl.z) < 0.12f,
+            "hovering at %.2f m, a table 35 cm high under it for 8 s: the ground level is moved (%.2f m), the craft is not (%.2f .. %.2f)", z0, r.core.alt_estimator().range_ground(), lo, hi);
       r.ground_level = 0.0f; for (int k = 0; k < 80; k++) { r.run(0.1f, p); lo = fminf(lo, r.pl.z); hi = fmaxf(hi, r.pl.z); }
-      CHECK(r.core.vertical().range_reanchors() == 2 && hi - z0 < 0.15f && z0 - lo < 0.15f, "and off the table again (%.2f .. %.2f of %.2f)", lo, hi, z0); }
+      CHECK(r.core.alt_estimator().range_reanchors() == 2 && hi - z0 < 0.15f && z0 - lo < 0.15f, "and off the table again (%.2f .. %.2f of %.2f)", lo, hi, z0); }
     // a GPS whose altitude is 3 m off (they wander like that): it has no say while there is a barometer
     for (int lidar = 0; lidar < 2; lidar++) { Rig r; r.baro = true; r.range = lidar; r.h.baro_ok = true; Pilot p; p.mode = 1; p.althold = true; r.run(1.0f, p); p.arm = true; r.run(0.3f, p); p.thr = 0.8f; r.run(0.7f, p); p.thr = 0.5f; r.run(8.0f, p);
       const float z0 = r.pl.z; r.gps = true; r.gps_alt_err = 3.0f; float lo = z0, hi = z0; for (int k = 0; k < 300; k++) { r.run(0.1f, p); lo = fminf(lo, r.pl.z); hi = fmaxf(hi, r.pl.z); }
-      CHECK(r.out.est.pos_valid && !r.core.vertical().state().gps_used && hi - z0 < 0.6f && z0 - lo < 0.45f && lo > 0.15f && r.out.ah_state == AhState::FLYING,
+      CHECK(r.out.est.pos_valid && !r.core.alt_estimator().gps_used() && hi - z0 < 0.6f && z0 - lo < 0.45f && lo > 0.15f && r.out.ah_state == AhState::FLYING,
             "%s, GPS altitude 3 m too high for 30 s: not used, the craft holds (%.2f m, then %.2f .. %.2f; fused as a height it would have come down by two metres - into the ground)", lidar ? "baro + lidar" : "baro only", z0, lo, hi); }
     { Rig r; r.range = true; r.gps = true; r.gps_alt_err = 3.0f; Pilot p; fly_up(r, p, 1); r.run(1.0f, p);
-      CHECK(r.pl.z > 0.1f && r.pl.z < 3.0f && !r.core.vertical().state().gps_used && r.core.vertical().state().range_used && r.out.est.alt_valid && fabsf(r.out.est.z - r.pl.z) < 0.15f, "lidar and GPS without a barometer, the GPS 3 m off: the lidar is the height (%.2f, true %.2f)", r.out.est.z, r.pl.z); }
+      CHECK(r.pl.z > 0.1f && r.pl.z < 3.0f && !r.core.alt_estimator().gps_used() && r.core.alt_estimator().range_used() && r.out.est.alt_valid && fabsf(r.out.est.z - r.pl.z) < 0.15f, "lidar and GPS without a barometer, the GPS 3 m off: the lidar is the height (%.2f, true %.2f)", r.out.est.z, r.pl.z); }
     for (int mode = GA_OFF; mode <= GA_FALLBACK; mode++) { Rig r; r.core.cfg.gps_alt = (uint8_t)mode; r.gps = true; r.gps_alt_err = 0.0f; Pilot p; p.mode = 1; r.run(0.5f, p); p.arm = true; r.run(0.2f, p); p.thr = r.pl.hover_cmd() * 1.2f; r.run(2.5f, p);
-      if (mode == GA_FALLBACK) CHECK(r.core.vertical().state().gps_used && r.out.est.alt_valid && r.out.est.gps_alt_used && fabsf(r.out.est.z - r.pl.z) < 1.5f, "a craft with GPS and nothing else (FALLBACK): its height is the height (%.2f, true %.2f) and counts as valid - Betaflight's altitude_source DEFAULT does the same", r.out.est.z, r.pl.z);
-      else CHECK(!r.core.vertical().state().gps_used && !r.out.est.alt_valid && !r.out.est.gps_alt_used, "the same with the GPS height switched off (OFF): no height at all"); }
-    // ---- the GPS height in Altitude Hold (vertical_est.h "GPS"); the GPS here: 1 m of noise on each height, 150 ms late, vertical velocity 0.1 m/s
+      if (mode == GA_FALLBACK) CHECK(r.core.alt_estimator().gps_used() && r.out.est.alt_valid && r.out.est.gps_alt_used && fabsf(r.out.est.z - r.pl.z) < 1.5f, "a craft with GPS and nothing else (FALLBACK): its height is the height (%.2f, true %.2f) and counts as valid - Betaflight's altitude_source DEFAULT does the same", r.out.est.z, r.pl.z);
+      else CHECK(!r.core.alt_estimator().gps_used() && !r.out.est.alt_valid && !r.out.est.gps_alt_used, "the same with the GPS height switched off (OFF): no height at all"); }
+    // ---- the GPS height in Altitude Hold (nav/alt_estimator.h "GPS height"); the GPS here: 1 m of noise on each height, 150 ms late, vertical velocity 0.1 m/s
     { auto gps_only = [](uint8_t mode, bool& active_all, float& dev, bool& flags) { Rig r; r.core.cfg.gps_alt = mode; r.ngps = true; r.h.gps_ok = true; Pilot p; p.mode = 1; r.run(1.0f, p); p.arm = true; r.run(0.3f, p);
           p.thr = r.pl.hover_cmd() * 1.15f; for (int i = 0; i < 400 && r.pl.z < 5.0f; i++) r.run(0.05f, p);
           p.thr = 0.5f; p.althold = true; r.run(3.0f, p); const float z0 = r.pl.z; active_all = true; dev = 0;
@@ -595,7 +595,7 @@ static void t_althold() {
       CHECK(all && valid && dev < 1.5f && r.out.est.gps_alt_used && r.out.ah_state == AhState::FLYING, "barometer silent at 5 m: Altitude Hold never drops out, the height stays valid, the craft within %.2f m for 20 s on the GPS", dev); }
     // a NMEA module has no vertical velocity: nothing of it is fused (vd would read 0 - a craft climbing at 2 m/s would be told it hovers)
     { Rig r; r.ngps = true; r.gps_vd = false; r.h.gps_ok = true; Pilot p; nav_takeoff(r, p, 3.0f);
-      CHECK(!r.out.est.gps_vz_used && !r.core.vertical().state().gps_vel_used, "GPS without vertical velocity (NMEA): not used for the climb rate"); }
+      CHECK(!r.out.est.gps_vz_used && !r.core.alt_estimator().gps_vel_used(), "GPS without vertical velocity (NMEA): not used for the climb rate"); }
     // near the ground with the motors running the barometer reads wrong (the air is pushed against the ground): it counts for less there
     { auto dip = [](float ground_effect_s, int in_flight) { float sum = 0; for (int rep = 0; rep < 4; rep++) { Rig r; r.core.cfg.ground_effect_s = ground_effect_s; r.core.configure(); r.baro = true; r.h.baro_ok = true; Pilot p; p.mode = 1; r.run(1.5f, p);
               if (in_flight == 2) { r.drift -= 0.8f; r.run(0.25f, p); sum += -r.out.est.z; }               // disarmed: the air itself changed
@@ -672,9 +672,9 @@ static void t_failsafe() {
     for (int racer = 0; racer < 2; racer++) { Rig r; if (racer) r.pl.make_five_inch(); Pilot p; p.mode = 1; r.run(0.3f, p); p.arm = true; r.run(0.2f, p);
       const float hover_thr = (r.pl.hover_cmd() - 0.055f) / 0.945f;
       p.thr = hover_thr * 1.15f; r.run(0.7f, p); p.thr = hover_thr; r.run(2.5f, p); const float z0 = r.pl.z;                // a manual take-off and a hover: no barometer, no lidar
-      CHECK(z0 > 0.2f && fabsf(r.core.althold().hover - r.pl.hover_cmd()) < 0.015f, "[%s] flown by hand for 3 s: hover output measured as %.3f (true %.3f)", racer ? "5-inch" : "heavy", r.core.althold().hover, r.pl.hover_cmd());
-      p.link = false; r.run(0.6f, p); CHECK(r.out.failsafe == FsStage::DESCENT, "link lost"); r.run(0.2f, p); const float v0 = r.pl.vz, h0 = r.core.althold().hover; r.run(1.5f, p);
-      CHECK(r.core.althold().hover == h0, "[%s] the hover output is not 'measured' during that descent (%.4f -> %.4f): the craft sinks with the air carrying part of its weight, and a descent derived from a hover value that follows it would get faster and faster", racer ? "5-inch" : "heavy", h0, r.core.althold().hover);
+      CHECK(z0 > 0.2f && fabsf(r.core.alt_hold().hover() - r.pl.hover_cmd()) < 0.015f, "[%s] flown by hand for 3 s: hover output measured as %.3f (true %.3f)", racer ? "5-inch" : "heavy", r.core.alt_hold().hover(), r.pl.hover_cmd());
+      p.link = false; r.run(0.6f, p); CHECK(r.out.failsafe == FsStage::DESCENT, "link lost"); r.run(0.2f, p); const float v0 = r.pl.vz, h0 = r.core.alt_hold().hover(); r.run(1.5f, p);
+      CHECK(r.core.alt_hold().hover() == h0, "[%s] the hover output is not 'measured' during that descent (%.4f -> %.4f): the craft sinks with the air carrying part of its weight, and a descent derived from a hover value that follows it would get faster and faster", racer ? "5-inch" : "heavy", h0, r.core.alt_hold().hover());
       const float want = r.core.cfg.fs.fallback_throttle_scale * r.pl.hover_cmd(), dv = r.pl.vz - v0, dv_want = -(1 - r.core.cfg.fs.fallback_throttle_scale) * kG0 * 1.5f;
       CHECK(fabsf(0.055f + r.out.throttle * 0.945f - want) < 0.015f && fabsf(dv - dv_want) < 0.5f, "[%s] failsafe without an altitude estimate: the motors go to %.0f %% of the hover output (%.3f) and the craft sinks - %.1f m/s gained downwards in 1.5 s (%.1f expected). It does not climb away",
             racer ? "5-inch" : "heavy", 100 * r.core.cfg.fs.fallback_throttle_scale, 0.055f + r.out.throttle * 0.945f, -dv, -dv_want); }
@@ -914,15 +914,56 @@ static void t_position_hold() {
       CHECK(!ground && g.out.est.pos_valid && g.out.est.yaw_from_mag, "disarmed on the ground with GPS + compass: the accelerometer alone says where down is (it is right there)"); }
 }
 
+// 0.35.0 (nav rewrite P6): the fence - a circle around home in Position Hold, a height ceiling in Altitude Hold
+static void t_nav_fence() {
+    printf("[fence] Position Hold stops at the circle, Altitude Hold under the ceiling\n");
+    { Rig r(0, true); r.pl.make_five_inch(); r.ngps = true; r.h.gps_ok = true; r.core.cfg.poshold.fence_radius_m = 15.0f; r.core.apply_nav(); Pilot p; nav_takeoff(r, p, 3.0f);
+      p.poshold = true; r.run(4.0f, p); p.pitch = 0.6f; float far = 0; bool flag = false;
+      for (int i = 0; i < 200; i++) { r.run(0.1f, p); far = fmaxf(far, nav_dist(r, 0, 0)); flag |= r.out.fence; }
+      CHECK(flag && far < 18.0f && nav_dist(r, 0, 0) < 16.0f && hypotf(r.pl.vn, r.pl.ve) < 0.5f, "fence 15 m, the stick held forwards for 20 s: %.1f m at most, holding at %.1f m (the fence flag set)", far, nav_dist(r, 0, 0));
+      p.pitch = -0.4f; r.run(3.0f, p); p.pitch = 0; r.run(1.0f, p);
+      CHECK(!r.out.fence && nav_dist(r, 0, 0) < 13.0f, "the stick back towards home: the pilot flies again (%.1f m)", nav_dist(r, 0, 0)); }
+    { Rig r; r.baro = true; r.h.baro_ok = true; r.core.cfg.alt.ceiling_m = 4.0f; r.core.apply_nav(); Pilot p; nav_takeoff(r, p, 1.5f);
+      p.thr = 1.0f; float top = 0; for (int i = 0; i < 150; i++) { r.run(0.1f, p); top = fmaxf(top, r.pl.z); }
+      CHECK(top < 4.0f && top > 3.0f && r.out.fence, "ceiling 4 m, full stick up for 15 s: %.2f m at most", top);
+      p.thr = 0.5f; r.run(2.0f, p); r.core.cfg.alt.ceiling_m = 2.0f; r.core.apply_nav(); r.run(6.0f, p);
+      CHECK(r.pl.z < 1.8f && r.pl.z > 1.0f, "the ceiling lowered to 2 m in flight: the craft comes down under it (%.2f m)", r.pl.z); }
+    // the height estimate is reset in flight (the barometer jumps 4 m and stays: 1.5 s of rejected readings, then the estimate is SET
+    // to it): Altitude Hold moves its target with the step - the craft does not dive 4 m to 'correct' it
+    { Rig r; r.baro = true; r.h.baro_ok = true; Pilot p; nav_takeoff(r, p, 5.0f); r.run(3.0f, p); const float z0 = r.pl.z; const uint32_t n0 = r.core.alt_estimator().baro_resets();
+      r.drift += 4.0f; float lo = z0, hi = z0; for (int i = 0; i < 80; i++) { r.run(0.1f, p); lo = fminf(lo, r.pl.z); hi = fmaxf(hi, r.pl.z); }
+      CHECK(r.core.alt_estimator().baro_resets() == n0 + 1 && z0 - lo < 1.0f && hi - z0 < 1.0f && r.out.ah_state == AhState::FLYING,
+            "the barometer jumps 4 m at %.1f m: one height reset, the craft stays between %.2f and %.2f m", z0, lo, hi); }
+}
+
+// 0.35.0 (nav rewrite P7): an outside autopilot (a mission, a companion computer) flies the hold modes through set_nav_request
+static void t_nav_request() {
+    printf("[nav request] the hook for RTH / waypoints: a point and a height, flown in Position Hold while it is refreshed\n");
+    Rig r(0, true); r.pl.make_five_inch(); r.ngps = true; r.h.gps_ok = true; Pilot p; nav_takeoff(r, p, 3.0f); p.poshold = true; r.run(4.0f, p);
+    nav::NavRequest q; q.north_m = 20.0f; q.east_m = -10.0f; q.speed_mps = 4.0f; q.height = true; q.height_m = 6.0f;
+    CHECK(!r.out.nav_request, "nothing asked: Position Hold as always");
+    float vmax = 0, t_arrive = -1; for (int i = 0; i < 300; i++) { r.core.set_nav_request(q, r.us / 1000); r.run(0.1f, p); vmax = fmaxf(vmax, hypotf(r.pl.vn, r.pl.ve)); if (t_arrive < 0 && hypotf(r.out.est.pos_n - 20.0f, r.out.est.pos_e + 10.0f) < 1.0f && fabsf(r.pl.vn) < 0.3f) t_arrive = 0.1f * i; }
+    const float off = hypotf(r.out.est.pos_n - 20.0f, r.out.est.pos_e + 10.0f);      // (the simulated GPS itself wanders a metre or two)
+    CHECK(r.out.nav_request && t_arrive > 3.0f && t_arrive < 20.0f && vmax < 4.6f && off < 0.4f && nav_dist(r, 20, -10) < 2.5f && fabsf(r.pl.z - 6.0f) < 0.4f,
+          "fly to 20 m N, 10 m W, 6 m up at 4 m/s: there after %.1f s (%.1f m/s at most), %.2f m off by its estimate (%.2f in truth), %.2f m up", t_arrive, vmax, off, nav_dist(r, 20, -10), r.pl.z);
+    p.roll = 0.4f; for (int i = 0; i < 10; i++) { r.core.set_nav_request(q, r.us / 1000); r.run(0.1f, p); }      // (still asked all the while)
+    CHECK(!r.out.nav_request && r.pl.right_down_deg() > 5.0f, "the pilot moves the roll stick: the stick has it (%.1f deg)", r.pl.right_down_deg());
+    p.roll = 0; const float n0 = r.pl.pn, e0 = r.pl.pe; r.run(8.0f, p);
+    CHECK(!r.out.nav_request && r.out.poshold_active && r.core.poshold().holding() && nav_dist(r, n0, e0) < 6.0f, "no more requests: Position Hold brakes and holds (%.1f m from where the stick was let go)", nav_dist(r, n0, e0));
+    q.position = false; q.vel_n_mps = -2.0f; q.vel_e_mps = 0.0f; q.height = false;
+    for (int i = 0; i < 40; i++) { r.core.set_nav_request(q, r.us / 1000); r.run(0.1f, p); }
+    CHECK(r.out.nav_request && fabsf(r.pl.vn + 2.0f) < 0.3f && fabsf(r.pl.ve) < 0.3f, "a velocity asked (2 m/s south): %.2f / %.2f m/s", r.pl.vn, r.pl.ve);
+}
+
 static void t_gps_rescue() {
     printf("[gps rescue] in the closed loop: link lost far out, the craft comes home and lands\n");
     auto fly_out = [](Rig& r, Pilot& p, float out_s = 6.0f) { nav_takeoff(r, p, 12.0f); p.pitch = 0.6f; r.run(out_s, p); p.pitch = 0; p.roll = 0; r.run(3.0f, p); };
     auto rig = [](Rig& r, bool rescue_fs) { r.pl.make_five_inch(); r.ngps = true; r.gps_wander = 0.3f; r.h.gps_ok = true; if (rescue_fs) { r.core.cfg.fs.procedure = FSP_RESCUE; r.core.cfg.rescue_configured = true; r.core.configure(); } };
     struct Seen { std::string order; float max_z = 0, t = 0, yaw_fly = 999, worst_tilt = 0; };
     auto watch = [](Rig& r, Pilot& p, float timeout, Seen& s, bool until_disarm = true) { int last = -1;
-        static const char* names[] = {"IDLE", "CLIMB", "ROTATE", "FLY_HOME", "DESCENT", "LANDING", "FAILED"};
+        static const char* names[] = {"IDLE", "CLIMB", "ROTATE", "FLY_HOME", "DESCENT", "LANDING", "FAILED", "LOITER"};
         for (float t = 0; t < timeout && (!until_disarm || r.out.armed); t += 0.05f) { r.run(0.05f, p); s.t += 0.05f;
-            if (r.out.rescue_phase != last) { last = r.out.rescue_phase; s.order += names[last]; s.order += ' '; if (last == (int)RescuePhase::FLY_HOME) s.yaw_fly = r.pl.yaw_deg(); }
+            if (r.out.rescue_phase != last) { last = r.out.rescue_phase; s.order += names[last]; s.order += ' '; if (last == (int)RescuePhase::DESCENT) s.yaw_fly = r.pl.yaw_deg(); }
             s.max_z = fmaxf(s.max_z, r.pl.z); s.worst_tilt = fmaxf(s.worst_tilt, fmaxf(fabsf(r.pl.right_down_deg()), fabsf(r.pl.nose_down_deg()))); } };
     // ---- the link is lost 40 m out
     { Rig r(0, true); rig(r, true); r.core.cfg.fs.max_descent_s = 5.0f; r.core.configure(); Pilot p; fly_out(r, p);       // (the failsafe's net for a landing that does not come down: 5 s here)
@@ -932,9 +973,9 @@ static void t_gps_rescue() {
       CHECK(guard && r.out.failsafe == FsStage::DESCENT && r.out.rescue_active && (RescuePhase)r.out.rescue_phase == RescuePhase::CLIMB, "link lost: half a second of waiting, then the rescue (not the landing on the spot) - it climbs");
       Seen s; watch(r, p, 180.0f, s);
       const float home = hypotf(r.pl.pn, r.pl.pe);
-      CHECK(s.order == "CLIMB ROTATE FLY_HOME DESCENT LANDING IDLE " || s.order == "CLIMB ROTATE FLY_HOME DESCENT LANDING ", "the phases: %s", s.order.c_str());
-      CHECK(fabsf(s.max_z - (r.core.rescue().return_height() > 0 ? r.core.rescue().return_height() : s.max_z)) < 100.0f && s.max_z > z0 + 8.0f && s.max_z < z0 + 14.0f, "it climbed to the highest point of the flight + 10 m (%.1f m, was at %.1f)", s.max_z, z0);
-      CHECK(fabsf(wrap180(s.yaw_fly - 180.0f)) < 35.0f, "turned the nose towards home before flying (heading %.0f, home lies to the south)", s.yaw_fly);
+      CHECK(s.order == "CLIMB FLY_HOME DESCENT LOITER LANDING IDLE " || s.order == "CLIMB FLY_HOME DESCENT LOITER LANDING ", "the phases (PX4 RTL): %s", s.order.c_str());
+      CHECK(s.max_z > 29.0f && s.max_z < 31.5f, "it climbed to the return height (the cone: %.0f m out is beyond RTL_MIN_DIST, so the full 30 m; %.1f m at most, was at %.1f)", d0, s.max_z, z0);
+      CHECK(fabsf(wrap180(s.yaw_fly - 180.0f)) < 35.0f, "the nose turned along the way home while flying (heading %.0f over home; home lay to the south)", s.yaw_fly);
       CHECK(!r.out.armed && r.pl.z < 0.05f && home < 3.0f && s.t < 120.0f && s.worst_tilt < 35.0f, "landed %.1f m from where it was armed and disarmed, %.0f s after the link was lost (never leaning more than %.0f deg; the failsafe's 5 s limit for not coming down does not count while the rescue flies)", home, s.t, s.worst_tilt);
       r.run(0.1f, p); CHECK(r.core.rescue().max_height() == 0.0f, "disarmed: the highest point of this flight is forgotten (the next flight's return height starts afresh)"); }
     // ---- the procedure is "land": a lost link brings the craft down where it is, even with everything a rescue would need
@@ -971,7 +1012,7 @@ static void t_gps_rescue() {
     // ---- switched on while Position Hold leans into a side wind: the rescue starts from that lean, the craft is not blown off first
     { Rig r(0, true); rig(r, false); Pilot p; fly_out(r, p); r.pl.wind_e = 6.0f; p.poshold = true; r.run(15.0f, p); const float lean0 = r.pl.right_down_deg();
       const float n0 = r.pl.pn, e0 = r.pl.pe; p.rescue = true; float far = 0; for (int i = 0; i < 150; i++) { r.run(0.02f, p); far = fmaxf(far, nav_dist(r, n0, e0)); }
-      CHECK(r.out.rescue_active && lean0 < -5.0f && far < 1.0f, "Position Hold in a 6 m/s side wind (%.0f deg into it), RESCUE switched on: the climb starts where the craft was (%.2f m off at most in 3 s)", -lean0, far); }
+      CHECK(r.out.rescue_active && lean0 < -5.0f && far < 0.4f, "Position Hold in a 6 m/s side wind (%.0f deg into it), RESCUE switched on: the climb starts where the craft was (%.2f m off at most in 3 s)", -lean0, far); }
     // ---- the link comes back on the way: the pilot must show he is there
     { Rig r(0, true); rig(r, true); Pilot p; fly_out(r, p); p.link = false; Seen s; watch(r, p, 14.0f, s, false);
       p.link = true; r.run(3.0f, p); const bool still = r.out.rescue_active && r.out.failsafe == FsStage::DESCENT;
@@ -992,6 +1033,26 @@ static void t_gps_rescue() {
       const bool failed = !r.out.rescue_active && (RescueFail)r.out.rescue_fail == RescueFail::GPS_LOST && r.out.failsafe == FsStage::DESCENT;
       Seen s2; watch(r, p, 90.0f, s2);
       CHECK(flying && failed && !r.out.armed && r.pl.z < 0.05f && s2.t < 61.0f && s2.worst_tilt < 25.0f, "the GPS dies on the way home: the rescue gives up (GPS_LOST) and the craft comes down where it is (%.0f s later, %.0f m from home)", s2.t, hypotf(r.pl.pn, r.pl.pe)); }
+    // ---- 0.36 SMART_RTL: out north, then east; the link is lost - back the way it came, round the corner (ArduPilot SmartRTL)
+    { Rig r(0, true); rig(r, true); r.core.cfg.rescue.mode = RESCUE_MODE_SMART_RTL; r.core.configure(); Pilot p; nav_takeoff(r, p, 12.0f);
+      p.pitch = 0.6f; r.run(5.0f, p); p.pitch = 0; r.run(3.0f, p); const float cn = r.pl.pn, ce = r.pl.pe; p.roll = 0.6f; r.run(5.0f, p); p.roll = 0; r.run(3.0f, p);
+      const float d0 = hypotf(r.pl.pn, r.pl.pe), leg = hypotf(r.pl.pn - cn, r.pl.pe - ce);
+      p.link = false; float corner = 1e9f, top = 0, rem0 = -1; bool smart = false;
+      for (float t = 0; t < 180.0f && r.out.armed; t += 0.05f) { r.run(0.05f, p); corner = fminf(corner, nav_dist(r, cn, ce)); top = fmaxf(top, r.pl.z); smart |= r.core.rescue().smart(); if (rem0 < 0 && r.out.rescue_active) rem0 = r.out.rescue_left; }
+      CHECK(cn > 20.0f && leg > 20.0f && smart && corner < 4.0f && top < 14.5f, "out %.0f m north, %.0f m east, link lost: back the way it came, %.1f m from the corner at most, no climb (%.1f m at most)", cn, leg, corner, top);
+      CHECK(rem0 > d0 + 5.0f && rem0 < cn + leg + 8.0f, "the way home it reported at the start (the OSD): %.0f m along the path (straight home would be %.0f)", rem0, d0);
+      CHECK(!r.out.armed && r.pl.z < 0.05f && hypotf(r.pl.pn, r.pl.pe) < 3.0f, "landed %.1f m from home, disarmed", hypotf(r.pl.pn, r.pl.pe)); }
+    // ---- 0.36 RTL in a 5 m/s side wind: the craft stays on the line home (a target point it is pulled back to, not a velocity alone)
+    { Rig r(0, true); rig(r, true); Pilot p; fly_out(r, p); p.poshold = true; r.pl.wind_e = 5.0f; r.run(10.0f, p); const float n0 = r.pl.pn, e0 = r.pl.pe, l0 = hypotf(n0, e0);
+      p.link = false; float off = 0; bool homing = false;
+      for (float t = 0; t < 120.0f && r.out.armed; t += 0.05f) { r.run(0.05f, p); const bool fh = r.out.rescue_phase == (uint8_t)RescuePhase::FLY_HOME; homing |= fh;
+        if (fh) off = fmaxf(off, fabsf(r.pl.pn * e0 - r.pl.pe * n0) / l0); }
+      CHECK(homing && l0 > 25.0f && off < 2.0f && !r.out.armed && hypotf(r.pl.pn, r.pl.pe) < 1.5f, "link lost %.0f m out in a 5 m/s side wind: at most %.1f m off the straight line home, landed %.1f m from home", l0, off, hypotf(r.pl.pn, r.pl.pe)); }
+    // ---- 0.36 LAND: the switch brings the craft down where it is, holding that point (ArduPilot LAND)
+    { Rig r(0, true); rig(r, false); r.core.cfg.rescue.mode = RESCUE_MODE_LAND; r.core.configure(); Pilot p; fly_out(r, p); const float n0 = r.pl.pn, e0 = r.pl.pe, z0 = r.pl.z;
+      r.pl.wind_e = 4.0f; p.althold = false; p.thr = 0.45f; p.rescue = true; Seen s; float far = 0;
+      for (float t = 0; t < 90.0f && r.out.armed; t += 0.05f) { r.run(0.05f, p); s.t += 0.05f; far = fmaxf(far, nav_dist(r, n0, e0)); if (r.out.rescue_active && s.order.empty()) s.order = r.out.rescue_phase == (uint8_t)RescuePhase::LANDING ? "LANDING" : "?"; }
+      CHECK(s.order == "LANDING" && !r.out.armed && r.pl.z < 0.05f && far < 4.0f && hypotf(n0, e0) > 25.0f, "RESCUE switch with rescue_mode LAND, %.0f m from home at %.0f m, a 4 m/s side wind: straight down, %.1f m from where it was at most, motors off (%.0f s)", hypotf(n0, e0), z0, far, s.t); }
     // ---- arming with a rescue set up
     { Rig r(0, true); r.core.cfg.rescue_configured = true; r.core.configure(); Pilot p; p.mode = 1; r.run(0.5f, p); p.arm = true; r.run(0.3f, p);
       const bool refused = !r.out.armed && (r.out.arm_blockers & AB_RESCUE_NO_FIX); p.arm = false; r.run(0.2f, p); r.h.gps_ok = true; p.arm = true; r.run(0.3f, p); const bool fix = r.out.armed;
@@ -1044,6 +1105,6 @@ static void t_switch_modes() {
 
 int main() {
     t_arming(); t_attitude_modes(); t_rate_loop(); t_filters_in_the_loop(); t_throttle_boost(); t_level_modes(); t_mode_details(); t_airmode(); t_compass(); t_althold(); t_failsafe(); t_uneven_cycles(); t_pid_denom(); t_stall(); t_runaway(); t_motor_layer(); t_estimator_in_flight();
-    t_position_hold(); t_gps_rescue(); t_switch_modes(); t_stick_arm();
+    t_position_hold(); t_nav_fence(); t_nav_request(); t_gps_rescue(); t_switch_modes(); t_stick_arm();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

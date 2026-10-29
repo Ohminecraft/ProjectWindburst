@@ -3,22 +3,22 @@
 #include "types.h"
 #include "filters.h"
 #include "ahrs.h"
-#include "vertical_est.h"
-#include "horizontal_est.h"
 #include "rc.h"
 #include "gyro_filter.h"
 #include "setpoint.h"
 #include "attitude.h"
 #include "pid.h"
 #include "mixer.h"
-#include "althold.h"
 #include "safety.h"
 #include "tilt_aid.h"
 #include "flow.h"
-#include "poshold.h"
 #include "rescue.h"
 #include "acro_trainer.h"
 #include "nav/nav_log.h"
+#include "nav/alt_estimator.h"
+#include "nav/alt_control.h"
+#include "nav/pos_estimator.h"
+#include "nav/pos_hold.h"
 
 // ============================================================================
 // FlightCore - the whole flight stack behind two entry points, shaped around what the hardware drivers actually deliver:
@@ -34,7 +34,7 @@
 // -> modes (Acro; Angle = Betaflight's; Stabilize = ArduPilot's; AltHold; failsafe = self-level + controlled descent) -> rate PID
 // (pid.h, Betaflight's) -> mixer -> ABSOLUTE motor values inside [limits.idle, limits.limit].
 // Navigation (at the estimators' rate): a velocity over the ground from GPS and / or optical flow (flow.h) goes into the horizontal
-// estimate and tells the attitude estimate which way is down while the craft accelerates (tilt_aid.h); Position Hold (poshold.h)
+// estimate and tells the attitude estimate which way is down while the craft accelerates (tilt_aid.h); Position Hold (nav/pos_hold.h)
 // and GPS Rescue (rescue.h) turn it into a lean for the Angle controller, the rescue also into a climb rate for Altitude Hold.
 // Every sensor is optional: a missing / stale one is simply not fused, and arming / the modes ask Health + the estimator validity flags.
 // The sensor pushes and update() must run in the same task (or be protected by the caller): they share plain data, no locks.
@@ -42,7 +42,7 @@
 namespace fc {
 
 enum AirmodeSetting : uint8_t { AM_OFF = 0, AM_AUTO = 1, AM_ALWAYS = 2 };
-// How the GPS height is used for the height estimate (vertical_est.h, "GPS"):
+// How the GPS height is used for the height estimate (nav/alt_estimator.h, "GPS height"):
 //   OFF      never
 //   FALLBACK only when there is no barometer and no range finder (none fitted, or one went silent in flight): then it is the
 //            height, and Altitude Hold / landing / GPS Rescue work on it
@@ -87,12 +87,12 @@ struct CoreConfig {
     float airmode_threshold = 0.25f;                 // throttle (0..1) that counts as "in the air" at once (Betaflight airmode_start_throttle_percent)
     float airborne_after_s = 1.0f;                   // ... and so does any throttle above "low" held this long (a strong craft hovers below that threshold)
     MixerConfig mixer;
-    AltHoldConfig alt;
+    nav::AltConfig alt;                            // Altitude Hold (nav/alt_control.h)
     FsConfig fs;
     RunawayConfig runaway;
     StallConfig stall;                             // a motor that stops: disarm (needs rpm telemetry)
     float max_arm_angle_deg = 25.0f;
-    Ahrs::Config ahrs; KfConfig vertical; HorizontalConfig horizontal;
+    Ahrs::Config ahrs; nav::AltEstConfig alt_est; nav::PosEstConfig pos_est;      // alt_est.gps_delay_s follows pos_est.gps_delay_s
     bool use_mag = false; float declination_deg = 0.0f;
     float baro_stale_ms = 1000.0f, range_stale_ms = 250.0f, gps_stale_ms = 1500.0f, mag_stale_ms = 300.0f;
     uint8_t gps_alt = GA_FALLBACK;                   // GpsAltMode
@@ -107,7 +107,8 @@ struct CoreConfig {
     TiltAid::Config tilt_aid; bool use_tilt_aid = true;      // tilt from the measured acceleration (GPS / flow velocity) while armed
     float aid_max_sigma_vel = 0.5f;                  // a GPS velocity less sure than this (m/s) is not used for it
     FlowConfig flow; float flow_stale_ms = 300.0f;
-    PosControlConfig pos; PosHoldConfig poshold; RescueConfig rescue;      // poscontrol.h, poshold.h, rescue.h; poshold.angle_max_deg is the lean limit of both
+    nav::PosCtlConfig pos; nav::PosHoldConfig poshold; RescueConfig rescue;      // nav/pos_control.h, nav/pos_hold.h, rescue.h; poshold.angle_max_deg is the lean limit of both
+    uint32_t nav_request_timeout_ms = 500;          // a NavRequest older than this is not flown (nav/nav_math.h)
     float ph_min_gps_hz = 5.0f;     // Position Hold on GPS alone wants at least this solution rate (0 = no check); see flight_core.h 6b
     bool rescue_configured = false, rescue_allow_no_fix = false;          // a RESCUE switch is assigned or the failsafe procedure is RESCUE: arming wants a GPS fix (home)
     CoreConfig() { rates.center_sens_dps[YAW] = 70; rates.max_rate_dps[YAW] = 400; }
@@ -171,7 +172,10 @@ struct CoreOutput {
     bool poshold_active = false, poshold_unavailable = false;         // Position Hold flies / is switched on but has no velocity over the ground to work with
     uint8_t ph_state[2] = {0, 0};  // PhAxis of roll, pitch
     bool rescue_active = false, rescue_available = false; uint8_t rescue_phase = 0, rescue_fail = 0;      // RescuePhase, RescueFail
+    uint8_t rescue_mode = 0; float rescue_left = 0;   // RescueKind; the way still to go home (m)
     bool nav_lean = false; float nav_roll = 0, nav_pitch = 0;         // an autopilot gives the lean (deg, pilot convention)
+    bool nav_request = false;      // an outside autopilot flies (FlightCore::set_nav_request)
+    bool fence = false;            // the fence acts: Position Hold holds on its circle, or the craft is within a metre of the height ceiling
     float nav_target_n = 0, nav_target_e = 0, nav_wind_n = 0, nav_wind_e = 0, nav_home_dist = 0;
     Estimate est;
 };
@@ -188,8 +192,8 @@ public:
         gf_.configure(cfg.gyro, cfg.loop_hz, mixer_.motor_count());
         configure_control();
         (void)dt;
-        vert_.cfg = cfg.vertical; vert_.reset(0.0f);
-        horiz_.cfg = cfg.horizontal; horiz_.reset(); tilt_aid_.cfg = cfg.tilt_aid; tilt_aid_.reset(); gyro_hist_.configure(1.0f / cfg.est_hz);
+        alt_est_.cfg = cfg.alt_est; alt_est_.cfg.gps_delay_s = cfg.pos_est.gps_delay_s; alt_est_.reset(0.0f);
+        pos_est_.cfg = cfg.pos_est; pos_est_.reset(); tilt_aid_.cfg = cfg.tilt_aid; tilt_aid_.reset(); gyro_hist_.configure(1.0f / cfg.est_hz);
         gyro_sum_ = Vec3(); flow_new_ = false; have_flow_ = false; have_gps_xy_ = false; heading_ok_ = false;
         ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue;
         was_poshold_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false; rescue_out_ = RescueOutput(); nav_tgt_[0] = nav_tgt_[1] = 0;
@@ -206,7 +210,7 @@ public:
     // without touching the attitude or the estimators. Rates and the RC map are read from cfg / rc directly every cycle.
     void apply_tuning() { configure_control(); }
     // Live: what the throttle stick means in Altitude Hold (the hover estimate and the state are kept)
-    void apply_althold() { alt_.cfg = cfg.alt; }
+    void apply_althold() { alt_.cfg = cfg.alt; alt_.apply_config(); }
     // The same for the gyro filters (they restart from the current gyro value). Disarmed only.
     void apply_filters() { gf_.configure(cfg.gyro, cfg.loop_hz, mixer_.motor_count()); configure_control(); }
 
@@ -219,12 +223,15 @@ public:
     void on_gps(const GpsMeas& g, uint32_t now_ms) { gps_ = g; gps_ms_ = now_ms; gps_new_ = g.valid; have_gps_ = g.valid; }
     void on_mag(const Vec3& board_gauss, bool ready, uint32_t now_ms) { mag_ = board_gauss; mag_ready_ = ready; mag_ms_ = now_ms; }
     void on_ekf(const EkfNav& e, uint32_t now_ms) { ekf_ = e; ekf_ms_ = now_ms; }
+    // P7 hook: what an outside autopilot wants flown (nav/nav_math.h NavRequest). Call it again at least every nav_request_timeout_ms.
+    void set_nav_request(const nav::NavRequest& r, uint32_t now_ms) { req_ = r; req_ms_ = now_ms; have_req_ = true; }
+    void clear_nav_request() { have_req_ = false; }
     bool ekf_used() const { return ekf_in_use_; }      // the last navigation step took the EKF's numbers
     void on_flow(const FlowSample& f, uint32_t now_ms) { flow_ = f; flow_ms_ = now_ms; flow_new_ = true; flow_seen_ = true; }
     // Re-zero the horizontal position (e.g. when the home point is set at arming).
-    void reset_position() { horiz_.reset(); tilt_aid_.restart(); vert_.restart_gps_ref(); have_gps_ = false; have_gps_xy_ = false; }
+    void reset_position() { pos_est_.reset(); tilt_aid_.restart(); alt_est_.restart_gps_ref(); have_gps_ = false; have_gps_xy_ = false; }
     // Live re-tune of the navigation settings from the app (disarmed)
-    void apply_nav() { ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue; tilt_aid_.cfg = cfg.tilt_aid; fs_.cfg = cfg.fs; }
+    void apply_nav() { alt_.cfg.ceiling_m = cfg.alt.ceiling_m; ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue; tilt_aid_.cfg = cfg.tilt_aid; fs_.cfg = cfg.fs; }
 
     // One gyro sample. Every sample goes through the gyro filters; every pid_denom-th one is also a control cycle (control()).
     WB_FAST CoreOutput update(const FastInput& in) {
@@ -318,14 +325,14 @@ private:
 
         FsInput fi;
         fi.rx_ok = in.rc_link; fi.batt_critical = in.health.batt_critical; fi.batt_low = in.health.batt_low; fi.alt_valid = est_.alt_valid;
-        fi.landed = alt_.get_state() == AhState::LANDED_IDLE; fi.airborne = airborne_; fi.armed = armed_; fi.switch_on = (cmd.modes >> M_FAILSAFE_SW) & 1u; fi.vz = est_.vz;
+        fi.landed = alt_.state() == AhState::LANDED_IDLE; fi.airborne = airborne_; fi.armed = armed_; fi.switch_on = (cmd.modes >> M_FAILSAFE_SW) & 1u; fi.vz = est_.vz;
         fi.rescue_active = rescue_out_.active; fi.stick_move = in.rc_link ? maxf(fabsf(cmd.roll), maxf(fabsf(cmd.pitch), fabsf(cmd.yaw))) : 0.0f;
         const FsOutput fo = fs_.update(fi, dt);
         if (fo.disarm) { arming_.force_disarm(); armed_ = false; }
         o.failsafe = fo.stage; o.fs_cause = fo.cause; o.fs_action = fo.action; o.armed = armed_;
 
         est_.att = att_; est_.tilt_deg = ahrs_.tilt_deg(); est_.yaw_from_mag = mag_fresh && mag_seeded_; heading_ok_ = est_.yaw_from_mag;
-        o.est = est_; o.ah_state = alt_.get_state();
+        o.est = est_; o.ah_state = alt_.state();
 
         // ---- 4b. the stick path: a new receiver frame -> rates + feedforward; every cycle -> RC smoothing
         if (!have_rc_ || in.rc_seq != rc_seq_) {
@@ -340,10 +347,10 @@ private:
         if (!armed_) {                                         // disarmed: nothing accumulates, motors off
             reset_control();
             pid_.update_throttle(0.0f, &gf_);                  // the dynamic low-passes rest at their zero-throttle cutoff
-            AhInput idle; idle.armed = false; alt_.update(idle, dt); was_althold_ = false; last_thr_ = 0;
-            o.ah_state = alt_.get_state();
+            nav::AltInput idle; idle.pos_d = alt_est_.pos_d(); idle.reset_count = alt_est_.reset_count(); alt_.update(idle, dt); was_althold_ = false; last_thr_ = 0;
+            o.ah_state = alt_.state();
             if (dt_est > 0.0f) { RescueInput ri; rescue_out_ = rescue_.update(ri, dt_est); }       // (forgets the flight: its highest point, a failure)
-            was_poshold_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false;
+            was_poshold_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false; was_req_ = false; req_climb_on_ = false;
             return o;
         }
         ctl_dirty_ = true;
@@ -360,11 +367,12 @@ private:
         if (rescue || fo.alt_descent || fo.hold || (althold_sw && alt_ok && !fo.throttle_fallback)) {
             // Engaged while flying: carry on from the present throttle. "Flying" is what the craft has been doing (airborne_), not
             // where the stick happens to be: a craft that hovers at 13 % of the stick must not be taken for a parked one.
-            if (!was_althold_ && airborne_) alt_.begin_flight(est_.z, last_thr_, ahrs_.up_cos(), est_.vz, est_.az);
-            AhInput ah; ah.armed = true; ah.stick01 = cmd.throttle_raw; ah.z = est_.z; ah.v = est_.vz; ah.a_up = est_.az; ah.up_cos = ahrs_.up_cos(); ah.failsafe_descent = fo.alt_descent && !rescue; ah.pilot_absent = neutral || rescue; ah.alt_valid = true;
-            ah.ext_climb = rescue; ah.climb_mps = rescue_out_.climb_mps;
+            if (!was_althold_ && airborne_) alt_.begin_flight(alt_est_.pos_d(), alt_est_.vel_d(), -est_.az, last_thr_, ahrs_.up_cos());
+            nav::AltInput ah; ah.armed = true; ah.stick01 = cmd.throttle_raw; ah.pos_d = alt_est_.pos_d(); ah.vel_d = alt_est_.vel_d(); ah.acc_d = -est_.az; ah.up_cos = ahrs_.up_cos();
+            ah.failsafe_descent = fo.alt_descent && !rescue; ah.pilot_absent = neutral || rescue; ah.ext_climb = rescue || req_climb_on_; ah.climb_mps = rescue ? rescue_out_.climb_mps : req_climb_;
+            ah.reset_count = alt_est_.reset_count(); ah.reset_step_d = alt_est_.reset_step_d();
             thr = alt_.update(ah, dt); o.althold_active = true; was_althold_ = true;
-            rescue_landed = rescue && alt_.get_state() == AhState::LANDED_IDLE;
+            rescue_landed = rescue && alt_.state() == AhState::LANDED_IDLE;
         } else if (fo.throttle_fallback) {                                            // failsafe without an altitude estimate: gentle fixed descent, never a motor cut
             thr = alt_.hover_throttle(cfg.fs.fallback_throttle_scale); was_althold_ = false;
         } else {
@@ -379,12 +387,12 @@ private:
                 thr = hover_centred(cmd.throttle_raw, alt_.hover_throttle());
             } else thr = ss.throttle;                                                 // the stick through its curve, smoothed
         }
-        o.ah_state = alt_.get_state();
+        o.ah_state = alt_.state();
         last_thr_ = thr; o.throttle = thr;
         // The hover throttle is measured in every mode (Altitude Hold and the failsafe descent start from it) - except while the
         // failsafe flies the open-loop descent: there the throttle is DERIVED from the hover value, and a craft that sinks with
         // air drag carrying part of its weight would "learn" a lower and lower hover, sinking faster and faster.
-        if (!fo.throttle_fallback) alt_.learn(thr, ahrs_.up_cos(), est_.az, dt);
+        if (!fo.throttle_fallback) alt_.learn(thr, ahrs_.up_cos(), -est_.az, dt);
         o.hover_throttle = alt_.hover_throttle();
 
         // ---- 6. in the air, or standing on the ground?
@@ -399,7 +407,7 @@ private:
             if (land_.update(li, dt)) airborne_ = false;
         } else {
             up_t_ = 0.0f; land_.reset();
-            if (o.althold_active) { if (alt_.lifted()) airborne_ = raised_ = true; else if (alt_.get_state() != AhState::TAKEOFF) airborne_ = false; }
+            if (o.althold_active) { if (alt_.lifted()) airborne_ = raised_ = true; else if (alt_.state() != AhState::TAKEOFF) airborne_ = false; }
         }
         o.airborne = airborne_;
         // Airmode = the craft stays stabilised (full authority, I-terms) with the throttle stick at the bottom. AUTO: while it is in
@@ -412,7 +420,7 @@ private:
         o.airmode_active = airmode && cmd.throttle_low;
         // ground_idle: every motor at idle, nothing mixed, nothing integrates (ArduCopter's GROUND_IDLE)
         const bool ground_idle = pilot_throttle ? (cmd.throttle_low && !airmode)
-                               : (o.althold_active && alt_.get_state() != AhState::TAKEOFF && alt_.get_state() != AhState::FLYING);
+                               : (o.althold_active && alt_.state() != AhState::TAKEOFF && alt_.state() != AhState::FLYING);
         o.ground_idle = ground_idle;
 
         // ---- 6b. navigation, at the estimators' rate: GPS Rescue (a switch, or the failsafe's procedure) comes before Position Hold
@@ -426,9 +434,9 @@ private:
             RescueInput ri; ri.armed = true; ri.airborne = airborne_; ri.request = airborne_ && (((cmd.modes >> M_RESCUE) & 1u) || fo.rescue);
             ri.pos_n = npn; ri.pos_e = npe; ri.vel_n = nvn; ri.vel_e = nve; ri.z = est_.z; ri.yaw_deg = yaw;
             ri.pos_valid = pos_valid; ri.alt_valid = est_.alt_valid; ri.heading_valid = heading_valid; ri.sats = gps_.sats;
-            const bool was_rescue = rescue_out_.active;
+            const bool was_rescue = rescue_out_.active && rescue_out_.horizontal;
             rescue_out_ = rescue_.update(ri, dt_est);
-            rescue_ok_ = Rescue::available(ri);
+            rescue_ok_ = rescue_.available(ri);
             // Position Hold needs a velocity over the ground; one from GPS only means something to the craft with a compass heading,
             // and only if it comes often enough: a 1 Hz GPS (an NMEA module left at its default) moves the position by a metre and the
             // velocity by 1 - 2 m/s at every solution, and the hold answers each step with a lean (0.8.7 log: +-15 deg, 15 m of drift).
@@ -439,24 +447,48 @@ private:
             // (the failsafe's HOLD: Position Hold with the sticks neutral, if there is a position to hold - else Altitude Hold alone)
             const bool ph_on = ((((cmd.modes >> M_POSHOLD) & 1u) && !neutral) || (fo.hold && ph_ok)) && !rescue_out_.active;
             ph_unavail_ = ph_on && !ph_ok;
-            if (rescue_out_.active) {
+            // an outside autopilot's request (P7) is flown while Position Hold could fly, it is fresh, and the sticks are centred
+            const bool req_on = ph_on && ph_ok && have_req_ && age_ms(now, req_ms_) <= cfg.nav_request_timeout_ms && !neutral && cmd.roll == 0.0f && cmd.pitch == 0.0f;
+            if (rescue_out_.active && rescue_out_.horizontal) {
+                // the rescue's target point, flown with its velocity as feed-forward (0.36: a path, PX4 / ArduPilot RTL)
                 if (!was_rescue) rctl_.init(npn, npe, nvn, nve, angle_.target_deg(ROLL), angle_.target_deg(PITCH), yaw);
-                rctl_.update(npn, npe, nvn, nve, dt_est, false, rescue_out_.vel_n, rescue_out_.vel_e);
+                rctl_.set_target(rescue_out_.tgt_n, rescue_out_.tgt_e);
+                rctl_.update(npn, npe, nvn, nve, dt_est, true, rescue_out_.vel_n, rescue_out_.vel_e);
                 rctl_.lean(yaw, nav_tgt_[ROLL], nav_tgt_[PITCH]);
                 nav_lean_ = true; was_poshold_ = false;
+            } else if (req_on) {
+                // an outside autopilot flies (P7): to a position at no more than its speed (slowing down as it gets there), or a velocity
+                float vn = req_.vel_n_mps, ve = req_.vel_e_mps; const float dn = req_.north_m - npn, de = req_.east_m - npe, d = sqrtf(dn * dn + de * de);
+                const bool arrived = req_.position && d < 1.0f;
+                if (req_.position) { const float v = d > 1e-3f ? minf(req_.speed_mps, nav::sqrt_controller(d, cfg.pos.pos_p, cfg.pos.accel_corr_mps2)) : 0.0f; vn = d > 1e-3f ? dn / d * v : 0.0f; ve = d > 1e-3f ? de / d * v : 0.0f; }
+                if (!was_req_) rctl_.init(npn, npe, nvn, nve, angle_.target_deg(ROLL), angle_.target_deg(PITCH), yaw);
+                if (arrived) rctl_.set_target(req_.north_m, req_.east_m);
+                rctl_.update(npn, npe, nvn, nve, dt_est, arrived, arrived ? 0.0f : vn, arrived ? 0.0f : ve);
+                rctl_.lean(yaw, nav_tgt_[ROLL], nav_tgt_[PITCH]);
+                req_climb_on_ = req_.height && est_.alt_valid;
+                req_climb_ = clampf(nav::sqrt_controller(req_.height_m - est_.z, cfg.alt.pos_p, cfg.alt.accel_max_mps2), -cfg.alt.descend_max_mps, cfg.alt.climb_max_mps);
+                nav_lean_ = true; was_poshold_ = false; was_req_ = true;
             } else if (ph_on && ph_ok) {
-                PosHoldInput pi; pi.airborne = airborne_; pi.yaw_deg = yaw; pi.pos_n = npn; pi.pos_e = npe; pi.vel_n = nvn; pi.vel_e = nve;
+                nav::PosHoldInput pi; pi.airborne = airborne_; pi.reset_count = pos_est_.reset_count(); pi.reset_step_n = pos_est_.reset_step_n(); pi.reset_step_e = pos_est_.reset_step_e(); pi.yaw_deg = yaw; pi.pos_n = npn; pi.pos_e = npe; pi.vel_n = nvn; pi.vel_e = nve;
                 pi.pilot_roll_deg = cfg.angle.limit_deg * ss.rate[ROLL] / maxf(cfg.rates.max_rate_dps[ROLL], 1.0f); pi.pilot_pitch_deg = cfg.angle.limit_deg * ss.rate[PITCH] / maxf(cfg.rates.max_rate_dps[PITCH], 1.0f);
                 pi.roll_centred = neutral || cmd.roll == 0.0f; pi.pitch_centred = neutral || cmd.pitch == 0.0f;      // (the failsafe's hold: the sticks are not the pilot's)
                 if (!was_poshold_) ph_.init(pi);
                 ph_.update(pi, dt_est, nav_tgt_[ROLL], nav_tgt_[PITCH]);
                 nav_lean_ = true; was_poshold_ = true;
             } else { nav_lean_ = false; was_poshold_ = false; }
+            if (!req_on || rescue_out_.active) { was_req_ = false; req_climb_on_ = false; }
         }
         o.rescue_active = rescue_out_.active; o.rescue_available = rescue_ok_; o.rescue_phase = (uint8_t)rescue_.phase(); o.rescue_fail = (uint8_t)rescue_.failure();
+        o.rescue_mode = cfg.rescue.mode; o.rescue_left = rescue_.remaining();
         o.poshold_active = was_poshold_; o.poshold_unavailable = ph_unavail_; o.poshold_slow_gps = ph_slow_gps_; o.ph_state[0] = (uint8_t)ph_.state(0); o.ph_state[1] = (uint8_t)ph_.state(1);
         o.nav_lean = nav_lean_; o.nav_roll = nav_tgt_[ROLL]; o.nav_pitch = nav_tgt_[PITCH];
-        o.nav_target_n = ph_.ctl.target_n(); o.nav_target_e = ph_.ctl.target_e(); o.nav_wind_n = ph_.wind_n(); o.nav_wind_e = ph_.wind_e(); o.nav_home_dist = sqrtf(est_.pos_n * est_.pos_n + est_.pos_e * est_.pos_e);
+        o.nav_request = was_req_;
+        o.fence = (was_poshold_ && ph_.fence_breached()) || (o.althold_active && cfg.alt.ceiling_m > 0.0f && est_.z > cfg.alt.ceiling_m - 1.0f);      // (it stops half a metre under)
+        navlog_.alt_tgt_pos_d = alt_.controller().pos_target_d(); navlog_.alt_tgt_vel_d = alt_.controller().vel_target_d(); navlog_.hover = alt_.hover();
+        const nav::PosController& nctl = rescue_out_.active ? rctl_ : ph_.ctl;      // (the rescue flies its own controller)
+        navlog_.pos_tgt[0] = nctl.target_n(); navlog_.pos_tgt[1] = nctl.target_e();
+        navlog_.ctl_flags = (uint8_t)((o.althold_active ? 1u : 0u) | (was_poshold_ ? 2u : 0u) | (was_poshold_ && ph_.holding() ? 4u : 0u) | (o.fence ? 8u : 0u));
+        o.nav_target_n = nctl.target_n(); o.nav_target_e = nctl.target_e(); o.nav_wind_n = ph_.wind_n(); o.nav_wind_e = ph_.wind_e(); o.nav_home_dist = sqrtf(est_.pos_n * est_.pos_n + est_.pos_e * est_.pos_e);
 
         // ---- 7. modes -> rate setpoints
         const bool angle = ((cmd.modes >> M_ANGLE) & 1u) || neutral;    // the failsafe levels the craft; the hold modes and the rescue switch carry ANGLE with them (ModeMap::resolve)
@@ -500,7 +532,7 @@ private:
         pid_.update(pin, o.u);
         for (int a = 0; a < 3; a++) { o.sp_dps[a] = sp_dps[a]; o.pid_p[a] = pid_.p_term[a]; o.pid_i[a] = pid_.i_term[a]; o.pid_d[a] = pid_.d_term[a]; o.pid_f[a] = pid_.f_term[a]; }
         mixer_.mix(in.limits, boost_.apply(thr, pilot_throttle), o.u[ROLL], o.u[PITCH], o.u[YAW], o.motor, ground_idle);
-        if (alt_.get_state() == AhState::STOPPED && o.althold_active) for (auto& m : o.motor) m = 0;
+        if (alt_.state() == AhState::STOPPED && o.althold_active) for (auto& m : o.motor) m = 0;
 
         // ---- 9. runaway take-off prevention (safety.h): the loop fights the craft instead of steering it -> motors off
         RunawayTakeoff::Input ri;
@@ -522,10 +554,10 @@ private:
 
 public:
     const Ahrs& ahrs() const { return ahrs_; }
-    const VerticalEstimator& vertical() const { return vert_; }
+    const nav::AltEstimator& alt_estimator() const { return alt_est_; }
     const nav::Log& navlog() const { return navlog_; }            // the navigation stack's inputs / state for the blackbox (nav/nav_log.h)
-    const HorizontalEstimator& horizontal() const { return horiz_; }
-    const AltHold& althold() const { return alt_; }
+    const nav::PosEstimator& pos_estimator() const { return pos_est_; }
+    const nav::AltHoldMode& alt_hold() const { return alt_; }
     const PidController& pid() const { return pid_; }
     const GyroFilter& gyro_filter() const { return gf_; }
     const SetpointGenerator& setpoints() const { return sp_gen_; }
@@ -536,7 +568,7 @@ public:
     const RunawayTakeoff& runaway() const { return runaway_; }
     const StallGuard& stall_guard() const { return stall_; }
     const TiltAid& tilt_aid() const { return tilt_aid_; }
-    const PosHold& poshold() const { return ph_; }
+    const nav::PosHoldMode& poshold() const { return ph_; }
     const Rescue& rescue() const { return rescue_; }
     Mixer& mixer() { return mixer_; }
 
@@ -562,18 +594,18 @@ private:
     WB_FAST void estimator_step(Vec3 acc, float dt_est, uint32_t now) {
         float an, ae, aup; ahrs_.world_accel(acc, an, ae, aup);
         est_.az = aup;
-        vert_.predict(aup, dt_est);
+        alt_est_.predict(-aup, dt_est);
         const bool baro_fresh = have_baro_ && age_ms(now, baro_ms_) <= (uint32_t)cfg.baro_stale_ms;
         // near the ground with the motors running the air under the craft is pushed about: the barometer counts for less
         // (ArduPilot does the same while a take-off or touch-down is expected)
         ground_t_ = armed_ && airborne_ ? ground_t_ + dt_est : 0.0f;
         if (baro_new_) {
-            vert_.update_baro(baro_alt_, baro_sigma_, armed_ && ground_t_ < cfg.ground_effect_s); baro_new_ = false;
-            if (!armed_) vert_.update_still();                  // standing: no climb rate can build up from an accel bias
+            alt_est_.update_baro(baro_alt_, baro_sigma_, armed_ && ground_t_ < cfg.ground_effect_s); baro_new_ = false;
+            if (!armed_) alt_est_.update_still();                  // standing: no climb rate can build up from an accel bias
         }
-        if (range_new_) { vert_.update_range(range_h_, range_sigma_, baro_fresh); range_new_ = false; }
+        if (range_new_) { alt_est_.update_range(range_h_, range_sigma_, baro_fresh); range_new_ = false; }
         const bool range_fresh = have_range_ && age_ms(now, range_ms_) <= (uint32_t)cfg.range_stale_ms;
-        horiz_.predict(an, ae, dt_est);
+        pos_est_.predict(an, ae, dt_est);
         tilt_aid_.push_force(an / kG0, ae / kG0, -aup / kG0 - 1.0f, dt_est);
         // The GPS's north means something to the craft only with a heading that does not come from the gyro alone (the compass).
         // Without one: the GPS still shows where the craft is - unless optical flow is at work, whose velocity is measured in
@@ -581,26 +613,25 @@ private:
         const bool flow_fresh = have_flow_ && age_ms(now, flow_ok_ms_) <= (uint32_t)cfg.flow_stale_ms;
         if (gps_new_) {
             // GPS height wanders by metres over a minute; a barometer does not (ArduPilot's default height source is the barometer,
-            // Betaflight lets the GPS in with a 200 s time constant). See GpsAltMode and vertical_est.h.
+            // Betaflight lets the GPS in with a 200 s time constant). See GpsAltMode and nav/alt_estimator.h.
             if (cfg.gps_alt != GA_OFF && gps_.sigma_alt <= cfg.gps_alt_max_sigma) {
                 const float sa = gps_.sigma_alt;
                 if (!baro_fresh && !range_fresh) {                 // the GPS is all there is: as the height (seamless when a baro was there a moment ago)
-                    if (vert_.gps_ref_ok()) vert_.update_gps_relative(gps_.alt_m, sa, true); else vert_.update_gps(gps_.alt_m, sa);
+                    if (alt_est_.gps_ref_ok()) alt_est_.update_gps_rel(gps_.alt_m, sa, true); else alt_est_.update_gps_abs(gps_.alt_m, sa);
                 } else if (cfg.gps_alt == GA_BLEND && baro_fresh && !range_fresh) {
-                    vert_.update_gps_relative(gps_.alt_m, maxf(sa, cfg.vertical.gps_blend_sigma_min), true);
-                } else vert_.update_gps_relative(gps_.alt_m, sa, false);      // only keeps the reference
+                    alt_est_.update_gps_rel(gps_.alt_m, maxf(sa, cfg.alt_est.gps_blend_sigma_min_m), true);
+                } else alt_est_.update_gps_rel(gps_.alt_m, sa, false);      // only keeps the reference
             }
-            // GPS vertical velocity: measured gps_delay_s ago - brought forward with the acceleration since (as the horizontal estimator does)
-            if (cfg.gps_vel_z && gps_.vd_valid)
-                vert_.update_gps_vel(-gps_.vd + (aup - vert_.accel_bias()) * cfg.horizontal.gps_delay_s, gps_.sigma_vel * cfg.gps_vz_sigma_scale);
+            // GPS vertical velocity: compared with the estimate of gps_delay_s ago, when it was measured (nav/alt_estimator.h)
+            if (cfg.gps_vel_z && gps_.vd_valid) alt_est_.update_gps_vel(gps_.vd, gps_.sigma_vel * cfg.gps_vz_sigma_scale);
             navlog_.gps_seq++; navlog_.gps_flags = (uint8_t)(1u | (gps_.vd_valid ? 2u : 0u));
             navlog_.gps_pos[0] = gps_.north_m; navlog_.gps_pos[1] = gps_.east_m; navlog_.gps_pos[2] = -gps_.alt_m;
             navlog_.gps_vel[0] = gps_.vn; navlog_.gps_vel[1] = gps_.ve; navlog_.gps_vel[2] = gps_.vd_valid ? gps_.vd : 0.0f;
             navlog_.gps_hacc = gps_.sigma_pos; navlog_.gps_sacc = gps_.sigma_vel; navlog_.gps_sats = gps_.sats;
             if (heading_ok_ || !flow_fresh) {
                 navlog_.gps_flags |= 4u;
-                horiz_.fuse_gps(gps_.north_m, gps_.east_m, gps_.vn, gps_.ve, gps_.sigma_pos, gps_.sigma_vel);
-                if (heading_ok_ && gps_.sigma_vel <= cfg.aid_max_sigma_vel) tilt_aid_.on_velocity(gps_.vn, gps_.ve, cfg.horizontal.gps_delay_s);
+                pos_est_.fuse_gps(gps_.north_m, gps_.east_m, gps_.vn, gps_.ve, gps_.sigma_pos, gps_.sigma_vel);
+                if (heading_ok_ && gps_.sigma_vel <= cfg.aid_max_sigma_vel) tilt_aid_.on_velocity(gps_.vn, gps_.ve, cfg.pos_est.gps_delay_s);
                 gps_xy_ms_ = now; have_gps_xy_ = true;
             }
             gps_new_ = false;
@@ -616,27 +647,26 @@ private:
             if (fv.valid) {
                 const float yaw = ahrs_.euler_aero().yaw * kDeg2Rad, cy = cosf(yaw), sy = sinf(yaw);
                 const float vn = fv.forward * cy - fv.right * sy, ve = fv.forward * sy + fv.right * cy, age = flow_.age_s + 0.5f * flow_.dt;
-                horiz_.fuse_velocity(vn, ve, fv.sigma, age);
+                pos_est_.fuse_velocity(vn, ve, fv.sigma, age);
                 tilt_aid_.on_velocity(vn, ve, age);
                 flow_ok_ms_ = now; have_flow_ = true;
             }
         }
         nav_log_inputs(an, ae, aup, dt_est);
-        const VerticalState vs = vert_.state();
-        est_.z = vs.z; est_.vz = vs.v; est_.z_sigma = vert_.z_sigma();
-        est_.gps_alt_used = vs.gps_used; est_.gps_vz_used = vs.gps_vel_used;
+        est_.z = alt_est_.height(); est_.vz = alt_est_.climb_rate(); est_.z_sigma = alt_est_.height_sigma();
+        est_.gps_alt_used = alt_est_.gps_used(); est_.gps_vz_used = alt_est_.gps_vel_used();
         // the GPS height counts when it is in use, or ready to take over this moment (its reference is set, the GPS is fresh):
         // a barometer that goes silent in flight then hands over without Altitude Hold dropping out in between
-        const bool gps_height = cfg.gps_alt != GA_OFF && (vs.gps_used || (vert_.gps_ref_ok() && have_gps_ && age_ms(now, gps_ms_) <= (uint32_t)cfg.gps_stale_ms));
+        const bool gps_height = cfg.gps_alt != GA_OFF && (alt_est_.gps_used() || (alt_est_.gps_ref_ok() && have_gps_ && age_ms(now, gps_ms_) <= (uint32_t)cfg.gps_stale_ms));
         est_.alt_valid = (baro_fresh || range_fresh || gps_height) && est_.z_sigma < 3.0f;
-        est_.pos_n = horiz_.pos_n(); est_.pos_e = horiz_.pos_e(); est_.vel_n = horiz_.vel_n(); est_.vel_e = horiz_.vel_e();
-        est_.pos_valid = have_gps_ && have_gps_xy_ && age_ms(now, gps_xy_ms_) <= (uint32_t)cfg.gps_stale_ms && horiz_.initialised();
+        est_.pos_n = pos_est_.pos_n(); est_.pos_e = pos_est_.pos_e(); est_.vel_n = pos_est_.vel_n(); est_.vel_e = pos_est_.vel_e();
+        est_.pos_valid = have_gps_ && have_gps_xy_ && age_ms(now, gps_xy_ms_) <= (uint32_t)cfg.gps_stale_ms && pos_est_.initialised();
         const bool flow_now = have_flow_ && age_ms(now, flow_ok_ms_) <= (uint32_t)cfg.flow_stale_ms;
-        est_.vel_valid = (est_.pos_valid || flow_now) && horiz_.initialised();
+        est_.vel_valid = (est_.pos_valid || flow_now) && pos_est_.initialised();
         est_.flow_valid = flow_now;                             // (one sample that was not used - a dark patch - does not end it: flow_stale_ms without any does)
     }
 
-    Ahrs ahrs_; AccelGainSchedule acc_gain_; VerticalEstimator vert_; HorizontalEstimator horiz_; Mixer mixer_; AltHold alt_; Failsafe fs_; Arming arming_; RunawayTakeoff runaway_; StallGuard stall_;
+    Ahrs ahrs_; AccelGainSchedule acc_gain_; nav::AltEstimator alt_est_; nav::PosEstimator pos_est_; Mixer mixer_; nav::AltHoldMode alt_; Failsafe fs_; Arming arming_; RunawayTakeoff runaway_; StallGuard stall_;
     GyroFilter gf_; SetpointGenerator sp_gen_; PidController pid_; AngleController angle_; StabilizeController stab_; ThrottleBoost boost_;
     AcroTrainer trainer_; bool was_trainer_ = false, trainer_reset_i_[2] = {false, false};
     StickArm stick_arm_;
@@ -656,10 +686,15 @@ private:
         navlog_.vib += (sqrtf(dx * dx + dy * dy + dz * dz) - navlog_.vib) * kv;
         navlog_.clip = clip_n_; clip_n_ = 0;
         navlog_.baro_alt = baro_alt_;
+        navlog_.est_pos_d = alt_est_.pos_d(); navlog_.est_vel_d = alt_est_.vel_d(); navlog_.est_bias_d = alt_est_.accel_bias(); navlog_.est_baro_off = alt_est_.baro_offset();
+        navlog_.baro_ratio = alt_est_.baro_innov().ratio; navlog_.gps_ratio = pos_est_.gps_innov().ratio;
+        navlog_.alt_resets = alt_est_.reset_count(); navlog_.pos_resets = pos_est_.reset_count();
+        navlog_.est_pos[0] = pos_est_.pos_n(); navlog_.est_pos[1] = pos_est_.pos_e(); navlog_.est_vel[0] = pos_est_.vel_n(); navlog_.est_vel[1] = pos_est_.vel_e();
     }
     TiltAid tilt_aid_; GyroHistory gyro_hist_; FlowSample flow_; bool flow_new_ = false, flow_seen_ = false, have_flow_ = false, have_gps_xy_ = false, heading_ok_ = false; uint32_t flow_ms_ = 0, flow_ok_ms_ = 0, gps_xy_ms_ = 0;
-    PosHold ph_; PosControlNE rctl_; Rescue rescue_; RescueOutput rescue_out_; bool was_poshold_ = false, nav_lean_ = false, ph_unavail_ = false, ph_slow_gps_ = false, rescue_ok_ = false; float nav_tgt_[2] = {0, 0};
+    nav::PosHoldMode ph_; nav::PosController rctl_; Rescue rescue_; RescueOutput rescue_out_; bool was_poshold_ = false, nav_lean_ = false, ph_unavail_ = false, ph_slow_gps_ = false, rescue_ok_ = false; float nav_tgt_[2] = {0, 0};
     EkfNav ekf_; uint32_t ekf_ms_ = 0; bool ekf_in_use_ = false;
+    nav::NavRequest req_; uint32_t req_ms_ = 0; bool have_req_ = false, was_req_ = false, req_climb_on_ = false; float req_climb_ = 0.0f;
     bool have_att_ = false, mag_seeded_ = false, armed_ = false, was_althold_ = false;
     LandDetector land_; bool airborne_ = false; float up_t_ = 0.0f;
     bool have_rc_ = false, raised_ = false, was_angle_ = false, was_stab_ = false, ctl_dirty_ = true; uint32_t rc_seq_ = 0;
