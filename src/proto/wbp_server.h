@@ -23,7 +23,8 @@
 //  (unsolicited)                   STREAM [id][t_ms u32][data]   and   LOG [level][text]
 //  ACK payload = [for_type][for_seq][err]
 // Settings are edited in RAM; `flags()` tells the app (via the status stream) if they are unsaved / need a reboot. Nothing configuration-
-// changing is accepted while armed.
+// changing is accepted while armed. Both flags compare each section with what flash holds and what the firmware started with (a
+// 32-bit hash per section): a value changed and then set back as it was is neither unsaved nor waiting for a reboot.
 // ============================================================================
 namespace wbp {
 
@@ -82,8 +83,8 @@ public:
         // the settings show as unsaved instead.
         if (const uint8_t sec = host_.take_autosave()) {
             const SectionInfo* si = find_section(sec);
-            if (si && store_ && store_->save_section(s_, sec)) { autosaved_++; char t[64]; snprintf(t, sizeof(t), "settings: section %s written by the firmware", si->name); log(1, t, true); }
-            else if (si) dirty_ = true;
+            if (si && store_ && store_->save_section(s_, sec)) { autosaved_++; written(index_of(si)); char t[64]; snprintf(t, sizeof(t), "settings: section %s written by the firmware", si->name); log(1, t, true); }
+            else if (si) flash_unknown_ = true;
         }
         int sent = 0;
         for (int i = 0; i < kStreamCount && sent < 4; i++) {
@@ -100,18 +101,20 @@ public:
     // droppable: skipped when the transmit buffer has no room (a message nobody asked for must never block on an app that is not there)
     void log(uint8_t level, const char* text, bool droppable = false) { uint8_t b[200]; const size_t n = strlen(text) > 190 ? 190 : strlen(text); b[0] = level; memcpy(b + 1, text, n); send(MSG_LOG, log_seq_++, b, (uint16_t)(n + 1), droppable); }
 
-    uint8_t flags() const { return (dirty_ ? SF_DIRTY : 0) | (reboot_required_ ? SF_REBOOT_REQUIRED : 0); }
+    uint8_t flags() const { return (unsaved_ || flash_unknown_ ? SF_DIRTY : 0) | (reboot_ ? SF_REBOOT_REQUIRED : 0); }
+    // The settings in RAM are what flash holds and what the firmware started with: called once they are loaded and the firmware
+    // is configured (main.cpp - the server itself is made before that). Without it every change counts until the next Save.
+    void settings_loaded() { for (int i = 0; i < kSectionCount; i++) saved_[i] = boot_[i] = hash_of(i); unsaved_ = reboot_ = 0; flash_unknown_ = false; }
     // ---- the CLI (src/app/cli.h) edits the settings in place, in the same task; these are the steps a SECTION_SET / SAVE takes
     bool rx_mid_frame() const { return parser_.mid_frame(); }
     bool armed() const { return host_.armed(); }
     void commit_section(uint8_t id) {                      // a section was changed in RAM: clamp it, derive what follows, apply or ask for a reboot
-        validate_section(s_, id); apply_rules(s_, id); dirty_ = true;
-        if (!host_.apply_live(id)) reboot_required_ = true;
+        validate_section(s_, id);
+        apply_rules(s_, id);                               // e.g. PID gains computed from the tuning sliders
+        changed(id, host_.apply_live(id));
     }
-    bool save_all() { if (host_.armed() || !store_ || !store_->save(s_)) return false; dirty_ = false; return true; }
+    bool save_all() { return !host_.armed() && write_all(); }
     void reboot_now() { host_.reboot(); }
-    void mark_reboot_required() { reboot_required_ = true; }
-    void mark_dirty() { dirty_ = true; }
     uint32_t frames() const { return parser_.frames(); }
     uint32_t bad_frames() const { return parser_.errors(); }
     uint32_t autosaved() const { return autosaved_; }               // sections written to flash on the firmware's own account
@@ -157,21 +160,18 @@ private:
             if (f.len != si->size + 1) { ack(f.type, f.seq, ERR_SIZE_MISMATCH); break; }
             if (host_.armed()) { ack(f.type, f.seq, ERR_ARMED); break; }
             memcpy(section_ptr(s_, si->id), f.payload + 1, si->size);
-            validate_section(s_, si->id);
-            apply_rules(s_, si->id);                           // e.g. PID gains computed from the tuning sliders
-            dirty_ = true;
-            if (!host_.apply_live(si->id)) reboot_required_ = true;
+            commit_section(si->id);
             send_section(f.seq, si->id); break; }
         case MSG_SETTINGS_SAVE:
             if (host_.armed()) { ack(f.type, f.seq, ERR_ARMED); break; }
-            if (!store_ || !store_->save(s_)) { ack(f.type, f.seq, ERR_STORAGE); break; }
-            dirty_ = false; ack(f.type, f.seq, ERR_OK); break;
+            if (!write_all()) { ack(f.type, f.seq, ERR_STORAGE); break; }
+            ack(f.type, f.seq, ERR_OK); break;
         case MSG_SETTINGS_DEFAULTS: {
             if (f.len != 1) { ack(f.type, f.seq, ERR_BAD_ARG); break; }
             if (host_.armed()) { ack(f.type, f.seq, ERR_ARMED); break; }
-            if (f.payload[0] == 0xFF) { defaults(s_); for (const SectionInfo& si : kSections) if (!host_.apply_live(si.id)) reboot_required_ = true; }
-            else { if (!defaults_section(s_, f.payload[0])) { ack(f.type, f.seq, ERR_BAD_SECTION); break; } if (!host_.apply_live(f.payload[0])) reboot_required_ = true; }
-            dirty_ = true; ack(f.type, f.seq, ERR_OK); break; }
+            if (f.payload[0] == 0xFF) { defaults(s_); for (const SectionInfo& si : kSections) changed(si.id, host_.apply_live(si.id)); }
+            else { if (!defaults_section(s_, f.payload[0])) { ack(f.type, f.seq, ERR_BAD_SECTION); break; } changed(f.payload[0], host_.apply_live(f.payload[0])); }
+            ack(f.type, f.seq, ERR_OK); break; }
         case MSG_REBOOT:
             if (host_.armed()) { ack(f.type, f.seq, ERR_ARMED); break; }
             ack(f.type, f.seq, ERR_OK); host_.reboot(); break;
@@ -188,16 +188,42 @@ private:
             uint8_t res[200]; uint16_t rlen = 0;
             const Err e = host_.command(f.payload[0], f.payload + 1, (uint16_t)(f.len - 1), res + 2, rlen);
             res[0] = f.payload[0]; res[1] = (uint8_t)e;
-            if (host_.take_settings_changed()) dirty_ = true;
+            if (host_.take_settings_changed()) for (int i = 0; i < kSectionCount; i++) put(unsaved_, i, hash_of(i) != saved_[i]);     // (a calibration: the firmware took it itself)
             send(MSG_CMD_RESULT, f.seq, res, (uint16_t)(rlen + 2), false); break; }
         default: ack(f.type, f.seq, ERR_UNKNOWN); break;
         }
     }
 
+    // ---- unsaved / reboot required, per section (bit i = kSections[i])
+    static_assert(kSectionCount <= 32, "one bit per section");
+    static void put(uint32_t& mask, int i, bool on) { mask = on ? mask | (1u << i) : mask & ~(1u << i); }
+    static int index_of(const SectionInfo* si) { return (int)(si - kSections); }
+    uint32_t hash_of(int i) const {                       // FNV-1a: any one byte changed always changes it
+        const uint8_t* p = section_ptr(s_, kSections[i].id); uint32_t h = 2166136261u;
+        for (uint16_t k = 0; k < kSections[i].size; k++) { h ^= p[k]; h *= 16777619u; }
+        return h;
+    }
+    // a section changed in RAM; live = the running firmware took it (Host::apply_live). Not live, it waits for a reboot as long as it
+    // differs from what the firmware started with.
+    void changed(uint8_t id, bool live) {
+        const SectionInfo* si = find_section(id); if (!si) return;
+        const int i = index_of(si); const uint32_t h = hash_of(i);
+        put(unsaved_, i, h != saved_[i]);
+        put(reboot_, i, !live && h != boot_[i]);
+    }
+    void written(int i) { saved_[i] = hash_of(i); put(unsaved_, i, false); }
+    // every section to flash. A write that fails leaves flash in a state nobody knows: unsaved until a Save succeeds.
+    bool write_all() {
+        if (!store_ || !store_->save(s_)) { flash_unknown_ = true; return false; }
+        for (int i = 0; i < kSectionCount; i++) written(i);
+        flash_unknown_ = false; return true;
+    }
+
     Settings& s_; SettingsStore* store_; Host& host_; Transport& tx_; Role role_; uint8_t maj_, min_, patch_; const char* name_; uint32_t features_;
     const char* mcu_ = nullptr; uint8_t pins_[32] = {};
     Parser parser_; uint16_t rate_[kStreamCount] = {}; uint32_t next_[kStreamCount] = {}; uint8_t stream_seq_ = 0, log_seq_ = 0;
-    bool dirty_ = false, reboot_required_ = false; uint32_t dropped_streams_ = 0, autosaved_ = 0;
+    uint32_t saved_[kSectionCount] = {}, boot_[kSectionCount] = {}, unsaved_ = 0, reboot_ = 0; bool flash_unknown_ = false;   // hashes: in flash / what the firmware started with
+    uint32_t dropped_streams_ = 0, autosaved_ = 0;
 };
 
 } // namespace wbp

@@ -93,20 +93,27 @@ inline int timer_rows_read(const uint32_t* rows, int k, uint32_t period, app::Rg
 #include <SPI.h>
 #include "../bus/bus_spi.h"
 namespace led {
+// The core's SPI calls (esp32-hal-spi.h), not SPIClass: SPIClass::begin() attaches a clock pin first and fails without one
+// (spiAttachSCK(-1) returns false, Arduino-ESP32 3.x), so with begin(-1, -1, pin, -1) the strip never started. Only MOSI is routed.
 class SpiStrip {
 public:
     bool begin(uint8_t pin) {
-        if (!spi_.begin(-1, -1, (int8_t)pin, -1)) return false;       // MOSI only: the clock and MISO pins stay unrouted
-        ok_ = true; return true;
+        if (bus_) return true;
+        div_ = spiFrequencyToClockDiv(nullptr, kSpiHz);
+        spi_t* b = spiStartBus((uint8_t)SPI_DEVICE_1, div_, SPI_MODE0, SPI_MSBFIRST);
+        if (!b) { why_ = "the second SPI bus did not start"; return false; }
+        if (!spiAttachMOSI(b, (int8_t)pin)) { spiStopBus(b); why_ = "the LED pin could not be routed to the SPI bus"; return false; }
+        bus_ = b; return true;
     }
     void show(const app::Rgb* c, int n) {
-        if (!ok_ || n <= 0) return;
+        if (!bus_ || n <= 0) return;
         const size_t k = encode(c, n, buf_, sizeof(buf_)); if (!k) return;
-        spi_.beginTransaction(SPISettings(kSpiHz, MSBFIRST, SPI_MODE0)); spi_.transferBytes(buf_, nullptr, (uint32_t)k); spi_.endTransaction();
+        spiTransaction(bus_, div_, SPI_MODE0, SPI_MSBFIRST); spiWriteNL(bus_, buf_, (uint32_t)k); spiEndTransaction(bus_);
     }
-    const char* why() const { return nullptr; }
+    const char* why() const { return why_; }
 private:
-    SPIClass spi_{(int)SPI_DEVICE_1}; bool ok_ = false; uint8_t buf_[32 * 12 + kLatchBytes];
+    spi_t* bus_ = nullptr; uint32_t div_ = 0; const char* why_ = nullptr;
+    alignas(4) uint8_t buf_[32 * 12 + kLatchBytes];      // (spiWriteNL reads it as 32-bit words)
 };
 using Strip = SpiStrip;
 }

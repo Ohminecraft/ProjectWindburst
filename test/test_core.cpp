@@ -436,6 +436,19 @@ static void t_safety() {
         Arming a2; a2.update(false, true, ok); a2.update(true, true, ok); a2.force_disarm(); for (int i = 0; i < 10; i++) a2.update(false, false, nolink);
         CHECK(!a2.update(true, true, ok) && !a2.update(false, false, nolink) && !a2.update(true, true, ok), "after a forced disarm an 'off' that arrives without a link does not count as the cycle");
         a2.update(false, true, ok); CHECK(a2.update(true, true, ok), "a real cycle does"); } }
+    // the mission turns the motors off on the ground and on again (0.37): no switch cycle, a few blockers do not count
+    { ArmInput ok; ok.imu_ok = ok.gyro_calibrated = ok.rx_ok = true; ok.throttle_low = true;
+      Arming ar; ar.update(false, true, ok); ar.update(true, true, ok); ar.mission_disarm();
+      ArmInput high = ok; high.throttle_low = false;
+      CHECK(!ar.armed() && !ar.update(true, true, high) && ar.mission_arm(true, true, high) && ar.armed(), "mission_disarm, then mission_arm with the ARM switch still on and the stick up: armed (no edge needed)");
+      CHECK(ar.update(true, true, high), "the switch staying on keeps it armed");
+      ar.mission_disarm(); ArmInput nolink = ok; nolink.rx_ok = false;
+      CHECK(ar.mission_arm(false, false, nolink), "the link lost (the mission carries on): armed although the switch cannot be read");
+      ar.mission_disarm(); CHECK(!ar.mission_arm(false, true, ok) && !ar.armed(), "the ARM switch off: never");
+      ArmInput tilted = ok; tilted.tilt_deg = 40.0f; tilted.max_arm_angle_deg = 25.0f; CHECK(!ar.mission_arm(true, true, tilted), "any other blocker still blocks (tilted 40 deg)");
+      ArmInput fs = ok; fs.failsafe_active = true; CHECK(!ar.mission_arm(true, true, fs), "a failsafe still blocks");
+      Arming b; b.update(false, true, ok); b.update(true, true, ok); b.mission_disarm(); for (int i = 0; i < 10; i++) b.update(true, true, ok);
+      CHECK(!b.armed(), "after mission_disarm the switch left on does not arm by itself"); }
     // standing on the ground?
     { LandDetector ld; LandDetector::Input in; in.throttle_down = true; in.accel_1g = true; in.gyro_dps = 3.0f;
       bool early = false; for (int i = 0; i < 990; i++) early |= ld.update(in, 0.001f); bool at_1s = false; for (int i = 0; i < 20; i++) at_1s |= ld.update(in, 0.001f);

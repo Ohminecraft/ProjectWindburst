@@ -30,6 +30,9 @@ def main():
         "--add-data", os.path.join(APP, "wbclient", "web") + SEP + "wbclient/web",
         "--add-data", schema + SEP + "wbclient",                # schema.default_path() looks next to schema.py first
         "--hidden-import", "serial.tools.list_ports",
+        # serial_for_url() imports its URL handlers by name (socket:// = serial.urlhandler.protocol_socket): PyInstaller cannot see them,
+        # and without them the simulator and the craft's WiFi fail with "protocol 'socket' not known"
+        "--collect-submodules", "serial.urlhandler",
         "--collect-submodules", "webview",
         "--distpath", os.path.join(APP, "dist"),
         "--workpath", os.path.join(APP, "build", "pyinstaller"),

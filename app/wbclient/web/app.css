@@ -145,7 +145,8 @@ body { background: var(--paper); color: var(--ink); font: 14px/1.45 var(--ui); }
 [hidden] { display: none !important; }
 .num { font-family: var(--num); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
 
-#app { display: grid; grid-template-columns: 212px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: calc(100vh / var(--zoom, 1)); }
+/* clip: the tab sliding in (translateY on #view, anim.js) would otherwise push the page 12 px past the window - a page scrollbar flashed */
+#app { display: grid; grid-template-columns: 212px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: calc(100vh / var(--zoom, 1)); overflow: clip; }
 
 /* ---- top bar: brand tile (carbon, part of the rail), connection, the annunciator, readiness, save */
 #bar { grid-column: 1 / -1; display: flex; align-items: stretch; min-height: 62px; background: var(--panel); border-bottom: 1px solid var(--line); }
@@ -792,3 +793,40 @@ input.switch:checked:active::after { left: 15px; }
   .linkbox, .linkbox.closing, .linkbox-card { animation: none; }
   .link-steps li[data-state="run"] i { animation: none; border-color: var(--blue); }
 }
+
+/* ---- Mission tab (tabs/mission.js): the map fills the tab, the rest floats on it */
+/* the map takes what the title leaves of the tab's area, no more: a taller box scrolled the tab, and a click on the map (Leaflet
+   focuses it) jumped the page */
+#view.view-fill { display: flex; flex-direction: column; padding-bottom: 16px; }
+#view.view-fill > * { flex-shrink: 0; }
+/* isolation: Leaflet's panes and controls (z-index 200 .. 1000) and the floating bars rank only inside the map - else the tiles
+   are drawn over the notices (#toasts, z-index 10) and the connection box */
+.mission-wrap { position: relative; isolation: isolate; flex: 1 0 0; min-height: 460px; border-radius: var(--r-panel); overflow: hidden; border: 1px solid var(--line); }
+.mission-map { position: absolute; inset: 0; background: var(--panel-2); }
+.mission-float { position: absolute; z-index: 1000; background: linear-gradient(var(--panel), var(--panel)), color-mix(in srgb, var(--paper) 88%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22); padding: 6px 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.mission-tl { left: 56px; top: 10px; max-width: 46%; }
+.mission-tl input[type=text] { width: 200px; }
+.mission-tr { right: 10px; top: 10px; }
+.mission-opts { right: 10px; top: 62px; flex-direction: column; align-items: flex-start; gap: 4px; }
+.mission-opts input.num { width: 64px; }
+.mission-hits { flex-basis: 100%; display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow: auto; }
+.mission-hits .hit { text-align: left; background: none; border: 0; padding: 4px 2px; color: var(--ink); cursor: pointer; border-bottom: 1px solid var(--line); }
+.mission-editor { left: 56px; top: 64px; width: 320px; max-width: calc(100% - 72px); max-height: calc(100% - 140px); overflow-y: auto; box-sizing: border-box; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 6px; }
+.mission-editor label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 110px); gap: 6px; align-items: center; color: var(--muted); }
+.mission-editor label.wide { grid-template-columns: auto minmax(0, 1fr); }
+.mission-editor input, .mission-editor select { width: 100%; min-width: 0; box-sizing: border-box; }
+.mission-editor .help { margin: 0; font-size: 12px; color: var(--warn, var(--muted)); }
+.mission-editor .ed-head { display: flex; align-items: center; justify-content: space-between; }
+.mission-editor .step-row { display: grid; grid-template-columns: minmax(0, 1fr) 58px auto 58px auto auto; gap: 4px; align-items: center; }
+.mission-editor .step-row .btn { padding: 0 6px; }
+.mission-hud { position: absolute; z-index: 1000; left: 10px; bottom: 22px; display: flex; gap: 16px; flex-wrap: wrap; background: rgba(23, 28, 33, 0.86); color: #e8edf0; border-radius: 6px; padding: 7px 11px; font-size: 12px; max-width: calc(100% - 40px); }
+.mission-hud b { display: block; font-size: 15px; font-family: var(--num); }
+.mission-hud.over #hud-total b { color: #ff8a70; }
+.wp-marker span, .home-marker span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #2446c8; color: #fff; font-weight: 700; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); }
+.wp-marker.servo span { background: #7a3fd0; }
+.wp-marker.land span { background: #b5651d; }
+.wp-marker.sel span { outline: 4px solid #ffb21f; }
+.home-marker span { background: #146c43; width: 26px; height: 26px; }
+.leg-label { color: #fff; font-weight: 600; font-size: 12px; text-shadow: 0 0 3px #000, 0 0 3px #000; white-space: nowrap; }
+.drone-marker svg { width: 30px; height: 30px; overflow: visible; }
+.drone-marker path { fill: #ff3b1f; stroke: #fff; stroke-width: 2; }

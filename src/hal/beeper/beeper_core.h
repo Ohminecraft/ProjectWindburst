@@ -34,6 +34,7 @@ enum Mode : uint8_t {
     GYRO_CALIBRATED, RX_LOST, RX_LOST_LANDING, DISARMING, ARMING, ARMING_GPS_FIX, ARMING_GPS_NO_FIX, BAT_CRIT_LOW, BAT_LOW, RX_SET,
     ACC_CALIBRATION, ACC_CALIBRATION_FAIL, READY_BEEP, ARMED, SYSTEM_INIT, ARM_REFUSED, BLACKBOX_ERASE,
     ON_USB,                 // not a sound: "beep on the bench too" (app connected and no battery)
+    MISSION_WARN,           // the countdown before a mission arms the motors again by itself (always on: FlightApp forces it)
     MODE_COUNT, NO_MODE = 255
 };
 
@@ -56,13 +57,14 @@ constexpr uint8_t seq_armed[] = {0, 245, 10, 5, kStop};                         
 // Windburst's own
 constexpr uint8_t seq_system_init[] = {3, 5, 3, 5, kStop};                                                  // power-on chirp
 constexpr uint8_t seq_arm_refused[] = {40, 10, 10, 10, 10, 10, kStop};                                      // one long, two short
+constexpr uint8_t seq_mission_warn[] = {8, 8, kStop};                                                       // fast, for as long as the countdown runs
 
 struct Entry { const uint8_t* sequence; const char* name; };
 constexpr Entry kTable[MODE_COUNT] = {
     {seq_gyro_calibrated, "GYRO_CALIBRATED"}, {seq_rx_lost, "RX_LOST"}, {seq_sos, "RX_LOST_LANDING"}, {seq_disarm, "DISARMING"}, {seq_arming, "ARMING"},
     {seq_arming_gps_fix, "ARMING_GPS_FIX"}, {seq_arming_gps_no_fix, "ARMING_GPS_NO_FIX"}, {seq_bat_crit, "BAT_CRIT_LOW"}, {seq_bat_low, "BAT_LOW"},
     {seq_short, "RX_SET"}, {seq_2short, "ACC_CALIBRATION"}, {seq_2longer, "ACC_CALIBRATION_FAIL"}, {seq_ready, "READY_BEEP"}, {seq_armed, "ARMED"},
-    {seq_system_init, "SYSTEM_INIT"}, {seq_arm_refused, "ARM_REFUSED"}, {seq_2short, "BLACKBOX_ERASE"}, {nullptr, "USB"},
+    {seq_system_init, "SYSTEM_INIT"}, {seq_arm_refused, "ARM_REFUSED"}, {seq_2short, "BLACKBOX_ERASE"}, {nullptr, "USB"}, {seq_mission_warn, "MISSION_WARN"},
 };
 inline bool has_sound(uint8_t mode) { return mode < MODE_COUNT && kTable[mode].sequence != nullptr; }
 
@@ -133,6 +135,7 @@ struct Input {
     bool throttle_low = true;
     uint32_t arm_refused = 0;           // Arming::refused(): counts arm attempts that a blocker rejected
     bool app_active = false;            // the configurator is talking to the firmware
+    bool mission_warn = false;          // the mission arms the motors by itself soon (the last seconds of a wait on the ground)
 };
 
 constexpr uint32_t kBeaconIntervalMs = 450;             // DSHOT_BEACON_MODE_INTERVAL_US: the ESC needs this long for one tone
@@ -171,6 +174,7 @@ public:
         else if (rx_lost && !in.app_active) both(bz, RX_LOST);        // also the lost-model finder: never on the desk
         if (in.batt_state == 3) both(bz, BAT_CRIT_LOW); else if (in.batt_state == 2) both(bz, BAT_LOW);
         if (in.beeper_switch) { bz.request(RX_SET); if (m_ && in.rx_ok) m_->request(RX_SET); }   // a dead link reports stale switches: the motors ignore them
+        if (in.mission_warn) both(bz, MISSION_WARN);
         if (!in.armed && in.gps_enabled && in.gps_ready && !ready_beeped_) { both(bz, READY_BEEP); ready_beeped_ = true; }
         // armed with the throttle down: a reminder every 2.5 s that the propellers are live
         if (in.armed && in.throttle_low) { bz.request(ARMED); armed_beep_ = true; }

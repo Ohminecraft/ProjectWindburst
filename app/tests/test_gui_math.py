@@ -104,7 +104,7 @@ def test_beep_patterns_drawn_are_the_patterns_played(both):
     """The Battery and beeper tab draws each sound as on/off bars. They come from a table in the page; it must be the firmware's."""
     ref, js = both
     assert js["beeper"] == ref["beeper"], "js/gfx/fwmath.js BEEP_PATTERNS differs from src/hal/beeper/beeper_core.h"
-    assert len(ref["beeper"]) == 17 and ref["beeper"]["ARMING"] == [30, 5, 5, 5]
+    assert len(ref["beeper"]) == 18 and ref["beeper"]["ARMING"] == [30, 5, 5, 5] and ref["beeper"]["MISSION_WARN"] == [8, 8]
     from wbclient import Schema
     assert Schema().enums["beeper_cond"] == ref["beeper_order"], "the schema's condition names are the firmware table, in priority order"
 

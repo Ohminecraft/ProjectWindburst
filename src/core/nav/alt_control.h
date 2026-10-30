@@ -180,6 +180,7 @@ struct AltInput {
     bool failsafe_descent = false;      // a controlled descent, overrides the stick
     bool ext_climb = false; float climb_mps = 0.0f;   // an autopilot gives the climb rate (UP +)
     bool pilot_absent = false;          // the stick is not the pilot's hand (link lost / failsafe switch)
+    bool auto_takeoff = false;          // an autopilot (the mission's TAKEOFF) takes off: no stick wanted, nothing the stick does aborts it
     uint8_t reset_count = 0; float reset_step_d = 0.0f;   // the estimator's height resets (AltEstimator::reset_count / reset_step_d)
 };
 
@@ -222,15 +223,17 @@ public:
             return 0.0f;
         case AhState::LANDED_IDLE:
             ctl_.reset(cfg, in.pos_d);
+            if (in.auto_takeoff && !in.failsafe_descent) { begin_takeoff(in); return 0.0f; }
             if (in.pilot_absent || in.failsafe_descent) return 0.0f;             // nobody at the stick: it stays where it stands
             if (in.stick01 <= cfg.low_stick) need_low_ = false;                  // the stick has been down since landing / arming
             if (!need_low_ && in.stick01 > cfg.low_stick + 0.04f) state_ = AhState::LANDED_PRE_TAKEOFF;
             return 0.0f;
         case AhState::LANDED_PRE_TAKEOFF:
             ctl_.reset(cfg, in.pos_d);
+            if (in.auto_takeoff && !in.failsafe_descent) { begin_takeoff(in); return 0.0f; }
             if (in.pilot_absent || in.failsafe_descent) { state_ = AhState::LANDED_IDLE; need_low_ = true; return 0.0f; }
             if (in.stick01 <= cfg.low_stick) { state_ = AhState::LANDED_IDLE; return 0.0f; }
-            if (in.stick01 > cfg.mid_stick + cfg.deadband) { takeoff_t_ = 0; takeoff_pos_d_ = in.pos_d; ramp_ = 0.0f; lifted_ = false; state_ = AhState::TAKEOFF; }
+            if (in.stick01 > cfg.mid_stick + cfg.deadband) begin_takeoff(in);
             return 0.0f;                                                         // motors at idle, no lift
         case AhState::TAKEOFF: return takeoff(in, dt);
         case AhState::FLYING: default: return flying(in, dt);
@@ -247,8 +250,8 @@ private:
         const float cos_t = maxf(in.up_cos, 0.5f);
         if (!lifted_) {
             // raise the throttle gently until the craft leaves the ground: the throttle then IS (a little above) the hover throttle
-            if (in.failsafe_descent || in.pilot_absent) { state_ = AhState::LANDED_IDLE; need_low_ = true; return 0.0f; }
-            if (in.stick01 <= cfg.low_stick) { state_ = AhState::LANDED_PRE_TAKEOFF; return 0.0f; }
+            if (in.failsafe_descent || (in.pilot_absent && !in.auto_takeoff)) { state_ = AhState::LANDED_IDLE; need_low_ = true; return 0.0f; }
+            if (in.stick01 <= cfg.low_stick && !in.auto_takeoff) { state_ = AhState::LANDED_PRE_TAKEOFF; return 0.0f; }
             ramp_ += cfg.takeoff_ramp_per_s * dt;
             if (-in.vel_d > cfg.liftoff_vel_mps || takeoff_pos_d_ - in.pos_d > cfg.liftoff_alt_m) {
                 lifted_ = true; hover_.seed(ctl_.to_output(ramp_), cos_t, in.acc_d);
@@ -285,6 +288,7 @@ private:
         return thr;
     }
 
+    void begin_takeoff(const AltInput& in) { takeoff_t_ = 0; takeoff_pos_d_ = in.pos_d; ramp_ = 0.0f; lifted_ = false; state_ = AhState::TAKEOFF; }
     static constexpr float kTakeoffBrake = 1.0f;     // m/s^2 the take-off climb is planned to stop with
     AltController ctl_; HoverEstimator hover_;
     AhState state_ = AhState::STOPPED;

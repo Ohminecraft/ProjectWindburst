@@ -72,6 +72,7 @@ struct Firmware {
         app.uart0 = g_rig_usb_link ? &Serial0 : nullptr;       // as main.cpp: with the app on USB, UART0 is free for a sensor
         app.configure(settings);
         began = app.begin();
+        server.settings_loaded();
         { uint8_t pins[port::kPinMaskBytes] = {}; port::esp32s3_pins(pins, true); server.set_chip("ESP32-S3", pins); }   // (the virtual board: an N16R8)
         { char line[128];
           if (logmem) {

@@ -4,6 +4,10 @@
 #include "../core/simplified_tuning.h"
 #include "../hal/motor/motor_output.h"
 #include "../hal/gps/gps_types.h"
+#include "../hal/gps/gps_nav.h"
+#include "../hal/servo/servo_source.h"
+#include "../hal/gps/gps_nav.h"
+#include "../hal/servo/servo_source.h"
 #include "../hal/mag/mag_calibration.h"
 #include "../hal/acc_gyro/acc_calibration.h"
 #include "../hal/battery/battery_monitor.h"
@@ -30,7 +34,7 @@ WB_SAME(GPS_STATE_CONFIGURE, gps::ST_CONFIGURE); WB_SAME(GPS_STATE_RECEIVING_DAT
 WB_SAME(MODE_ARM, fc::M_ARM); WB_SAME(MODE_ANGLE, fc::M_ANGLE); WB_SAME(MODE_STABILIZE, fc::M_STABILIZE); WB_SAME(MODE_ALTHOLD, fc::M_ALTHOLD); WB_SAME(MODE_POSHOLD, fc::M_POSHOLD);
 WB_SAME(MODE_FAILSAFE, fc::M_FAILSAFE_SW); WB_SAME(MODE_BEEPER, fc::M_BEEPER); WB_SAME(MODE_BLACKBOX, fc::M_BLACKBOX);
 WB_SAME(MODE_CALIB, fc::M_CALIB); WB_SAME(MODE_RESCUE, fc::M_RESCUE);
-WB_SAME(MODE_ACRO_TRAINER, fc::M_ACRO_TRAINER); WB_SAME(MODE_AIRMODE, fc::M_AIRMODE); WB_SAME(MODE_ANTI_GRAVITY, fc::M_ANTI_GRAVITY); WB_SAME(MODE_BLACKBOX_ERASE, fc::M_BLACKBOX_ERASE); WB_SAME(MODE_BLACKBOX_ERASE + 1, fc::M_COUNT);
+WB_SAME(MODE_ACRO_TRAINER, fc::M_ACRO_TRAINER); WB_SAME(MODE_AIRMODE, fc::M_AIRMODE); WB_SAME(MODE_ANTI_GRAVITY, fc::M_ANTI_GRAVITY); WB_SAME(MODE_BLACKBOX_ERASE, fc::M_BLACKBOX_ERASE); WB_SAME(MODE_MISSION, fc::M_MISSION); WB_SAME(MODE_MISSION + 1, fc::M_COUNT);
 WB_SAME(LPF_TYPE_PT1, fc::LPF_PT1); WB_SAME(LPF_TYPE_BIQUAD, fc::LPF_BIQUAD); WB_SAME(LPF_TYPE_PT2, fc::LPF_PT2); WB_SAME(LPF_TYPE_PT3, fc::LPF_PT3);
 WB_SAME(ITERM_RELAX_OFF, fc::RELAX_OFF); WB_SAME(ITERM_RELAX_RP, fc::RELAX_RP); WB_SAME(ITERM_RELAX_RPY, fc::RELAX_RPY); WB_SAME(ITERM_RELAX_RP_INC, fc::RELAX_RP_INC); WB_SAME(ITERM_RELAX_RPY_INC, fc::RELAX_RPY_INC);
 WB_SAME(ITERM_RELAX_TYPE_GYRO, fc::RELAX_GYRO); WB_SAME(ITERM_RELAX_TYPE_SETPOINT, fc::RELAX_SETPOINT); WB_SAME(TPA_MODE_PD, fc::TPA_PD); WB_SAME(TPA_MODE_D, fc::TPA_D);
@@ -63,7 +67,14 @@ WB_SAME(BATT_STATE_NOT_PRESENT, batt::State::NOT_PRESENT); WB_SAME(BATT_STATE_OK
 #define WB_BEEP(n) WB_SAME(BEEPER_COND_##n, beep::n)
 WB_BEEP(GYRO_CALIBRATED); WB_BEEP(RX_LOST); WB_BEEP(RX_LOST_LANDING); WB_BEEP(DISARMING); WB_BEEP(ARMING); WB_BEEP(ARMING_GPS_FIX); WB_BEEP(ARMING_GPS_NO_FIX); WB_BEEP(BAT_CRIT_LOW); WB_BEEP(BAT_LOW);
 WB_BEEP(RX_SET); WB_BEEP(ACC_CALIBRATION); WB_BEEP(ACC_CALIBRATION_FAIL); WB_BEEP(READY_BEEP); WB_BEEP(ARMED); WB_BEEP(SYSTEM_INIT); WB_BEEP(ARM_REFUSED); WB_BEEP(BLACKBOX_ERASE);
-WB_SAME(BEEPER_COND_USB, beep::ON_USB);
+WB_SAME(BEEPER_COND_USB, beep::ON_USB); WB_SAME(BEEPER_COND_MISSION_WARN, beep::MISSION_WARN); WB_SAME(BEEPER_COND_MISSION_WARN + 1, beep::MODE_COUNT);
+#define WB_MC(n) WB_SAME(MISSION_CMD_##n, fc::MissionCmd::n)
+WB_MC(NONE); WB_MC(TAKEOFF); WB_MC(WAYPOINT); WB_MC(LOITER_TIME); WB_MC(LAND); WB_MC(DELAY); WB_MC(RTL); WB_MC(SERVO); WB_MC(SPEED);
+#undef WB_MC
+#define WB_MS(n) WB_SAME(MISSION_STATE_##n, fc::MissionState::n)
+WB_MS(IDLE); WB_MS(TAKEOFF); WB_MS(WAYPOINT); WB_MS(LOITER); WB_MS(LANDING); WB_MS(GROUND_WAIT); WB_MS(ARMING); WB_MS(RTL); WB_MS(DONE); WB_MS(REFUSED); WB_MS(FAILED);
+#undef WB_MS
+WB_SAME(SERVO_SOURCE_MISSION, servo::kSourceMission); WB_SAME(fc::kMissionMax, sizeof(S_mission::cmd));
 #undef WB_BEEP
 #define WB_BBF(n) WB_SAME(BB_FIELD_##n, bb::G_##n)
 WB_BBF(GYRO); WB_BBF(GYRO_RAW); WB_BBF(SETPOINT); WB_BBF(PID); WB_BBF(RC); WB_BBF(MOTORS); WB_BBF(ATTITUDE); WB_BBF(ACC); WB_BBF(RPM); WB_BBF(TIMING); WB_BBF(ALT); WB_BBF(BATTERY); WB_BBF(GPS); WB_BBF(MAG); WB_BBF(NAV);
@@ -153,6 +164,21 @@ inline void apply_nav(const Settings& s, fc::CoreConfig& c) {
     c.ph_min_gps_hz = (float)n.ph_min_gps_hz;
     c.alt.ceiling_m = (float)n.fence_alt_max; c.poshold.fence_radius_m = (float)n.fence_radius;      // the fence (nav/alt_control.h, nav/pos_hold.h)
     c.ekf_nav = n.ekf == EKF_MODE_NAV;
+    c.fs.mission_rc_continue = s.mission.rc_lost == MISSION_RC_LOST_CONTINUE;      // (section mission: the link lost while it flies)
+}
+
+// The mission section -> the plan the core flies: lat / lon to metres from home with the GPS's own offset (gps::offset_cm, what the
+// position estimate is made of), heights dm -> m. lat = lon = 0: no point (where the craft is); alt 0: no height (MAV_CMD meaning:
+// keep it) - except TAKEOFF, whose height is its whole point. More than kMissionMax commands: cut.
+inline void mission_plan_from(const S_mission& m, const gps::Location& home, fc::MissionPlan& p) {
+    p.count = m.count > fc::kMissionMax ? (uint8_t)fc::kMissionMax : m.count;
+    for (int i = 0; i < p.count; i++) {
+        fc::MissionItem& it = p.item[i]; it = fc::MissionItem();
+        it.cmd = m.cmd[i] <= MISSION_CMD_SPEED ? (fc::MissionCmd)m.cmd[i] : fc::MissionCmd::NONE; it.arg = m.arg[i]; it.p = m.p[i];
+        it.alt_m = m.alt[i] * 0.1f; it.has_alt = m.alt[i] != 0 || it.cmd == fc::MissionCmd::TAKEOFF;
+        it.has_pos = m.lat[i] != 0 || m.lon[i] != 0;
+        if (it.has_pos) { gps::Location to; to.lat = m.lat[i]; to.lon = m.lon[i]; float e = 0, n = 0; gps::offset_cm(home, to, e, n); it.n = n * 0.01f; it.e = e * 0.01f; }
+    }
 }
 
 // The althold section: what the throttle stick means in Altitude Hold (live).
@@ -204,8 +230,9 @@ inline void apply_battery(const Settings& s, batt::Config& b) {
 inline float battery_divider(const Settings& s) { return s.battery.divider * 0.01f; }
 // buzzer: the conditions as set. motors: their own set, minus what a motor can never play; one ESC tone per beep.
 inline void apply_beeper(const Settings& s, beep::Beeper& buzzer, beep::Beeper& motors) {
-    buzzer.enabled = s.beeper.conditions; buzzer.slot_ms = 0;
-    motors.enabled = s.beeper.motor_conditions & ~beep::kMotorNever; motors.slot_ms = (uint16_t)beep::kBeaconIntervalMs;
+    // (the countdown before a mission arms the motors by itself cannot be switched off: people stand next to the craft)
+    buzzer.enabled = s.beeper.conditions | (1u << beep::MISSION_WARN); buzzer.slot_ms = 0;
+    motors.enabled = (s.beeper.motor_conditions | (1u << beep::MISSION_WARN)) & ~beep::kMotorNever; motors.slot_ms = (uint16_t)beep::kBeaconIntervalMs;
 }
 inline bool beeper_motor_default_matches() { S_beeper b; defaults(b); return b.motor_conditions == beep::kMotorDefault; }
 

@@ -32,7 +32,7 @@ struct Host1 : Host {
 struct Rig {
     Settings s; MemStorage mem; SettingsStore store{mem}; Host1 host; NullTx tx; Server srv{s, &store, host, tx, ROLE_RX, 0, 1, 0, "t", 0};
     std::string out; app::Cli cli{s, srv, [](const char* t, void* c) { static_cast<Rig*>(c)->out += t; }, this};
-    Rig() { defaults(s); }
+    Rig() { defaults(s); srv.settings_loaded(); }
     std::string run(const char* line) { out.clear(); cli.run(line); return out; }
     bool has(const char* text) const { return out.find(text) != std::string::npos; }
 };
@@ -60,6 +60,8 @@ static void t_cli() {
       r.run("get loop_hz"); CHECK(r.has("general.loop_hz = 4000") && r.has("allowed: 500 .. 8000"), "get: the value and what it takes:\n%s", r.out.c_str());
       r.run("set general.loop_hz = 8000"); CHECK(r.has("general.loop_hz = 8000") && r.s.general.loop_hz == 8000 && (r.srv.flags() & SF_REBOOT_REQUIRED) && (r.srv.flags() & SF_DIRTY), "set: in RAM, unsaved, and this one needs a reboot");
       r.run("set general.loop_hz = 9000"); CHECK(r.has("Invalid value: out of range") && r.s.general.loop_hz == 8000, "out of range: refused, the value stays");
+      r.run("set general.loop_hz = 4000"); r.run("status"); CHECK(r.srv.flags() == 0 && r.has("settings saved") && !r.has("reboot"), "set back as it was: nothing to save, no reboot (%s)", r.out.c_str());
+      r.run("set general.loop_hz = 8000");
       r.run("set general.board_trim_roll = -2.5"); CHECK(r.s.general.board_trim_roll == -25 && r.has("general.board_trim_roll = -2.5"), "scaled fields in the app's units (deg: -2.5 is -25 tenths)");
       r.run("set general.airmode = ALWAYS"); CHECK(r.s.general.airmode == AIRMODE_ALWAYS, "enums by name") ; }
     { Rig r;

@@ -32,7 +32,7 @@ struct State {
     // HEARTBEAT
     uint8_t vehicle_type = MAV_TYPE_QUADROTOR;
     bool armed = false, failsafe = false, calibrating = false;
-    bool angle = false, stabilize = false, althold = false, poshold = false, rescue = false;
+    bool angle = false, stabilize = false, althold = false, poshold = false, rescue = false, mission = false;      // mission: it flies the waypoint mission
     // attitude, rad and rad/s
     float roll = 0, pitch = 0, yaw = 0, p = 0, q = 0, r = 0;
     // position
@@ -55,8 +55,8 @@ inline Heartbeat heartbeat_of(const State& s) {
     Heartbeat h; h.type = s.vehicle_type; h.autopilot = MAV_AUTOPILOT_GENERIC;
     h.base_mode = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | MAV_MODE_FLAG_MANUAL_INPUT_ENABLED;
     if (s.armed) h.base_mode |= MAV_MODE_FLAG_SAFETY_ARMED;
-    if (s.angle || s.stabilize || s.althold || s.poshold || s.rescue) h.base_mode |= MAV_MODE_FLAG_STABILIZE_ENABLED;
-    h.custom_mode = s.failsafe ? (s.rescue ? COPTER_RTL : COPTER_LAND) : s.rescue ? COPTER_RTL : s.poshold ? COPTER_POSHOLD : s.althold ? COPTER_ALT_HOLD
+    if (s.angle || s.stabilize || s.althold || s.poshold || s.rescue || s.mission) h.base_mode |= MAV_MODE_FLAG_STABILIZE_ENABLED;
+    h.custom_mode = s.failsafe ? (s.rescue ? COPTER_RTL : COPTER_LAND) : s.rescue ? COPTER_RTL : s.mission ? COPTER_AUTO : s.poshold ? COPTER_POSHOLD : s.althold ? COPTER_ALT_HOLD
                   : (s.angle || s.stabilize) ? COPTER_STABILIZE : COPTER_ACRO;
     h.system_status = s.failsafe ? MAV_STATE_CRITICAL : s.calibrating && !s.armed ? MAV_STATE_CALIBRATING : s.armed ? MAV_STATE_ACTIVE : MAV_STATE_STANDBY;
     return h;

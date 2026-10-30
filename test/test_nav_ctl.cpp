@@ -25,11 +25,13 @@ struct Plant1D {
 
 struct AltRig {
     AltHoldMode m; Plant1D p; float t = 0, offset_d = 0; uint8_t resets = 0; float step_d = 0;
+    bool auto_to = false, absent = false, ext = false; float climb = 0;     // an autopilot: take off by itself, nobody at the stick, its climb rate
     AltRig() { m.init(); m.set_limits(p.idle, 1.0f); }
     float run(float seconds, float stick, bool armed = true, float dt = 0.002f) {
         float thr = 0;
         for (int i = 0; i < (int)(seconds / dt + 0.5f); i++) {
             AltInput in; in.armed = armed; in.stick01 = stick; in.pos_d = -p.h + offset_d; in.vel_d = -p.v; in.acc_d = -p.a; in.reset_count = resets; in.reset_step_d = step_d;
+            in.auto_takeoff = auto_to; in.pilot_absent = absent; in.ext_climb = ext; in.climb_mps = climb;
             thr = m.update(in, dt); m.learn(thr, 1.0f, -p.a, dt); p.step(armed ? thr : 0.0f, dt); t += dt;
         }
         return thr;
@@ -67,6 +69,20 @@ static void t_alt_takeoff_hold_land() {
     CHECK(r.m.state() == AhState::LANDED_IDLE && r.p.h < 0.01f, "stick down: descends, lands, idles (h %.3f)", r.p.h);
     r.run(0.1f, 0.8f); CHECK(r.m.state() == AhState::TAKEOFF, "the stick was down on the ground: up again takes off again");
     r.run(0.1f, 0.8f, false); CHECK(r.m.state() == AhState::STOPPED && r.run(0.01f, 0.8f, false) == 0.0f, "disarmed: stopped, no throttle");
+}
+
+static void t_alt_auto_takeoff() {
+    printf("[alt hold] the mission takes off by itself (0.37)\n");
+    AltRig r; r.absent = true; r.run(0.5f, 0.0f);
+    CHECK(r.m.state() == AhState::LANDED_IDLE, "armed, nobody at the stick: idle on the ground");
+    r.ext = true; r.climb = 2.0f; r.run(1.0f, 0.0f);
+    CHECK(r.m.state() == AhState::LANDED_IDLE && r.p.h == 0.0f, "a climb rate alone does not take off");
+    r.auto_to = true; r.run(0.1f, 0.0f);
+    CHECK(r.m.state() == AhState::TAKEOFF && !r.m.lifted(), "auto_takeoff: the throttle ramps although the stick is down and nobody is there");
+    r.run(3.0f, 0.0f);
+    CHECK(r.m.lifted() && r.p.h > 0.3f, "it leaves the ground (%.2f m)", r.p.h);
+    r.auto_to = false; r.run(3.0f, 0.0f); const float h = r.p.h; r.run(2.0f, 0.0f);
+    CHECK(r.m.state() == AhState::FLYING && r.p.h - h > 3.0f && fabsf(r.p.v - 2.0f) < 0.3f, "then the autopilot's climb rate flies (%.2f m/s, the stick at the bottom does not mean down)", r.p.v);
 }
 
 static void t_alt_edges() {
@@ -159,7 +175,7 @@ static void t_pos_hold() {
 }
 
 int main() {
-    t_alt_setpoint(); t_alt_takeoff_hold_land(); t_alt_edges();
+    t_alt_setpoint(); t_alt_takeoff_hold_land(); t_alt_auto_takeoff(); t_alt_edges();
     t_nav_math(); t_pos_hold();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

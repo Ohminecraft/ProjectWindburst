@@ -1139,6 +1139,10 @@ export const EN = {
     "From power-on",
   "Vệ tinh":
     "Satellites",
+  "Tên đường":
+    "Labels",
+  "Tên đường, phường, địa danh trên ảnh vệ tinh":
+    "Street, district and place names on the satellite pictures",
   "Với lựa chọn này: {n} byte mỗi bản ghi, khoảng {rate} mỗi giây.":
     "With these choices: {n} bytes per record, about {rate} per second.",
   "Xem":
@@ -3155,10 +3159,175 @@ export const EN = {
     "Shown in the goggles (element \"Craft name\"), in capitals, at most 15 ASCII characters.",
   "{label}: cột {c}, hàng {r}":
     "{label}: column {c}, row {r}",
+  "Nhiệm vụ sắp tự cất cánh":
+    "Mission about to take off by itself",
+  "10 giây cuối lúc nhiệm vụ chờ dưới đất, trước khi tự bật motor. Luôn kêu, tắt ở đây cũng không tắt được.":
+    "The last 10 seconds of a mission waiting on the ground, before it starts the motors by itself. Always sounds; switching it off here does not silence it.",
+  "Nhiệm vụ (AUTO)":
+    "Mission (AUTO)",
+  "Bay theo kế hoạch đã nạp, như AUTO của ArduPilot. Arm bằng công tắc ARM trước, rồi bật công tắc này: drone tự cất cánh và bay. Tắt công tắc là lấy lại quyền điều khiển ngay.":
+    "Flies the uploaded plan, like ArduPilot's AUTO. Arm with the ARM switch first, then turn this switch on: the craft takes off and flies by itself. Switch it off to take control back at once.",
+  "Nhiệm vụ":
+    "Mission",
+  "đang cất cánh":
+    "taking off",
+  "đang bay tới điểm":
+    "flying to the point",
+  "đang đứng yên":
+    "holding still",
+  "đang chờ dưới đất (motor tắt)":
+    "waiting on the ground (motors off)",
+  "sắp tự cất cánh":
+    "about to take off by itself",
+  "đang bay về nhà":
+    "flying home",
+  "xong":
+    "done",
+  "không bắt đầu được":
+    "could not start",
+  "bỏ dở (mất vị trí), đang hạ cánh":
+    "given up (position lost), landing",
+  "Cất cánh":
+    "Take off",
+  "Bay tới":
+    "Fly to",
+  "Đứng yên":
+    "Hold still",
+  "Chờ":
+    "Wait",
+  "Về nhà, hạ cánh":
+    "Return home, land",
+  "Đổi tốc độ":
+    "Change speed",
+  "Bay tiếp nhiệm vụ":
+    "Carry on with the mission",
+  "Failsafe như thường":
+    "Failsafe as usual",
+  "Kênh \"Nhiệm vụ\": chỉ nhiệm vụ điều khiển servo này (bước servo ở tab Nhiệm vụ). Góc ở xung nhỏ nhất / lớn nhất cho app đổi số độ ra xung; trước khi nhiệm vụ đụng tới, servo đứng ở \"Xung ban đầu\".":
+    "Channel \"Mission\": only the mission moves this servo (the servo steps on the Mission tab). The angles at the smallest / largest pulse let the app turn degrees into a pulse; until the mission moves it, the servo stands at the \"Initial pulse\".",
+  "Góc ở xung nhỏ nhất (°)":
+    "Angle at the smallest pulse (°)",
+  "Góc ở xung lớn nhất (°)":
+    "Angle at the largest pulse (°)",
+  "Xung ban đầu (µs)":
+    "Initial pulse (µs)",
+  "Hạ cánh":
+    "Land",
+  "Kế hoạch bay tự động: bấm lên bản đồ để thêm điểm, bấm vào điểm để chọn việc drone làm ở đó, rồi nạp vào drone. Arm bằng công tắc trước, sau đó bật công tắc MISSION hoặc bấm Bắt đầu.":
+    "A flight plan the craft flies by itself: click the map to add a point, click a point to choose what the craft does there, then upload it to the craft. Arm with the switch first, then turn the MISSION switch on or press Start.",
+  "{m} phút {r} s":
+    "{m} min {r} s",
+  "Không tải được thư viện bản đồ (Leaflet).":
+    "The map library (Leaflet) could not be loaded.",
+  "Tìm địa chỉ…":
+    "Search an address…",
+  "Tìm địa chỉ":
+    "Search an address",
+  "Đường phố":
+    "Streets",
+  "Tải từ drone":
+    "Download from the craft",
+  "Nạp vào drone":
+    "Upload to the craft",
+  "Không tìm thấy (hoặc không có mạng).":
+    "Nothing found (or no network).",
+  "Cất cánh lên (m)":
+    "Take off to (m)",
+  "Tốc độ (m/s, 0 = như rescue)":
+    "Speed (m/s, 0 = as the rescue)",
+  "Xong điểm cuối thì về nhà hạ cánh":
+    "After the last point: back home and land",
+  "Mất sóng tay điều khiển:":
+    "Transmitter link lost:",
+  "Đứng yên · servo":
+    "Hold · servo",
+  "Hạ cánh · chờ · cất cánh":
+    "Land · wait · take off",
+  "Việc":
+    "Action",
+  "Cất cánh lại lên (m)":
+    "Take off again to (m)",
+  "Cao khi bay (m)":
+    "Height (m)",
+  "Giữ ở điểm (s)":
+    "Hold at the point (s)",
+  "Chờ dưới đất (s)":
+    "Wait on the ground (s)",
+  "Đứng yên trước (s)":
+    "Hold first (s)",
+  "Bỏ bước này":
+    "Remove this step",
+  "Góc (°)":
+    "Angle (°)",
+  "Chờ sau đó (s)":
+    "Wait after it (s)",
+  "Thêm bước servo":
+    "Add a servo step",
+  "Xoá điểm":
+    "Delete the point",
+  "Điểm {n}":
+    "Point {n}",
+  "Chưa chạy":
+    "Not running",
+  "Đang làm":
+    "Doing",
+  "Tới điểm":
+    "To the point",
+  "Còn chờ":
+    "Wait left",
+  "Cao":
+    "Height",
+  "Cách nhà":
+    "From home",
+  "Cả chuyến":
+    "Whole flight",
+  "{d} m · ~{t} · {c}/{max} lệnh":
+    "{d} m · ~{t} · {c}/{max} commands",
+  "GPS chưa fix":
+    "GPS has no fix",
+  "Đã tải kế hoạch từ drone.":
+    "Plan downloaded from the craft.",
+  "Kế hoạch quá dài: tối đa 32 lệnh (mỗi điểm hạ cánh 3 lệnh, mỗi bước servo 2 lệnh).":
+    "The plan is too long: 32 commands at most (a landing point takes 3, a servo step 2).",
+  "Chưa có điểm nào: bấm lên bản đồ để thêm.":
+    "No points yet: click the map to add one.",
+  "Đã nạp kế hoạch vào drone và lưu.":
+    "Plan uploaded to the craft and saved.",
+  "Đã gửi lệnh bắt đầu.":
+    "Start sent.",
+  "Đã dừng nhiệm vụ.":
+    "Mission stopped.",
+  "Không bắt đầu được: drone phải được arm bằng công tắc trước, có GPS fix và đã nạp kế hoạch.":
+    "Could not start: the craft must be armed with the switch first, have a GPS fix and an uploaded plan.",
+  "Servo {list} chưa chọn kênh \"Nhiệm vụ\" ở tab Motor: nhiệm vụ sẽ không điều khiển được.":
+    "Servo {list} is not set to the channel \"Mission\" on the Motors tab: the mission cannot move it.",
+  "Vị trí của tôi":
+    "My position",
+  "Vị trí của máy tính này, theo dịch vụ vị trí của Windows (GPS, Wi-Fi). Lần đầu Windows hỏi quyền.":
+    "This computer's position, from the Windows location service (GPS, Wi-Fi). Windows asks for permission the first time.",
+  "Máy này không cho biết vị trí.":
+    "This computer does not give its position.",
+  "Vị trí của bạn (sai số khoảng {m} m).":
+    "Your position (within about {m} m).",
+  "Windows chưa cho phép lấy vị trí. Bật trong Cài đặt > Quyền riêng tư và bảo mật > Vị trí: \"Dịch vụ vị trí\" và \"Cho phép ứng dụng máy tính truy cập vị trí\".":
+    "Windows does not allow the position yet. Turn on in Settings > Privacy & security > Location: \"Location services\" and \"Let desktop apps access your location\".",
+  "Chờ vị trí quá lâu. Bật Wi-Fi (Windows dò vị trí theo các mạng Wi-Fi xung quanh) rồi thử lại.":
+    "The position took too long. Turn Wi-Fi on (Windows finds the position from the Wi-Fi networks around) and try again.",
+  "Không xác định được vị trí. Bật Wi-Fi hoặc GPS của máy và dịch vụ vị trí của Windows, rồi thử lại.":
+    "The position could not be found. Turn on Wi-Fi or the computer's GPS and the Windows location service, then try again.",
+  "Mở cài đặt vị trí của Windows":
+    "Open the Windows location settings",
+  "Không mở được: hãy mở Cài đặt của Windows > Quyền riêng tư và bảo mật > Vị trí.":
+    "Could not open it: open Windows Settings > Privacy & security > Location.",
+  "Xoá hết điểm":
+    "Delete all points",
+  "Xoá cả {n} điểm trên bản đồ? Kế hoạch đã nạp trong drone giữ nguyên cho tới khi bạn bấm \"Nạp vào drone\".":
+    "Delete all {n} points on the map? The plan already in the craft stays as it is until you press \"Upload to the craft\".",
 };
 
 // Strings that read the same in both languages (units, protocol names, terms pilots use in English).
 export const SAME = [
+  "Servo",
   "m/s²", "m/s³", "Hz", "°", "S", "mV", "ms", "s", "Airmode", "Roll", "Pitch", "Throttle", "Yaw", "%", "Throttle mid", "Throttle expo", "Throttle limit",
   "Angle strength", "TPA rate", "TPA breakpoint", "I-term relax", "Feedforward max rate limit", "µs", "Extended DShot telemetry", "Motor idle",
   "× 100 rpm", "Dynamic idle P", "Dynamic idle I", "Dynamic idle D", "Barometer", "Lidar / sonar", "GPS", "Baud", "bps", "SBAS", "SBAS integrity",

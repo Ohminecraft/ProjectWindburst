@@ -199,6 +199,28 @@ def test_edit_clamp_save_and_reboot(gui):
     assert gui.setting("pid", "tpa_rate") == 65
 
 
+def test_a_change_set_back_hides_save(gui):
+    """0.37.1 (reported): a setting changed showed "Save"; changed back as it was, "Save" stayed until the next Save. The firmware
+    now compares each section with flash and with what it started with."""
+    pg = gui.connect().page
+    gui.tab("tuning")
+    assert pg.locator("#save").is_hidden() and gui.field("pid.tpa_rate").input_value() == "65"
+    gui.type_into("pid.tpa_rate", "40")
+    pg.wait_for_selector("#save:not([hidden])")
+    assert pg.inner_text("#save") == "Lưu"
+    gui.type_into("pid.tpa_rate", "65")
+    pg.wait_for_selector("#save", state="hidden")
+    assert pg.locator("#revert").is_hidden()
+    # a setting that needs a restart
+    gui.tab("motors")
+    before = gui.field("motors.protocol").input_value()
+    pg.select_option('[data-field="motors.protocol"]', "DSHOT300" if before == "DSHOT600" else "DSHOT600")
+    pg.wait_for_function("document.getElementById('save').textContent === 'Lưu và khởi động lại'")
+    pg.select_option('[data-field="motors.protocol"]', before)
+    pg.wait_for_selector("#save", state="hidden")
+    assert gui.setting("motors", "protocol") == before
+
+
 def test_modes_tab(gui):
     pg = gui.connect().page
     gui.tab("modes")
@@ -1139,6 +1161,13 @@ def test_current_sensor_and_servos_on_the_page(gui):
     gui.type_into("servo.max_us[0]", "1800")
     pg.wait_for_function("/^1200 µs$/.test(document.getElementById('servo-us-0').textContent.trim())", timeout=6000)   # 1000 + 0.25 x 800
     assert pg.inner_text("#servo-us-1").strip() == "tắt"
+    # ---- 0.37: the servo belongs to the mission: it stands at its initial pulse until a DO_SET_SERVO moves it
+    assert pg.inner_text('[data-field="servo.source[0]"] option[value="MISSION"]') == "Nhiệm vụ"
+    pg.select_option('[data-field="servo.source[0]"]', "MISSION")
+    gui.type_into("servo.init_us[0]", "1300")
+    gui.type_into("servo.angle_max[0]", "270")
+    gui.wait(lambda: gui.setting("servo", "source")[0] == "MISSION" and gui.setting("servo", "init_us")[0] == 1300 and gui.setting("servo", "angle_max")[0] == 270, what="mission servo stored")
+    pg.wait_for_function("/^1300 µs$/.test(document.getElementById('servo-us-0').textContent.trim())", timeout=6000)
 
 
 def test_battery_and_beeper_tab(gui):
@@ -1178,13 +1207,13 @@ def test_battery_and_beeper_tab(gui):
     assert abs(float(gui.field("battery.divider").input_value()) - 11.0) <= 0.03
 
     # ---- beeper: the list is the firmware's, each sound is drawn as it is played
-    assert pg.locator("#beeps tbody tr").count() == 18
+    assert pg.locator("#beeps tbody tr").count() == 19                  # (0.37: MISSION_WARN, the countdown before a mission takes off again)
     assert pg.locator('tr[data-cond="GYRO_CALIBRATED"] .bp-on').count() == 3 and pg.locator('tr[data-cond="RX_LOST_LANDING"] .bp-on').count() == 9
     assert pg.locator('tr[data-cond="USB"] .beep-try').count() == 0 and not pg.is_checked("#cond-USB") and pg.is_checked("#cond-ARMING")
     pg.uncheck("#cond-DISARMING")
     pg.check("#cond-USB")
     gui.wait(lambda: "DISARMING" not in gui.setting("beeper", "conditions") and "USB" in gui.setting("beeper", "conditions"), what="conditions stored")
-    assert "ARMING" in gui.setting("beeper", "conditions") and len(gui.setting("beeper", "conditions")) == 17
+    assert "ARMING" in gui.setting("beeper", "conditions") and len(gui.setting("beeper", "conditions")) == 18
 
     def buzz():
         return int(gui.sim.state()["buzz_ms"])
@@ -1204,11 +1233,11 @@ def test_battery_and_beeper_tab(gui):
     # ---- the motors as the second sounder: their own column, what they cannot play is not offered, the count of tones is shown
     assert pg.get_attribute("#sounders", "data-buzzer") == "1" and pg.get_attribute("#sounders", "data-motors") == "1" and "có còi và motor kêu được" in pg.inner_text("#sounders")
     assert pg.is_checked("#mcond-RX_LOST") and pg.is_checked("#mcond-GYRO_CALIBRATED") and not pg.is_checked("#mcond-SYSTEM_INIT")
-    assert pg.locator("#mcond-ARMING").count() == 0 and pg.locator("#mcond-ARMED").count() == 0 and pg.locator("#mcond-USB").count() == 0 and pg.locator("#beeps .cond-on[id^=mcond-]").count() == 12
+    assert pg.locator("#mcond-ARMING").count() == 0 and pg.locator("#mcond-ARMED").count() == 0 and pg.locator("#mcond-USB").count() == 0 and pg.locator("#beeps .cond-on[id^=mcond-]").count() == 13
     assert pg.inner_text('tr[data-cond="GYRO_CALIBRATED"] .motor-tones').strip() == "motor: 3 tiếng" and pg.inner_text('tr[data-cond="DISARMING"] .motor-tones').strip() == "motor: 2 tiếng"
     pg.uncheck("#mcond-BAT_LOW")
     gui.wait(lambda: "BAT_LOW" not in gui.setting("beeper", "motor_conditions") and "BAT_LOW" in gui.setting("beeper", "conditions"), what="BAT_LOW off for the motors only")
-    assert len(gui.setting("beeper", "motor_conditions")) == 10
+    assert len(gui.setting("beeper", "motor_conditions")) == 11
     # a low pack now beeps on the buzzer only: the two "playing now" readouts are separate things
     gui.sim.do("batt 13.8")
     pg.wait_for_function("document.getElementById('beep-now').textContent === 'Pin dưới mức cảnh báo'", timeout=8000)
@@ -1247,7 +1276,7 @@ def test_english_page_every_tab(gui_en):
     gui.connect()
     assert pg.inner_text("#arm-pill") == "Ready to arm" and pg.inner_text("#connect") == "Disconnect"
     titles = {"overview": "Overview", "receiver": "Receiver", "modes": "Modes", "sensors": "Sensors", "motors": "Motors", "tuning": "PID", "rates": "Rate", "filters": "Filters",
-              "nav": "Position", "power": "Battery and beeper", "osd": "OSD", "blackbox": "Blackbox", "pins": "Pins and ports", "system": "System"}
+              "nav": "Position", "mission": "Mission", "power": "Battery and beeper", "osd": "OSD", "blackbox": "Blackbox", "pins": "Pins and ports", "system": "System"}
     assert [a.inner_text() for a in pg.locator("#rail a").all()] == list(titles.values())
     for tab, title in titles.items():
         gui.tab(tab)
@@ -1999,3 +2028,260 @@ def test_readings_tabs_usage_bars_compass_tape_and_satellites(gui):
     gui.tab("overview")
     pg.wait_for_selector("#compass-tape")
     pg.wait_for_function("/^\d+°$/.test(document.querySelector('#compass-tape .tape-value').textContent)")
+
+
+def test_mission_tab(gui):
+    """0.37 Mission tab (layout C): the map fills the tab, points are added by clicking it, a floating box says what the craft does
+    at each, Upload writes the mission section, Download reads it back, Start is refused while the pilot has not armed."""
+    pg = gui.connect().page
+    gui.tab("mission")
+    pg.wait_for_selector("#mission-map.leaflet-container")
+    pg.wait_for_selector(".drone-marker", timeout=8000)                   # the simulated craft has a GPS fix: drawn where it stands
+    assert "GPS" in pg.inner_text("#mission-link")
+    box = pg.locator("#mission-map").bounding_box()
+    at = lambda fx, fy: pg.mouse.click(box["x"] + box["width"] * fx, box["y"] + box["height"] * fy)      # noqa: E731
+    at(0.50, 0.45); at(0.62, 0.40); at(0.58, 0.62)
+    pg.wait_for_function("document.querySelectorAll('.wp-marker').length === 3")
+    assert "3" in pg.inner_text("#mission-editor .ed-head"), "the point just added is the one being edited"
+    # point 3: the delivery stop (land, wait 30 s, take off again)
+    pg.select_option("#pt-act", "land")
+    pg.fill("#pt-wait", "30"); pg.dispatch_event("#pt-wait", "change")
+    # point 2: hover, then move servo 1 to 45 degrees
+    pg.click('[data-wp="1"]')
+    pg.wait_for_function("/2/.test(document.querySelector('#mission-editor .ed-head').textContent)")
+    pg.select_option("#pt-act", "servo")
+    pg.click("#step-add")
+    pg.fill("#step-deg-0", "45"); pg.dispatch_event("#step-deg-0", "change")
+    assert pg.locator(".leg-label").count() >= 3, "the length of every leg is written on the map"
+    pg.wait_for_function("/10\\/32/.test(document.getElementById('hud-total').textContent)")      # TAKEOFF, WP, WP+LOITER+LOITER+SERVO, LAND+DELAY+TAKEOFF, RTL
+    # upload: the section in the firmware
+    pg.click("#mission-upload")
+    pg.wait_for_selector(".toast.ok")
+    gui.wait(lambda: gui.setting("mission", "count") == 10, what="mission section written")
+    cmd = gui.setting("mission", "cmd")[:10]
+    assert cmd == ["TAKEOFF", "WAYPOINT", "WAYPOINT", "LOITER_TIME", "LOITER_TIME", "SERVO", "LAND", "DELAY", "TAKEOFF", "RTL"], cmd
+    lat, lon = gui.setting("mission", "lat"), gui.setting("mission", "lon")
+    assert 473900000 < lat[1] < 474100000 and 85400000 < lon[1] < 85500000, "the points lie around the simulated craft (%d, %d)" % (lat[1], lon[1])
+    assert gui.setting("mission", "p")[5] == 1250 and gui.setting("mission", "arg")[5] == 1 and gui.setting("mission", "p")[7] == 30, "45 deg = 1250 us on 0..180 / 1000..2000; the wait 30 s"
+    # the plan changed on the page, then read back from the craft
+    pg.click('[data-wp="0"]'); pg.click("#pt-delete")
+    pg.wait_for_function("document.querySelectorAll('.wp-marker').length === 2")
+    pg.click("#mission-download")
+    pg.wait_for_function("document.querySelectorAll('.wp-marker').length === 3")
+    pg.click('[data-wp="2"]')
+    assert pg.input_value("#pt-act") == "land" and pg.input_value("#pt-wait") == "30"
+    # start while the pilot has not armed: refused, explained
+    pg.click("#mission-start")
+    pg.wait_for_selector(".toast.bad")
+    assert "arm" in pg.inner_text(".toast.bad")
+
+
+def _rgba(css):
+    """rgb(a)(...) or color(srgb r g b / a) (what a color-mix() computes to) -> [r, g, b (0..255), a]"""
+    inner = css[css.index("(") + 1:css.rindex(")")]
+    if inner.startswith("srgb"):
+        parts = inner[4:].replace("/", " ").split()
+        v = [float(x) * 255.0 for x in parts[:3]] + [float(parts[3]) if len(parts) > 3 else 1.0]
+        return v
+    v = [float(x) for x in inner.split(",")]
+    return v + [1.0] * (4 - len(v))
+
+
+def _luminance(rgb):
+    def ch(c):
+        c = c / 255.0
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    return 0.2126 * ch(rgb[0]) + 0.7152 * ch(rgb[1]) + 0.0722 * ch(rgb[2])
+
+
+def test_mission_map_names(gui):
+    """The satellite pictures with the names of roads and places over them, like Google's satellite view (Esri's reference maps,
+    through /api/tile: p=road, p=lbl). On by default; the button switches them off and on; the street map has its own names,
+    the button is not there with it."""
+    pg = gui.connect().page
+    gui.tab("mission")
+    pg.wait_for_selector("#mission-map.leaflet-container")
+    def layers():
+        return pg.evaluate("""() => [...document.querySelectorAll('#mission-map .leaflet-tile-pane .leaflet-layer')].map(l => {
+            const img = l.querySelector('img'); return [img ? new URL(img.src).searchParams.get('p') : null, Number(l.style.zIndex)]; })""")
+    pg.wait_for_function("document.querySelectorAll('#mission-map .leaflet-tile-pane img').length > 0")
+    got = dict(layers())
+    assert set(got) == {"sat", "road", "lbl"}, got
+    assert got["sat"] < got["road"] < got["lbl"], "the pictures under the roads, the place names on top (%s)" % got
+    assert pg.is_visible("#map-names") and pg.get_attribute("#map-names", "aria-pressed") == "true"
+    pg.click("#map-names")
+    gui.wait(lambda: {p for p, _ in layers()} == {"sat"}, what="names off")
+    assert pg.get_attribute("#map-names", "aria-pressed") == "false"
+    pg.click("#map-names")
+    gui.wait(lambda: {p for p, _ in layers()} == {"sat", "road", "lbl"}, what="names on again")
+    pg.click("#map-osm")
+    gui.wait(lambda: {p for p, _ in layers()} == {"osm"}, what="street map alone")
+    assert pg.is_hidden("#map-names")
+    pg.click("#map-sat")
+    gui.wait(lambda: dict(layers()).keys() == {"sat", "road", "lbl"}, what="back to the pictures with their names")
+    got = dict(layers())
+    assert got["sat"] < got["road"] < got["lbl"], "the base map added again goes under the names (%s)" % got
+    gui.tab("receiver"); gui.tab("mission")
+    pg.click("#map-names")
+    gui.tab("receiver"); gui.tab("mission")
+    pg.wait_for_function("document.querySelectorAll('#mission-map .leaflet-tile-pane img').length > 0")
+    assert pg.get_attribute("#map-names", "aria-pressed") == "false" and {p for p, _ in layers()} == {"sat"}, "the choice is kept while the app runs"
+
+
+def test_mission_tab_themes_and_zoom(gui):
+    """The Mission tab's floating bar in every theme (the chosen map's button readable, the search box styled like the other
+    inputs - a black-on-black button in the Swiss theme was reported), and the map under the UI zoom: a click and a drag land
+    where the mouse is."""
+    pg = gui.connect().page
+    gui.tab("mission")
+    pg.wait_for_selector("#mission-map.leaflet-container")
+    themes = pg.evaluate("() => [...document.querySelectorAll('#theme option')].map(o => o.value)")
+    assert len(themes) >= 4
+    for t in themes:
+        pg.select_option("#theme", t)
+        for b in ("#map-sat", "#map-osm"):
+            pg.click(b)
+            st = pg.evaluate("s => { const c = getComputedStyle(document.querySelector(s)); return [c.color, c.backgroundColor]; }", b)
+            fg, bg = _rgba(st[0]), _rgba(st[1])
+            if bg[3] < 0.5:                                   # a see-through button: the floating panel is behind it
+                bg = _rgba(pg.evaluate("() => getComputedStyle(document.getElementById('mission-bar')).backgroundColor"))
+            hi, lo = sorted([_luminance(fg), _luminance(bg)], reverse=True)
+            assert fg[3] > 0.6 and (hi + 0.05) / (lo + 0.05) >= 3.0, "theme %s, %s chosen: its text must be readable (%s on %s)" % (t, b, st[0], st[1])
+            assert pg.get_attribute(b, "aria-pressed") == "true"
+        under = _rgba(pg.evaluate("() => getComputedStyle(document.getElementById('mission-bar')).backgroundColor"))
+        assert under[3] >= 0.8, "theme %s: the floating bar has a solid enough ground over the map (alpha %.2f)" % (t, under[3])
+        search_h = pg.evaluate("() => document.getElementById('mission-search').getBoundingClientRect().height")
+        other_h = pg.evaluate("() => document.getElementById('mission-takeoff').getBoundingClientRect().height")
+        assert abs(search_h - other_h) <= 2, "theme %s: the search box is an input like the others (%.0f vs %.0f px)" % (t, search_h, other_h)
+    pg.select_option("#theme", themes[0])
+    # the UI zoom (a CSS zoom on the whole page): Leaflet must still put a click and a drag under the mouse
+    pg.select_option("#zoom", "125")
+    gui.tab("overview"); gui.tab("mission")
+    pg.wait_for_selector("#mission-map.leaflet-container")
+    box = pg.locator("#mission-map").bounding_box()
+    x, y = box["x"] + box["width"] * 0.6, box["y"] + box["height"] * 0.5
+    n = pg.locator(".wp-marker").count()
+    pg.mouse.click(x, y)
+    pg.wait_for_function("n => document.querySelectorAll('.wp-marker').length > n", arg=n)
+    mk = pg.locator(".wp-marker span").last.bounding_box()
+    cx, cy = mk["x"] + mk["width"] / 2, mk["y"] + mk["height"] / 2
+    assert abs(cx - x) <= 3 and abs(cy - y) <= 3, "125 %%: the point is where the mouse clicked (%.0f, %.0f vs %.0f, %.0f)" % (cx, cy, x, y)
+    pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx + 50, cy, steps=5); pg.mouse.move(cx + 100, cy + 60, steps=5); pg.mouse.up()
+    gui.wait(lambda: abs(pg.locator(".wp-marker span").last.bounding_box()["x"] - mk["x"] - 100) <= 3, what="dragged with the mouse")
+    m2 = pg.locator(".wp-marker span").last.bounding_box()
+    assert abs(m2["y"] - mk["y"] - 60) <= 3, "125 %%: a dragged point follows the mouse (%.0f px down of 60)" % (m2["y"] - mk["y"])
+    pg.select_option("#zoom", "100")
+
+
+def test_mission_editor_fits(gui):
+    """The floating editor of a point with servo steps, in every theme (a step row ran out of the box in Swiss): every control inside
+    the box, the action list wide enough for its longest text, a servo not set to MISSION said once under the steps."""
+    pg = gui.connect().page
+    gui.tab("mission")
+    pg.wait_for_selector("#mission-map.leaflet-container")
+    box = pg.locator("#mission-map").bounding_box()
+    pg.mouse.click(box["x"] + box["width"] * 0.6, box["y"] + box["height"] * 0.5)
+    pg.wait_for_selector("#pt-act")
+    pg.select_option("#pt-act", "servo")
+    pg.click("#step-add"); pg.click("#step-add")
+    themes = pg.evaluate("() => [...document.querySelectorAll('#theme option')].map(o => o.value)")
+    for t in themes:
+        pg.select_option("#theme", t)
+        out = pg.evaluate("""() => { const ed = document.getElementById('mission-editor').getBoundingClientRect();
+            return [...document.querySelectorAll('#mission-editor input, #mission-editor select, #mission-editor button, #mission-editor span, #mission-editor label')]
+              .map(e => [e.id || e.tagName + ':' + e.textContent.slice(0, 12), e.getBoundingClientRect()])
+              .filter(([, r]) => r.width > 0 && (r.right > ed.right + 0.5 || r.left < ed.left - 0.5)).map(([n, r]) => n + ' ' + Math.round(r.left) + '..' + Math.round(r.right) + ' of ' + Math.round(ed.left) + '..' + Math.round(ed.right)); }""")
+        assert not out, "theme %s: out of the editor box: %s" % (t, out)
+        fit = pg.evaluate("""() => { const s = document.getElementById('pt-act'); const c = document.createElement('canvas').getContext('2d'); const st = getComputedStyle(s);
+            c.font = st.fontWeight + ' ' + st.fontSize + ' ' + st.fontFamily; const w = Math.max(...[...s.options].map(o => c.measureText(o.text).width));
+            return [w, s.clientWidth]; }""")
+        assert fit[0] + 24 <= fit[1], "theme %s: the action list shows its longest text (%.0f px of text in %d px)" % (t, fit[0], fit[1])
+    note = pg.inner_text("#step-note")
+    assert "Servo 1" in note and "Mission" in note or "Nhiệm vụ" in note, note
+    assert pg.locator("#mission-editor option", has_text="not set").count() == 0 and pg.locator("#mission-editor option", has_text="chưa gán").count() == 0
+
+
+def test_tab_switch_never_scrolls_the_page(gui):
+    """Switching tabs slides the new tab in: the page itself must never get a scrollbar for those 180 ms (it flashed on and off),
+    in any theme (each has its own entrance) - only the tab's own area scrolls."""
+    pg = gui.connect().page
+    # anim.js keeps still under a driven browser (navigator.webdriver): the entrances only run with that hidden
+    pg.evaluate("() => Object.defineProperty(navigator, 'webdriver', { get: () => false, configurable: true })")
+    sample = """id => new Promise((done) => {
+        const de = document.documentElement, v = document.getElementById('view'); let worst = 0, moving = 0; const t0 = performance.now();
+        const tick = () => { worst = Math.max(worst, de.scrollHeight - de.clientHeight, de.scrollWidth - de.clientWidth, window.scrollY, window.scrollX);
+                             moving += v.classList.contains('view-enter');
+                             if (performance.now() - t0 < 450) requestAnimationFrame(tick); else done([worst, moving]); };
+        location.hash = id; requestAnimationFrame(tick); })"""
+    themes = pg.evaluate("() => [...document.querySelectorAll('#theme option')].map(o => o.value)")
+    try:
+        for t in themes:
+            pg.select_option("#theme", t)
+            for tab in ("receiver", "motors", "overview", "nav", "system", "mission", "tuning"):
+                worst, moving = pg.evaluate(sample, tab)
+                assert moving or t == "field", "theme %s, to %s: the entrance did not run, nothing was checked" % (t, tab)
+                assert worst <= 0, "theme %s, to %s: the page overflowed by %.0f px during the slide (a scrollbar flashes)" % (t, tab, worst)
+    finally:
+        pg.evaluate("() => delete navigator.webdriver")
+
+
+
+def test_mission_clear_and_my_position(gui, monkeypatch):
+    """0.37 Mission tab: "Delete all points" (asked first: No keeps them), and "My position" - where this computer is, from the
+    browser's location (in the desktop window: Windows' location service, GPS / Wi-Fi). Refused, the page says where Windows
+    allows it and opens that page of the Windows settings through the server."""
+    import os
+    pg = gui.connect().page
+    gui.tab("mission")
+    pg.wait_for_selector("#mission-map.leaflet-container")
+    box = pg.locator("#mission-map").bounding_box()
+    for fx, fy in ((0.45, 0.5), (0.55, 0.45), (0.6, 0.6)):
+        pg.mouse.click(box["x"] + box["width"] * fx, box["y"] + box["height"] * fy)
+    pg.wait_for_function("document.querySelectorAll('.wp-marker').length === 3")
+    over, top, gap = pg.evaluate("""() => { const v = document.getElementById('view'), w = document.getElementById('mission-wrap');
+        return [v.scrollHeight - v.clientHeight, v.scrollTop, v.getBoundingClientRect().bottom - w.getBoundingClientRect().bottom]; }""")
+    assert over <= 0 and top == 0, "the map fits the tab's area: it had a scrollbar, and a click on the map jumped the page (%d px over, %d scrolled)" % (over, top)
+    assert gap < 30, "... and fills it down to the bottom (%d px left)" % gap
+    pg.once("dialog", lambda d: d.dismiss())
+    pg.click("#mission-clear")
+    assert pg.locator(".wp-marker").count() == 3, "No: the points stay"
+    asked = []
+    pg.once("dialog", lambda d: (asked.append(d.message), d.accept()))
+    pg.click("#mission-clear")
+    pg.wait_for_function("document.querySelectorAll('.wp-marker').length === 0")
+    assert "3" in asked[0] and pg.is_hidden("#mission-editor"), asked
+    assert pg.inner_text("#hud-total b").startswith("0 m "), "the trip is gone with them"
+
+    # allowed: the map goes there, a dot and the accuracy circle are drawn
+    pg.context.grant_permissions(["geolocation"])
+    pg.context.set_geolocation({"latitude": 21.0285, "longitude": 105.8542, "accuracy": 35})
+    pg.click("#map-me")
+    pg.wait_for_selector(".me-marker")
+    assert "35 m" in pg.inner_text(".toast.ok")
+    # the notices stay above the map (you reported them covered by the map's tiles: Leaflet's panes, z-index 200 .. 1000, outranked #toasts)
+    # (no tiles load here: one is put in the tile pane by hand, as large as the map, as the satellite pictures are)
+    overlap, seen = pg.evaluate("""() => { const t = document.querySelector('.toast.ok').getBoundingClientRect(), m = document.getElementById('mission-map').getBoundingClientRect();
+        const tile = document.createElement('div'); tile.id = 'fake-tile'; tile.style.cssText = 'position:absolute;left:-5000px;top:-5000px;width:10000px;height:10000px;background:#363';
+        document.querySelector('#mission-map .leaflet-tile-pane').append(tile);
+        const x = Math.max(t.left, m.left) + 4, y = (t.top + t.bottom) / 2;
+        const r = [t.left < m.right && t.bottom > m.top && t.top < m.bottom, !!document.elementFromPoint(x, y)?.closest('.toast')]; tile.remove(); return r; }""")
+    assert overlap and seen, "a notice over the map is drawn under it (overlap %s)" % overlap
+    def off_centre():
+        dot, box = pg.locator(".me-marker").bounding_box(), pg.locator("#mission-map").bounding_box()
+        return max(abs(dot["x"] + dot["width"] / 2 - (box["x"] + box["width"] / 2)), abs(dot["y"] + dot["height"] / 2 - (box["y"] + box["height"] / 2)))
+    try:
+        gui.wait(lambda: off_centre() < 3, timeout=3, what="map centred")
+    except AssertionError:
+        raise AssertionError("the map is centred on it: %.0f px off" % off_centre())
+    gui.tab("receiver"); gui.tab("mission")
+    pg.wait_for_selector(".me-marker")                     # kept when the tab comes back
+
+    # refused: why, and the button that opens Windows' location settings
+    opened = []
+    monkeypatch.setattr(os, "startfile", opened.append, raising=False)
+    pg.context.clear_permissions()
+    pg.click("#map-me")
+    pg.wait_for_selector("#map-me-error")
+    assert "Vị trí" in pg.inner_text("#map-me-error") and pg.is_enabled("#map-me")
+    pg.click("#map-me-settings")
+    gui.wait(lambda: opened == ["ms-settings:privacy-location"], what="Windows settings opened")

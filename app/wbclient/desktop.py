@@ -25,6 +25,33 @@ def _storage_dir():
     return path
 
 
+def allow_location(origin, chromium=None, core=None):
+    """The Mission tab's "my position" asks the page for the location; WebView2 would first ask with a box of its own, then
+    Windows' location service (GPS, Wi-Fi around) asks again. The page is ours: WebView2 lets it ask, Windows keeps the last word
+    (Settings > Privacy & security > Location). Applied to the windows made after this; False where it cannot be (no WebView2,
+    a pywebview built otherwise) - the page then gets WebView2's box, nothing worse."""
+    try:
+        if chromium is None:
+            from webview.platforms import edgechromium as chromium
+        if core is None:
+            from Microsoft.Web.WebView2 import Core as core
+        kind, state = core.CoreWebView2PermissionKind.Geolocation, core.CoreWebView2PermissionState.Allow
+        ready = chromium.EdgeChrome.on_webview_ready
+    except Exception:            # noqa: BLE001 - not Windows, no .NET, another pywebview
+        return False
+
+    def allow(sender, args):
+        if args.PermissionKind == kind and str(args.Uri).startswith(origin):
+            args.State = state
+
+    def on_ready(self, sender, args):
+        ready(self, sender, args)
+        if args.IsSuccess:
+            sender.CoreWebView2.PermissionRequested += allow
+    chromium.EdgeChrome.on_webview_ready = on_ready
+    return True
+
+
 def run(log_dir=None, debug=False):
     try:
         import webview
@@ -32,6 +59,7 @@ def run(log_dir=None, debug=False):
         sys.stderr.write("The desktop window needs pywebview (pip install pywebview); `python -m wbclient gui` opens the browser instead.\n")
         return 2
     srv = GuiServer(http_port=DESKTOP_PORT, log_dir=log_dir).start()
+    allow_location(srv.url)
     webview.settings["ALLOW_DOWNLOADS"] = True            # backups, CSV exports, downloaded logs: saved like in a browser
     win = webview.create_window(TITLE, srv.url, width=1440, height=920, min_size=(900, 600), background_color="#171c21", text_select=True)
 

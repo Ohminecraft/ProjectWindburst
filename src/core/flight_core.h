@@ -13,6 +13,7 @@
 #include "tilt_aid.h"
 #include "flow.h"
 #include "rescue.h"
+#include "nav/mission.h"
 #include "acro_trainer.h"
 #include "nav/nav_log.h"
 #include "nav/alt_estimator.h"
@@ -177,6 +178,12 @@ struct CoreOutput {
     bool nav_request = false;      // an outside autopilot flies (FlightCore::set_nav_request)
     bool fence = false;            // the fence acts: Position Hold holds on its circle, or the craft is within a metre of the height ceiling
     float nav_target_n = 0, nav_target_e = 0, nav_wind_n = 0, nav_wind_e = 0, nav_home_dist = 0;
+    // the mission (nav/mission.h)
+    uint8_t mission_state = 0, mission_index = 0, mission_count = 0, mission_wait = 0;      // MissionState; its command; commands; s left of a wait
+    float mission_dist = 0, mission_left = 0;      // m to the present command's point; m the mission still flies
+    bool mission_warn = false;                     // the motors are about to be armed by the mission (beeper / LED)
+    bool mission_holds_home = false;               // a mid-mission landing: home and the height origin must not move at the next arming
+    uint16_t mission_servo_us[4] = {0, 0, 0, 0};   // what DO_SET_SERVO last set (0 = nothing yet): servos with the source MISSION
     Estimate est;
 };
 
@@ -197,6 +204,7 @@ public:
         gyro_sum_ = Vec3(); flow_new_ = false; have_flow_ = false; have_gps_xy_ = false; heading_ok_ = false;
         ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue;
         was_poshold_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false; rescue_out_ = RescueOutput(); nav_tgt_[0] = nav_tgt_[1] = 0;
+        mission_.cfg = cfg.rescue; mission_.stop(); mission_out_ = MissionOutput(); mission_req_ = mission_app_ = mission_sw_ = mission_fly_ = was_mission_h_ = false; for (auto& u : mission_servo_) u = 0;
         alt_.cfg = cfg.alt; alt_.init();
         fs_.cfg = cfg.fs; runaway_.cfg = cfg.runaway; stall_.cfg = cfg.stall; stall_.reset();
         decim_ = (int)(cfg.pid_hz() / cfg.est_hz + 0.5f); if (decim_ < 1) decim_ = 1;
@@ -231,7 +239,12 @@ public:
     // Re-zero the horizontal position (e.g. when the home point is set at arming).
     void reset_position() { pos_est_.reset(); tilt_aid_.restart(); alt_est_.restart_gps_ref(); have_gps_ = false; have_gps_xy_ = false; }
     // Live re-tune of the navigation settings from the app (disarmed)
-    void apply_nav() { alt_.cfg.ceiling_m = cfg.alt.ceiling_m; ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue; tilt_aid_.cfg = cfg.tilt_aid; fs_.cfg = cfg.fs; }
+    void apply_nav() { alt_.cfg.ceiling_m = cfg.alt.ceiling_m; ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue; mission_.cfg = cfg.rescue; tilt_aid_.cfg = cfg.tilt_aid; fs_.cfg = cfg.fs; }
+    // The mission (nav/mission.h): the plan, in metres from home (flown from the next start on), and the app's start / stop.
+    // A MISSION switch starts it too; either way it starts once per request (a refused or finished mission waits for the next).
+    void set_mission(const MissionPlan& p) { mission_plan_ = p; }
+    void mission_command(bool start) { mission_app_ = start; }
+    const MissionRunner& mission() const { return mission_; }
 
     // One gyro sample. Every sample goes through the gyro filters; every pid_denom-th one is also a control cycle (control()).
     WB_FAST CoreOutput update(const FastInput& in) {
@@ -319,16 +332,23 @@ private:
             keep_reason = !g;
         }
         armed_ = arming_.update(arm_sw, in.rc_link, ai, keep_reason);
+        if (in.rc_link) mission_sw_ = (cmd.modes >> M_MISSION) & 1u;          // (lost link: the switch as it was)
+        // the mission turns the motors off at a delivery stop and on again after the wait (Arming::mission_disarm / mission_arm)
+        if (mission_out_.want_disarm && armed_ && mission_out_.active) { arming_.mission_disarm(); armed_ = false; }
+        else if (mission_out_.want_arm && !armed_ && mission_.running()) armed_ = arming_.mission_arm(arm_sw, in.rc_link, ai);
+        if (was_armed && !armed_ && arming_.last_disarm_reason() != 3) mission_app_ = false;     // (the pilot or a failsafe: the app's start is used up)
         if (armed_ && !was_armed) runaway_.on_arm();
         o.arm_blockers = arming_.blockers(); o.arm_refused = arming_.refused();
         o.stick[0] = cmd.roll; o.stick[1] = cmd.pitch; o.stick[2] = cmd.yaw; o.stick[3] = cmd.throttle_raw; o.throttle_low = cmd.throttle_low;
 
         FsInput fi;
-        fi.rx_ok = in.rc_link; fi.batt_critical = in.health.batt_critical; fi.batt_low = in.health.batt_low; fi.alt_valid = est_.alt_valid;
+        fi.rx_ok = in.rc_link || (mission_fly_ && cfg.fs.mission_rc_continue); fi.batt_critical = in.health.batt_critical; fi.batt_low = in.health.batt_low; fi.alt_valid = est_.alt_valid;
         fi.landed = alt_.state() == AhState::LANDED_IDLE; fi.airborne = airborne_; fi.armed = armed_; fi.switch_on = (cmd.modes >> M_FAILSAFE_SW) & 1u; fi.vz = est_.vz;
         fi.rescue_active = rescue_out_.active; fi.stick_move = in.rc_link ? maxf(fabsf(cmd.roll), maxf(fabsf(cmd.pitch), fabsf(cmd.yaw))) : 0.0f;
         const FsOutput fo = fs_.update(fi, dt);
         if (fo.disarm) { arming_.force_disarm(); armed_ = false; }
+        // a failsafe that flies something ends the mission (ArduPilot: the failsafe changes the mode, AUTO stops)
+        if ((fo.rescue || fo.alt_descent || fo.hold || fo.throttle_fallback || fo.disarm) && mission_.running()) { mission_.stop(); mission_app_ = false; mission_out_ = MissionOutput(); mission_fly_ = false; }
         o.failsafe = fo.stage; o.fs_cause = fo.cause; o.fs_action = fo.action; o.armed = armed_;
 
         est_.att = att_; est_.tilt_deg = ahrs_.tilt_deg(); est_.yaw_from_mag = mag_fresh && mag_seeded_; heading_ok_ = est_.yaw_from_mag;
@@ -340,7 +360,7 @@ private:
             const float st[3] = {cmd.roll, cmd.pitch, cmd.yaw};
             sp_gen_.on_frame(st, cmd.throttle, cfg.rates);
         }
-        const bool neutral = fo.neutral_sticks;
+        const bool neutral = fo.neutral_sticks || (mission_fly_ && !in.rc_link);      // (the mission flies on without a link: the last sticks are not the pilot's)
         if (neutral) sp_gen_.neutral();                        // failsafe: the pilot's sticks are not to be believed
         const StickSetpoint ss = sp_gen_.update();
 
@@ -349,8 +369,9 @@ private:
             pid_.update_throttle(0.0f, &gf_);                  // the dynamic low-passes rest at their zero-throttle cutoff
             nav::AltInput idle; idle.pos_d = alt_est_.pos_d(); idle.reset_count = alt_est_.reset_count(); alt_.update(idle, dt); was_althold_ = false; last_thr_ = 0;
             o.ah_state = alt_.state();
-            if (dt_est > 0.0f) { RescueInput ri; rescue_out_ = rescue_.update(ri, dt_est); }       // (forgets the flight: its highest point, a failure)
-            was_poshold_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false; was_req_ = false; req_climb_on_ = false;
+            if (dt_est > 0.0f) { RescueInput ri; rescue_out_ = rescue_.update(ri, dt_est); mission_step(in, arm_sw, dt_est); }       // (forgets the flight: its highest point, a failure)
+            was_poshold_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false; was_req_ = false; req_climb_on_ = false; mission_fly_ = was_mission_h_ = false;
+            mission_fill(o);
             return o;
         }
         ctl_dirty_ = true;
@@ -363,13 +384,15 @@ private:
         o.althold_unavailable = false;
         bool pilot_throttle = false;
         const bool rescue = rescue_out_.active;                // GPS Rescue flies: it gives the climb rate (it only runs with a valid height)
+        const bool mission = mission_fly_;                     // the mission flies (its climb rate, its take-off)
         bool rescue_landed = false;
-        if (rescue || fo.alt_descent || fo.hold || (althold_sw && alt_ok && !fo.throttle_fallback)) {
+        if (rescue || mission || fo.alt_descent || fo.hold || (althold_sw && alt_ok && !fo.throttle_fallback)) {
             // Engaged while flying: carry on from the present throttle. "Flying" is what the craft has been doing (airborne_), not
             // where the stick happens to be: a craft that hovers at 13 % of the stick must not be taken for a parked one.
             if (!was_althold_ && airborne_) alt_.begin_flight(alt_est_.pos_d(), alt_est_.vel_d(), -est_.az, last_thr_, ahrs_.up_cos());
             nav::AltInput ah; ah.armed = true; ah.stick01 = cmd.throttle_raw; ah.pos_d = alt_est_.pos_d(); ah.vel_d = alt_est_.vel_d(); ah.acc_d = -est_.az; ah.up_cos = ahrs_.up_cos();
-            ah.failsafe_descent = fo.alt_descent && !rescue; ah.pilot_absent = neutral || rescue; ah.ext_climb = rescue || req_climb_on_; ah.climb_mps = rescue ? rescue_out_.climb_mps : req_climb_;
+            ah.failsafe_descent = fo.alt_descent && !rescue; ah.pilot_absent = neutral || rescue || mission; ah.ext_climb = rescue || mission || req_climb_on_;
+            ah.climb_mps = rescue ? rescue_out_.climb_mps : mission ? mission_out_.climb_mps : req_climb_; ah.auto_takeoff = mission && mission_out_.takeoff;
             ah.reset_count = alt_est_.reset_count(); ah.reset_step_d = alt_est_.reset_step_d();
             thr = alt_.update(ah, dt); o.althold_active = true; was_althold_ = true;
             rescue_landed = rescue && alt_.state() == AhState::LANDED_IDLE;
@@ -431,12 +454,17 @@ private:
             bool heading_valid = est_.yaw_from_mag, pos_valid = est_.pos_valid, vel_valid = est_.vel_valid;
             ekf_in_use_ = cfg.ekf_nav && ekf_.valid && ekf_.gps_aiding && !est_.flow_valid && age_ms(now, ekf_ms_) <= 200u;
             if (ekf_in_use_) { yaw = ekf_.yaw_deg; npn = ekf_.pn; npe = ekf_.pe; nvn = ekf_.vn; nve = ekf_.ve; heading_valid = ekf_.heading_ok; pos_valid = vel_valid = have_gps_; }
-            RescueInput ri; ri.armed = true; ri.airborne = airborne_; ri.request = airborne_ && (((cmd.modes >> M_RESCUE) & 1u) || fo.rescue);
+            // the mission first: it may ask for the rescue (its RTL, or a landing where it is when it lost the position)
+            mission_step(in, arm_sw, dt_est, npn, npe, nvn, nve, yaw, pos_valid);
+            const bool pilot_rescue = ((cmd.modes >> M_RESCUE) & 1u) || fo.rescue;
+            RescueInput ri; ri.armed = true; ri.airborne = airborne_; ri.request = airborne_ && (pilot_rescue || mission_out_.want_rtl || mission_out_.want_land);
+            ri.kind = pilot_rescue ? (uint8_t)255 : mission_out_.want_land ? (uint8_t)RESCUE_MODE_LAND : (uint8_t)RESCUE_MODE_RTL;
             ri.pos_n = npn; ri.pos_e = npe; ri.vel_n = nvn; ri.vel_e = nve; ri.z = est_.z; ri.yaw_deg = yaw;
             ri.pos_valid = pos_valid; ri.alt_valid = est_.alt_valid; ri.heading_valid = heading_valid; ri.sats = gps_.sats;
             const bool was_rescue = rescue_out_.active && rescue_out_.horizontal;
             rescue_out_ = rescue_.update(ri, dt_est);
             rescue_ok_ = rescue_.available(ri);
+            mission_fly_ = mission_out_.active && !rescue_out_.active;      // (a rescue it asked for flies itself)
             // Position Hold needs a velocity over the ground; one from GPS only means something to the craft with a compass heading,
             // and only if it comes often enough: a 1 Hz GPS (an NMEA module left at its default) moves the position by a metre and the
             // velocity by 1 - 2 m/s at every solution, and the hold answers each step with a lean (0.8.7 log: +-15 deg, 15 m of drift).
@@ -445,7 +473,7 @@ private:
             const bool ph_ok = vel_valid && (est_.flow_valid || (heading_valid && gps_rate_ok));
             ph_slow_gps_ = ((cmd.modes >> M_POSHOLD) & 1u) && !est_.flow_valid && heading_valid && vel_valid && !gps_rate_ok;
             // (the failsafe's HOLD: Position Hold with the sticks neutral, if there is a position to hold - else Altitude Hold alone)
-            const bool ph_on = ((((cmd.modes >> M_POSHOLD) & 1u) && !neutral) || (fo.hold && ph_ok)) && !rescue_out_.active;
+            const bool ph_on = ((((cmd.modes >> M_POSHOLD) & 1u) && !neutral) || (fo.hold && ph_ok)) && !rescue_out_.active && !mission_fly_;
             ph_unavail_ = ph_on && !ph_ok;
             // an outside autopilot's request (P7) is flown while Position Hold could fly, it is fresh, and the sticks are centred
             const bool req_on = ph_on && ph_ok && have_req_ && age_ms(now, req_ms_) <= cfg.nav_request_timeout_ms && !neutral && cmd.roll == 0.0f && cmd.pitch == 0.0f;
@@ -454,6 +482,13 @@ private:
                 if (!was_rescue) rctl_.init(npn, npe, nvn, nve, angle_.target_deg(ROLL), angle_.target_deg(PITCH), yaw);
                 rctl_.set_target(rescue_out_.tgt_n, rescue_out_.tgt_e);
                 rctl_.update(npn, npe, nvn, nve, dt_est, true, rescue_out_.vel_n, rescue_out_.vel_e);
+                rctl_.lean(yaw, nav_tgt_[ROLL], nav_tgt_[PITCH]);
+                nav_lean_ = true; was_poshold_ = false;
+            } else if (mission_fly_ && mission_out_.horizontal) {
+                // the mission's target point, flown with its velocity as feed-forward - the same controller as the rescue's
+                if (!was_mission_h_) rctl_.init(npn, npe, nvn, nve, angle_.target_deg(ROLL), angle_.target_deg(PITCH), yaw);
+                rctl_.set_target(mission_out_.tgt_n, mission_out_.tgt_e);
+                rctl_.update(npn, npe, nvn, nve, dt_est, true, mission_out_.vel_n, mission_out_.vel_e);
                 rctl_.lean(yaw, nav_tgt_[ROLL], nav_tgt_[PITCH]);
                 nav_lean_ = true; was_poshold_ = false;
             } else if (req_on) {
@@ -477,25 +512,28 @@ private:
                 nav_lean_ = true; was_poshold_ = true;
             } else { nav_lean_ = false; was_poshold_ = false; }
             if (!req_on || rescue_out_.active) { was_req_ = false; req_climb_on_ = false; }
+            was_mission_h_ = mission_fly_ && mission_out_.horizontal && !rescue_out_.active;
         }
         o.rescue_active = rescue_out_.active; o.rescue_available = rescue_ok_; o.rescue_phase = (uint8_t)rescue_.phase(); o.rescue_fail = (uint8_t)rescue_.failure();
-        o.rescue_mode = cfg.rescue.mode; o.rescue_left = rescue_.remaining();
+        o.rescue_mode = rescue_out_.active ? rescue_.kind() : cfg.rescue.mode; o.rescue_left = rescue_.remaining();
+        mission_fill(o);
         o.poshold_active = was_poshold_; o.poshold_unavailable = ph_unavail_; o.poshold_slow_gps = ph_slow_gps_; o.ph_state[0] = (uint8_t)ph_.state(0); o.ph_state[1] = (uint8_t)ph_.state(1);
         o.nav_lean = nav_lean_; o.nav_roll = nav_tgt_[ROLL]; o.nav_pitch = nav_tgt_[PITCH];
         o.nav_request = was_req_;
         o.fence = (was_poshold_ && ph_.fence_breached()) || (o.althold_active && cfg.alt.ceiling_m > 0.0f && est_.z > cfg.alt.ceiling_m - 1.0f);      // (it stops half a metre under)
         navlog_.alt_tgt_pos_d = alt_.controller().pos_target_d(); navlog_.alt_tgt_vel_d = alt_.controller().vel_target_d(); navlog_.hover = alt_.hover();
-        const nav::PosController& nctl = rescue_out_.active ? rctl_ : ph_.ctl;      // (the rescue flies its own controller)
+        const nav::PosController& nctl = rescue_out_.active || mission_fly_ ? rctl_ : ph_.ctl;      // (the rescue and the mission fly their own controller)
         navlog_.pos_tgt[0] = nctl.target_n(); navlog_.pos_tgt[1] = nctl.target_e();
         navlog_.ctl_flags = (uint8_t)((o.althold_active ? 1u : 0u) | (was_poshold_ ? 2u : 0u) | (was_poshold_ && ph_.holding() ? 4u : 0u) | (o.fence ? 8u : 0u));
         o.nav_target_n = nctl.target_n(); o.nav_target_e = nctl.target_e(); o.nav_wind_n = ph_.wind_n(); o.nav_wind_e = ph_.wind_e(); o.nav_home_dist = sqrtf(est_.pos_n * est_.pos_n + est_.pos_e * est_.pos_e);
 
         // ---- 7. modes -> rate setpoints
-        const bool angle = ((cmd.modes >> M_ANGLE) & 1u) || neutral;    // the failsafe levels the craft; the hold modes and the rescue switch carry ANGLE with them (ModeMap::resolve)
+        const bool angle = ((cmd.modes >> M_ANGLE) & 1u) || neutral || mission_fly_;    // the failsafe levels the craft; the hold modes and the rescue switch carry ANGLE with them (ModeMap::resolve)
         const bool stab = !angle && ((cmd.modes >> M_STABILIZE) & 1u);
         float sp_dps[3] = {ss.rate[ROLL], ss.rate[PITCH], ss.rate[YAW]};
         // the rescue turns the nose towards home; a pilot who is there (a rescue from the switch) keeps the last word with his yaw stick
         if (rescue_out_.active && rescue_out_.yaw_control && (neutral || fabsf(cmd.yaw) < 0.05f)) sp_dps[YAW] = rescue_out_.yaw_rate_dps;
+        else if (mission_fly_ && mission_out_.yaw_control && (neutral || fabsf(cmd.yaw) < 0.05f)) sp_dps[YAW] = mission_out_.yaw_rate_dps;
         PidInput pin;
         if (angle) {                                           // Betaflight Angle: the stick - or the autopilot - gives a tilt
             if (!was_angle_) angle_.reset();
@@ -579,6 +617,25 @@ public:
     }
 
 private:
+    // The mission, once per estimator step (armed or not: it waits on the ground with the motors off): start / stop as the
+    // switch or the app ask, then one step. The navigation numbers are the ones 6b flies with (the EKF's when it is in use).
+    void mission_step(const FastInput& in, bool arm_sw, float dt_est, float pn = 0, float pe = 0, float vn = 0, float ve = 0, float yaw = 0, bool pos_valid = false) {
+        if (!armed_) { pn = est_.pos_n; pe = est_.pos_e; vn = est_.vel_n; ve = est_.vel_e; yaw = att_.yaw; pos_valid = est_.pos_valid; }
+        MissionInput mi; mi.armed = armed_; mi.airborne = airborne_; mi.pos_valid = pos_valid; mi.alt_valid = est_.alt_valid;
+        mi.landed = armed_ && alt_.state() == AhState::LANDED_IDLE; mi.arm_switch_on = in.rc_link ? arm_sw : true;
+        mi.rtl_done = mission_.state() == MissionState::RTL && !armed_;
+        mi.pos_n = pn; mi.pos_e = pe; mi.vel_n = vn; mi.vel_e = ve; mi.z = est_.z; mi.vz = est_.vz; mi.yaw_deg = yaw;
+        const bool want = mission_sw_ || mission_app_;
+        if (want && !mission_req_) { mission_req_ = true; mission_.start(mission_plan_, mi); }      // (REFUSED shows in the state)
+        else if (!want && mission_req_) { mission_req_ = false; mission_.stop(); }
+        mission_out_ = mission_.update(mi, dt_est);
+        if (mission_out_.servo >= 1 && mission_out_.servo <= 4) mission_servo_[mission_out_.servo - 1] = mission_out_.servo_us;
+    }
+    void mission_fill(CoreOutput& o) const {
+        o.mission_state = (uint8_t)mission_.state(); o.mission_index = mission_.index(); o.mission_count = mission_.count(); o.mission_wait = mission_.wait_s();
+        o.mission_dist = mission_.dist(); o.mission_left = mission_.left(); o.mission_warn = mission_out_.warn; o.mission_holds_home = mission_.holds_home();
+        for (int i = 0; i < 4; i++) o.mission_servo_us[i] = mission_servo_[i];
+    }
     void configure_control() {
         const float hz = cfg.pid_hz();                 // the controllers run at the control rate, the gyro filters (gf_) at the gyro's
         pid_.configure(cfg.pid, hz); sp_gen_.configure(cfg.ff, cfg.rc_smoothing, hz);
@@ -695,6 +752,8 @@ private:
     nav::PosHoldMode ph_; nav::PosController rctl_; Rescue rescue_; RescueOutput rescue_out_; bool was_poshold_ = false, nav_lean_ = false, ph_unavail_ = false, ph_slow_gps_ = false, rescue_ok_ = false; float nav_tgt_[2] = {0, 0};
     EkfNav ekf_; uint32_t ekf_ms_ = 0; bool ekf_in_use_ = false;
     nav::NavRequest req_; uint32_t req_ms_ = 0; bool have_req_ = false, was_req_ = false, req_climb_on_ = false; float req_climb_ = 0.0f;
+    MissionRunner mission_; MissionPlan mission_plan_; MissionOutput mission_out_; uint16_t mission_servo_[4] = {0, 0, 0, 0};
+    bool mission_req_ = false, mission_app_ = false, mission_sw_ = false, mission_fly_ = false, was_mission_h_ = false;
     bool have_att_ = false, mag_seeded_ = false, armed_ = false, was_althold_ = false;
     LandDetector land_; bool airborne_ = false; float up_t_ = 0.0f;
     bool have_rc_ = false, raised_ = false, was_angle_ = false, was_stab_ = false, ctl_dirty_ = true; uint32_t rc_seq_ = 0;

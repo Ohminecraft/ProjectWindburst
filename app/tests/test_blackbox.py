@@ -111,10 +111,16 @@ def test_csv_keeps_the_resolution():
 
 
 # ---------------------------------------------------------------------------------------------------------------- firmware
+_ARMED_S = []                                             # how long the last _fly() kept the craft armed, by the simulator's clock
+
+
 def _fly(sim, fc, seconds=4.0):
-    """Arm, take off in Altitude Hold, a roll input, land by disarming. Returns the largest roll angle seen (from telemetry)."""
+    """Arm, take off in Altitude Hold, a roll input, land by disarming. Returns the largest roll angle seen (from telemetry).
+    How long it was armed (simulated seconds) goes to _ARMED_S: the telemetry waits below take wall-clock time while the simulator
+    runs on, so the flight is longer on a slow computer."""
     fc.subscribe("attitude", 50)
     sim.do("rc 6 2000"); sim.do("rc 7 2000"); sim.sleep(0.3)
+    t_arm = int(sim.state()["t_ms"])
     sim.do("rc 5 2000"); sim.sleep(0.5)
     sim.do("rc 3 1700"); sim.sleep(seconds * 0.5)
     sim.do("rc 3 1500"); sim.do("rc 1 1800")
@@ -123,7 +129,9 @@ def _fly(sim, fc, seconds=4.0):
         sim.sleep(0.04); peak = max(peak, fc.wait_stream("attitude")["roll"])
     sim.do("rc 1 1500"); sim.sleep(seconds * 0.5 - 1.0)
     z = float(sim.state()["z"])
-    sim.do("rc 3 1000"); sim.do("rc 5 1000"); sim.sleep(1.0)
+    sim.do("rc 3 1000"); sim.do("rc 5 1000")
+    _ARMED_S[:] = [(int(sim.state()["t_ms"]) - t_arm) / 1000.0]
+    sim.sleep(1.0)
     return peak, z
 
 
@@ -156,10 +164,10 @@ def test_flight_logged_to_flash_downloaded_and_decoded(sim, fc, tmp_path):
     assert s.meta["firmware"].startswith("Windburst RX") and s.meta["to"] == "storage" and s.meta["session"] == "1" and s.rate_hz == 500 and s.schema_matches(fc.schema)
     # the settings of that flight are in the log
     stored = s.settings(fc.schema)
-    assert stored["pid"] == fc.get("pid") and stored["rates"] == fc.get("rates") and stored["blackbox"]["rate_hz"] == 500 and len(stored) == len(fc.schema.sections) - 1 and "wifi" not in stored     # (every section but the WiFi one: its password stays out of the log)
+    assert stored["pid"] == fc.get("pid") and stored["rates"] == fc.get("rates") and stored["blackbox"]["rate_hz"] == 500 and len(stored) == len(fc.schema.sections) - 2 and "wifi" not in stored and "osd" not in stored     # (every section but the WiFi one: its password stays out of the log)
     # what the records say
     t = s.fast["t"]
-    assert 6.0 < s.duration < 10.0 and len(t) > 0.85 * 500 * s.duration, "%.2f s, %d records" % (s.duration, len(t))
+    assert 6.0 < s.duration and abs(s.duration - _ARMED_S[0]) < 0.3 and len(t) > 0.85 * 500 * s.duration, "%.2f s logged of %.2f s armed, %d records" % (s.duration, _ARMED_S[0], len(t))
     assert max(s.fast["roll"]) == pytest.approx(peak_roll, abs=4.0) and max(s.fast["stick[0]"]) == pytest.approx((0.6 - 0.02) / 0.98, abs=0.03)
     assert max(s.fast["setpoint[0]"]) > 20 and max(s.fast["gyro[0]"]) > 10 and abs(sum(s.fast["gyro[2]"]) / len(t)) < 3
     hover = [m for m, tt in zip(s.fast["motor[0]"], t) if 3.0 < tt < 4.0]

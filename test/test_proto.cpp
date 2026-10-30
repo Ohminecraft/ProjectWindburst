@@ -34,6 +34,7 @@ struct FakeHost : Host {
     bool apply_live(uint8_t) override { live_calls++; return live; }
     void reboot() override { rebooted = true; }
     uint8_t autosave = 0; uint8_t take_autosave() override { const uint8_t a = autosave; autosave = 0; return a; }
+    bool wrote = false; bool take_settings_changed() override { const bool w = wrote; wrote = false; return w; }
 };
 static std::vector<uint8_t> frame(uint8_t type, uint8_t seq, std::vector<uint8_t> p = {}) { std::vector<uint8_t> o(p.size() + kOverhead); const size_t n = encode(o.data(), o.size(), type, seq, p.data(), (uint16_t)p.size()); o.resize(n); return o; }
 
@@ -62,8 +63,8 @@ static void t_schema() {
     CHECK(s.pid.p[0] == 45 && s.pid.i[1] == 84 && s.pid.d[1] == 34 && s.pid.d_max[1] == 46 && s.pid.f[1] == 125 && s.pid.d[2] == 0 && s.pid.slider_mode == SLIDER_MODE_RPY && s.pid.slider_master == 100 && s.pid.stab_p[2] == 4.5f, "pid defaults = Betaflight's numbers, sliders on");
     CHECK(s.filters.gyro_lpf1_dyn_min_hz == 250 && s.filters.gyro_lpf1_dyn_max_hz == 500 && s.filters.gyro_lpf2_hz == 500 && s.filters.dterm_lpf1_dyn_min_hz == 75 && s.filters.dterm_lpf2_hz == 150 && s.filters.dyn_notch_count == 3 &&
           s.filters.rpm_harmonics == 3 && s.filters.yaw_lowpass_hz == 100 && s.filters.slider_gyro == 1 && s.filters.slider_dterm_mult == 100, "filter defaults = Betaflight's");
-    CHECK(s.beeper.conditions == 0x1FFFFu && s.general.fs_guard_ms == 500 && s.general.airmode_start_throttle == 25 && s.receiver.rc_smoothing == 1 && s.receiver.rc_smoothing_factor == 30, "u32 default, general, receiver");
-    size_t total = 0; for (const SectionInfo& si : kSections) total += si.size; CHECK(kSectionCount == 25 && total == sizeof(Settings), "section table covers the Settings struct exactly (%zu vs %zu)", total, sizeof(Settings));
+    CHECK(s.beeper.conditions == 0x5FFFFu && s.general.fs_guard_ms == 500 && s.general.airmode_start_throttle == 25 && s.receiver.rc_smoothing == 1 && s.receiver.rc_smoothing_factor == 30, "u32 default, general, receiver");
+    size_t total = 0; for (const SectionInfo& si : kSections) total += si.size; CHECK(kSectionCount == 26 && total == sizeof(Settings), "section table covers the Settings struct exactly (%zu vs %zu)", total, sizeof(Settings));
     CHECK(find_section(SEC_PID)->size == sizeof(S_pid) && find_section(99) == nullptr, "lookup");
     S_general g; defaults(g); g.loop_hz = 60000; g.max_arm_angle = 0; g.board_align = 99; g.airmode = 7; g.board_trim_yaw = -9999;
     Settings t; defaults(t); t.general = g; const int fixed = validate_section(t, SEC_GENERAL);
@@ -229,8 +230,9 @@ static void t_store() {
 
 struct Rig {
     Settings s; MemStorage mem; SettingsStore store{mem}; FakeHost host; MemTransport tx; Server srv{s, &store, host, tx, ROLE_RX, 0, 1, 0, "Windburst RX", FEAT_STREAMS | FEAT_GPS};
-    Rig() { defaults(s); }
+    Rig() { defaults(s); srv.settings_loaded(); }
     void send(const std::vector<uint8_t>& f) { tx.out.clear(); srv.on_bytes(f.data(), f.size()); }
+    template <class T> void set(uint8_t id, const T& v) { std::vector<uint8_t> p(1 + sizeof(T)); p[0] = id; memcpy(p.data() + 1, &v, sizeof(T)); send(frame(MSG_SECTION_SET, 7, p)); }
 };
 
 static void t_server() {
@@ -282,6 +284,33 @@ static void t_server() {
       q.tx.room = 0; q.host.autosave = SEC_CALIBRATION; q.srv.tick(2); CHECK(q.srv.autosaved() == 1 && q.tx.out.empty(), "no room in the transmit buffer (no app listening): saved all the same, the message is dropped - never blocked on"); }
     { Settings s2; defaults(s2); FakeHost h2; MemTransport t2; Server nos{s2, nullptr, h2, t2, ROLE_RX, 0, 1, 0, "x", 0}; h2.autosave = SEC_CALIBRATION; nos.tick(1);
       CHECK(nos.autosaved() == 0 && (nos.flags() & SF_DIRTY), "a firmware without a settings store: nothing is written, the change shows as unsaved"); }
+    // 0.37.1: unsaved / reboot required = differs from flash / from what the firmware started with, per section - a value changed
+    // and set back as it was asks for nothing (the app showed "Save" until the next Save)
+    { Rig r; const S_rates rates0 = r.s.rates; S_rates nr = rates0; nr.max_rate[0] = 800;
+      CHECK(r.srv.flags() == 0, "as loaded: nothing to save");
+      r.set(SEC_RATES, nr); CHECK(r.srv.flags() == SF_DIRTY, "changed: unsaved");
+      r.set(SEC_RATES, rates0); CHECK(r.srv.flags() == 0, "set back as it was: nothing to save (the Save button goes away)");
+      r.host.live = false; const S_general g0 = r.s.general; S_general ng = g0; ng.loop_hz = 2000;
+      r.set(SEC_GENERAL, ng); CHECK(r.srv.flags() == (SF_DIRTY | SF_REBOOT_REQUIRED), "a section the firmware cannot take live: unsaved, waits for a reboot");
+      r.set(SEC_GENERAL, g0); CHECK(r.srv.flags() == 0, "set back: the running firmware has that already - no reboot either");
+      r.host.live = true; r.set(SEC_RATES, nr); r.host.live = false; r.set(SEC_GENERAL, ng); r.set(SEC_RATES, rates0);
+      CHECK(r.srv.flags() == (SF_DIRTY | SF_REBOOT_REQUIRED), "per section: one set back, the other still changed");
+      r.send(frame(MSG_SETTINGS_SAVE, 8)); CHECK(r.srv.flags() == SF_REBOOT_REQUIRED, "saved: the reboot is still owed");
+      r.set(SEC_GENERAL, g0); CHECK(r.srv.flags() == SF_DIRTY, "set back after the save: flash has the new value (unsaved), the firmware runs the old one (no reboot)"); }
+    { Rig r; r.host.live = false; S_pid np = r.s.pid; np.tpa_rate = 10; r.set(SEC_PID, np); CHECK(r.srv.flags() == (SF_DIRTY | SF_REBOOT_REQUIRED), "pid changed");
+      r.send(frame(MSG_SETTINGS_DEFAULTS, 1, {SEC_PID})); CHECK(r.srv.flags() == 0, "defaults of a section = what was loaded: nothing to save");
+      r.set(SEC_PID, np); r.send(frame(MSG_SETTINGS_DEFAULTS, 2, {0xFF})); CHECK(r.srv.flags() == 0, "defaults for everything, the same");
+      r.send(frame(MSG_SETTINGS_DEFAULTS, 3, {SEC_PID})); CHECK(r.srv.flags() == 0, "defaults of a section that has them: nothing changed"); }
+    { Rig r; r.host.live = false; S_general ng = r.s.general; ng.loop_hz = 2000; r.set(SEC_GENERAL, ng);
+      r.s.calibration.acc_trim_roll = 9; r.host.wrote = true; r.send(frame(MSG_COMMAND, 1, {CMD_GYRO_CAL}));
+      r.send(frame(MSG_SETTINGS_SAVE, 2));
+      r.s.calibration.acc_trim_roll = 0; r.host.wrote = true; r.send(frame(MSG_COMMAND, 3, {CMD_GYRO_CAL}));
+      CHECK(r.srv.flags() == (SF_DIRTY | SF_REBOOT_REQUIRED), "a calibration the firmware wrote itself: unsaved, and the reboot still owed for the other section");
+      r.s.calibration.acc_trim_roll = 9; r.host.wrote = true; r.send(frame(MSG_COMMAND, 4, {CMD_GYRO_CAL})); CHECK(r.srv.flags() == SF_REBOOT_REQUIRED, "calibrated back to what flash holds: nothing to save");
+      S_calibration nc = r.s.calibration; nc.acc_trim_pitch = 5; r.host.live = true; r.set(SEC_CALIBRATION, nc); r.host.autosave = SEC_CALIBRATION; r.srv.tick(1);
+      CHECK(r.srv.flags() == SF_REBOOT_REQUIRED, "a section the firmware wrote to flash itself is saved, the app's change in it too"); }
+    { Rig r; r.mem.fail_write = true; r.send(frame(MSG_SETTINGS_SAVE, 1)); CHECK(r.srv.flags() == SF_DIRTY, "a flash write that failed: flash holds who knows what - unsaved, nothing changed or not");
+      r.mem.fail_write = false; r.send(frame(MSG_SETTINGS_SAVE, 2)); CHECK(r.srv.flags() == 0, "until a Save goes through"); }
     { Rig r; r.send(frame(MSG_REBOOT, 1)); CHECK(r.host.rebooted && r.tx.frames()[0].second[2] == ERR_OK, "reboot acknowledged first"); r.host.rebooted = false; r.host.is_armed = true; r.send(frame(MSG_REBOOT, 2)); CHECK(!r.host.rebooted, "no reboot while armed"); }
     { Rig r; r.send(frame(MSG_COMMAND, 4, {CMD_MOTOR_TEST, 2, 0xE8, 0x03})); auto fr = r.tx.frames();
       CHECK(r.host.last_cmd == CMD_MOTOR_TEST && fr[0].first.type == MSG_CMD_RESULT && fr[0].second[0] == CMD_MOTOR_TEST && fr[0].second[1] == ERR_OK && fr[0].second.size() == 2 + 3, "COMMAND is forwarded with its args and answered with CMD_RESULT");
@@ -407,12 +436,12 @@ static void t_apply() {
       apply_beeper(s, bp, mp);
       CHECK(bp.enabled == s.beeper.conditions && !((bp.enabled >> beep::ON_USB) & 1u) && ((bp.enabled >> beep::RX_LOST) & 1u) && bp.slot_ms == 0, "buzzer defaults: every sound on, quiet on the bench, patterns as written");
       // by hand: GYRO_CALIBRATED 0, RX_LOST 1, DISARMING 3, BAT_CRIT_LOW 7, BAT_LOW 8, RX_SET 9, ACC_CALIBRATION 10, ACC_CALIBRATION_FAIL 11, READY_BEEP 12, ARM_REFUSED 15, BLACKBOX_ERASE 16
-      CHECK(mp.enabled == 0x19F8Bu && beeper_motor_default_matches() && mp.slot_ms == 450, "motor defaults: what a stopped motor can play, without the power-on chirp; one 450 ms tone per beep (0x%x)", (unsigned)mp.enabled);
+      CHECK(mp.enabled == 0x59F8Bu && beeper_motor_default_matches() && mp.slot_ms == 450, "motor defaults: what a stopped motor can play, without the power-on chirp; one 450 ms tone per beep (0x%x)", (unsigned)mp.enabled);
       s.beeper.conditions = 1u << beep::BAT_LOW; s.beeper.motor_conditions = 0xFFFFFFFFu; apply_beeper(s, bp, mp);
-      CHECK(bp.enabled == (1u << beep::BAT_LOW), "buzzer conditions reach the buzzer");
+      CHECK(bp.enabled == ((1u << beep::BAT_LOW) | (1u << beep::MISSION_WARN)), "buzzer conditions reach the buzzer (the mission's take-off warning always on)");
       CHECK(!((mp.enabled >> beep::ARMING) & 1u) && !((mp.enabled >> beep::ARMED) & 1u) && !((mp.enabled >> beep::RX_LOST_LANDING) & 1u) && !((mp.enabled >> beep::ARMING_GPS_FIX) & 1u) && !((mp.enabled >> beep::ARMING_GPS_NO_FIX) & 1u) &&
             !((mp.enabled >> beep::ON_USB) & 1u) && ((mp.enabled >> beep::SYSTEM_INIT) & 1u) && ((mp.enabled >> beep::RX_LOST) & 1u), "motors: conditions of an armed craft are removed whatever the settings say");
-      s.beeper.motor_conditions = 1u << beep::RX_LOST; apply_beeper(s, bp, mp); CHECK(mp.enabled == (1u << beep::RX_LOST), "motor conditions reach the motor sounder"); }
+      s.beeper.motor_conditions = 1u << beep::RX_LOST; apply_beeper(s, bp, mp); CHECK(mp.enabled == ((1u << beep::RX_LOST) | (1u << beep::MISSION_WARN)), "motor conditions reach the motor sounder (the mission's take-off warning always on)"); }
     { bb::Config bc; apply_blackbox(s, bc);
       CHECK(bc.device == bb::DEV_NONE && bc.trigger == bb::TRIG_ARMED && bc.rate_hz == 250 && bc.sd_mode == SD_MODE_SPI && bc.sd_mhz == 20, "blackbox defaults: off, while armed, 250 records/s; SD card on SPI at 20 MHz");
       s.blackbox.device = BB_DEVICE_SDCARD; s.blackbox.sd_mode = SD_MODE_SDMMC_1BIT; s.blackbox.sd_mhz = 8; s.blackbox.rate_hz = 1000; apply_blackbox(s, bc);
@@ -517,4 +546,31 @@ static void t_more() {
       CHECK(n == 8, "the others follow on the next tick (%d)", n); }
 }
 
-int main() { t_codec(); t_schema(); t_store(); t_server(); t_streams(); t_apply(); t_rules(); t_more(); printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0; }
+static void t_mission_schema() {
+    printf("[schema] mission (0.37)\n");
+    { const SectionInfo* m = find_section(SEC_MISSION); S_mission d; defaults(d);
+      CHECK(m && m->id == 26 && m->size == sizeof(S_mission) && sizeof(S_mission) == 1 + 1 + 32 * (1 + 1 + 2 + 4 + 4 + 2) && sizeof(S_mission) <= kMaxPayload - 8, "section mission: id 26, count + rc_lost + 32 x (cmd, arg, alt, lat, lon, p) = %zu bytes, fits one frame", sizeof(S_mission));
+      CHECK(d.count == 0 && d.cmd[0] == MISSION_CMD_NONE && d.rc_lost == MISSION_RC_LOST_CONTINUE, "an empty plan by default; a lost link carries on (ArduPilot FS_OPTIONS continue in AUTO)");
+      CHECK(MISSION_CMD_TAKEOFF == 1 && MISSION_CMD_WAYPOINT == 2 && MISSION_CMD_LOITER_TIME == 3 && MISSION_CMD_LAND == 4 && MISSION_CMD_DELAY == 5 && MISSION_CMD_RTL == 6 && MISSION_CMD_SERVO == 7 && MISSION_CMD_SPEED == 8, "mission commands in the order the firmware's MissionCmd uses"); }
+    { S_servo s; defaults(s); const SectionInfo* si = find_section(SEC_SERVO);
+      CHECK(s.angle_min[3] == 0 && s.angle_max[0] == 180 && s.init_us[2] == 1500 && si->compat == 26 && offsetof(S_servo, angle_min) == 26, "servo: the angles of min_us / max_us (0 / 180 deg) and the pulse before a mission command (1500 us) at the end, the old size 26 known");
+      CHECK(SERVO_SOURCE_MISSION == 17 && MODE_MISSION == 14 && BEEPER_COND_MISSION_WARN == 18, "MISSION appended to servo_source and mode, MISSION_WARN to the beeper conditions"); }
+    { S_beeper b; defaults(b); CHECK((b.conditions >> BEEPER_COND_MISSION_WARN) & 1u && (b.motor_conditions >> BEEPER_COND_MISSION_WARN) & 1u, "the take-off warning beeps by default on the buzzer and the motors"); }
+    { Settings s; defaults(s); beep::Beeper bp, mp; s.beeper.conditions = 0; s.beeper.motor_conditions = 0; apply_beeper(s, bp, mp);
+      CHECK(bp.enabled == (1u << beep::MISSION_WARN) && mp.enabled == (1u << beep::MISSION_WARN), "every condition switched off: the take-off warning still sounds (people stand next to the craft)"); }
+    { Settings s; defaults(s); fc::CoreConfig c; s.mission.rc_lost = MISSION_RC_LOST_RTL; apply_nav(s, c); const bool rtl = !c.fs.mission_rc_continue;
+      s.mission.rc_lost = MISSION_RC_LOST_CONTINUE; apply_nav(s, c); CHECK(rtl && c.fs.mission_rc_continue, "mission.rc_lost: RTL = the failsafe as usual, CONTINUE = it flies on"); }
+    { // the plan: lat / lon -> metres from home (the GPS's own offset), heights in dm, MAV meanings
+      S_mission m; defaults(m); gps::Location home; home.lat = 473977419; home.lon = 85455938; home.alt_cm = 48820;
+      m.count = 4; m.cmd[0] = MISSION_CMD_TAKEOFF; m.alt[0] = 85;
+      m.cmd[1] = MISSION_CMD_WAYPOINT; m.lat[1] = 473977419 + 1797; m.lon[1] = 85455938 - 1332; m.alt[1] = 120; m.p[1] = 4;     // ~20 m north, ~10 m west
+      m.cmd[2] = MISSION_CMD_SERVO; m.arg[2] = 2; m.p[2] = 1750;
+      m.cmd[3] = MISSION_CMD_LOITER_TIME; m.p[3] = 6; m.cmd[4] = MISSION_CMD_WAYPOINT;
+      fc::MissionPlan p; mission_plan_from(m, home, p);
+      CHECK(p.count == 4 && p.item[0].cmd == fc::MissionCmd::TAKEOFF && fabsf(p.item[0].alt_m - 8.5f) < 1e-4f && p.item[0].has_alt && !p.item[0].has_pos, "TAKEOFF 8.5 m, no position");
+      CHECK(p.item[1].has_pos && fabsf(p.item[1].n - 20.0f) < 0.1f && fabsf(p.item[1].e + 10.0f) < 0.1f && fabsf(p.item[1].alt_m - 12.0f) < 1e-4f && p.item[1].p == 4, "WAYPOINT 20.0 m N, 10.0 m W (%.2f / %.2f), 12 m, hold 4 s", p.item[1].n, p.item[1].e);
+      CHECK(p.item[2].cmd == fc::MissionCmd::SERVO && p.item[2].arg == 2 && p.item[2].p == 1750 && p.item[3].cmd == fc::MissionCmd::LOITER_TIME && !p.item[3].has_pos && !p.item[3].has_alt, "SERVO 2 -> 1750 us; LOITER_TIME without a point or a height (lat = lon = 0, alt 0)");
+      m.count = 40; mission_plan_from(m, home, p); CHECK(p.count == 32, "a count beyond 32 is cut to 32"); }
+}
+
+int main() { t_codec(); t_schema(); t_store(); t_server(); t_streams(); t_apply(); t_rules(); t_more(); t_mission_schema(); printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0; }

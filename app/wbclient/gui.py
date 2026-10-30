@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import framing as F
-from . import logview, tune, usbnames, wblog
+from . import logview, maptiles, tune, usbnames, wblog
 from .client import SchemaMismatch, WbClient, WbError, WbTimeout
 from .schema import Schema
 
@@ -43,7 +43,7 @@ WIFI_AP_URL = "socket://192.168.4.1:5760"   # the board's own access point (sect
 
 # USB vendors of the serial chips found on ESP32 boards: such a port is listed first and marked as the likely flight controller.
 LIKELY_VIDS = {0x303A: "Espressif USB", 0x10C4: "CP210x", 0x1A86: "CH34x / CH910x", 0x0403: "FTDI"}
-BAUDS = (115200, 230400, 460800, 921600)
+BAUDS = (115200, 230400, 460800, 921600, 2000000, 3000000)
 
 
 class ApiError(Exception):
@@ -70,7 +70,7 @@ class Hub:
         self.aux_seq = 1                    # bumped when job / recording state changes
         self.fc = None
         self.port = None
-        self.baud = 230400
+        self.baud = 921600
         self.report = []
         self.note = None                    # why the link is down / what just happened: {"code": "PORT_LOST" | "NOT_RESPONDING" | "REBOOTED" | "STALLED", ...}
         self.responding = True
@@ -755,6 +755,19 @@ def _same(a, b):
     return a == b
 
 
+def open_location_settings():
+    """Windows' page of the location permission (Settings > Privacy & security > Location): the Mission tab's "my position"
+    when Windows keeps it to itself. False where there is no such page (not Windows)."""
+    start = getattr(os, "startfile", None)
+    if start is None:
+        return False
+    try:
+        start("ms-settings:privacy-location")
+    except OSError:
+        return False
+    return True
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "wbgui"
@@ -829,6 +842,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"sessions": hub.bb_sessions()})
                 if url.path.startswith("/api/log/"):
                     return self._log_get(url.path[9:], query)
+                if url.path == "/api/tile":                      # the Mission tab's map (wbclient/maptiles.py): from the disk cache or fetched once
+                    one = lambda k: (query.get(k) or [""])[0]   # noqa: E731
+                    try:
+                        got = self.server.tiles.tile(one("p"), one("z"), one("x"), one("y"))
+                    except ValueError as e:
+                        return self._send(400, {"error": "BAD_REQUEST", "message": str(e)})
+                    if got is None:                               # (no network, nothing cached: a see-through square, asked again next time)
+                        return self._send(200, maptiles.BLANK_PNG, "image/png", {"Cache-Control": "no-store"})
+                    return self._send(200, got[0], got[1], {"Cache-Control": "max-age=86400"})
+                if url.path == "/api/geocode":
+                    return self._send(200, {"hits": self.server.tiles.geocode((query.get("q") or [""])[0])})
                 if url.path == "/api/backup":
                     return self._send(200, json.dumps(hub.backup(), indent=1, ensure_ascii=False).encode("utf-8"),
                                       extra={"Content-Disposition": 'attachment; filename="windburst_settings.json"'})
@@ -967,6 +991,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if p == "/api/log/upload":
                 return self._send(200, {"file": hub.log_upload(body.get("name"), body.get("data"))})
+            if p == "/api/location-settings":
+                return self._send(200, {"opened": open_location_settings()})
             return self._send(404, {"error": "NOT_FOUND", "message": p})
         except Exception as e:               # noqa: BLE001
             return self._fail(e)
@@ -987,6 +1013,7 @@ class GuiServer(ThreadingHTTPServer):
         else:
             raise last
         self.hub = hub or Hub(log_dir=log_dir)
+        self.tiles = maptiles.MapTiles()                      # map tiles + address search for the Mission tab
         self.token = token or secrets.token_urlsafe(18)
         self.stopping = False
         port = self.server_address[1]

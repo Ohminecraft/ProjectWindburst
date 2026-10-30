@@ -189,6 +189,8 @@ static void t_heartbeat() {
     s.armed = true; s.angle = true; h = heartbeat_of(s);
     CHECK(h.custom_mode == COPTER_STABILIZE && h.system_status == MAV_STATE_ACTIVE && (h.base_mode & MAV_MODE_FLAG_SAFETY_ARMED) && (h.base_mode & MAV_MODE_FLAG_STABILIZE_ENABLED), "armed Angle: STABILIZE, ACTIVE, armed flag");
     s.angle = false; s.stabilize = true; CHECK(heartbeat_of(s).custom_mode == COPTER_STABILIZE, "Stabilize: STABILIZE");
+    { State a = s; a.mission = true; CHECK(heartbeat_of(a).custom_mode == COPTER_AUTO && COPTER_AUTO == 3 && (heartbeat_of(a).base_mode & MAV_MODE_FLAG_STABILIZE_ENABLED), "the mission flies: AUTO (3)");
+      a.rescue = true; CHECK(heartbeat_of(a).custom_mode == COPTER_RTL, "its RTL: RTL"); }
     s.althold = true; CHECK(heartbeat_of(s).custom_mode == COPTER_ALT_HOLD, "Altitude Hold: ALT_HOLD");
     s.poshold = true; CHECK(heartbeat_of(s).custom_mode == COPTER_POSHOLD, "Position Hold: POSHOLD");
     s.rescue = true; CHECK(heartbeat_of(s).custom_mode == COPTER_RTL, "GPS Rescue: RTL");

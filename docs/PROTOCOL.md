@@ -70,7 +70,11 @@ Mã lỗi (`errors` trong json): `OK, UNKNOWN, BAD_ARG, ARMED, BUSY, NOT_SUPPORT
 | 17 | nav | 27 | **live** | hướng lắp / lật gương / hệ số / ngưỡng chất lượng / độ cao tối đa của flow, chỉnh góc nghiêng theo gia tốc đo được, Position Hold (góc tối đa, phanh, hệ số bộ điều khiển vị trí), thủ tục failsafe (`LAND` / `RESCUE`), GPS Rescue; xem `docs/NAV.md` |
 
 Quy tắc phía firmware (`wbp_server.h`, `settings_store.h`):
-- Thay đổi nằm trong **RAM** cho tới `SETTINGS_SAVE`. Cờ trong stream `status.settings_dirty`: `DIRTY` (chưa lưu), `REBOOT_REQUIRED` (đã đổi section không live).
+- Thay đổi nằm trong **RAM** cho tới `SETTINGS_SAVE`. Cờ trong stream `status.settings_dirty`:
+  - `DIRTY` (chưa lưu): có section khác với bản trong flash.
+  - `REBOOT_REQUIRED`: có section không live khác với bản firmware dùng lúc khởi động.
+
+  Firmware so từng section bằng một mã băm 32 bit (FNV-1a). Mốc là lúc cài đặt vừa nạp xong (`Server::settings_loaded()`), sau đó cập nhật mỗi lần ghi flash. Vì vậy **đổi một giá trị rồi đặt lại như cũ thì cả hai cờ đều tắt** (từ 0.37.1; trước đó cờ giữ nguyên tới lần lưu sau). Lưu một section cần khởi động lại xong rồi mới đặt nó về như cũ thì chỉ còn `DIRTY`: flash đang giữ giá trị mới, còn firmware vẫn chạy giá trị cũ. Một lần ghi flash thất bại thì `DIRTY` bật cho tới khi lưu thành công, vì không biết flash còn giữ gì.
 - Section **live** được áp vào firmware đang chạy ngay (PID, bộ lọc, rates, modes, calibration); section còn lại có hiệu lực sau save + reboot.
 - **Quan hệ giữa các field** (`settings_rules.h`), áp sau `validate()` mỗi khi một section được app ghi hoặc được nạp từ flash: trục nào đang theo thanh trượt thì P/I/D/Dmax/F của trục đó được **tính lại** từ thanh trượt; thanh trượt lọc đang bật thì các tần số cắt lowpass được tính lại. Câu trả lời của SECTION_SET mang giá trị đã tính, nên app luôn hiện đúng thứ đang có hiệu lực.
 - **Firmware tự ghi một section**: level trim khi bay đổi section `calibration` rồi yêu cầu link task ghi riêng section đó vào flash (chỉ khi đã disarm; ghi flash làm vòng lặp đứng vài ms). Thành công: LOG `settings: section calibration written by the firmware` (app đọc lại section và báo); flash từ chối: cờ `DIRTY`.

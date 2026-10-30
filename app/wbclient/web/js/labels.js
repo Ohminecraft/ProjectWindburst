@@ -336,6 +336,7 @@ export const BEEP_CONDITIONS = {
   ARM_REFUSED: { label: 'Không arm được', help: 'Gạt công tắc ARM nhưng còn điều kiện chặn (xem thanh trên cùng).' },
   BLACKBOX_ERASE: { label: 'Xoá xong bộ nhớ blackbox' },
   USB: { label: 'Kêu cả khi đang nối app mà không có pin', help: 'Tắt (mặc định): im lặng trên bàn làm việc, chỉ nút "Thử" là kêu.' },
+  MISSION_WARN: { label: 'Nhiệm vụ sắp tự cất cánh', help: '10 giây cuối lúc nhiệm vụ chờ dưới đất, trước khi tự bật motor. Luôn kêu, tắt ở đây cũng không tắt được.' },
 };
 
 // Why a log session ended (the END event of the log carries the index).
@@ -381,6 +382,7 @@ export const MODES = {
   AIRMODE: { label: 'Airmode (công tắc)', help: 'Có công tắc này thì airmode chỉ bật khi công tắc bật (kiểu theo mục Airmode ở tab Cảm biến; mục đó là Tắt thì dùng "Khi đang bay"). Công tắc tắt: ga về min là motor về idle.' },
   ANTI_GRAVITY: { label: 'Anti Gravity (công tắc)', help: 'Có công tắc này thì Anti Gravity chỉ chạy khi công tắc bật, bất kể ô Anti Gravity ở tab PID.' },
   BLACKBOX_ERASE: { label: 'Xoá blackbox', help: 'Gạt công tắc từ tắt sang bật khi chưa arm: xoá hết log (flash hoặc các file log trên thẻ SD), xong thì còi kêu. Đang bật sẵn lúc khởi động thì không xoá; muốn xoá lần nữa phải gạt tắt rồi bật lại.' },
+  MISSION: { label: 'Nhiệm vụ (AUTO)', help: 'Bay theo kế hoạch đã nạp, như AUTO của ArduPilot. Arm bằng công tắc ARM trước, rồi bật công tắc này: drone tự cất cánh và bay. Tắt công tắc là lấy lại quyền điều khiển ngay.' },
 };
 
 // Enum values the firmware accepts in settings but does not implement yet (it reports "FAILED - ..." in the boot report).
@@ -430,7 +432,10 @@ export const ENUM_LABELS = {
   sd_mode: { SPI: 'SPI (4 dây)', SDMMC_1BIT: 'SDMMC 1 bit (3 dây)' },
   bb_trigger: { SWITCH: 'Khi bật công tắc Blackbox', ARMED: 'Suốt lúc arm', ALWAYS: 'Từ lúc bật nguồn' },
   bb_state: { OFF: 'Tắt', NO_STORAGE: 'Không có bộ nhớ log', NEEDS_ERASE: 'Phải xoá trước khi dùng', IDLE: 'Sẵn sàng', LOGGING: 'Đang ghi', STREAMING: 'Đang gửi về app', ERASING: 'Đang xoá', FULL: 'Đầy' },
-  servo_source: { OFF: 'Tắt' },
+  servo_source: { OFF: 'Tắt', MISSION: 'Nhiệm vụ' },
+  mission_state: { IDLE: 'không chạy', TAKEOFF: 'đang cất cánh', WAYPOINT: 'đang bay tới điểm', LOITER: 'đang đứng yên', LANDING: 'đang hạ cánh', GROUND_WAIT: 'đang chờ dưới đất (motor tắt)', ARMING: 'sắp tự cất cánh', RTL: 'đang bay về nhà', DONE: 'xong', REFUSED: 'không bắt đầu được', FAILED: 'bỏ dở (mất vị trí), đang hạ cánh' },
+  mission_cmd: { NONE: 'không có', TAKEOFF: 'Cất cánh', WAYPOINT: 'Bay tới', LOITER_TIME: 'Đứng yên', LAND: 'Hạ cánh', DELAY: 'Chờ', RTL: 'Về nhà, hạ cánh', SERVO: 'Servo', SPEED: 'Đổi tốc độ' },
+  mission_rc_lost: { CONTINUE: 'Bay tiếp nhiệm vụ', RTL: 'Failsafe như thường' },
   flow_type: { NONE: 'Không dùng', PMW3901: 'PMW3901 (SPI)', MSP: 'MSP qua UART (MicoAir MTF, Matek)' },
   flow_align: { CW0: '0°', CW90: '90°', CW180: '180°', CW270: '270°' },
   flow_reject: { OK: 'đang dùng', QUALITY: 'bỏ qua: bề mặt quá mờ hoặc quá tối', HEIGHT: 'bỏ qua: quá gần sàn, quá cao, hoặc lidar không có số đo', TILT: 'bỏ qua: máy nghiêng quá 45°', TURNING: 'bỏ qua: máy đang quay quá nhanh', NO_GYRO: 'bỏ qua: chưa đủ dữ liệu gyro', NO_SAMPLE: 'cảm biến không gửi mẫu nào' },

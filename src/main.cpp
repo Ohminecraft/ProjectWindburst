@@ -156,6 +156,7 @@ void setup() {
 #endif
     flight.configure(settings);
     flight.begin();
+    server.settings_loaded();                                // what flash holds, what the firmware runs with: "unsaved" / "reboot required" from here
 
     // 3. blackbox: find the sessions already in the log memory (a few hundred short flash reads), hand the service to the link side
     char line[176];                                          // (= FlightApp::kReportLen)

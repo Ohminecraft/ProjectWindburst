@@ -110,8 +110,8 @@ def test_layout_pack_unpack():
     # a bit field stored in the settings, an optional enum as a command argument, scaled settings
     bp = s.layout("section", "beeper")
     d = bp.defaults()
-    assert "ARMING" in d["conditions"] and "USB" not in d["conditions"] and len(d["conditions"]) == 17 and d["type"] == "ACTIVE"
-    assert "RX_LOST" in d["motor_conditions"] and "ARMING" not in d["motor_conditions"] and "SYSTEM_INIT" not in d["motor_conditions"] and len(d["motor_conditions"]) == 11
+    assert "ARMING" in d["conditions"] and "USB" not in d["conditions"] and "MISSION_WARN" in d["conditions"] and len(d["conditions"]) == 18 and d["type"] == "ACTIVE"
+    assert "RX_LOST" in d["motor_conditions"] and "ARMING" not in d["motor_conditions"] and "SYSTEM_INIT" not in d["motor_conditions"] and "MISSION_WARN" in d["motor_conditions"] and len(d["motor_conditions"]) == 12
     d["conditions"] = ["BAT_LOW", "usb"]
     assert bp.unpack(bp.pack(d))["conditions"] == ["BAT_LOW", "USB"]
     args = s.layout("args", "BEEP")

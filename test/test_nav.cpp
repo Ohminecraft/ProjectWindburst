@@ -586,8 +586,20 @@ static void t_rescue() {
       CHECK(s.r.phase() == P::IDLE && s.r.max_height() == 0 && !s.out.active && s.r.crumbs().size() == 0, "disarmed: idle, the highest point and the way of the flight forgotten"); }
 }
 
+static void t_rescue_kind() {
+    printf("[rescue] the kind asked for by the caller (the mission's RTL / its landing, 0.37)\n");
+    { RescSim s(60, 0, 10, 0); s.r.cfg.mode = RESCUE_MODE_LAND; s.in.request = true; s.in.kind = RESCUE_MODE_RTL; s.run(0.5f);
+      CHECK(s.r.phase() == RescuePhase::CLIMB, "nav.rescue_mode LAND, the mission asks for RTL: it climbs to fly home (%s)", phase_name(s.r.phase()));
+      s.in.kind = RESCUE_MODE_LAND; s.run(0.5f); CHECK(s.r.phase() == RescuePhase::CLIMB, "the kind is fixed when the rescue starts");
+      const bool landing = s.until(RescuePhase::LANDING, 120.0f); s.run(1.0f);      // (the step that enters LANDING still shows the wait's target)
+      CHECK(landing && s.r.phase() == RescuePhase::LANDING && hypotf(s.out.tgt_n, s.out.tgt_e) < 1.0f, "... all the way: it lands over home (%.1f m off), not where it started", hypotf(s.out.tgt_n, s.out.tgt_e)); }
+    { RescSim s(60, 0, 10, 0); s.in.request = true; s.in.kind = RESCUE_MODE_LAND; s.run(0.5f);
+      CHECK(s.r.phase() == RescuePhase::LANDING && fabsf(s.out.tgt_n - 60.0f) < 1.0f, "nav.rescue_mode RTL, LAND asked for: down where it is"); }
+    { RescSim s(60, 0, 10, 0); s.in.request = true; s.run(0.5f); CHECK(s.r.phase() == RescuePhase::CLIMB, "no kind given (255): the setting's"); }
+}
+
 int main() {
-    t_flow(); t_flow_fusion(); t_tilt_aid(); t_poscontrol(); t_poshold(); t_breadcrumbs(); t_rescue();
+    t_flow(); t_flow_fusion(); t_tilt_aid(); t_poscontrol(); t_poshold(); t_breadcrumbs(); t_rescue(); t_rescue_kind();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

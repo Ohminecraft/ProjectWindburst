@@ -111,6 +111,7 @@ export const BEEP_PATTERNS = {
   SYSTEM_INIT: [3, 5, 3, 5],
   ARM_REFUSED: [40, 10, 10, 10, 10, 10],
   BLACKBOX_ERASE: [5, 5, 5, 5],
+  MISSION_WARN: [8, 8],
 };
 
 // The motors as the sounder (DShot beacon): one ESC tone per "on" part of a pattern, each taking BEACON_SLOT_MS; the pauses stay.

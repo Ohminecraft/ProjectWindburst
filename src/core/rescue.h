@@ -78,6 +78,7 @@ struct RescueInput {
     float yaw_deg = 0;                                     // heading, 0 = north, clockwise
     bool pos_valid = false, alt_valid = false, heading_valid = false;
     uint8_t sats = 0;
+    uint8_t kind = 255;                                    // RescueKind for this request (the mission's RTL / landing); 255 = cfg.mode
 };
 struct RescueOutput {
     bool active = false;                                   // false: nothing below counts (idle or failed)
@@ -100,7 +101,8 @@ public:
         if (!in.armed) { phase_ = RescuePhase::IDLE; fail_ = RescueFail::NONE; max_z_ = 0; crumbs_.reset(); bad_s_ = 0; full_s_ = 0; left_ = 0; remaining_ = 0; return o; }
         if (!in.request) { idle(in, dt); return o; }
         if (phase_ == RescuePhase::FAILED) return o;
-        const bool land = cfg.mode == RESCUE_MODE_LAND;
+        if (phase_ == RescuePhase::IDLE) kind_ = in.kind != 255 ? in.kind : cfg.mode;      // (fixed for this rescue)
+        const bool land = kind_ == RESCUE_MODE_LAND;
         if (phase_ == RescuePhase::IDLE) {                                   // start
             if (!land && !in.pos_valid) return failed(RescueFail::NO_POSITION);
             if (!land && !in.heading_valid) return failed(RescueFail::NO_HEADING);
@@ -178,6 +180,7 @@ public:
     }
 
     RescuePhase phase() const { return phase_; }
+    uint8_t kind() const { return kind_; }                // RescueKind of this (or the last) rescue
     RescueFail failure() const { return fail_; }
     float return_height() const { return return_z_; }
     float max_height() const { return max_z_; }
@@ -221,7 +224,7 @@ private:
         route_[0].n = sn; route_[0].e = se; route_[0].z = in.z;
         route_n_ = 1; leg_ = 0; s_ = 0; v_ = vplan_ = 0; done_ = false; smart_ = false;
         ramp_yaw_ = 0; sec_ = 0; stalled_ = flyaway_ = lowsats_ = 0; z_1s_ = in.z; speed_1s_ = 0; climb_1s_ = 0; t_phase_ = 0;
-        if (cfg.mode == RESCUE_MODE_LAND) { return_z_ = in.z; left_ = 0; left_1s_ = 0; phase_ = RescuePhase::LANDING; return; }
+        if (kind_ == RESCUE_MODE_LAND) { return_z_ = in.z; left_ = 0; left_1s_ = 0; phase_ = RescuePhase::LANDING; return; }
 
         if (cfg.alt_mode == RESCUE_ALT_FIXED) return_z_ = cfg.return_alt_m;
         else if (cfg.alt_mode == RESCUE_ALT_CURRENT) return_z_ = in.z + cfg.initial_climb_m;
@@ -229,7 +232,7 @@ private:
         else return_z_ = cone_height(dist);
         if (cfg.alt_mode != RESCUE_ALT_FIXED) return_z_ = maxf(return_z_, in.z);       // (never down first - but FIXED is fixed)
         route_[0].z = return_z_;
-        smart_ = cfg.mode == RESCUE_MODE_SMART_RTL && crumbs_.ok() && crumbs_.size() >= 2 && dist >= cfg.min_start_dist_m;
+        smart_ = kind_ == RESCUE_MODE_SMART_RTL && crumbs_.ok() && crumbs_.size() >= 2 && dist >= cfg.min_start_dist_m;
         if (smart_) {
             // the way it came, newest point first, at the heights flown there; no climb; home 2 m up at the end
             route_[0].z = return_z_ = in.z;
@@ -311,7 +314,7 @@ private:
     RescueOutput failed(RescueFail why) { phase_ = RescuePhase::FAILED; fail_ = why; remaining_ = 0; return RescueOutput(); }
     void next(RescuePhase p) { phase_ = p; t_phase_ = 0; }
 
-    RescuePhase phase_ = RescuePhase::IDLE; RescueFail fail_ = RescueFail::NONE;
+    RescuePhase phase_ = RescuePhase::IDLE; RescueFail fail_ = RescueFail::NONE; uint8_t kind_ = RESCUE_MODE_RTL;
     float max_z_ = 0, return_z_ = 0, t_phase_ = 0, ramp_yaw_ = 0, sec_ = 0, z_1s_ = 0, left_1s_ = 0, speed_1s_ = 0, climb_1s_ = 0;
     int stalled_ = 0, flyaway_ = 0, lowsats_ = 0;
     nav::Breadcrumbs<kCrumbs> crumbs_; float bad_s_ = 0, full_s_ = 0;

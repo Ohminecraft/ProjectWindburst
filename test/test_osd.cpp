@@ -43,6 +43,12 @@ static void t_elements() {
       CHECK(text(E_MODE, r) == "LAND" && land == "LAND 12M" && std::string(w) == "LAND", "LAND: the height still to come down ('%s'; without a height '%s')", land.c_str(), w);
       r.rescue = RESC_RTL; r.rescue_stage = RSTAGE_WAY; r.rescue_left_m = 1e6f; rescue_text(r, w, sizeof(w)); CHECK(std::string(w) == "RTL 65000M", "never more digits than fit (%s)", w);
       r.failsafe = true; CHECK(text(E_MODE, r) == "!FS!", "a failsafe rescue: the mode says !FS! (the warning line says RTL)"); }
+    // the mission (0.37): AUTO, which command of how many and the way left; the wait on the ground; the countdown before it takes off
+    { State m = s; char w[24]; m.mission = MISS_FLY; m.mission_index = 2; m.mission_count = 9; m.mission_left_m = 120.4f; mission_text(m, w, sizeof(w));
+      CHECK(text(E_MODE, m) == "AUTO" && std::string(w) == "AUTO 3/9 120M", "flying the mission: mode AUTO, '%s'", w);
+      m.mission = MISS_WAIT; m.mission_wait = 45; mission_text(m, w, sizeof(w)); CHECK(std::string(w) == "WAIT 45S", "waiting at a delivery stop: '%s'", w);
+      m.mission_wait = 7; m.mission_warn = true; mission_text(m, w, sizeof(w)); CHECK(std::string(w) == "TAKEOFF 7S", "the last 10 s: the countdown '%s'", w);
+      m.rescue = RESC_RTL; CHECK(text(E_MODE, m) == "RTL", "the mission's RTL: the rescue's name"); }
     CHECK(text(E_NAME, s) == "WINDBURST", "craft name");
     s.fly_s = 125; s.on_s = 3599; CHECK(text(E_FLY_TIME, s) == sym({SYM_FLY_M}) + "02:05" && text(E_ON_TIME, s) == sym({SYM_ON_M}) + "59:59", "timers mm:ss");
     s.rc_link = true; s.rssi_pct = 100; CHECK(text(E_RSSI, s) == sym({SYM_LINK_QUALITY}) + "99", "link quality, at most 99");

@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0xBC5CB67F",
+ "hash": "0xB91CB124",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -128,7 +128,8 @@
    "ACRO_TRAINER",
    "AIRMODE",
    "ANTI_GRAVITY",
-   "BLACKBOX_ERASE"
+   "BLACKBOX_ERASE",
+   "MISSION"
   ],
   "failsafe": [
    "NONE",
@@ -211,7 +212,8 @@
    "SYSTEM_INIT",
    "ARM_REFUSED",
    "BLACKBOX_ERASE",
-   "USB"
+   "USB",
+   "MISSION_WARN"
   ],
   "bb_device": [
    "NONE",
@@ -401,7 +403,8 @@
    "CH13",
    "CH14",
    "CH15",
-   "CH16"
+   "CH16",
+   "MISSION"
   ],
   "curr_source": [
    "AUTO",
@@ -507,6 +510,34 @@
   "msp_identity": [
    "BETAFLIGHT",
    "WINDBURST"
+  ],
+  "mission_cmd": [
+   "NONE",
+   "TAKEOFF",
+   "WAYPOINT",
+   "LOITER_TIME",
+   "LAND",
+   "DELAY",
+   "RTL",
+   "SERVO",
+   "SPEED"
+  ],
+  "mission_state": [
+   "IDLE",
+   "TAKEOFF",
+   "WAYPOINT",
+   "LOITER",
+   "LANDING",
+   "GROUND_WAIT",
+   "ARMING",
+   "RTL",
+   "DONE",
+   "REFUSED",
+   "FAILED"
+  ],
+  "mission_rc_lost": [
+   "CONTINUE",
+   "RTL"
   ]
  },
  "bits": {
@@ -1831,9 +1862,9 @@
     {
      "n": "conditions",
      "t": "u32",
-     "d": 131071,
+     "d": 393215,
      "bits": "beeper_cond",
-     "desc": "bit set = this condition beeps. USB: beep also on the bench (app connected, no battery)"
+     "desc": "bit set = this condition beeps. USB: beep also on the bench (app connected, no battery). MISSION_WARN (the countdown before a mission takes off again by itself) always sounds, whatever this says"
     },
     {
      "n": "type",
@@ -1875,7 +1906,7 @@
     {
      "n": "motor_conditions",
      "t": "u32",
-     "d": 106379,
+     "d": 368523,
      "bits": "beeper_cond",
      "desc": "bit set = the MOTORS play this condition (the ESCs beep on a DShot beacon command): a craft without a buzzer. Only while disarmed and only with a DShot protocol; one tone per beep of the pattern. Conditions of an armed craft (ARMING..., ARMED, RX_LOST_LANDING) cannot be played by motors"
     }
@@ -3008,7 +3039,7 @@
   {
    "id": 18,
    "name": "servo",
-   "desc": "Servo outputs (gimbal, camera tilt, a gripper...): each follows one RC channel. Pins: pins.servo",
+   "desc": "Servo outputs (gimbal, camera tilt, a gripper...): each follows one RC channel, or the mission (DO_SET_SERVO). Pins: pins.servo",
    "live": true,
    "fields": [
     {
@@ -3017,7 +3048,7 @@
      "count": 4,
      "d": 0,
      "enum": "servo_source",
-     "desc": "the RC channel this servo follows (OFF = no pulse)"
+     "desc": "the RC channel this servo follows (OFF = no pulse; MISSION = only the mission moves it, with DO_SET_SERVO)"
     },
     {
      "n": "min_us",
@@ -3051,8 +3082,36 @@
      "min": 50,
      "max": 330,
      "desc": "pulses per second: 50 for analog servos, up to 330 for digital ones (read at power-up)"
+    },
+    {
+     "n": "angle_min",
+     "t": "i16",
+     "count": 4,
+     "d": 0,
+     "min": -360,
+     "max": 360,
+     "desc": "the angle (deg) this servo stands at with the pulse min_us: the app turns the mission's angles into pulses with it"
+    },
+    {
+     "n": "angle_max",
+     "t": "i16",
+     "count": 4,
+     "d": 180,
+     "min": -360,
+     "max": 360,
+     "desc": "the angle (deg) at max_us"
+    },
+    {
+     "n": "init_us",
+     "t": "u16",
+     "count": 4,
+     "d": 1500,
+     "min": 500,
+     "max": 2500,
+     "desc": "source MISSION: the pulse before the mission has moved this servo"
     }
-   ]
+   ],
+   "compat": 26
   },
   {
    "id": 19,
@@ -3512,6 +3571,73 @@
      "t": "bool",
      "d": 1,
      "desc": "the tools may change settings (PID, rates, modes, receiver map, craft name) and save them; off = they can only read. Never while armed"
+    }
+   ]
+  },
+  {
+   "id": 26,
+   "name": "mission",
+   "desc": "The waypoint mission (ArduPilot AUTO semantics, at most 32 commands): what each command does is in docs/MISSION.md. Positions are absolute (1e-7 deg), heights above home",
+   "live": true,
+   "fields": [
+    {
+     "n": "count",
+     "t": "u8",
+     "d": 0,
+     "min": 0,
+     "max": 32,
+     "desc": "commands in use"
+    },
+    {
+     "n": "rc_lost",
+     "t": "u8",
+     "d": 0,
+     "enum": "mission_rc_lost",
+     "desc": "the RC link lost while the mission flies: CONTINUE = it flies on (ArduPilot FS_OPTIONS \"continue if in AUTO\"); RTL = the failsafe as usual"
+    },
+    {
+     "n": "cmd",
+     "t": "u8",
+     "count": 32,
+     "d": 0,
+     "enum": "mission_cmd",
+     "desc": "MAV_CMD: TAKEOFF 22, WAYPOINT 16, LOITER_TIME 19, LAND 21, DELAY 93, RTL 20, SERVO 183 (DO_SET_SERVO), SPEED 178 (DO_CHANGE_SPEED)"
+    },
+    {
+     "n": "arg",
+     "t": "u8",
+     "count": 32,
+     "d": 0,
+     "desc": "SERVO: the servo 1..4"
+    },
+    {
+     "n": "alt",
+     "t": "i16",
+     "count": 32,
+     "d": 0,
+     "scale": 0.1,
+     "desc": "height above home (m); 0 on LOITER_TIME = keep the height"
+    },
+    {
+     "n": "lat",
+     "t": "i32",
+     "count": 32,
+     "d": 0,
+     "desc": "latitude, 1e-7 deg (lat = lon = 0: where the craft is)"
+    },
+    {
+     "n": "lon",
+     "t": "i32",
+     "count": 32,
+     "d": 0,
+     "desc": "longitude, 1e-7 deg"
+    },
+    {
+     "n": "p",
+     "t": "u16",
+     "count": 32,
+     "d": 0,
+     "desc": "WAYPOINT / LOITER_TIME / DELAY: seconds; SERVO: pulse (us); SPEED: dm/s"
     }
    ]
   }
@@ -4518,6 +4644,37 @@
      "t": "u16",
      "scale": 0.1,
      "desc": "m the rescue still has to fly home (along its path; 0 once over home, and when landing where it is)"
+    },
+    {
+     "n": "mission_state",
+     "t": "u8",
+     "enum": "mission_state"
+    },
+    {
+     "n": "mission_index",
+     "t": "u8",
+     "desc": "the command the mission is at (0 ..)"
+    },
+    {
+     "n": "mission_count",
+     "t": "u8",
+     "desc": "commands in the mission it flies"
+    },
+    {
+     "n": "mission_dist",
+     "t": "u16",
+     "scale": 0.1,
+     "desc": "m to the point of the present command"
+    },
+    {
+     "n": "mission_left",
+     "t": "u16",
+     "desc": "m the whole mission still has to fly (to its last point)"
+    },
+    {
+     "n": "mission_wait",
+     "t": "u8",
+     "desc": "s left of a wait (on the ground before it takes off again, or a hover)"
     }
    ]
   },
@@ -5002,6 +5159,18 @@
    "name": "MAG_AUTOCAL",
    "args": [],
    "desc": "the automatic compass calibration (Betaflight 4.5 style): turn the craft around by hand within 15 s; it ends by itself (progress, state and result in the calibration stream) and the new hard-iron offset is applied and saved to flash by the firmware. Stick command: throttle high, pitch back, roll and yaw centred, 1 s, disarmed"
+  },
+  {
+   "id": 23,
+   "name": "MISSION",
+   "args": [
+    {
+     "n": "action",
+     "t": "u8"
+    }
+   ],
+   "armed_ok": true,
+   "desc": "action 1 = start the stored mission (the craft must be armed by the pilot; on the ground the first command must be TAKEOFF), 0 = stop it (the pilot's modes fly again). FAILED: refused"
   }
  ],
  "errors": [

@@ -393,6 +393,15 @@ static void t_settings() {
     CHECK(r->ack_of(r->request(MSG_SETTINGS_DEFAULTS, {SEC_PID})) == ERR_OK && r->app().core.cfg.pid.p[0] == 45 && r->app().core.pid().config().p[0] == 45 && r->app().core.cfg.gyro.lpf1_dyn_min_hz == 200, "defaults for one section, applied live (the filters keep theirs)");
     // unused mode slots stay unused through a save / load cycle
     { S_modes mo; r->get_section(SEC_MODES, &mo, sizeof(mo)); CHECK(mo.mode[3] == 255 && mo.mode[15] == 255, "unused mode slots stay 255 (not clamped into a real mode): %u", mo.mode[3]); }
+    // 0.37.1: a change set back as it was asks for nothing - the app's Save button goes away (it stayed until the next Save)
+    { auto q = fresh(); q->run(1.5); q->stream(STR_STATUS, 50); q->run(0.1); T_status s{}; q->latest(STR_STATUS, s);
+      CHECK(s.settings_dirty == 0, "as booted: nothing to save (flags %u)", s.settings_dirty);
+      S_motors m0; q->get_section(SEC_MOTORS, &m0, sizeof(m0)); S_motors m = m0; m.protocol = m0.protocol == ESC_PROTOCOL_DSHOT600 ? ESC_PROTOCOL_DSHOT300 : ESC_PROTOCOL_DSHOT600;
+      S_pid p0; q->get_section(SEC_PID, &p0, sizeof(p0)); S_pid p = p0; p.tpa_rate = 40;
+      q->set_section(SEC_MOTORS, &m, sizeof(m)); q->set_section(SEC_PID, &p, sizeof(p)); q->run(0.1); q->latest(STR_STATUS, s);
+      CHECK(s.settings_dirty == (SETTINGS_FLAGS_DIRTY | SETTINGS_FLAGS_REBOOT_REQUIRED), "motor protocol and a PID value changed: unsaved, restart asked for");
+      q->set_section(SEC_MOTORS, &m0, sizeof(m0)); q->set_section(SEC_PID, &p0, sizeof(p0)); q->run(0.1); q->latest(STR_STATUS, s);
+      CHECK(s.settings_dirty == 0 && q->app().core.cfg.pid.tpa_rate == p0.tpa_rate, "both set back as they were: nothing to save, no restart (flags %u)", s.settings_dirty); }
 }
 
 static void t_motor_test() {
@@ -797,7 +806,7 @@ static void t_beeper() {
 
       // ---- one condition switched off in the settings (live)
       S_beeper sb; r->get_section(SEC_BEEPER, &sb, sizeof(sb));
-      CHECK(sb.conditions == 0x1FFFFu && sb.type == BUZZER_TYPE_ACTIVE && sb.volume == 100 && sb.frequency == 2700, "default beeper settings");
+      CHECK(sb.conditions == 0x5FFFFu && sb.type == BUZZER_TYPE_ACTIVE && sb.volume == 100 && sb.frequency == 2700, "default beeper settings");
       sb.conditions &= ~(1u << BEEPER_COND_DISARMING); sb.conditions |= 1u << BEEPER_COND_USB; r->set_section(SEC_BEEPER, &sb, sizeof(sb));
       b.rc[4] = 2000; r->run(1.5); CHECK(r->tel().armed, "armed");
       b.rc[2] = 1300; r->run(0.3); t0 = millis(); b.rc[4] = 1000; b.rc[2] = 1000; r->run(1.0);
@@ -884,7 +893,7 @@ static void t_motor_beeper() {
       // ---- the stream tells the app what the motors are playing
       r.stream(STR_BATTERY, 20); r.request(MSG_HELLO);
       S_beeper sb; r.get_section(SEC_BEEPER, &sb, sizeof(sb));
-      CHECK(sb.motor_conditions == 0x19F8Bu && sb.dshot_beacon_tone == 1, "default motor conditions 0x%x, tone %u", (unsigned)sb.motor_conditions, sb.dshot_beacon_tone);
+      CHECK(sb.motor_conditions == 0x59F8Bu && sb.dshot_beacon_tone == 1, "default motor conditions 0x%x, tone %u", (unsigned)sb.motor_conditions, sb.dshot_beacon_tone);
       sb.dshot_beacon_tone = 3; r.set_section(SEC_BEEPER, &sb, sizeof(sb));
       uint32_t t0 = millis(); CHECK(r.command(CMD_BEEP, {beep::DISARMING}).err == ERR_OK, "BEEP works without a buzzer"); r.run(0.3);
       T_battery tb{}; r.latest(STR_BATTERY, tb);
@@ -1032,7 +1041,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.36.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.37.2" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -2874,10 +2883,73 @@ static void t_msp_configurator() {
       CHECK(!ask(ml2, mt2, msp::SET_PID, pid) && q->fw->settings.pid.p[0] == p0, "msp.writes off: SET_PID refused"); }
 }
 
+// ---- the waypoint mission (0.37): a plan in the settings, the real firmware flies it on the virtual board
+static int32_t m_lat(double n) { return (int32_t)lround((VirtualBoard::kLat0 + n / 111319.5) * 1e7); }
+static int32_t m_lon(double e) { return (int32_t)lround((VirtualBoard::kLon0 + e / (111319.5 * cos(VirtualBoard::kLat0 * M_PI / 180.0))) * 1e7); }
+static void m_set(S_mission& m, int i, uint8_t cmd, double n, double e, double alt, uint16_t p = 0, uint8_t arg = 0, bool pos = true) {
+    m.cmd[i] = cmd; m.arg[i] = arg; m.alt[i] = (int16_t)lround(alt * 10); m.lat[i] = pos ? m_lat(n) : 0; m.lon[i] = pos ? m_lon(e) : 0; m.p[i] = p; if (m.count < i + 1) m.count = (uint8_t)(i + 1);
+}
+static void t_mission_fw() {
+    printf("[mission] the firmware flies a delivery plan: take off, a point with the servo, land - wait - take off, RTL\n");
+    const uint8_t pa = 1;
+    auto pulse = [](uint8_t pin) { const StubPwm& q = g_stub_pwm[pin]; return q.freq ? (double)q.duty * 1e6 / (double)q.freq / 16384.0 : 0.0; };
+    auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) {
+        gps_compass(s, b);
+        s.pins.servo[0] = pa; s.servo.source[0] = SERVO_SOURCE_MISSION; s.servo.init_us[0] = 1200;
+        s.modes.mode[4] = MODE_MISSION; s.modes.aux[4] = 4; s.modes.lo[4] = 1700; s.modes.hi[4] = 2100;
+        S_mission& m = s.mission; m.count = 0;
+        m_set(m, 0, MISSION_CMD_TAKEOFF, 0, 0, 8, 0, 0, false); m_set(m, 1, MISSION_CMD_WAYPOINT, 25, 0, 8);
+        m_set(m, 2, MISSION_CMD_LOITER_TIME, 0, 0, 0, 2, 0, false); m_set(m, 3, MISSION_CMD_SERVO, 0, 0, 0, 1800, 1, false); m_set(m, 4, MISSION_CMD_LOITER_TIME, 0, 0, 0, 1, 0, false);
+        m_set(m, 5, MISSION_CMD_LAND, 25, 15, 0); m_set(m, 6, MISSION_CMD_DELAY, 0, 0, 0, 12, 0, false); m_set(m, 7, MISSION_CMD_TAKEOFF, 0, 0, 8, 0, 0, false);
+        m_set(m, 8, MISSION_CMD_WAYPOINT, 5, 15, 8); m_set(m, 9, MISSION_CMD_RTL, 0, 0, 0, 0, 0, false);
+    }, false);
+    VirtualBoard& b = r->board; T_nav n{};
+    r->run(6.0);
+    CHECK(fabs(pulse(pa) - 1200) < 2, "servo 1 on MISSION: its init_us (%.0f us) until the mission moves it", pulse(pa));
+    CHECK(r->command(CMD_MISSION, {1}).err == ERR_FAILED, "MISSION start over WBP while disarmed: FAILED");
+    b.rc[5] = 2000; r->run(0.3); b.rc[4] = 2000; r->run(0.7);
+    CHECK(r->tel().armed && b.plant.z < 0.05f && r->tel().mission_state == MISSION_STATE_IDLE, "armed by the pilot, the mission switch off: on the ground, IDLE");
+    b.rc[8] = 2000;
+    std::string order; int last = -1; bool servo_there = false, home_ok_wait = true, home_ok_after = true; double t_wait0 = -1, t_wait1 = -1, t_rearm = -1; float land_n = 0, land_e = 0; bool was_armed = true; uint32_t ms_wait1 = 0;
+    static const char* names[] = {"IDLE", "TAKEOFF", "WAYPOINT", "LOITER", "LANDING", "GROUND_WAIT", "ARMING", "RTL", "DONE", "REFUSED", "FAILED"};
+    double t = 0; bool streamed = false;
+    for (; t < 240.0; t += 0.05) {
+        r->run(0.05); const app::Telemetry& tl = r->tel(); const Plant& pl = b.plant;
+        if (tl.mission_state != last) { last = tl.mission_state; if (!order.empty()) order += " "; order += names[last < 11 ? last : 0]; }
+        if (!streamed && tl.mission_state == MISSION_STATE_WAYPOINT) { streamed = nav_now(*r, n); }
+        if (fabs(pulse(pa) - 1800) < 2 && hypotf(pl.pn - 25.0f, pl.pe) < 3.0f) servo_there = true;
+        const float true_home = hypotf(pl.pn, pl.pe);
+        if (tl.mission_state == MISSION_STATE_GROUND_WAIT) { if (t_wait0 < 0) { t_wait0 = t; land_n = pl.pn; land_e = pl.pe; } t_wait1 = t; ms_wait1 = millis(); if (fabsf(tl.home_dist_m - true_home) > 3.0f) home_ok_wait = false; }
+        if (!was_armed && tl.armed && t_rearm < 0) t_rearm = t;
+        if (t_rearm > 0 && t < t_rearm + 20.0 && fabsf(tl.home_dist_m - true_home) > 3.0f) home_ok_after = false;
+        was_armed = tl.armed;
+        if (tl.mission_state == MISSION_STATE_DONE && !tl.armed) break;
+    }
+    CHECK(order == "TAKEOFF WAYPOINT LOITER LANDING GROUND_WAIT TAKEOFF WAYPOINT RTL DONE" || order == "TAKEOFF WAYPOINT LOITER LANDING GROUND_WAIT ARMING TAKEOFF WAYPOINT RTL DONE", "the mission's states (telemetry): %s", order.c_str());
+    CHECK(streamed && n.mission_state == MISSION_STATE_WAYPOINT && n.mission_count == 10 && n.mission_index >= 1 && n.mission_dist > 0 && n.mission_left > 0, "nav stream on the first leg: command %u of %u, %.1f m to its point, %u m left in all", n.mission_index, n.mission_count, n.mission_dist * 0.1, n.mission_left);
+    CHECK(servo_there, "DO_SET_SERVO: servo 1 at 1800 us over the first point");
+    CHECK(t_wait0 > 0 && hypotf(land_n - 25.0f, land_e - 15.0f) < 2.5f && t_wait1 - t_wait0 > 11.0 && t_wait1 - t_wait0 < 13.5, "landed %.1f m from the delivery point, waited %.1f s with the motors off (12 asked)", hypotf(land_n - 25.0f, land_e - 15.0f), t_wait1 - t_wait0);
+    const std::vector<int> warn = buzz_runs(b, ms_wait1 - 9000, ms_wait1);
+    CHECK(warn.size() > 8 && runs_are(std::vector<int>(warn.begin() + 1, warn.end()), {80, 80, 80, 80}, 12), "the buzzer during the last 10 s of the wait: fast beeps (%s)", show(warn).c_str());
+    CHECK(home_ok_wait && home_ok_after, "home stayed where the craft was first armed: the GPS home distance matched the true one during the wait and after the second arming");
+    CHECK(!r->tel().armed && b.plant.z < 0.05f && hypotf(b.plant.pn, b.plant.pe) < 2.5f && t < 200.0, "RTL: home again (%.1f m from the take-off point), disarmed, %.0f s in all", hypotf(b.plant.pn, b.plant.pe), t);
+    b.rc[8] = 1000; b.rc[4] = 1000; r->run(0.5); b.rc[4] = 2000; r->run(0.7);
+    { const bool armed2 = r->tel().armed; const uint32_t blk = r->tel().blockers; const uint8_t err = r->command(CMD_MISSION, {1}).err;
+      CHECK(armed2 && err == ERR_OK, "armed again by the pilot: MISSION start over WBP accepted (armed %d, blockers 0x%x, reply %u)", armed2, (unsigned)blk, err); }
+    r->run(3.0); CHECK(r->tel().mission_state == MISSION_STATE_TAKEOFF && b.plant.z > 0.3f && fabs(pulse(pa) - 1800) < 2, "it takes off (state %u, %.2f m up; servo 1 keeps its last pulse: %.0f us)", r->tel().mission_state, b.plant.z, pulse(pa));
+    CHECK(r->command(CMD_MISSION, {0}).err == ERR_OK, "MISSION stop"); r->run(0.3);
+    CHECK(r->tel().mission_state == MISSION_STATE_IDLE && r->tel().armed, "stopped: the pilot's modes fly again");
+    // gps.set_home_once: home is kept while disarmed - the start is still refused until the pilot arms
+    { auto q = nav_rig([](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.gps.set_home_once = 1; S_mission& m = s.mission; m.count = 0; m_set(m, 0, MISSION_CMD_TAKEOFF, 0, 0, 5, 0, 0, false); m_set(m, 1, MISSION_CMD_WAYPOINT, 10, 0, 5); }, false);
+      VirtualBoard& qb = q->board; q->run(6.0); qb.rc[5] = 2000; q->run(0.3); qb.rc[4] = 2000; q->run(0.7); const bool armed = q->tel().armed; qb.rc[4] = 1000; q->run(0.7);
+      CHECK(armed && !q->tel().armed && q->app().gnss.home().has_home() && q->command(CMD_MISSION, {1}).err == ERR_FAILED, "home kept from an earlier arming (set_home_once), disarmed: MISSION start FAILED"); }
+}
+
 int main() {
     if (const char* only = getenv("WB_ONLY")) {            // one group alone (while working on it): WB_ONLY=nav ./build/test_fw
         if (!strcmp(only, "nav")) { t_nav_flow(); t_nav_mounting(); t_nav_uarts(); }
         if (!strcmp(only, "gps")) t_nav_gps();
+        if (!strcmp(only, "mission")) t_mission_fw();
         if (!strcmp(only, "navlog")) t_nav_log();
         if (!strcmp(only, "escwait")) t_esc_boot_wait();
         if (!strcmp(only, "servo")) t_servo();
@@ -2928,6 +3000,7 @@ int main() {
     t_battery();
     t_beeper();
     t_motor_beeper();
+    t_mission_fw();
     t_blackbox(); t_log_stage_times();
     t_blackbox_card();
     t_pins_and_load();

@@ -441,15 +441,20 @@ function escToolBlock() {
     h('div', { class: 'btn-row' }, btn), msg);
 }
 
-// Servos: each follows one RC channel. Live settings; the pins are on the Pins tab.
+// Servos: each follows one RC channel, or the mission (DO_SET_SERVO). Live settings; the pins are on the Pins tab.
 function servos() {
   const live = (i) => readout('motors', (m) => (m.servo && m.servo[i] ? `${m.servo[i]} µs` : tr('tắt')));
   return block('Servo',
     h('p', { class: 'help' }, tr('Mỗi servo đi theo một kênh RC: kênh ở 1000 µs cho xung "nhỏ nhất", ở 2000 µs cho xung "lớn nhất". Có tác dụng ngay; chân servo gán ở tab Chân và cổng (cần lưu và khởi động lại). Nguồn servo lấy từ BEC 5 / 6 V riêng, nối chung GND.')),
+    h('p', { class: 'help' }, tr('Kênh "Nhiệm vụ": chỉ nhiệm vụ điều khiển servo này (bước servo ở tab Nhiệm vụ). Góc ở xung nhỏ nhất / lớn nhất cho app đổi số độ ra xung; trước khi nhiệm vụ đụng tới, servo đứng ở "Xung ban đầu".')),
+    h('p', { class: 'help' }, tr('Kênh "Nhiệm vụ": chỉ nhiệm vụ điều khiển servo này (bước servo ở tab Nhiệm vụ). Góc ở xung nhỏ nhất / lớn nhất cho app đổi số độ ra xung; trước khi nhiệm vụ đụng tới, servo đứng ở "Xung ban đầu".')),
     h('table', { class: 'grid', id: 'servo-table' },
-      h('tr', {}, h('th', {}, ''), h('th', {}, tr('Kênh RC')), h('th', {}, tr('Nhỏ nhất (µs)')), h('th', {}, tr('Lớn nhất (µs)')), h('th', {}, tr('Đảo chiều')), h('th', {}, tr('Đang phát'))),
+      h('tr', {}, h('th', {}, ''), h('th', {}, tr('Kênh RC')), h('th', {}, tr('Nhỏ nhất (µs)')), h('th', {}, tr('Lớn nhất (µs)')), h('th', {}, tr('Đảo chiều')),
+        h('th', {}, tr('Góc ở xung nhỏ nhất (°)')), h('th', {}, tr('Góc ở xung lớn nhất (°)')), h('th', {}, tr('Xung ban đầu (µs)')), h('th', {}, tr('Đang phát'))),
       [0, 1, 2, 3].map((i) => h('tr', {}, h('td', {}, `Servo ${i + 1}`), h('td', {}, control('servo', 'source', { index: i })),
         h('td', {}, control('servo', 'min_us', { index: i, width: '80px' })), h('td', {}, control('servo', 'max_us', { index: i, width: '80px' })),
-        h('td', {}, control('servo', 'reverse', { index: i })), h('td', { id: `servo-us-${i}` }, live(i))))),
+        h('td', {}, control('servo', 'reverse', { index: i })),
+        h('td', {}, control('servo', 'angle_min', { index: i, width: '70px' })), h('td', {}, control('servo', 'angle_max', { index: i, width: '70px' })), h('td', {}, control('servo', 'init_us', { index: i, width: '80px' })),
+        h('td', { id: `servo-us-${i}` }, live(i))))),
     fields('servo', ['rate_hz']));
 }

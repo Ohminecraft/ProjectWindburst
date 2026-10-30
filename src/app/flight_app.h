@@ -527,7 +527,9 @@ public:
         slow_seen_ = true; slow_last_ms_ = now_ms;
         // ---- A. device I/O, no lock: nothing here is shared with the flight task except the three values copied first
         bool armed, esc_a_ok; float up_cos, esc_v, esc_a, gyro_rate;
-        { app::Guard g(*sync_); armed = last_out_.armed; up_cos = core.ahrs().up_cos(); esc_v = motors.manager().esc_voltage(now_ms); esc_a_ok = motors.manager().esc_current(now_ms, esc_a);
+        // (a mission waiting on the ground with its motors off counts as armed here: the GPS home point and the barometer's ground
+        // reference stay what they were at the first arming - the next take-off flies to the plan's points from the same origin)
+        { app::Guard g(*sync_); armed = last_out_.armed || last_out_.mission_holds_home; up_cos = core.ahrs().up_cos(); esc_v = motors.manager().esc_voltage(now_ms); esc_a_ok = motors.manager().esc_current(now_ms, esc_a);
           const float* gw = last_out_.gyro_f_dps; gyro_rate = sqrtf(gw[0] * gw[0] + gw[1] * gw[1] + gw[2] * gw[2]); }
 
         bool rc_new = false;
@@ -586,7 +588,11 @@ public:
         {
             app::Guard g(*sync_);
             const bool now_armed = last_out_.armed;
-            if (now_armed && !was_armed_) { core.reset_position(); ekf_rehome_ = true; }   // (the GPS home point is set by gnss.update() when it sees the same edge)
+            if (now_armed && !was_armed_ && !last_out_.mission_holds_home) { core.reset_position(); ekf_rehome_ = true; }   // (the GPS home point is set by gnss.update() when it sees the same edge; not when the mission arms again)
+            if (now_armed && !was_armed_) mission_dirty_ = true;                      // (a new home: the plan's points move with it)
+            // the mission's plan in metres from home, whenever the plan or home changed and it is not being flown
+            if (mission_dirty_ && gnss.home().has_home() && !core.mission().running()) { fc::MissionPlan mp; wbp::mission_plan_from(s_->mission, gnss.home().home(), mp); core.set_mission(mp); mission_dirty_ = false; }
+            for (int i = 0; i < servo::kServos; i++) servo_mission_[i] = last_out_.mission_servo_us[i];
             was_armed_ = now_armed;
             if (ekf_mode_) {
                 if (ekf_acc_.dt >= 0.004f) { ekf_in_ = ekf_acc_; ekf_acc_ = EkfDelta(); ekf_due_ = true; ekf_ahrs_yaw_ = core.ahrs().euler_aero().yaw; ekf_armed_ = now_armed; ekf_gyro_ok_ = gyro_calibrated(); }
@@ -669,7 +675,7 @@ public:
             led_strip_.show(led_rgb_, led_n_);
 #endif
         }
-        servos.update(servo_rc_, servo_have_rc_);              // (outside the lock: it writes the PWM peripheral; the channels were copied under it)
+        servos.update(servo_rc_, servo_have_rc_, servo_mission_);      // (outside the lock: it writes the PWM peripheral; the channels were copied under it)
         if (tlm_n_) { rc.sendTelemetry(tlm_buf_, tlm_n_); tlm_n_ = 0; }                  // (outside the lock: a UART write)
         if (mav_on_) mav_send(now_ms);                                                     // (outside the lock: the state was copied under it)
         if (osd_uart_) osd_send(now_ms);
@@ -770,9 +776,14 @@ public:
             if (!status.motors) return wbp::ERR_NO_SENSOR;
             return mm.enable_extended_telemetry(r.args[0] != 0) ? wbp::ERR_OK : wbp::ERR_NOT_SUPPORTED;
 
+        case wbp::CMD_MISSION:                                 // the app's start / stop (a MISSION switch does the same)
+            if (r.args[0] > 1) return wbp::ERR_BAD_ARG;
+            if (r.args[0] == 1 && (!last_out_.armed || s_->mission.count == 0 || !gnss.home().has_home())) return wbp::ERR_FAILED;   // (the pilot arms first)
+            core.mission_command(r.args[0] == 1);
+            return wbp::ERR_OK;
         case wbp::CMD_SET_HOME:
             if (!status.gps || !gnss.usable()) return wbp::ERR_NO_SENSOR;
-            gnss.home().reset(gnss.solution()); core.reset_position();
+            gnss.home().reset(gnss.solution()); core.reset_position(); mission_dirty_ = true;
             return gnss.home().has_home() ? wbp::ERR_OK : wbp::ERR_FAILED;
 
         case wbp::CMD_BEEP:                                    // the app's "try it" button; 255 = silence
@@ -1026,9 +1037,9 @@ private:
         land_on_critical_ = s.battery.land_on_critical != 0; capacity_mah_ = s.battery.capacity_mah;
     }
     void apply_servo() {                                 // (copied out: the settings struct is packed, a pointer into it may be unaligned - an exception on the ESP32)
-        const wbp::S_servo& v = s_->servo; uint8_t src[servo::kServos], rev[servo::kServos]; uint16_t lo[servo::kServos], hi[servo::kServos];
-        for (int i = 0; i < servo::kServos; i++) { src[i] = v.source[i]; lo[i] = v.min_us[i]; hi[i] = v.max_us[i]; rev[i] = v.reverse[i]; }
-        servos.configure(src, lo, hi, rev);
+        const wbp::S_servo& v = s_->servo; uint8_t src[servo::kServos], rev[servo::kServos]; uint16_t lo[servo::kServos], hi[servo::kServos], init[servo::kServos];
+        for (int i = 0; i < servo::kServos; i++) { src[i] = v.source[i]; lo[i] = v.min_us[i]; hi[i] = v.max_us[i]; rev[i] = v.reverse[i]; init[i] = v.init_us[i]; }
+        servos.configure(src, lo, hi, rev, init);
     }
     void apply_beeper() {
         wbp::Settings& s = *s_;
@@ -1048,6 +1059,7 @@ private:
         case wbp::SEC_BEEPER: apply_beeper(); return true;
         case wbp::SEC_BATTERY: apply_battery(); return true;
         case wbp::SEC_SERVO: apply_servo(); return true;
+        case wbp::SEC_MISSION: wbp::apply_nav(s, core.cfg); core.apply_nav(); mission_dirty_ = true; return true;      // (rc_lost; the plan at the next pass)
         case wbp::SEC_ALTHOLD: wbp::apply_althold(s, core.cfg.alt); core.apply_althold(); return true;
         case wbp::SEC_BLACKBOX: return true;                                      // used by bb::Service (link task), nothing to do in the flight loop
         case wbp::SEC_MOTORS: return apply_motor_order();
@@ -1091,7 +1103,7 @@ private:
         bi.gps_enabled = status.gps; bi.gps_ready = gnss.usable();
         bi.batt_state = (uint8_t)battery.monitor.state();
         bi.beeper_switch = ((last_out_.modes >> fc::M_BEEPER) & 1u) != 0; bi.throttle_low = last_out_.throttle_low; bi.arm_refused = last_out_.arm_refused;
-        bi.app_active = link.link_active(now_ms);
+        bi.app_active = link.link_active(now_ms); bi.mission_warn = last_out_.mission_warn;
         // the motors can beep: DShot, outputs running, and the app is not turning a motor with the test slider
         motor::MotorOutputManager& mm = motors.manager();
         const bool motors_ok = status.motor_beep && !mm.testing(micros());
@@ -1167,6 +1179,7 @@ private:
         m.armed = t.armed; m.failsafe = t.failsafe != 0; m.calibrating = busy_other_ || gyro_cal_state() == CalState::RUNNING;
         m.angle = (t.modes >> fc::M_ANGLE) & 1u; m.stabilize = (t.modes >> fc::M_STABILIZE) & 1u; m.althold = (t.modes >> fc::M_ALTHOLD) & 1u;
         m.poshold = (t.modes >> fc::M_POSHOLD) & 1u; m.rescue = (t.modes >> fc::M_RESCUE) & 1u;
+        m.mission = t.mission_state >= wbp::MISSION_STATE_TAKEOFF && t.mission_state <= wbp::MISSION_STATE_ARMING; m.rescue = m.rescue || (t.nav_flags & wbp::NAV_FLAGS_RESCUE);      // (the mission's RTL, or the failsafe's)
         // pilot convention (pitch nose up negative) -> MAVLink (FRD: pitch nose up positive); yaw -180 .. 180
         m.roll = t.roll * d2r; m.pitch = -t.pitch * d2r; m.yaw = t.yaw * d2r;
         m.p = t.gyro_f[0] * d2r; m.q = -t.gyro_f[1] * d2r; m.r = t.gyro_f[2] * d2r;
@@ -1221,8 +1234,15 @@ private:
                            : t.rescue_phase == (uint8_t)fc::RescuePhase::DESCENT || t.rescue_phase == (uint8_t)fc::RescuePhase::LOITER ? osd::RSTAGE_HOME : osd::RSTAGE_WAY;
             o.rescue_left_m = t.rescue_left;
         }
+        // the mission: flying it (AUTO), or waiting on the ground at a delivery stop
+        { const uint8_t ms = t.mission_state;
+          if (ms == wbp::MISSION_STATE_GROUND_WAIT || ms == wbp::MISSION_STATE_ARMING) o.mission = osd::MISS_WAIT;
+          else if (ms >= wbp::MISSION_STATE_TAKEOFF && ms <= wbp::MISSION_STATE_LANDING) o.mission = osd::MISS_FLY;
+          o.mission_index = t.mission_index; o.mission_count = t.mission_count; o.mission_wait = t.mission_wait; o.mission_left_m = t.mission_left;
+          o.mission_warn = ms == wbp::MISSION_STATE_ARMING || (ms == wbp::MISSION_STATE_GROUND_WAIT && t.mission_wait <= 10); }
         const char* w = o.failsafe ? "FAILSAFE" : o.batt_level == 2 ? "LAND NOW" : o.batt_level == 1 ? "LOW BATTERY" : !t.rc_link ? "RXLOSS" : nullptr;
         if (o.rescue) osd::rescue_text(o, o.warning, sizeof(o.warning));
+        else if (o.mission) osd::mission_text(o, o.warning, sizeof(o.warning));
         else if (w) snprintf(o.warning, sizeof(o.warning), "%s", w);
         else if (!t.armed && t.blockers) {
             for (int b = 0; b < 32; b++) if ((t.blockers >> b) & 1u) {
@@ -1358,7 +1378,9 @@ private:
           tel_.ph_state[0] = o.ph_state[0]; tel_.ph_state[1] = o.ph_state[1]; tel_.nav_roll = o.nav_lean ? o.nav_roll : 0.0f; tel_.nav_pitch = o.nav_lean ? o.nav_pitch : 0.0f;
           tel_.nav_target_n = o.nav_target_n; tel_.nav_target_e = o.nav_target_e; tel_.nav_wind_n = o.nav_wind_n; tel_.nav_wind_e = o.nav_wind_e; tel_.nav_home_dist = o.nav_home_dist;
           tel_.rescue_phase = o.rescue_phase; tel_.rescue_fail = o.rescue_fail; tel_.rescue_return_alt = core.rescue().return_height();
-          tel_.rescue_mode = o.rescue_mode; tel_.rescue_left = o.rescue_left; }
+          tel_.rescue_mode = o.rescue_mode; tel_.rescue_left = o.rescue_left;
+          tel_.mission_state = o.mission_state; tel_.mission_index = o.mission_index; tel_.mission_count = o.mission_count; tel_.mission_wait = o.mission_wait;
+          tel_.mission_dist = o.mission_dist; tel_.mission_left = o.mission_left; }
         for (int i = 0; i < 16; i++) tel_.rc[i] = rc_[i];
         tel_.rc_link = rc_link_; tel_.rssi = rc.linkQuality(); tel_.rc_rate = rc.rateHz();
         // ---- live state of the filters and the PID helpers (the app's tuning stream)
@@ -1533,6 +1555,7 @@ private:
     WB_FAST static uint16_t peak16(uint16_t was, uint32_t us) { return us > 65535u ? (uint16_t)65535 : us > was ? (uint16_t)us : was; }
     bool loop_slow_ = false, busy_other_ = false, busy_seen_ = false; uint8_t slow_seconds_ = 0, batt_state_ = 0, flow_quality_ = 0; uint32_t flow_tel_ms_ = 0;
     uint16_t servo_rc_[16] = {}; bool servo_have_rc_ = false;
+    uint16_t servo_mission_[servo::kServos] = {}; bool mission_dirty_ = true;      // what the mission set the servos to; the plan wants converting (settings / home changed)
     fc::Health health_; motor::HwStats hw_mark_; uint32_t crc_mark_ = 0; uint32_t rc_mark_[3] = {};
     bool rx_tlm_on_ = true;                               // receiver.telemetry: CRSF telemetry back through the receiver
     wbp::S_motors motors_run_ = {};                       // the motors section the outputs run with (apply_motor_order)

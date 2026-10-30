@@ -135,7 +135,7 @@ def tune_page(browser, tmp_path):
 def test_pid_tuning_panel(tune_page):
     pg = tune_page
     pg.click("#log-tune")
-    pg.wait_for_function("() => document.getElementById('tune-out').dataset.done === '1'", timeout=30000)
+    pg.wait_for_function("() => document.getElementById('tune-out').dataset.done === '1'", timeout=30000)      # (about 2 s; it once timed out because the page drew the tab twice at start-up - main.js)
     assert pg.locator(".tune-axis").count() == 3 and pg.locator("canvas.tune-step").count() == 3
     rows = pg.locator("#tune-suggestions tbody tr")
     params = [rows.nth(i).get_attribute("data-param") for i in range(rows.count())]

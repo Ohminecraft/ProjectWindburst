@@ -210,7 +210,7 @@ export function logPlot({ source }) {
   {
     let dragging = false;
     const at = (e) => seekX(e.clientX - ovCv.getBoundingClientRect().left, ovCv.clientWidth, span);
-    ovCv.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; dragging = true; ovCv.setPointerCapture(e.pointerId); const t = at(e); seek(t); if (!view) { view = windowAround(t, defaultWidth(), span); request(0); } });
+    ovCv.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; dragging = true; ovCv.setPointerCapture(e.pointerId); const t = at(e); seek(t); if (!view) { view = windowAround(t, defaultWidth(), span); paint(); request(0); } });
     ovCv.addEventListener('pointermove', (e) => { if (dragging) seek(at(e)); });
     const done = () => { dragging = false; };
     ovCv.addEventListener('pointerup', done); ovCv.addEventListener('pointercancel', done);

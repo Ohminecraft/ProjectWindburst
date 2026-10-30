@@ -1,11 +1,24 @@
 
 Cần test:
+- app tab Nhiệm vụ, tên đường trên ảnh vệ tinh: mở tab (có mạng) -> ảnh vệ tinh có tên đường / phường / địa danh như Google; nút "Tên đường" tắt / bật; chọn Đường phố thì nút ẩn; rút mạng, xem lại chỗ đã xem -> tên vẫn còn (lưu trong ~/Windburst/tiles)
+- app tab Nhiệm vụ: bản đồ vệ tinh đã tải, bấm vài nút (Vị trí của tôi, Nạp vào drone...) cho hiện thông báo -> thông báo ở góc phải dưới nằm TRÊN bản đồ, đọc được chữ
+- app Windburst.exe: chạy build/wb_sim, chọn cổng socket://127.0.0.1:5760 -> kết nối được (trước đây: "protocol 'socket' not known"); cũng là đường WiFi của máy bay
+- 0.37.2 LED: board trần S3 DevKit, tab Pins chọn LED = GPIO48 (bản v1.1 của DevKitC-1 là GPIO38), tab LED số LED = 1 -> Lưu và khởi động lại; boot report phải có "led: ... 1 LEDs on GPIO48" (không còn FAILED) và LED trên mạch sáng, đổi chế độ bay thì đổi màu
+- 0.37.1: đổi một cài đặt (vd. TPA ở tab Tinh chỉnh, giao thức ở tab Motor) -> nút Lưu hiện; đổi lại đúng giá trị cũ -> nút Lưu phải ẩn (trước đây vẫn hiện tới lần Lưu sau); rồi Lưu thật một thay đổi, rút nguồn, cắm lại: nút Lưu không hiện, giá trị còn
+- 0.37.0 app: nút "Vị trí của tôi" trong cửa sổ Windburst (Windows hỏi quyền vị trí lần đầu, bản đồ nhảy tới laptop; thử cả khi tắt vị trí: phải hiện hướng dẫn + nút mở Cài đặt), nút "Xoá hết điểm", đổi tab không còn loé thanh cuộn
+- 0.37.0 nhiệm vụ bay (waypoint) + tab Nhiệm vụ: vẽ kế hoạch trên bản đồ, Nạp vào drone, làm theo 4 bước cuối docs/MISSION.md - công tắc MISSION trước, TAKEOFF + 1 điểm, rồi servo, rồi hạ cánh - chờ - tự cất cánh (thử gạt ARM về OFF lúc chờ), rồi RTL; bật nhóm blackbox "Dữ liệu dẫn đường chi tiết" và gửi log
 - 0.36.0 rescue mới (ArduPilot / PX4): RTL, SmartRTL, LAND bằng công tắc trước rồi mới failsafe; xem OSD báo "RTL ..M" giảm dần; làm theo bước 6 cuối docs/NAV_ROADMAP.md, bật nhóm blackbox "Dữ liệu dẫn đường chi tiết" và gửi log
 - 0.35.1: cắm pin -> nghe ESC phát nhạc khởi động xong mới tới hiệu chỉnh gyro (boot report: "gyro: calibration started ... ms after the motor outputs"); test motor kéo nhanh 0 <-> 100 % xem motor theo kịp, kéo về 0 thì dừng ngay; animation chuyển tab ở từng theme
 - ALT HOLD / POS HOLD viết lại (0.35.0): làm theo 6 bước cuối docs/NAV_ROADMAP.md (cầm tay, ALT HOLD, trần độ cao, POS HOLD, hàng rào bán kính, GPS Rescue), bật nhóm blackbox "Dữ liệu dẫn đường chi tiết" và gửi log từng bước
 - OSD 0.33: bật vài mục mới (thanh la bàn, thanh bên, vĩ/kinh độ, thanh pin cần battery.capacity_mah) xem đúng chỗ trong kính; bay xong disarm xem bảng thống kê
 
 Hoàn Thành:
+- bản đồ giống Google: lớp tên đường + địa danh của Esri chồng lên ảnh vệ tinh, nút "Tên đường" (không dùng tile Google như Betaflight: trái điều khoản) (completed nhưng chưa xem trên exe)
+- thông báo (toast) bị bản đồ tab Nhiệm vụ đè lên: .mission-wrap thêm isolation: isolate (completed, exe đã build lại)
+- Windburst.exe không mở được socket:// (simulator, WiFi): PyInstaller không đóng gói bộ xử lý URL của pyserial - build_exe.py thêm --collect-submodules serial.urlhandler; Makefile thêm -D_USE_MATH_DEFINES trên Windows để make sim / make test chạy với cờ mặc định (completed, exe đã build lại)
+- lỗi LED trên ESP32: dải LED không bao giờ khởi động (SPIClass::begin của core 3.x đòi chân SCK) - driver giờ gọi thẳng SPI của core, chỉ gắn MOSI (completed nhưng chưa thử trên mạch, 0.37.2)
+- lỗi nút Lưu: đổi cài đặt rồi đổi lại như cũ vẫn hiện Lưu / Lưu và khởi động lại - firmware giờ so từng section với bản trong flash và bản lúc khởi động (completed nhưng chưa thử trên mạch, 0.37.1)
+- nhiệm vụ bay kiểu ArduPilot AUTO, phần 1 firmware: kế hoạch 32 lệnh (cất cánh, bay tới, đứng yên, servo, hạ cánh - chờ - tự cất cánh, về nhà), công tắc MISSION / lệnh app, còi 10 s trước khi tự cất cánh, mất sóng thì bay tiếp (completed nhưng chưa thử trên mạch, 0.37.0; kèm tab Nhiệm vụ có bản đồ trong app; ELRS MAVLink là phần 3)
 - rescue viết lại theo ArduPilot / PX4: RTL (hình nón PX4, bay theo đường có giới hạn gia tốc, hạ xuống độ cao chờ, chờ rồi hạ cánh), SmartRTL (bay về theo đường cũ), LAND (hạ tại chỗ giữ vị trí); OSD hiện số mét còn lại (completed nhưng chưa thử trên mạch, 0.36.0)
 - app: animation chuyển tab theo theme, công tắc, giá trị "giải mã" ASCII khi hiện lần đầu (completed nhưng chưa thử trên máy, 0.35.1)
 - app: hộp kết nối ở giữa (nền mờ, các bước tìm thiết bị / đã kết nối / đọc cấu hình, thanh timeout) (completed nhưng chưa thử với mạch thật, 0.35.1)

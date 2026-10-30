@@ -66,7 +66,7 @@ class DeviceInfo:
 
 
 class WbClient:
-    def __init__(self, port, baud=230400, schema=None, timeout=1.0, check_schema=True):
+    def __init__(self, port, baud=921600, schema=None, timeout=1.0, check_schema=True):
         self.port_name = port
         self.baud = baud
         self.schema = schema or Schema()

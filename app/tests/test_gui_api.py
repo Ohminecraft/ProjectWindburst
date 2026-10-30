@@ -109,6 +109,23 @@ def test_not_connected_is_an_answer_not_a_crash(gui):
     assert gui.raw("POST", "/api/connect", {"port": "socket://127.0.0.1:1", "baud": 50})[1]["error"] == "BAD_REQUEST"
 
 
+def test_windows_location_settings(gui, monkeypatch):
+    """0.37 Mission tab, "my position": when Windows keeps the computer's position to itself, the page has the server open Windows'
+    own page of the location permission (a page cannot open ms-settings: without a question of the browser)."""
+    import os
+    opened = []
+    monkeypatch.setattr(os, "startfile", opened.append, raising=False)
+    assert gui.post("/api/location-settings") == {"opened": True} and opened == ["ms-settings:privacy-location"]
+
+    def broken(_):
+        raise OSError("no such page")
+    monkeypatch.setattr(os, "startfile", broken)
+    assert gui.post("/api/location-settings") == {"opened": False}
+    monkeypatch.delattr(os, "startfile")
+    assert gui.post("/api/location-settings") == {"opened": False}, "not Windows"
+    assert gui.raw("POST", "/api/location-settings", {}, token=False)[0] == 403
+
+
 def test_connect_settings_save_reboot(linked, sim):
     gui = linked
     st = gui.get("/api/state")

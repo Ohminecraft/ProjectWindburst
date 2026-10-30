@@ -11,6 +11,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 SIM = os.path.join(ROOT, "build", "wb_sim" + (".exe" if os.name == "nt" else ""))
 sys.path.insert(0, os.path.dirname(HERE))
+os.environ["WBCLIENT_TILES_OFFLINE"] = "1"                  # the Mission tab's map: never the network in a test (wbclient/maptiles.py)
 
 
 def _free_port_pair():

@@ -1103,8 +1103,101 @@ static void t_switch_modes() {
         CHECK(sw_off == 0.0f && sw_on > 5.0f, "ANTI_GRAVITY switch: off = none although the setting is on, on = boost although it is off (%.1f)", sw_on); }
 }
 
+// ---- the waypoint mission (nav/mission.h, 0.37): a delivery flight
+static MissionItem m_item(MissionCmd c, float n = 0, float e = 0, float alt = 0, uint16_t p = 0, uint8_t arg = 0, bool pos = true, bool has_alt = true) {
+    MissionItem i; i.cmd = c; i.n = n; i.e = e; i.has_pos = pos; i.alt_m = alt; i.has_alt = has_alt; i.p = p; i.arg = arg; return i;
+}
+static void m_add(MissionPlan& pl, const MissionItem& i) { pl.item[pl.count++] = i; }
+static const char* m_state_name(int s) { static const char* n[] = {"IDLE", "TAKEOFF", "WAYPOINT", "LOITER", "LANDING", "GROUND_WAIT", "ARMING", "RTL", "DONE", "REFUSED", "FAILED"}; return s >= 0 && s < 11 ? n[s] : "?"; }
+struct MissionWatch {
+    std::string order; int last = -1; float t = 0, worst_tilt = 0, warn_from = -1, warn_to = -1, wait_from = -1, wait_to = -1, rearm_t = -1, land_n = 0, land_e = 0;
+    bool servo_at_point = false; int disarms = 0; bool was_armed = true;
+    void run(Rig& r, Pilot& p, float timeout, int stop_state = -1) {
+        for (float e = 0; e < timeout; e += 0.05f) {
+            r.run(0.05f, p); t += 0.05f;
+            const int st = r.out.mission_state;
+            if (st != last) { last = st; order += m_state_name(st); order += ' '; }
+            if (st == (int)MissionState::GROUND_WAIT) { if (wait_from < 0) { wait_from = t; land_n = r.pl.pn; land_e = r.pl.pe; } wait_to = t; }
+            if (r.out.mission_warn) { if (warn_from < 0) warn_from = t; warn_to = t; }
+            if (r.out.mission_servo_us[0] == 1900 && !servo_at_point && hypotf(r.pl.pn - 40.0f, r.pl.pe) < 3.0f) servo_at_point = true;
+            if (was_armed && !r.out.armed) disarms++;
+            if (!was_armed && r.out.armed && rearm_t < 0) rearm_t = t;
+            was_armed = r.out.armed;
+            worst_tilt = fmaxf(worst_tilt, fmaxf(fabsf(r.pl.right_down_deg()), fabsf(r.pl.nose_down_deg())));
+            if (stop_state >= 0 && st == stop_state) return;
+        }
+    }
+};
+static void t_mission() {
+    printf("[mission] a delivery flight in the closed loop: take off, waypoints, servo, land - wait - take off, RTL\n");
+    auto rig = [](Rig& r) { r.pl.make_five_inch(); r.pl.ground_holds = true; r.ngps = true; r.gps_wander = 0.3f; r.h.gps_ok = true; r.baro = true; r.h.baro_ok = true; r.core.rc.modes.add(M_MISSION, 7, 1300, 1700); };      // (landing gear: it waits on the ground with the motors off)
+    auto ready = [](Rig& r, Pilot& p) { p = Pilot(); p.mode = 1; r.run(1.0f, p); p.arm = true; r.run(0.5f, p); };     // sensors settle, the pilot arms (throttle down)
+    // ---- the whole flight
+    { Rig r(0, true); rig(r); MissionPlan pl;
+      m_add(pl, m_item(MissionCmd::TAKEOFF, 0, 0, 10, 0, 0, false)); m_add(pl, m_item(MissionCmd::WAYPOINT, 40, 0, 10));
+      m_add(pl, m_item(MissionCmd::LOITER_TIME, 0, 0, 0, 3, 0, false, false)); m_add(pl, m_item(MissionCmd::SERVO, 0, 0, 0, 1900, 1, false, false)); m_add(pl, m_item(MissionCmd::LOITER_TIME, 0, 0, 0, 1, 0, false, false));
+      m_add(pl, m_item(MissionCmd::LAND, 40, 30, 0, 0, 0, true, false)); m_add(pl, m_item(MissionCmd::DELAY, 0, 0, 0, 15, 0, false, false)); m_add(pl, m_item(MissionCmd::TAKEOFF, 0, 0, 12, 0, 0, false));
+      m_add(pl, m_item(MissionCmd::WAYPOINT, 10, 30, 12)); m_add(pl, m_item(MissionCmd::RTL, 0, 0, 0, 0, 0, false, false));
+      r.core.set_mission(pl); Pilot p; ready(r, p);
+      CHECK(r.out.armed && r.out.mission_state == (int)MissionState::IDLE && r.pl.z == 0.0f, "armed by the pilot, the mission switch still off: nothing happens");
+      p.aux7 = 1500; MissionWatch w; w.run(r, p, 300.0f, (int)MissionState::DONE); w.run(r, p, 3.0f);
+      CHECK(w.order == "TAKEOFF WAYPOINT LOITER LANDING GROUND_WAIT TAKEOFF WAYPOINT RTL DONE " || w.order == "TAKEOFF WAYPOINT LOITER LANDING GROUND_WAIT ARMING TAKEOFF WAYPOINT RTL DONE ",
+            "the states (ArduCopter AUTO + the delivery stop; ARMING lasts one cycle): %s", w.order.c_str());
+      CHECK(w.servo_at_point, "servo 1 went to 1900 us at the first point");
+      CHECK(hypotf(w.land_n - 40.0f, w.land_e - 30.0f) < 2.5f && w.disarms >= 1, "landed %.1f m from the delivery point, motors off there", hypotf(w.land_n - 40.0f, w.land_e - 30.0f));
+      CHECK(w.wait_to - w.wait_from > 14.0f && w.wait_to - w.wait_from < 16.5f && w.rearm_t > w.wait_to - 0.2f, "waited %.1f s on the ground (15 asked), then armed again by itself", w.wait_to - w.wait_from);
+      CHECK(w.warn_from > 0 && w.rearm_t - w.warn_from > 9.5f && w.rearm_t - w.warn_from < 11.0f, "the warning sounded for the last %.1f s before the motors started", w.rearm_t - w.warn_from);
+      CHECK(!r.out.armed && r.pl.z < 0.05f && hypotf(r.pl.pn, r.pl.pe) < 3.0f, "home again: %.1f m from where it was armed first (the second arming did not move home), disarmed", hypotf(r.pl.pn, r.pl.pe));
+      CHECK(w.worst_tilt < 35.0f && w.t < 260.0f, "never leaning more than %.0f deg, %.0f s in all", w.worst_tilt, w.t); }
+    // ---- the link is lost on the way: the mission flies on (ArduPilot FS_OPTIONS continue in AUTO)
+    { Rig r(0, true); rig(r); MissionPlan pl; m_add(pl, m_item(MissionCmd::TAKEOFF, 0, 0, 8, 0, 0, false)); m_add(pl, m_item(MissionCmd::WAYPOINT, 50, 0, 8)); m_add(pl, m_item(MissionCmd::WAYPOINT, 50, 20, 8));
+      r.core.set_mission(pl); Pilot p; ready(r, p); p.aux7 = 1500; MissionWatch w; w.run(r, p, 12.0f);
+      // (the receiver's failsafe values: the switches off; the pilot's yaw stick was held)
+      const bool on_leg = r.out.mission_state == (int)MissionState::WAYPOINT && r.pl.pn > 5.0f; p.link = false; p.aux7 = 1000; p.yaw = 0.6f; w.run(r, p, 60.0f, (int)MissionState::DONE); w.run(r, p, 3.0f);
+      CHECK(on_leg && r.out.mission_state == (int)MissionState::DONE && nav_dist(r, 50, 20) < 2.5f && r.out.failsafe == FsStage::NONE && r.out.armed && fabsf(r.pl.gyro_dps().z) < 15.0f,
+            "link lost on the first leg (the receiver says the switches are off): no failsafe, it flew on to the last point and holds there (%.1f m off), the last yaw stick ignored (%.0f deg/s)", nav_dist(r, 50, 20), r.pl.gyro_dps().z); }
+    { Rig r(0, true); rig(r); r.core.cfg.fs.mission_rc_continue = false; MissionPlan pl; m_add(pl, m_item(MissionCmd::TAKEOFF, 0, 0, 8, 0, 0, false)); m_add(pl, m_item(MissionCmd::WAYPOINT, 50, 0, 8));
+      r.core.set_mission(pl); Pilot p; ready(r, p); p.aux7 = 1500; r.run(12.0f, p); p.link = false; r.run(2.0f, p);
+      CHECK(r.out.failsafe != FsStage::NONE && r.out.mission_state != (int)MissionState::WAYPOINT, "mission.rc_lost = RTL: the failsafe takes over as usual (it ends the mission)"); }
+    // ---- the mission's RTL is an RTL, whatever kind the rescue is set to (here LAND)
+    { Rig r(0, true); rig(r); r.core.cfg.rescue.mode = RESCUE_MODE_LAND; r.core.apply_nav(); MissionPlan pl; m_add(pl, m_item(MissionCmd::TAKEOFF, 0, 0, 6, 0, 0, false)); m_add(pl, m_item(MissionCmd::WAYPOINT, 30, 0, 6));
+      m_add(pl, m_item(MissionCmd::RTL, 0, 0, 0, 0, 0, false, false)); r.core.set_mission(pl); Pilot p; ready(r, p); p.aux7 = 1500; MissionWatch w; w.run(r, p, 120.0f, (int)MissionState::DONE);
+      CHECK(!r.out.armed && r.pl.z < 0.05f && hypotf(r.pl.pn, r.pl.pe) < 3.0f, "nav.rescue_mode LAND: the mission's RTL still flies home (landed %.1f m from home)", hypotf(r.pl.pn, r.pl.pe)); }
+    // ---- the pilot takes it back: the mission switch off
+    { Rig r(0, true); rig(r); MissionPlan pl; m_add(pl, m_item(MissionCmd::TAKEOFF, 0, 0, 8, 0, 0, false)); m_add(pl, m_item(MissionCmd::WAYPOINT, 60, 0, 8));
+      r.core.set_mission(pl); Pilot p; ready(r, p); p.aux7 = 1500; r.run(12.0f, p); const bool flying = r.out.mission_state == (int)MissionState::WAYPOINT;
+      p.aux7 = 1000; p.althold = true; p.thr = 0.5f; p.roll = 0.4f; r.run(1.5f, p);
+      CHECK(flying && r.out.mission_state == (int)MissionState::IDLE && fabsf(r.out.est.att.roll - angle_cmd(r, ROLL, 0.4f)) < 2.0f && r.out.armed, "mission switch off: the pilot has the craft at once (the stick gives %.1f deg)", r.out.est.att.roll); }
+    // ---- the ARM switch off while it waits on the ground: it never takes off by itself
+    { Rig r(0, true); rig(r); MissionPlan pl; m_add(pl, m_item(MissionCmd::TAKEOFF, 0, 0, 6, 0, 0, false)); m_add(pl, m_item(MissionCmd::LAND, 0, 10, 0, 0, 0, true, false));
+      m_add(pl, m_item(MissionCmd::DELAY, 0, 0, 0, 10, 0, false, false)); m_add(pl, m_item(MissionCmd::TAKEOFF, 0, 0, 6, 0, 0, false)); m_add(pl, m_item(MissionCmd::WAYPOINT, 0, 20, 6));
+      r.core.set_mission(pl); Pilot p; ready(r, p); p.aux7 = 1500; MissionWatch w; w.run(r, p, 60.0f, (int)MissionState::GROUND_WAIT);
+      const bool waiting = r.out.mission_state == (int)MissionState::GROUND_WAIT && !r.out.armed; p.arm = false; r.run(30.0f, p);
+      CHECK(waiting && !r.out.armed && r.pl.z < 0.05f && r.out.mission_state != (int)MissionState::ARMING, "ARM switch off during the wait: still on the ground 30 s later (%s)", m_state_name(r.out.mission_state)); }
+    // ---- the link is lost while it waits on the ground (likely 1 - 2 km out, the craft on the ground): it still takes off after the wait
+    { Rig r(0, true); rig(r); MissionPlan pl; m_add(pl, m_item(MissionCmd::TAKEOFF, 0, 0, 6, 0, 0, false)); m_add(pl, m_item(MissionCmd::LAND, 0, 10, 0, 0, 0, true, false));
+      m_add(pl, m_item(MissionCmd::DELAY, 0, 0, 0, 10, 0, false, false)); m_add(pl, m_item(MissionCmd::TAKEOFF, 0, 0, 6, 0, 0, false)); m_add(pl, m_item(MissionCmd::WAYPOINT, 0, 25, 6));
+      r.core.set_mission(pl); Pilot p; ready(r, p); p.aux7 = 1500; MissionWatch w; w.run(r, p, 60.0f, (int)MissionState::GROUND_WAIT);
+      const bool waiting = r.out.mission_state == (int)MissionState::GROUND_WAIT && !r.out.armed; p.link = false; w.run(r, p, 60.0f, (int)MissionState::DONE); w.run(r, p, 3.0f);
+      CHECK(waiting && r.out.mission_state == (int)MissionState::DONE && nav_dist(r, 0, 25) < 2.5f && r.out.armed && r.out.failsafe == FsStage::NONE,
+            "link lost while it waits on the ground: no failsafe, it takes off after the wait and flies on (%s; %.1f m from the last point)", w.order.c_str(), nav_dist(r, 0, 25)); }
+    // ---- the battery goes critical on a leg: the failsafe lands where it is
+    { Rig r(0, true); rig(r); MissionPlan pl; m_add(pl, m_item(MissionCmd::TAKEOFF, 0, 0, 8, 0, 0, false)); m_add(pl, m_item(MissionCmd::WAYPOINT, 80, 0, 8));
+      r.core.set_mission(pl); Pilot p; ready(r, p); p.aux7 = 1500; r.run(14.0f, p); const float n0 = r.pl.pn; r.h.batt_critical = true; r.run(1.0f, p);
+      const bool ended = r.out.mission_state == (int)MissionState::IDLE && r.out.failsafe != FsStage::NONE; r.run(40.0f, p);
+      CHECK(n0 > 10.0f && ended && !r.out.armed && r.pl.z < 0.05f && fabsf(r.pl.pn - n0) < 30.0f, "battery critical %.0f m out: the mission ends at once, the failsafe lands (coasting to %.0f m north, the failsafe landing does not hold a position)", n0, r.pl.pn); }
+    // ---- refused: on the ground the first command must be TAKEOFF
+    { Rig r(0, true); rig(r); MissionPlan pl; m_add(pl, m_item(MissionCmd::WAYPOINT, 20, 0, 8)); r.core.set_mission(pl); Pilot p; ready(r, p); p.aux7 = 1500; r.run(5.0f, p);
+      CHECK(r.out.mission_state == (int)MissionState::REFUSED && r.pl.z == 0.0f && r.out.armed, "a plan that starts with a waypoint, on the ground: REFUSED, the craft stays where it is"); }
+    // ---- started from the app (no switch), stopped from the app
+    { Rig r(0, true); rig(r); MissionPlan pl; m_add(pl, m_item(MissionCmd::TAKEOFF, 0, 0, 6, 0, 0, false)); m_add(pl, m_item(MissionCmd::WAYPOINT, 30, 0, 6));
+      r.core.set_mission(pl); Pilot p; ready(r, p); p.mode = 0; r.run(0.2f, p); p.thr = 0.0f; r.core.mission_command(true); r.run(14.0f, p);      // (no Altitude Hold switch either: it would bring Angle with it)      // (the mode of the pilot: Acro - the mission flies in Angle all the same)
+      const bool flying = r.out.mission_state != (int)MissionState::IDLE && r.pl.z > 4.0f && nav_dist(r, 30, 0) < 6.0f; p.althold = true; p.thr = 0.5f; r.core.mission_command(false); r.run(0.5f, p);
+      CHECK(flying && r.out.mission_state == (int)MissionState::IDLE && r.out.althold_active && r.out.armed, "the app's start flies it without a switch; its stop gives the craft back (Altitude Hold, the pilot's switch)"); }
+}
+
 int main() {
     t_arming(); t_attitude_modes(); t_rate_loop(); t_filters_in_the_loop(); t_throttle_boost(); t_level_modes(); t_mode_details(); t_airmode(); t_compass(); t_althold(); t_failsafe(); t_uneven_cycles(); t_pid_denom(); t_stall(); t_runaway(); t_motor_layer(); t_estimator_in_flight();
-    t_position_hold(); t_nav_fence(); t_nav_request(); t_gps_rescue(); t_switch_modes(); t_stick_arm();
+    t_position_hold(); t_nav_fence(); t_nav_request(); t_gps_rescue(); t_switch_modes(); t_stick_arm(); t_mission();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

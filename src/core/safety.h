@@ -97,7 +97,9 @@ struct FsConfig { float guard_s = 0.5f, recover_s = 1.0f, max_descent_s = 60.0f;
                   uint8_t procedure = FSP_LAND;          // LINK / SWITCH: what to fly (FsProcedure)
                   float stick_threshold = 0.30f;         // the pilot takes the craft back by moving a stick this far
                   float hold_s = 30.0f;                  // FSP_HOLD: how long before it lands
-                  uint8_t batt_low = FBL_WARN, batt_crit = FBC_LAND; };
+                  uint8_t batt_low = FBL_WARN, batt_crit = FBC_LAND;
+                  bool mission_rc_continue = true;       // the link lost while the mission flies: no failsafe, it flies on (mission.rc_lost)
+};
 struct FsInput { bool rx_ok = true, batt_critical = false, alt_valid = false, landed = false, armed = false, switch_on = false;
                  bool batt_low = false;        // the pack at its warning level
                  bool airborne = true;         // false: the craft stands on the ground - there is nothing to land, the failsafe disarms
@@ -366,10 +368,22 @@ public:
     // After this the switch is still on, so there is no edge until the pilot has moved it off and on again.
     // why: a blocker bit to show until then (0 = none).
     WB_FAST void force_disarm(uint32_t why = 0) { if (armed_) { armed_ = false; disarm_reason_ = 2; } sticky_ |= why; }
+    // The mission (nav/mission.h) puts the craft down with the motors OFF at a delivery stop and arms it again after the wait:
+    // no switch edge for either (the pilot's ARM switch stays on all the while) and no sticky reason. Arming again ignores what
+    // a take-off without a pilot cannot satisfy - the throttle stick, the switch being on, the link (the mission carries on
+    // without it); every other blocker still holds it off. switch_on: the ARM switch as read (not believed while the link is lost).
+    WB_FAST void mission_disarm() { if (armed_) { armed_ = false; disarm_reason_ = 3; } prev_switch_ = true; }
+    WB_FAST bool mission_arm(bool switch_on, bool link_ok, const ArmInput& in) {
+        if (armed_) return true;
+        if (link_ok && !switch_on) return false;
+        if (((arm_blockers(in) & ~(AB_THROTTLE_HIGH | AB_ARM_SWITCH_ON | AB_RX_LOST)) | sticky_) != 0) return false;
+        armed_ = true; prev_switch_ = true;
+        return true;
+    }
     bool armed() const { return armed_; }
     uint32_t blockers() const { return blockers_; }
     uint32_t refused() const { return refused_; }          // arm attempts rejected by a blocker
-    uint8_t last_disarm_reason() const { return disarm_reason_; }   // 1 switch, 2 forced (failsafe / crash)
+    uint8_t last_disarm_reason() const { return disarm_reason_; }   // 1 switch, 2 forced (failsafe / crash), 3 the mission (a delivery stop)
 private:
     bool armed_ = false, prev_switch_ = false, seen_off_ = false; uint32_t blockers_ = 0, refused_ = 0, sticky_ = 0; uint8_t disarm_reason_ = 0;
 };

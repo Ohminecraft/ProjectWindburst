@@ -100,6 +100,24 @@ def test_settings_set_clamp_save_reboot(sim, fc):
     assert fc.get("filters")["gyro_lpf2_hz"] == 123, "the defaults of one section leave the others alone"
 
 
+def test_a_change_set_back_needs_no_save(sim, fc):
+    """0.37.1: the firmware compares each section with flash and with what it started with - a value changed and set back as it
+    was leaves nothing to save and no restart (the app's Save button stayed until the next Save)."""
+    fc.subscribe("status", 20)
+    assert fc.wait_stream("status")["settings_dirty"] == [], "as booted: nothing to save"
+    pid, motors = fc.get("pid"), fc.get("motors")
+    fc.set("pid", tpa_rate=pid["tpa_rate"] + 10)
+    fc.set("motors", protocol="DSHOT300" if motors["protocol"] == "DSHOT600" else "DSHOT600")
+    sim.sleep(0.2)
+    assert fc.wait_stream("status")["settings_dirty"] == ["DIRTY", "REBOOT_REQUIRED"]
+    fc.set("motors", protocol=motors["protocol"])
+    sim.sleep(0.2)
+    assert fc.wait_stream("status")["settings_dirty"] == ["DIRTY"], "the motors as they were: no restart; the PID is still unsaved"
+    fc.set("pid", tpa_rate=pid["tpa_rate"])
+    sim.sleep(0.2)
+    assert fc.wait_stream("status")["settings_dirty"] == [], "and the PID too: nothing to save"
+
+
 def test_streams_show_the_craft(sim, fc):
     sim.do("pose 20 -10 0")                               # right side down 20, nose UP 10
     sim.sleep(3.0)
@@ -122,7 +140,9 @@ def test_streams_show_the_craft(sim, fc):
     assert span >= 2000 and (len(stamps) - 1) * 1000.0 / span == pytest.approx(50, abs=1.0), "50 Hz stream: %d frames in %d firmware ms" % (len(stamps), span)
     # The frames keep to a 20 ms grid that does not drift. One frame may leave a millisecond or two late (at most four streams are sent
     # per link poll, and other streams are running), the next one is then back on the grid; a frame is dropped rather than queued.
-    late = [(t - stamps[1]) % 20 for t in stamps[1:]]
+    # (judged from the 5th frame on: the firmware puts a stream on a new phase when its STREAM_CFG arrives, and the simulator - running
+    # faster than real time - may send a frame or two on the old phase before that; how many depends on the computer)
+    late = [(t - stamps[5]) % 20 for t in stamps[5:]]
     late = [x - 20 if x > 10 else x for x in late]                 # the reference frame itself may have been the late one
     assert max(late) - min(late) <= 2, "always within 2 ms of the firmware's 20 ms grid: offsets %s" % sorted(set(late))
     gaps = [b - a for a, b in zip(stamps[1:], stamps[2:])]

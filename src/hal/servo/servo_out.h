@@ -6,6 +6,7 @@
 
 #include <Arduino.h>
 #include "../../port/pwm.h"
+#include "servo_source.h"
 
 // ============================================================================
 // Servo outputs: up to four servos, each follows one RC channel (a gimbal tilt on a slider, a gripper on a switch...).
@@ -58,18 +59,20 @@ public:
     void stop() { for (int i = 0; i < servo::kServos; i++) if (pin_[i] != 255) { port::pwm_detach(pin_[i]); pin_[i] = 255; out_[i] = 0; } count_ = 0; }
 
     // src: 0 = off, n = RC channel n (1-based); live
-    void configure(const uint8_t src[servo::kServos], const uint16_t min_us[servo::kServos], const uint16_t max_us[servo::kServos], const uint8_t reverse[servo::kServos]) {
-        for (int i = 0; i < servo::kServos; i++) { src_[i] = src[i]; min_[i] = min_us[i]; max_[i] = max_us[i]; rev_[i] = reverse[i] != 0; }
+    void configure(const uint8_t src[servo::kServos], const uint16_t min_us[servo::kServos], const uint16_t max_us[servo::kServos], const uint8_t reverse[servo::kServos], const uint16_t* init_us = nullptr) {
+        for (int i = 0; i < servo::kServos; i++) { src_[i] = src[i]; min_[i] = min_us[i]; max_[i] = max_us[i]; rev_[i] = reverse[i] != 0; init_[i] = init_us ? init_us[i] : 1500; }
         dirty_ = true;
     }
 
     // rc: 16 channels (us); have_rc: they are real (a frame arrived since power-up). Without them the servos sit in the middle.
-    void update(const uint16_t* rc, bool have_rc) {
+    // mission: what DO_SET_SERVO last set per servo (0 = nothing yet: init_us), for the servos with the source MISSION
+    void update(const uint16_t* rc, bool have_rc, const uint16_t* mission = nullptr) {
         if (have_rc) have_rc_ = true;
         for (int i = 0; i < servo::kServos; i++) {
             if (pin_[i] == 255) continue;
             uint16_t us = 0;
             if (src_[i] >= 1 && src_[i] <= 16) us = have_rc_ ? servo::map_us(rc[src_[i] - 1], min_[i], max_[i], rev_[i]) : (uint16_t)((min_[i] + max_[i]) / 2);
+            else if (src_[i] == servo::kSourceMission) us = mission && mission[i] ? mission[i] : init_[i];
             if (us != out_[i] || dirty_) { out_[i] = us; port::pwm_write(pin_[i], us ? servo::duty_for(us, rate_) : 0); }
         }
         dirty_ = false;
@@ -82,6 +85,6 @@ public:
 
 private:
     uint8_t pin_[servo::kServos] = {255, 255, 255, 255}, src_[servo::kServos] = {};
-    uint16_t min_[servo::kServos] = {1000, 1000, 1000, 1000}, max_[servo::kServos] = {2000, 2000, 2000, 2000}, out_[servo::kServos] = {};
+    uint16_t min_[servo::kServos] = {1000, 1000, 1000, 1000}, max_[servo::kServos] = {2000, 2000, 2000, 2000}, out_[servo::kServos] = {}, init_[servo::kServos] = {1500, 1500, 1500, 1500};
     bool rev_[servo::kServos] = {}, have_rc_ = false, dirty_ = true; uint16_t rate_ = 50; int count_ = 0; const char* fail_ = "";
 };

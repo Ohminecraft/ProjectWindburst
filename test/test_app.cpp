@@ -438,7 +438,7 @@ static void t_settings() {
     printf("[settings] validation that protects the flight code\n");
     Settings s; defaults(s);
     CHECK(validate(s.modes) == 0 && s.modes.mode[0] == 255 && s.modes.mode[15] == 255, "defaults are valid; unused mode slots stay 255");
-    s.modes.mode[2] = MODE_BLACKBOX_ERASE + 1; CHECK(validate(s.modes) == 1 && s.modes.mode[2] == 255, "an unknown mode id (from a newer firmware, or a damaged record) empties its slot - it does not become some other mode");
+    s.modes.mode[2] = MODE_MISSION + 1; CHECK(validate(s.modes) == 1 && s.modes.mode[2] == 255, "an unknown mode id (from a newer firmware, or a damaged record) empties its slot - it does not become some other mode");
     for (const SectionInfo& si : kSections) { Settings d; defaults(d); CHECK(validate_section(d, si.id) == 0, "section %s: defaults pass their own validation", si.name); }
     const float nan = NAN;
     s.pid.stab_p[1] = nan; s.pid.stab_p[2] = nan; s.calibration.acc_scale[2] = nan; s.calibration.mag_matrix[4] = nan;
@@ -450,7 +450,7 @@ static void t_settings() {
       CHECK(b.valid && b.offset[0] == 0.02f && b.offset[2] == -0.03f && b.scale[1] == 1.01f && c.mag_valid == 0, "accelerometer calibration <-> settings round trip, compass part untouched"); }
     { Settings q; defaults(q); q.general.board_trim_roll = 15; q.general.board_trim_yaw = -900; q.calibration.acc_trim_roll = -7; q.calibration.acc_trim_pitch = 22; float r, p, y; board_fine_alignment(q, r, p, y);
       CHECK(fabsf(r - 0.8f) < 1e-5f && fabsf(p - 2.2f) < 1e-5f && fabsf(y + 90.0f) < 1e-5f, "fine alignment = board trim + level trim: %.2f %.2f %.2f", r, p, y); }
-    for (const SectionInfo& si : kSections) CHECK(si.live == (si.id == SEC_MODES || si.id == SEC_RATES || si.id == SEC_PID || si.id == SEC_CALIBRATION || si.id == SEC_BEEPER || si.id == SEC_BATTERY || si.id == SEC_BLACKBOX || si.id == SEC_FILTERS || si.id == SEC_NAV || si.id == SEC_SERVO || si.id == SEC_ALTHOLD || si.id == SEC_MSP), "section %s live flag", si.name);
+    for (const SectionInfo& si : kSections) CHECK(si.live == (si.id == SEC_MODES || si.id == SEC_RATES || si.id == SEC_PID || si.id == SEC_CALIBRATION || si.id == SEC_BEEPER || si.id == SEC_BATTERY || si.id == SEC_BLACKBOX || si.id == SEC_FILTERS || si.id == SEC_NAV || si.id == SEC_SERVO || si.id == SEC_ALTHOLD || si.id == SEC_MSP || si.id == SEC_MISSION), "section %s live flag", si.name);
 }
 
 static void t_hwconfig() {

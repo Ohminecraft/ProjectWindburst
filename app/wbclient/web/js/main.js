@@ -16,18 +16,19 @@ import tuning from './tabs/tuning.js';
 import rates from './tabs/rates.js';
 import filters from './tabs/filters.js';
 import nav from './tabs/nav.js';
+import mission from './tabs/mission.js';
 import power from './tabs/power.js';
 import blackbox from './tabs/blackbox.js';
 import pins from './tabs/pins.js';
 import osd from './tabs/osd.js';
 import system from './tabs/system.js';
 
-const TABS = [overview, receiver, modes, sensors, motors, tuning, rates, filters, nav, power, osd, blackbox, pins, system];
+const TABS = [overview, receiver, modes, sensors, motors, tuning, rates, filters, nav, mission, power, osd, blackbox, pins, system];
 // the rail in the order of building a craft: put it together, tune it, what it does in the air, then its logs and the board itself
 const GROUPS = [
   [tr('Lắp máy'), ['overview', 'receiver', 'modes', 'sensors', 'motors']],
   [tr('Tinh chỉnh'), ['tuning', 'rates', 'filters']],
-  [tr('Khi bay'), ['nav', 'power', 'osd']],
+  [tr('Khi bay'), ['nav', 'mission', 'power', 'osd']],
   [tr('Log và mạch'), ['blackbox', 'pins', 'system']],
 ];
 // one line drawing per tab (24 x 24, stroked in the text colour)
@@ -41,6 +42,7 @@ const ICONS = {
   rates: '<path d="M4 4v16h16"/><path d="M4 19c7 0 10-3 12-8s2.5-6 4-7"/>',
   filters: '<path d="M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0"/><path d="M3 20h18"/>',
   nav: '<path d="M12 21s-6.5-5.6-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15.4 12 21 12 21z"/><circle cx="12" cy="10.5" r="2.3"/>',
+  mission: '<circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h5a3 3 0 0 0 0-6h-2a3 3 0 0 1 0-6h5"/>',
   power: '<rect x="3" y="7" width="16" height="10" rx="2"/><path d="M21 10.5v3M7 10v4M10.5 10v4"/>',
   osd: '<rect x="3" y="5" width="18" height="13" rx="2"/><path d="M6.5 9h4M13.5 14.5h4M6.5 14.5h2.5"/>',
   blackbox: '<path d="M3 4v16h18"/><path d="M6.5 15l4-5 3 3 5-7"/>',
@@ -336,7 +338,10 @@ function connectHelp() {
 async function onConn({ before }) {
   const c = store.conn;
   const fresh = c.connected && (!before.connected || before.boots !== c.boots || before.port !== c.port);
-  if (!c.connected) { settingsReady = false; paintBar(); show(current); refreshPorts(true); return; }
+  // (a tab that works with no flight controller is left as it is while nothing changed for it: the first event after the page
+  // loads rebuilt the Blackbox tab, and the log open in it - the PID analysis landed in a box that was gone)
+  const keep = !before.connected && (TABS.find((t) => t.id === current) || {}).offline;
+  if (!c.connected) { settingsReady = false; paintBar(); if (!keep) show(current); refreshPorts(true); return; }
   paintBar();
   if (before.connected && (c.stalls || 0) > (before.stalls || 0)) toast(noteText(c.note), 'warn');
   if (fresh) {
@@ -386,9 +391,11 @@ async function start() {
       if (m && store.settings[m[1]]) { reloadSection(m[1]).catch(() => {}); toast(tr('Firmware vừa tự lưu phần "{name}" (level trim khi bay).', { name: m[1] }), 'ok'); }
     }
   });
-  window.addEventListener('hashchange', () => show(tabFromHash()));
   await refreshPorts(true);
-  show(current);
+  // (the tab asked for while the ports were read is the one shown, once: listening before that drew it twice, and the second
+  // drawing threw away what was already done in the first - a log opened in Blackbox)
+  window.addEventListener('hashchange', () => show(tabFromHash()));
+  show(tabFromHash());
   api.events(handleEvent, (up) => { if (up !== store.serverUp) { store.serverUp = up; paintBar(); } });
   // a board plugged in later shows up by itself
   setInterval(() => { if (!store.conn.connected && !busy && !document.hidden) refreshPorts(false, true); }, 2500);

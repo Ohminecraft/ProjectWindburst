@@ -65,6 +65,8 @@ constexpr int kMaxString = 30;                        // MSP_OSD_MAX_STRING_LENG
 enum Mode : uint8_t { MODE_ACRO, MODE_ANGLE, MODE_STAB, MODE_ALTHOLD, MODE_POSHOLD, MODE_RESCUE };
 // a GPS Rescue that flies (nav.rescue_mode + 1), and where it is: on the way home, over home (coming down, waiting), landing
 enum RescueShown : uint8_t { RESC_NONE, RESC_RTL, RESC_SMART_RTL, RESC_LAND };
+// the mission (0.37): flying it, or waiting on the ground at a delivery stop
+enum MissionShown : uint8_t { MISS_NONE, MISS_FLY, MISS_WAIT };
 enum RescueStage : uint8_t { RSTAGE_WAY, RSTAGE_HOME, RSTAGE_LANDING };
 
 // What is shown, in the units it is shown in (metric)
@@ -88,6 +90,7 @@ struct State {
     uint8_t batt_remaining = 255;                     // % of the pack left; 255 = unknown
     float dist_m = 0;                                 // distance flown since arming (ground track)
     uint8_t rescue = RESC_NONE, rescue_stage = RSTAGE_WAY; float rescue_left_m = 0;     // the way the rescue still has to fly home (m)
+    uint8_t mission = MISS_NONE, mission_index = 0, mission_count = 0, mission_wait = 0; bool mission_warn = false; float mission_left_m = 0;
 };
 
 // Betaflight's statistics of one flight (osd.c statistic_t)
@@ -131,12 +134,19 @@ inline uint8_t direction_symbol(float deg) {           // osdGetDirectionSymbolF
 inline const char* mode_name(const State& s) {
     if (s.failsafe) return "!FS!";
     if (s.rescue) { static const char* const r[] = {"", "RTL", "SRTL", "LAND"}; return s.rescue <= RESC_LAND ? r[s.rescue] : "RESC"; }    // (ArduPilot's mode names)
+    if (s.mission) return "AUTO";
     static const char* const n[] = {"ACRO", "ANGL", "STAB", "ALTH", "POSH", "RESC"};
     return s.mode < 6 ? n[s.mode] : "ACRO";
 }
 // The warning line while a rescue flies (it comes before every other warning: the failsafe that started it shows in the mode):
 // "RTL 123M" on the way - the metres still to fly home, along the way it flies (SmartRTL: the way the flight came) -, "RTL HOME"
 // over home (coming down, waiting), "RTL LAND" landing; LAND: "LAND 12M", the height still to come down
+// The warning line while the mission runs: "AUTO 3/9 120M" (the command, how many, the way left), "WAIT 45S" on the ground at a
+// delivery stop, "TAKEOFF 7S" in its last seconds (the countdown the buzzer plays too)
+inline void mission_text(const State& s, char* b, size_t cap) {
+    if (s.mission == MISS_WAIT) { snprintf(b, cap, s.mission_warn ? "TAKEOFF %uS" : "WAIT %uS", (unsigned)s.mission_wait); return; }
+    snprintf(b, cap, "AUTO %u/%u %uM", (unsigned)s.mission_index + 1u, (unsigned)s.mission_count, (unsigned)lroundf(s.mission_left_m > 0 ? (s.mission_left_m < 65000.0f ? s.mission_left_m : 65000.0f) : 0.0f));
+}
 inline void rescue_text(const State& s, char* b, size_t cap) {
     const char* n = s.rescue == RESC_SMART_RTL ? "SRTL" : s.rescue == RESC_LAND ? "LAND" : "RTL";
     if (s.rescue == RESC_LAND) { if (s.alt_valid) snprintf(b, cap, "LAND %uM", (unsigned)lroundf(s.alt_m > 0 ? s.alt_m : 0.0f)); else snprintf(b, cap, "LAND"); return; }

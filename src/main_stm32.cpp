@@ -137,6 +137,7 @@ void setup() {
     }
     flight.configure(settings);
     flight.begin();
+    server.settings_loaded();                                // what flash holds, what the firmware runs with: "unsaved" / "reboot required" from here
 
     // 3. blackbox in bank 2 (a chip with one bank: none in the chip's flash)
     char line[176];                                          // (= FlightApp::kReportLen)
