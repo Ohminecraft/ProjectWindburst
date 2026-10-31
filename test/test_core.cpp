@@ -11,6 +11,7 @@
 #include "../src/core/mixer.h"
 #include "../src/core/safety.h"
 #include "../src/core/nav/alt_control.h"
+#include "../src/core/crash_flip.h"
 using namespace fc;
 
 static int g_pass = 0, g_fail = 0;
@@ -877,10 +878,56 @@ static void t_failsafe_actions() {
         o = run(f, in, 0.3f); CHECK(o.stage == FsStage::LANDED && o.disarm, "then the motors stop"); }
 }
 
+// 0.42: crash flip (Betaflight's turtle mode, mixer.c applyCrashFlipModeToMotors). The values below are worked out by hand from
+// Betaflight's formulas for its quad X (motor 1 rear-right, 2 front-right, 3 rear-left, 4 front-left; props in).
+static void t_crash_flip() {
+    printf("[crash flip] the sticks pick the motors that turn the craft over\n");
+    Mixer mx; mx.cfg.layout = QUAD_X; mx.configure();
+    MotorLimits lim; lim.idle = 0.055f; lim.limit = 1.0f;
+    const float range = lim.limit - lim.idle;
+    CrashFlip cf; float o[kMaxMotors];
+    auto run = [&](float roll, float pitch, float yaw, float cos_tilt = -1.0f, float gr = 0, float gp = 0) { cf.update(mx, roll, pitch, yaw, cos_tilt, gr, gp, lim, o); };
+    auto near = [](float a, float b) { return fabsf(a - b) < 1e-4f; };
+    cf.start();
+    run(0, 1, 0); CHECK(o[0] == 0 && near(o[1], 1.0f) && o[2] == 0 && near(o[3], 1.0f), "pitch forward: the two front motors at full, the rear ones stopped (%.3f %.3f %.3f %.3f)", o[0], o[1], o[2], o[3]);
+    run(0, 0.5f, 0); CHECK(o[0] == 0 && near(o[1], lim.idle + 0.5f * range) && near(o[3], lim.idle + 0.5f * range), "half the stick: idle + half the range (%.4f)", o[1]);
+    run(0, -0.6f, 0); CHECK(near(o[0], lim.idle + 0.6f * range) && near(o[2], lim.idle + 0.6f * range) && o[1] == 0 && o[3] == 0, "pitch back: the rear motors");
+    run(0.8f, 0, 0); CHECK(near(o[0], lim.idle + 0.8f * range) && near(o[1], lim.idle + 0.8f * range) && o[2] == 0 && o[3] == 0, "roll right: the right motors");
+    run(-0.8f, 0, 0); CHECK(o[0] == 0 && o[1] == 0 && near(o[2], lim.idle + 0.8f * range) && near(o[3], lim.idle + 0.8f * range), "roll left: the left motors");
+    run(0, 0, 0.6f); CHECK(near(o[0], lim.idle + 0.6f * range) && o[1] == 0 && o[2] == 0 && near(o[3], lim.idle + 0.6f * range), "yaw right: the clockwise props (1, 4)");
+    run(0, 0, -0.6f); CHECK(o[0] == 0 && near(o[1], lim.idle + 0.6f * range) && near(o[2], lim.idle + 0.6f * range) && o[3] == 0, "yaw left: the counter-clockwise props (2, 3)");
+    run(0.3f, 0.2f, 0.6f); CHECK(near(o[0], lim.idle + 0.6f * range) && o[1] == 0 && o[2] == 0, "yaw the largest: yaw alone, as far as the yaw stick goes");
+    run(0.7f, 0.7f, 0); CHECK(near(o[1], 1.0f) && o[0] == 0 && o[2] == 0 && o[3] == 0, "on the diagonal (pitch forward + roll right): the front-right motor alone, at full");
+    run(0.2f, 0.8f, 0); { const float len = sqrtf(0.2f * 0.2f + 0.8f * 0.8f);
+        CHECK(near(o[1], lim.idle + len * range) && near(o[3], lim.idle + len * range) && o[0] == 0 && o[2] == 0, "more than 30 deg off the diagonal: pitch alone, with the length of both sticks (%.4f)", o[1]); }
+    run(0, 0.14f, 0.1f); CHECK(o[0] == 0 && o[1] == 0 && o[2] == 0 && o[3] == 0, "within the stick dead band (15 %%): nothing turns");
+    mx.cfg.props_out = true; mx.configure();
+    run(0, 0, 0.6f); CHECK(o[0] == 0 && near(o[1], lim.idle + 0.6f * range) && near(o[2], lim.idle + 0.6f * range) && o[3] == 0, "props out: yaw right takes the other pair");
+    mx.cfg.props_out = false; mx.configure();
+    cf.cfg.motor_pct = 50;
+    run(0, 1, 0); CHECK(near(o[0], lim.idle + 0.5f * range) && near(o[1], 1.0f), "crashflip_motor_percent 50: the motors on the other side at half");
+    cf.cfg.motor_pct = 10;
+    run(0, 0.16f, 0); CHECK(o[0] == 0 && near(o[1], lim.idle + 0.16f * range), "a command below 2 %% of the range stops the motor (not idle)");
+    cf.cfg.motor_pct = 0;
+    // the attenuators (crashflip_rate > 0): the turn rate, and with the accelerometer the attitude change since the start
+    cf.cfg.rate_limit_dps = 350;
+    cf.start();
+    run(0, 1, 0, -1.0f, 100, 0); CHECK(near(o[1], 1.0f), "turning at 100 deg/s (less than half of 350): full power");
+    run(0, 1, 0, -1.0f, 0, -262.5f); CHECK(near(o[1], lim.idle + 0.5f * range), "262.5 deg/s (75 %% of the limit): half the power (%.4f)", o[1]);
+    run(0, 1, 0, -1.0f, 400, 0); CHECK(o[1] == 0, "at the limit: the motors stop");
+    run(0, 1, 0, -0.25f); CHECK(near(o[1], lim.idle + 0.5f * range), "the tilt changed by 0.75 (cos): half the power (%.4f)", o[1]);
+    run(0, 1, 0, 0.1f); CHECK(o[1] == 0, "over on its side and beyond (cos changed by more than 1): the motors stop, the flip is done");
+    cf.start(); run(0, 1, 0, 0.1f); CHECK(near(o[1], 1.0f), "a new start: the attitude it has now is the reference");
+    cf.cfg.rate_limit_dps = 0; cf.start(); run(0, 1, 0, -1.0f); run(0, 1, 0, 0.9f, 900, 0); CHECK(near(o[1], 1.0f), "crashflip_rate 0: no attenuation at all");
+    {   Mixer hx; hx.cfg.layout = HEX_X; hx.configure(); CrashFlip h; h.start(); float p[kMaxMotors]; h.update(hx, 0, 1, 0, -1.0f, 0, 0, lim, p);
+        int front = 0, rear = 0; for (int i = 0; i < hx.motor_count(); i++) { const MixRow r = mixer_row(HEX_X, i); if (p[i] > 0) { if (r.pitch < 0) front++; else rear++; } }
+        CHECK(front == 2 && rear == 0 && p[6] == 0 && p[7] == 0, "hex X, pitch forward: its two front motors (%d front, %d rear)", front, rear); }
+}
+
 int main() {
     t_stall_guard();
     t_fast_math();
     t_minmax();
-    t_filters(); t_ahrs(); t_ahrs_trust(); t_rc(); t_mixer(); t_layouts(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges(); t_kinematics(); t_althold_cascade(); t_failsafe_actions();
+    t_filters(); t_ahrs(); t_ahrs_trust(); t_rc(); t_mixer(); t_layouts(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges(); t_kinematics(); t_althold_cascade(); t_failsafe_actions(); t_crash_flip();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

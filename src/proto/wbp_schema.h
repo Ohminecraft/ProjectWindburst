@@ -8,7 +8,7 @@
 // so a struct is its own wire image). The Python client builds the same layouts from the same json.
 namespace wbp {
 constexpr uint8_t kProtocolVersion = 1;
-constexpr uint32_t kSchemaHash = 0xCAF05FD1u;
+constexpr uint32_t kSchemaHash = 0x622BBE0Du;
 
 enum Err : uint8_t { ERR_OK, ERR_UNKNOWN, ERR_BAD_ARG, ERR_ARMED, ERR_BUSY, ERR_NOT_SUPPORTED, ERR_BAD_SECTION, ERR_SIZE_MISMATCH, ERR_STORAGE, ERR_NO_SENSOR, ERR_BAD_STATE, ERR_FAILED };
 enum Cmd : uint8_t { CMD_GYRO_CAL = 1, CMD_ACC_CAL_POINT = 2, CMD_ACC_CAL_FINISH = 3, CMD_LEVEL_TRIM = 4, CMD_MAG_CAL_START = 5, CMD_MAG_CAL_FINISH = 6, CMD_MAG_CAL_CANCEL = 7, CMD_MOTOR_TEST = 8, CMD_MOTOR_STOP = 9, CMD_MOTOR_DIRECTION = 10, CMD_MOTOR_BEACON = 11, CMD_SET_HOME = 12, CMD_ESC_TELEMETRY = 13, CMD_APPLY_SETTINGS = 14, CMD_REPORT = 15, CMD_ACC_CAL_CANCEL = 16, CMD_BEEP = 17, CMD_BLACKBOX_ERASE = 18, CMD_BLACKBOX_STREAM = 19, CMD_BLACKBOX_SESSION = 20, CMD_BLACKBOX_READ = 21, CMD_MAG_AUTOCAL = 22, CMD_MISSION = 23, CMD_BIND = 24, CMD_STICK_CAL = 25 };
@@ -26,7 +26,7 @@ enum RANGE_MODEL_E : uint8_t { RANGE_MODEL_AUTO, RANGE_MODEL_VL53L1X, RANGE_MODE
 enum MAG_MODEL_E : uint8_t { MAG_MODEL_AUTO, MAG_MODEL_HMC5883L, MAG_MODEL_QMC5883L, MAG_MODEL_QMC5883P, MAG_MODEL_AK8963_MPU9250, MAG_MODEL_DRONECAN, MAG_MODEL_RM3100, MAG_MODEL_MSP };
 enum BARO_MODEL_E : uint8_t { BARO_MODEL_AUTO, BARO_MODEL_DRONECAN, BARO_MODEL_MSP };
 enum PORT_FUNCTION_E : uint8_t { PORT_FUNCTION_NONE, PORT_FUNCTION_SERIAL_RX, PORT_FUNCTION_GPS, PORT_FUNCTION_TELEMETRY, PORT_FUNCTION_FLOW_MSP, PORT_FUNCTION_ESC_SENSOR, PORT_FUNCTION_DISPLAYPORT };
-enum MODE_E : uint8_t { MODE_ARM, MODE_ANGLE, MODE_STABILIZE, MODE_ALTHOLD, MODE_POSHOLD, MODE_FAILSAFE, MODE_BEEPER, MODE_BLACKBOX, MODE_CALIB, MODE_RESCUE, MODE_ACRO_TRAINER, MODE_AIRMODE, MODE_ANTI_GRAVITY, MODE_BLACKBOX_ERASE, MODE_MISSION, MODE_LOITER };
+enum MODE_E : uint8_t { MODE_ARM, MODE_ANGLE, MODE_STABILIZE, MODE_ALTHOLD, MODE_POSHOLD, MODE_FAILSAFE, MODE_BEEPER, MODE_BLACKBOX, MODE_CALIB, MODE_RESCUE, MODE_ACRO_TRAINER, MODE_AIRMODE, MODE_ANTI_GRAVITY, MODE_BLACKBOX_ERASE, MODE_MISSION, MODE_LOITER, MODE_CRASHFLIP };
 enum FAILSAFE_E : uint8_t { FAILSAFE_NONE, FAILSAFE_GUARD, FAILSAFE_DESCENT, FAILSAFE_LANDED };
 enum AH_STATE_E : uint8_t { AH_STATE_STOPPED, AH_STATE_LANDED_IDLE, AH_STATE_LANDED_PRE_TAKEOFF, AH_STATE_TAKEOFF, AH_STATE_FLYING };
 enum GPS_STATE_E : uint8_t { GPS_STATE_UNKNOWN, GPS_STATE_INITIALIZED, GPS_STATE_DETECT_BAUD, GPS_STATE_CHANGE_BAUD, GPS_STATE_CONFIGURE, GPS_STATE_RECEIVING_DATA, GPS_STATE_LOST_COMMUNICATION };
@@ -87,14 +87,14 @@ enum NRF_RATE_E : uint8_t { NRF_RATE_R250K, NRF_RATE_R1M, NRF_RATE_R2M };
 enum NRF_POWER_E : uint8_t { NRF_POWER_MIN, NRF_POWER_LOW, NRF_POWER_HIGH, NRF_POWER_MAX };
 enum NRF_PPS_E : uint8_t { NRF_PPS_HZ50, NRF_PPS_HZ100, NRF_PPS_HZ150 };
 enum BIND_STATE_E : uint8_t { BIND_STATE_IDLE, BIND_STATE_LISTEN, BIND_STATE_BINDING, BIND_STATE_BOUND, BIND_STATE_FAILED };
-enum FLY_MODE_E : uint8_t { FLY_MODE_ACRO, FLY_MODE_ANGLE, FLY_MODE_STABILIZE, FLY_MODE_ALTHOLD, FLY_MODE_POSHOLD, FLY_MODE_RESCUE, FLY_MODE_MISSION, FLY_MODE_LOITER };
+enum FLY_MODE_E : uint8_t { FLY_MODE_ACRO, FLY_MODE_ANGLE, FLY_MODE_STABILIZE, FLY_MODE_ALTHOLD, FLY_MODE_POSHOLD, FLY_MODE_RESCUE, FLY_MODE_MISSION, FLY_MODE_LOITER, FLY_MODE_CRASHFLIP };
 enum TX_THROTTLE_E : uint8_t { TX_THROTTLE_ALTPOS, TX_THROTTLE_MANUAL };
-enum ARM_BLOCKER_B : uint32_t { ARM_BLOCKER_NO_IMU = 1u << 0, ARM_BLOCKER_GYRO_NOT_CAL = 1u << 1, ARM_BLOCKER_RX_LOST = 1u << 2, ARM_BLOCKER_THROTTLE_HIGH = 1u << 3, ARM_BLOCKER_ANGLE_TOO_HIGH = 1u << 4, ARM_BLOCKER_FAILSAFE = 1u << 5, ARM_BLOCKER_ALTHOLD_NO_BARO = 1u << 6, ARM_BLOCKER_BATT_LOW = 1u << 7, ARM_BLOCKER_ARM_SWITCH_ON = 1u << 8, ARM_BLOCKER_CONFIG_UNSAVED = 1u << 9, ARM_BLOCKER_CALIBRATING = 1u << 10, ARM_BLOCKER_POSHOLD_NO_GPS = 1u << 11, ARM_BLOCKER_MAG_NOT_CALIBRATED = 1u << 12, ARM_BLOCKER_PIN_CONFLICT = 1u << 13, ARM_BLOCKER_LOOP_RATE = 1u << 14, ARM_BLOCKER_RUNAWAY_TAKEOFF = 1u << 15, ARM_BLOCKER_RESCUE_NO_FIX = 1u << 16, ARM_BLOCKER_RESCUE_NO_COMPASS = 1u << 17, ARM_BLOCKER_MOTOR_STALL = 1u << 18 };
+enum ARM_BLOCKER_B : uint32_t { ARM_BLOCKER_NO_IMU = 1u << 0, ARM_BLOCKER_GYRO_NOT_CAL = 1u << 1, ARM_BLOCKER_RX_LOST = 1u << 2, ARM_BLOCKER_THROTTLE_HIGH = 1u << 3, ARM_BLOCKER_ANGLE_TOO_HIGH = 1u << 4, ARM_BLOCKER_FAILSAFE = 1u << 5, ARM_BLOCKER_ALTHOLD_NO_BARO = 1u << 6, ARM_BLOCKER_BATT_LOW = 1u << 7, ARM_BLOCKER_ARM_SWITCH_ON = 1u << 8, ARM_BLOCKER_CONFIG_UNSAVED = 1u << 9, ARM_BLOCKER_CALIBRATING = 1u << 10, ARM_BLOCKER_POSHOLD_NO_GPS = 1u << 11, ARM_BLOCKER_MAG_NOT_CALIBRATED = 1u << 12, ARM_BLOCKER_PIN_CONFLICT = 1u << 13, ARM_BLOCKER_LOOP_RATE = 1u << 14, ARM_BLOCKER_RUNAWAY_TAKEOFF = 1u << 15, ARM_BLOCKER_RESCUE_NO_FIX = 1u << 16, ARM_BLOCKER_RESCUE_NO_COMPASS = 1u << 17, ARM_BLOCKER_MOTOR_STALL = 1u << 18, ARM_BLOCKER_CRASHFLIP = 1u << 19 };
 enum HEALTH_B : uint32_t { HEALTH_IMU = 1u << 0, HEALTH_GYRO_CAL = 1u << 1, HEALTH_BARO = 1u << 2, HEALTH_RANGE = 1u << 3, HEALTH_GPS = 1u << 4, HEALTH_MAG_READY = 1u << 5, HEALTH_MAG_CAL = 1u << 6, HEALTH_RX = 1u << 7, HEALTH_MOTORS = 1u << 8, HEALTH_ESC_TELEMETRY = 1u << 9, HEALTH_ACC_CAL = 1u << 10, HEALTH_BATTERY = 1u << 11, HEALTH_FLOW = 1u << 12, HEALTH_IMU2 = 1u << 13, HEALTH_CAN = 1u << 14 };
 enum SETTINGS_FLAGS_B : uint32_t { SETTINGS_FLAGS_DIRTY = 1u << 0, SETTINGS_FLAGS_REBOOT_REQUIRED = 1u << 1 };
 enum EST_VALID_B : uint32_t { EST_VALID_ALT = 1u << 0, EST_VALID_POS = 1u << 1, EST_VALID_YAW_FROM_MAG = 1u << 2, EST_VALID_VEL = 1u << 3, EST_VALID_FLOW = 1u << 4, EST_VALID_TILT_AIDED = 1u << 5, EST_VALID_GPS_ALT = 1u << 6, EST_VALID_GPS_VZ = 1u << 7 };
 enum FS_CAUSE_B : uint32_t { FS_CAUSE_LINK = 1u << 0, FS_CAUSE_SWITCH = 1u << 1, FS_CAUSE_BATTERY = 1u << 2, FS_CAUSE_BATTERY_LOW = 1u << 3 };
-enum NAV_FLAGS_B : uint32_t { NAV_FLAGS_POSHOLD = 1u << 0, NAV_FLAGS_POSHOLD_UNAVAILABLE = 1u << 1, NAV_FLAGS_RESCUE = 1u << 2, NAV_FLAGS_RESCUE_AVAILABLE = 1u << 3, NAV_FLAGS_NAV_LEAN = 1u << 4, NAV_FLAGS_POSHOLD_SLOW_GPS = 1u << 5, NAV_FLAGS_FENCE = 1u << 6 };
+enum NAV_FLAGS_B : uint32_t { NAV_FLAGS_POSHOLD = 1u << 0, NAV_FLAGS_POSHOLD_UNAVAILABLE = 1u << 1, NAV_FLAGS_RESCUE = 1u << 2, NAV_FLAGS_RESCUE_AVAILABLE = 1u << 3, NAV_FLAGS_NAV_LEAN = 1u << 4, NAV_FLAGS_POSHOLD_SLOW_GPS = 1u << 5, NAV_FLAGS_FENCE = 1u << 6, NAV_FLAGS_CRASHFLIP = 1u << 7 };
 enum EKF_FLAGS_B : uint32_t { EKF_FLAGS_ALIGNED = 1u << 0, EKF_FLAGS_GPS_AIDING = 1u << 1, EKF_FLAGS_HEADING_OK = 1u << 2, EKF_FLAGS_USED_FOR_NAV = 1u << 3 };
 enum IMU_SRC_B : uint32_t { IMU_SRC_IMU1 = 1u << 0, IMU_SRC_IMU2 = 1u << 1 };
 
@@ -330,7 +330,7 @@ inline void defaults(S_modes& s) {
 }
 inline int validate(S_modes& s) {
     int fixed = 0; (void)s;
-    for (int i = 0; i < 16; i++) { if (s.mode[i] > 15 && s.mode[i] != 255) { s.mode[i] = 255; fixed++; } }
+    for (int i = 0; i < 16; i++) { if (s.mode[i] > 16 && s.mode[i] != 255) { s.mode[i] = 255; fixed++; } }
     for (int i = 0; i < 16; i++) { if (s.aux[i] > 7) { s.aux[i] = 7; fixed++; } }
     for (int i = 0; i < 16; i++) { if (s.lo[i] < 900) { s.lo[i] = 900; fixed++; } else if (s.lo[i] > 2100) { s.lo[i] = 2100; fixed++; } }
     for (int i = 0; i < 16; i++) { if (s.hi[i] < 900) { s.hi[i] = 900; fixed++; } else if (s.hi[i] > 2100) { s.hi[i] = 2100; fixed++; } }
@@ -582,8 +582,11 @@ struct __attribute__((packed)) S_motors {
     uint8_t stall_drop;
     uint8_t stall_min_cmd;
     uint16_t stall_ms;
+    uint8_t crashflip_rate;
+    uint8_t crashflip_motor_pct;
+    uint8_t crashflip_auto_rearm;
 };
-static_assert(sizeof(S_motors) == 44, "S_motors layout");
+static_assert(sizeof(S_motors) == 47, "S_motors layout");
 inline void defaults(S_motors& s) {
     s.layout = 0;
     s.props_out = 0;
@@ -620,6 +623,9 @@ inline void defaults(S_motors& s) {
     s.stall_drop = 35;
     s.stall_min_cmd = 25;
     s.stall_ms = 100;
+    s.crashflip_rate = 0;
+    s.crashflip_motor_pct = 0;
+    s.crashflip_auto_rearm = 0;
 }
 inline int validate(S_motors& s) {
     int fixed = 0; (void)s;
@@ -649,6 +655,9 @@ inline int validate(S_motors& s) {
     { if (s.stall_drop < 10) { s.stall_drop = 10; fixed++; } else if (s.stall_drop > 80) { s.stall_drop = 80; fixed++; } }
     { if (s.stall_min_cmd < 5) { s.stall_min_cmd = 5; fixed++; } else if (s.stall_min_cmd > 80) { s.stall_min_cmd = 80; fixed++; } }
     { if (s.stall_ms < 20) { s.stall_ms = 20; fixed++; } else if (s.stall_ms > 1000) { s.stall_ms = 1000; fixed++; } }
+    { if (s.crashflip_rate > 250) { s.crashflip_rate = 250; fixed++; } }
+    { if (s.crashflip_motor_pct > 100) { s.crashflip_motor_pct = 100; fixed++; } }
+    { if (s.crashflip_auto_rearm > 1) { s.crashflip_auto_rearm = 1; fixed++; } }
     return fixed;
 }
 
@@ -2019,7 +2028,7 @@ inline void defaults(Settings& s) { defaults(s.general); defaults(s.receiver); d
 // One schema for both: a server serves, and a store keeps, only the sections of its own role.
 struct SectionInfo { uint8_t id; const char* name; uint16_t size; bool live; uint16_t compat, compat2, compat3, compat4; uint8_t role; };
 constexpr int kSectionCount = 27;
-constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 57, false, 56, 22, 23, 24, 0}, {SEC_RECEIVER, "receiver", 22, false, 13, 12, 9, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0, 0, 0}, {SEC_PID, "pid", 79, true, 75, 0, 0, 0, 0}, {SEC_MOTORS, "motors", 44, false, 37, 36, 35, 34, 0}, {SEC_SENSORS, "sensors", 21, false, 20, 19, 18, 16, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0, 0, 0}, {SEC_PINS, "pins", 57, false, 52, 50, 48, 47, 0}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0, 0, 0}, {SEC_NAV, "nav", 44, true, 43, 38, 34, 31, 0}, {SEC_SERVO, "servo", 50, true, 26, 0, 0, 0, 0}, {SEC_ALTHOLD, "althold", 10, true, 6, 0, 0, 0, 0}, {SEC_CAN, "can", 4, false, 0, 0, 0, 0, 0}, {SEC_LED, "led", 165, false, 3, 0, 0, 0, 0}, {SEC_TELEMETRY, "telemetry", 16, false, 15, 14, 0, 0, 0}, {SEC_OSD, "osd", 90, false, 73, 0, 0, 0, 0}, {SEC_MSP, "msp", 2, true, 0, 0, 0, 0, 0}, {SEC_MISSION, "mission", 450, true, 0, 0, 0, 0, 0}, {SEC_TX_RADIO, "tx_radio", 15, false, 0, 0, 0, 0, 1}, {SEC_TX_STICKS, "tx_sticks", 40, true, 0, 0, 0, 0, 1}};
+constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 57, false, 56, 22, 23, 24, 0}, {SEC_RECEIVER, "receiver", 22, false, 13, 12, 9, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0, 0, 0}, {SEC_PID, "pid", 79, true, 75, 0, 0, 0, 0}, {SEC_MOTORS, "motors", 47, false, 44, 37, 36, 35, 0}, {SEC_SENSORS, "sensors", 21, false, 20, 19, 18, 16, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0, 0, 0}, {SEC_PINS, "pins", 57, false, 52, 50, 48, 47, 0}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0, 0, 0}, {SEC_NAV, "nav", 44, true, 43, 38, 34, 31, 0}, {SEC_SERVO, "servo", 50, true, 26, 0, 0, 0, 0}, {SEC_ALTHOLD, "althold", 10, true, 6, 0, 0, 0, 0}, {SEC_CAN, "can", 4, false, 0, 0, 0, 0, 0}, {SEC_LED, "led", 165, false, 3, 0, 0, 0, 0}, {SEC_TELEMETRY, "telemetry", 16, false, 15, 14, 0, 0, 0}, {SEC_OSD, "osd", 90, false, 73, 0, 0, 0, 0}, {SEC_MSP, "msp", 2, true, 0, 0, 0, 0, 0}, {SEC_MISSION, "mission", 450, true, 0, 0, 0, 0, 0}, {SEC_TX_RADIO, "tx_radio", 15, false, 0, 0, 0, 0, 1}, {SEC_TX_STICKS, "tx_sticks", 40, true, 0, 0, 0, 0, 1}};
 inline const SectionInfo* find_section(uint8_t id) { for (const auto& s : kSections) if (s.id == id) return &s; return nullptr; }
 // pointer to / size of a section inside a Settings object (nullptr if unknown)
 inline uint8_t* section_ptr(Settings& st, uint8_t id) { switch (id) {

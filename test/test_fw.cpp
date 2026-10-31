@@ -1042,7 +1042,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.41.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.42.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -3243,6 +3243,43 @@ static void t_loiter_fw() {
     AvailableModes am; CHECK(g.command(CMD_REQUEST_MESSAGE, MSG_AVAILABLE_MODES, 9) == RESULT_ACCEPTED && g.last(am) && !strcmp(am.mode_name, "Loiter"), "AVAILABLE_MODES 9: Loiter");
 }
 
+// 0.42: crash flip on the virtual board: a CRASHFLIP switch, the craft held upside down; the ESCs hear DShot 21 at the arming and
+// 20 after it, the sticks pick the motors; the settings reach the core (motor %, auto re-arm); a pulse protocol refuses it
+static void t_crash_flip_fw() {
+    printf("[crash flip] upside down on the virtual board: DShot 21, the sticks, DShot 20\n");
+    auto flip_rig = [](uint8_t protocol, bool auto_rearm, uint8_t motor_pct, uint8_t rate = 0) {
+        return nav_rig([=](wbp::Settings& s, VirtualBoard&) { s.modes.mode[4] = MODE_CRASHFLIP; s.modes.aux[4] = 4; s.modes.lo[4] = 1700; s.modes.hi[4] = 2100;
+                                                              s.motors.protocol = protocol; s.motors.crashflip_auto_rearm = auto_rearm; s.motors.crashflip_motor_pct = motor_pct; s.motors.crashflip_rate = rate; }); };
+    auto cmd_at = [](const VirtualBoard& b, uint8_t c, uint32_t from_ms) { for (const auto& e : b.esc_cmds) if (e.ms >= from_ms && e.cmd == c && e.slots == 0x0F) return e.ms; return (uint32_t)0; };
+    {   auto r = flip_rig(ESC_PROTOCOL_DSHOT300, false, 50, 35); VirtualBoard& b = r->board;
+        b.plant.set_tilt(180, 0); b.plant.held = true; r->run(3.0);
+        b.rc[4] = 2000; r->run(0.3);
+        CHECK(!r->tel().armed && (r->tel().blockers & ARM_BLOCKER_ANGLE_TOO_HIGH), "upside down, the switch off: refused (ANGLE_TOO_HIGH)");
+        b.rc[4] = 1000; r->run(0.3); b.rc[8] = 2000; r->run(0.3);
+        const uint32_t t_arm = g_stub_us / 1000; b.rc[4] = 2000; r->run(0.5);
+        CHECK(r->tel().armed && (r->tel().nav_flags & NAV_FLAGS_CRASHFLIP) && cmd_at(b, motor::CMD_SPIN_DIRECTION_REVERSED, t_arm), "the CRASHFLIP switch on: armed upside down; every ESC heard DShot 21");
+        CHECK(b.motor_frac[0] == 0 && b.motor_frac[1] == 0 && b.motor_frac[2] == 0 && b.motor_frac[3] == 0, "sticks centred: every motor stands");
+        b.rc[1] = 2000; r->run(0.3);
+        CHECK(b.motor_frac[1] > 0.99f && b.motor_frac[3] > 0.99f && fabsf(b.motor_frac[0] - 0.5f) < 0.03f && fabsf(b.motor_frac[2] - 0.5f) < 0.03f,
+              "pitch forward: the front motors at full, the rear ones at crashflip_motor_pct 50 (%.2f %.2f %.2f %.2f)", b.motor_frac[0], b.motor_frac[1], b.motor_frac[2], b.motor_frac[3]);
+        b.plant.w[0] = 400 * fc::kDeg2Rad; r->run(0.1); const float spun = b.motor_frac[1]; b.plant.w[0] = 0; r->run(0.1);
+        CHECK(spun == 0 && b.motor_frac[1] > 0.99f, "crashflip_rate 35: turning at 400 deg/s the motors stop, still again they run (%.2f)", b.motor_frac[1]);
+        b.rc[1] = 1500; b.rc[8] = 1000; const uint32_t t_off = g_stub_us / 1000; r->run(0.2);
+        CHECK(!r->tel().armed && (r->tel().blockers & ARM_BLOCKER_CRASHFLIP), "the switch off: disarmed, blocker CRASHFLIP");
+        r->run(1.5); const uint32_t t20 = cmd_at(b, motor::CMD_SPIN_DIRECTION_NORMAL, t_off);
+        CHECK(t20 >= t_off + 900, "DShot 20 to every ESC once the motors have run down (+%u ms)", t20 - t_off);
+        b.rc[4] = 1000; r->run(0.3); CHECK(!(r->tel().blockers & ARM_BLOCKER_CRASHFLIP), "the arm switch off: the blocker is gone"); }
+    {   auto r = flip_rig(ESC_PROTOCOL_DSHOT300, true, 0); VirtualBoard& b = r->board; r->run(3.0);
+        b.rc[8] = 2000; r->run(0.3); b.rc[4] = 2000; r->run(0.5);
+        CHECK(r->tel().armed && (r->tel().nav_flags & NAV_FLAGS_CRASHFLIP), "upright, the switch on: crash flip all the same");
+        b.rc[8] = 1000; const uint32_t t_off = g_stub_us / 1000; r->run(1.5);
+        CHECK(r->tel().armed && !(r->tel().nav_flags & NAV_FLAGS_CRASHFLIP) && cmd_at(b, motor::CMD_SPIN_DIRECTION_NORMAL, t_off) && b.motor_frac[0] > 0.03f,
+              "crashflip_auto_rearm: the switch off - still armed, DShot 20, then the motors run as usual (%.3f)", b.motor_frac[0]); }
+    {   auto r = flip_rig(ESC_PROTOCOL_ONESHOT125, false, 0); VirtualBoard& b = r->board; r->run(3.0);
+        b.rc[8] = 2000; r->run(0.3); b.rc[4] = 2000; r->run(0.3);
+        CHECK(!r->tel().armed && (r->tel().blockers & ARM_BLOCKER_CRASHFLIP), "Oneshot125 (no DShot): the switch on refuses the arming (CRASHFLIP)"); }
+}
+
 int main() {
     if (const char* only = getenv("WB_ONLY")) {            // one group alone (while working on it): WB_ONLY=nav ./build/test_fw
         if (!strcmp(only, "nav")) { t_nav_flow(); t_nav_mounting(); t_nav_uarts(); }
@@ -3270,6 +3307,7 @@ int main() {
         if (!strcmp(only, "magauto")) t_mag_autocal();
         if (!strcmp(only, "mavlink")) { t_mavlink(); t_mavlink_rx(); t_mavlink_gcs(); }
         if (!strcmp(only, "loiter")) t_loiter_fw();
+        if (!strcmp(only, "crashflip")) t_crash_flip_fw();
         if (!strcmp(only, "osd")) t_osd();
         if (!strcmp(only, "switch")) t_switch_modes();
         if (!strcmp(only, "stickarm")) t_stick_arm();
@@ -3334,6 +3372,7 @@ int main() {
     t_mavlink_rx();
     t_mavlink_gcs();
     t_loiter_fw();
+    t_crash_flip_fw();
     t_esc_passthrough();
     t_ekf();
     t_gps_alt();

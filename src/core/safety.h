@@ -13,6 +13,7 @@ enum ArmBlock : uint32_t {
     AB_ANGLE_TOO_HIGH = 1u << 4, AB_FAILSAFE = 1u << 5, AB_ALTHOLD_NO_BARO = 1u << 6, AB_BATT_LOW = 1u << 7,
     AB_ARM_SWITCH_ON = 1u << 8, AB_CONFIG_UNSAVED = 1u << 9, AB_CALIBRATING = 1u << 10, AB_POSHOLD_NO_GPS = 1u << 11, AB_MAG_NOT_CALIBRATED = 1u << 12,
     AB_PIN_CONFLICT = 1u << 13, AB_LOOP_RATE = 1u << 14, AB_RUNAWAY_TAKEOFF = 1u << 15, AB_RESCUE_NO_FIX = 1u << 16, AB_RESCUE_NO_COMPASS = 1u << 17, AB_MOTOR_STALL = 1u << 18,
+    AB_CRASHFLIP = 1u << 19,          // the crash flip switch with motors that cannot turn round (no DShot), or a crash flip ended by its switch (the arm switch must go off)
 };
 
 struct ArmInput {
@@ -27,6 +28,7 @@ struct ArmInput {
     bool rescue_configured = false, rescue_allow_no_fix = false;       // GPS Rescue is set up (a switch, or the failsafe procedure): home is where the craft is ARMED - with a fix
     bool rescue_no_compass = false;                     // ... but the compass is switched off: the rescue could never fly
     float tilt_deg = 0, max_arm_angle_deg = 25.0f;
+    bool crashflip = false, crashflip_ok = false;       // the CRASHFLIP switch is on; the motors can be turned round (DShot): then upside down and without a GPS fix it arms (Betaflight)
 };
 inline uint32_t arm_blockers(const ArmInput& a) {
     uint32_t b = 0;
@@ -34,11 +36,13 @@ inline uint32_t arm_blockers(const ArmInput& a) {
     if (!a.gyro_calibrated) b |= AB_GYRO_NOT_CAL;
     if (!a.rx_ok) b |= AB_RX_LOST;
     if (!a.throttle_low) b |= AB_THROTTLE_HIGH;
-    if (a.tilt_deg > a.max_arm_angle_deg) b |= AB_ANGLE_TOO_HIGH;
+    const bool flip = a.crashflip && a.crashflip_ok;
+    if (a.tilt_deg > a.max_arm_angle_deg && !flip) b |= AB_ANGLE_TOO_HIGH;
+    if (a.crashflip && !a.crashflip_ok) b |= AB_CRASHFLIP;
     if (a.failsafe_active) b |= AB_FAILSAFE;
     if (a.althold_switch && !a.baro_ok) b |= AB_ALTHOLD_NO_BARO;       // spec: Altitude Hold requires baro, warn immediately
     if (a.poshold_switch && !a.pos_source) b |= AB_POSHOLD_NO_GPS;
-    if (a.rescue_configured && !a.gps_fix && !a.rescue_allow_no_fix) b |= AB_RESCUE_NO_FIX;
+    if (a.rescue_configured && !a.gps_fix && !a.rescue_allow_no_fix && !flip) b |= AB_RESCUE_NO_FIX;
     if (a.rescue_no_compass) b |= AB_RESCUE_NO_COMPASS;
     if (a.batt_low) b |= AB_BATT_LOW;
     if (a.arm_switch_was_on_at_boot) b |= AB_ARM_SWITCH_ON;

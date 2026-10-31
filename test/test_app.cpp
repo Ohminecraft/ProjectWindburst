@@ -433,7 +433,7 @@ static void t_settings() {
     printf("[settings] validation that protects the flight code\n");
     Settings s; defaults(s);
     CHECK(validate(s.modes) == 0 && s.modes.mode[0] == 255 && s.modes.mode[15] == 255, "defaults are valid; unused mode slots stay 255");
-    s.modes.mode[2] = MODE_LOITER + 1; CHECK(validate(s.modes) == 1 && s.modes.mode[2] == 255, "an unknown mode id (from a newer firmware, or a damaged record) empties its slot - it does not become some other mode");
+    s.modes.mode[2] = MODE_CRASHFLIP + 1; CHECK(validate(s.modes) == 1 && s.modes.mode[2] == 255, "an unknown mode id (from a newer firmware, or a damaged record) empties its slot - it does not become some other mode");
     for (const SectionInfo& si : kSections) { Settings d; defaults(d); CHECK(validate_section(d, si.id) == 0, "section %s: defaults pass their own validation", si.name); }
     const float nan = NAN;
     s.pid.stab_p[1] = nan; s.pid.stab_p[2] = nan; s.calibration.acc_scale[2] = nan; s.calibration.mag_matrix[4] = nan;

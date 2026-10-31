@@ -150,6 +150,9 @@ export const FIELDS = {
   'motors.stall_drop': { label: 'Hoặc tụt còn dưới', unit: '%', help: 'phần trăm tốc độ cao nhất của motor đó kể từ lần lệnh của nó giảm gần nhất' },
   'motors.stall_min_cmd': { label: 'Chỉ xét khi lệnh từ', unit: '%', help: 'Dưới mức này (ví dụ đang idle trên mặt đất) thì motor không bị xét.' },
   'motors.stall_ms': { label: 'Kéo dài', unit: 'ms' },
+  'motors.crashflip_rate': { label: 'Crash flip: tắt dần theo tốc độ xoay', unit: '°/s', help: 'crashflip_rate của Betaflight (x10): máy xoay nhanh hơn nửa mức này thì lực giảm dần, tới mức này thì motor dừng; lật qua cạnh rồi motor cũng tự dừng. 0 = không giảm (mặc định Betaflight).' },
+  'motors.crashflip_motor_pct': { label: 'Crash flip: motor phía bên kia', unit: '%', help: 'crashflip_motor_percent của Betaflight: các motor phía không được chọn chạy bằng % này của lực. 0 = đứng yên.' },
+  'motors.crashflip_auto_rearm': { label: 'Crash flip: tự arm lại', help: 'crashflip_auto_rearm của Betaflight: gạt công tắc CRASHFLIP về tắt thì máy vẫn arm và bay như bình thường (motor dừng khoảng 1 s để đổi lại chiều quay). Tắt: máy disarm, gạt ARM về OFF rồi arm lại.' },
   'motors.esc_sensor': { label: 'Dây telemetry ESC (KISS)', help: 'Chân telemetry (T) của các ESC nối chung vào RX của một UART (chân ở tab Chân: Telemetry ESC). Firmware hỏi lần lượt từng ESC bằng bit telemetry của khung DShot; ESC trả lời nhiệt độ, điện áp, dòng, mAh và RPM. Dùng với BLHeli_32, AM32, KISS. Chỉ với DShot. Đủ cho đo pin và nhiệt độ, không đủ nhanh cho bộ lọc RPM (cần DShot hai chiều). Có hiệu lực sau khi lưu và khởi động lại.' },
   'motors.pole_count': { label: 'Số cực motor', help: 'Đếm số nam châm trên chuông motor (thường 14).' },
   'motors.idle_x10': { label: 'Motor idle', unit: '× 0,1 %', help: '55 = 5,5 %.' },
@@ -375,6 +378,7 @@ export const BLOCKERS = {
   RUNAWAY_TAKEOFF: 'motor vừa bị tắt vì runaway lúc cất cánh: kiểm tra thứ tự motor, chiều quay, chiều lắp cánh và hướng chip IMU (gạt ARM về OFF để xoá)',
   RESCUE_NO_FIX: 'đã cài GPS Rescue (có công tắc, dù đang tắt, hoặc là thủ tục failsafe) nhưng GPS chưa fix: chưa có điểm home. Không muốn chờ: bật "Cho arm khi GPS chưa fix" ở tab Vị trí (như Betaflight)',
   RESCUE_NO_COMPASS: 'đã cài GPS Rescue nhưng la bàn đang tắt hoặc không có',
+  CRASHFLIP: 'công tắc CRASHFLIP đang bật mà ESC không phải DShot (không đảo được chiều quay), hoặc crash flip vừa kết thúc bằng công tắc (gạt ARM về OFF để xoá)',
 };
 
 export const MODES = {
@@ -393,6 +397,7 @@ export const MODES = {
   ANTI_GRAVITY: { label: 'Anti Gravity (công tắc)', help: 'Có công tắc này thì Anti Gravity chỉ chạy khi công tắc bật, bất kể ô Anti Gravity ở tab PID.' },
   BLACKBOX_ERASE: { label: 'Xoá blackbox', help: 'Gạt công tắc từ tắt sang bật khi chưa arm: xoá hết log (flash hoặc các file log trên thẻ SD), xong thì còi kêu. Đang bật sẵn lúc khởi động thì không xoá; muốn xoá lần nữa phải gạt tắt rồi bật lại.' },
   LOITER: { label: 'Loiter', help: 'Giữ vị trí kiểu Loiter của ArduPilot: buông cần là máy tự giảm tốc rồi đứng yên, đẩy cần là bay với vận tốc theo độ đẩy cần (hết cần = "Loiter: tốc độ tối đa" ở tab Vị trí). Tự bật Angle và Altitude Hold. Cần GPS + la bàn hoặc optical flow như Position Hold. Bật cùng lúc với Position Hold thì Loiter được ưu tiên.' },
+  CRASHFLIP: { label: 'Crash flip (turtle)', help: 'Lật máy lại sau khi rơi ngửa (turtle mode của Betaflight). Bật công tắc này rồi mới arm: motor quay ngược chiều, cần pitch / roll chọn phía motor chạy để lật máy (đẩy pitch tới: hai motor trước), cần yaw chạy một cặp chéo (gỡ cánh kẹt). Công tắc chỉ được xét lúc arm. Gạt tắt: máy disarm, phải gạt ARM về OFF rồi mới arm lại (hoặc bay tiếp nếu bật "tự arm lại" ở tab Motor). Cần ESC DShot.' },
   MISSION: { label: 'Nhiệm vụ (AUTO)', help: 'Bay theo kế hoạch đã nạp, như AUTO của ArduPilot. Arm bằng công tắc ARM trước, rồi bật công tắc này: drone tự cất cánh và bay. Tắt công tắc là lấy lại quyền điều khiển ngay.' },
 };
 
@@ -409,7 +414,7 @@ export const ENUM_LABELS = {
   rx_protocol: { NRF24: 'nRF24 (tay phát DIY Windburst)', SPEKTRUM: 'Spektrum 2048 (DSMX, DSM2 11 ms)', SPEKTRUM1024: 'Spektrum 1024 (DSM2 22 ms)', PPM: 'PPM (một chân)', PWM: 'PWM (mỗi kênh một chân)', MSP: 'MSP (MSP_SET_RAW_RC trên cổng MSP)', MAVLINK: 'MAVLink (ELRS ở chế độ MAVLink)' },
   bidir_state: { OFF: 'tắt', ACTIVE: 'đang chạy', UNAVAILABLE: 'đã bật nhưng không chạy (driver IDF chỉ một chiều, hoặc kiểm tra lúc khởi động không đạt: xem dòng motors ở tab Tổng quan); motor chạy DShot một chiều' },
   bind_state: { IDLE: 'chưa bind', LISTEN: 'đang nghe bind', BINDING: 'đang bind', BOUND: 'đã bind', FAILED: 'bind không được' },
-  fly_mode: { ACRO: 'Acro', ANGLE: 'Angle', STABILIZE: 'Stabilize', ALTHOLD: 'Alt hold', POSHOLD: 'Pos hold', RESCUE: 'Rescue', MISSION: 'Nhiệm vụ', LOITER: 'Loiter' },
+  fly_mode: { ACRO: 'Acro', ANGLE: 'Angle', STABILIZE: 'Stabilize', ALTHOLD: 'Alt hold', POSHOLD: 'Pos hold', RESCUE: 'Rescue', MISSION: 'Nhiệm vụ', LOITER: 'Loiter', CRASHFLIP: 'Crash flip' },
   nrf_rate: { R250K: '250 kbps', R1M: '1 Mbps', R2M: '2 Mbps' },
   nrf_power: { MIN: 'thấp nhất (-18 dBm)', LOW: 'thấp (-12 dBm)', HIGH: 'cao (-6 dBm)', MAX: 'cao nhất (0 dBm)' },
   nrf_pps: { HZ50: '50 gói/s', HZ100: '100 gói/s', HZ150: '150 gói/s' },

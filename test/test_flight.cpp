@@ -1253,8 +1253,49 @@ static void t_loiter_flight() {
     p.aux7 = 1500; r.run(0.2f, p); CHECK(r.out.loiter_active && !r.out.poshold_active, "both switches on: Loiter");
 }
 
+// 0.42: crash flip (Betaflight's turtle mode): armed with the CRASHFLIP switch on, the sticks drive the motors that turn the craft
+// back over (crash_flip.h). The switch counts at the arming only. Switched off: disarmed, and no arming until the arm switch has
+// been off (crashflip_auto_rearm: flown on as usual). The motor layer turns the motors round (test_motor).
+static void t_crash_flip_core() {
+    printf("[crash flip] armed upside down, the sticks turn it over\n");
+    auto rig = [](bool dshot, float roll = 180.0f) { Rig* r = new Rig(); r->core.rc.modes.add(M_CRASHFLIP, 7, 1300, 2100); r->core.cfg.crashflip.available = dshot; r->core.configure();
+        r->pl.set_tilt(roll, 0); r->pl.held = true; return std::unique_ptr<Rig>(r); };
+    auto stopped = [](const Rig& r) { for (int i = 0; i < 4; i++) if (r.out.motor[i] != 0.0f) return false; return true; };
+    Pilot p, f; f.aux7 = 1500;          // f: the crash flip switch on
+    { auto r = rig(true); r->run(0.5f, p); p.arm = true; r->run(0.1f, p); p.arm = false;
+      CHECK(!r->out.armed && (r->out.arm_blockers & AB_ANGLE_TOO_HIGH), "upside down without the switch: refused (ANGLE_TOO_HIGH)"); }
+    { auto r = rig(true); r->run(0.5f, f); f.arm = true; r->run(0.1f, f);
+      CHECK(r->out.armed && r->out.crashflip && stopped(*r), "with the switch on: armed, crash flip; sticks centred - every motor stands");
+      f.pitch = 1; r->run(0.05f, f);
+      CHECK(fabsf(r->out.motor[1] - 1.0f) < 1e-4f && fabsf(r->out.motor[3] - 1.0f) < 1e-4f && r->out.motor[0] == 0 && r->out.motor[2] == 0, "pitch forward: the front motors at full, the rear ones stand (%.3f %.3f %.3f %.3f)", r->out.motor[0], r->out.motor[1], r->out.motor[2], r->out.motor[3]);
+      f.link = false; r->run(0.1f, f); CHECK(stopped(*r), "the link lost: the sticks count as centred - the motors stand"); f.link = true; r->run(0.6f, f);
+      f.pitch = 0; f.aux7 = 1000; r->run(0.05f, f);
+      CHECK(!r->out.armed && (r->out.arm_blockers & AB_CRASHFLIP) && stopped(*r), "the switch off: disarmed, blocker CRASHFLIP (0x%x)", r->out.arm_blockers);
+      f.aux7 = 1500; r->run(0.1f, f); CHECK(!r->out.armed, "the switch on again: still disarmed (the arm switch has to go off first)");
+      f.arm = false; r->run(0.1f, f); CHECK(!(r->out.arm_blockers & AB_CRASHFLIP), "the arm switch off: the blocker is gone");
+      f.arm = true; r->run(0.1f, f); CHECK(r->out.armed && r->out.crashflip, "armed into it again"); f.arm = false; }
+    { auto r = rig(false); r->run(0.5f, f); f.arm = true; r->run(0.1f, f); f.arm = false;
+      CHECK(!r->out.armed && (r->out.arm_blockers & AB_CRASHFLIP), "motors that cannot be turned round (no DShot): refused, blocker CRASHFLIP (0x%x)", r->out.arm_blockers); }
+    { auto r = rig(true, 0.0f); r->core.cfg.crashflip.auto_rearm = true; r->core.configure(); r->run(0.5f, f); f.arm = true; r->run(0.1f, f);
+      CHECK(r->out.armed && r->out.crashflip, "upright with the switch on: crash flip too");
+      f.aux7 = 1000; r->run(0.05f, f);
+      CHECK(r->out.armed && !r->out.crashflip && fabsf(r->out.motor[0] - 0.055f) < 0.01f, "crashflip_auto_rearm: the switch off - still armed, flown as usual (idle %.3f)", r->out.motor[0]);
+      f.aux7 = 1500; r->run(0.05f, f); CHECK(r->out.armed && !r->out.crashflip, "the switch on again in flight: nothing (it counts at the arming only)"); f.arm = false; f.aux7 = 1500; }
+    { auto r = rig(true, 0.0f); Pilot q = p; r->run(0.5f, q); q.arm = true; r->run(0.1f, q); q.aux7 = 1500; r->run(0.05f, q);
+      CHECK(r->out.armed && !r->out.crashflip, "armed as usual, the switch on afterwards: no crash flip"); }
+    { auto r = rig(true); r->core.cfg.rescue_configured = true; r->core.configure(); r->run(0.5f, f); f.arm = true; r->run(0.1f, f); f.arm = false;
+      CHECK(!(r->out.arm_blockers & AB_RESCUE_NO_FIX) && (r->out.arm_blockers & AB_RESCUE_NO_COMPASS), "GPS Rescue set up, no fix: that does not hold the crash flip off (Betaflight); a rescue without a compass still does (0x%x)", r->out.arm_blockers); }
+    {   // the attenuators get the craft's own turn rate and attitude (crashflip_rate 35 = no power at 350 deg/s)
+        auto r = rig(true); r->core.cfg.crashflip.rate_limit_dps = 350; r->core.configure(); r->run(0.5f, f); f.arm = true; r->run(0.1f, f); f.pitch = 1;
+        r->pl.w[0] = 400 * kDeg2Rad; r->run(0.05f, f); CHECK(stopped(*r), "turning at 400 deg/s: the motors stop");
+        r->pl.w[0] = 0; r->run(0.05f, f); CHECK(r->out.motor[1] > 0.99f, "still again (turned by 20 deg): full power");
+        r->pl.w[0] = 120 * kDeg2Rad; r->run(0.3f, f); CHECK(r->out.motor[1] > 0.99f, "on at 120 deg/s, turned by 56 deg: full power (%.3f)", r->out.motor[1]);
+        r->run(0.7f, f); CHECK(stopped(*r), "by 140 deg (past its side): the motors stop - it has flipped (roll %.0f)", r->out.est.att.roll);
+        r->pl.w[0] = 0; f.arm = false; f.pitch = 0; }
+}
+
 int main() {
     t_arming(); t_attitude_modes(); t_rate_loop(); t_filters_in_the_loop(); t_throttle_boost(); t_level_modes(); t_mode_details(); t_airmode(); t_compass(); t_althold(); t_failsafe(); t_uneven_cycles(); t_pid_denom(); t_stall(); t_runaway(); t_motor_layer(); t_estimator_in_flight();
-    t_position_hold(); t_nav_fence(); t_nav_request(); t_gps_rescue(); t_switch_modes(); t_stick_arm(); t_mission(); t_ground_station(); t_loiter_flight();
+    t_position_hold(); t_nav_fence(); t_nav_request(); t_gps_rescue(); t_switch_modes(); t_stick_arm(); t_mission(); t_ground_station(); t_loiter_flight(); t_crash_flip_core();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

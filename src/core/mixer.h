@@ -107,6 +107,7 @@ public:
     MixerConfig cfg;
     void configure() { n_ = mixer_motor_count(cfg.layout); for (int i = 0; i < n_; i++) row_[i] = mixer_row(cfg.layout, i); }
     int motor_count() const { return n_; }
+    const MixRow& row(int i) const { return row_[i]; }
     // thr 0..1 (stick/controller), roll/pitch/yaw = authority as a fraction of the usable motor range [idle, limit] (the PID sum / 1000,
     // as in Betaflight's mixer: motor = min + range * (throttle + mix)). out[] = absolute 0..1.
     // The pattern always keeps its full authority: at zero throttle it is slid up until no motor is below idle (Betaflight's mixer

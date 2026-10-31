@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0xCAF05FD1",
+ "hash": "0x622BBE0D",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -131,7 +131,8 @@
    "ANTI_GRAVITY",
    "BLACKBOX_ERASE",
    "MISSION",
-   "LOITER"
+   "LOITER",
+   "CRASHFLIP"
   ],
   "failsafe": [
    "NONE",
@@ -556,7 +557,8 @@
    "POSHOLD",
    "RESCUE",
    "MISSION",
-   "LOITER"
+   "LOITER",
+   "CRASHFLIP"
   ],
   "tx_throttle": [
    "ALTPOS",
@@ -583,7 +585,8 @@
    "RUNAWAY_TAKEOFF",
    "RESCUE_NO_FIX",
    "RESCUE_NO_COMPASS",
-   "MOTOR_STALL"
+   "MOTOR_STALL",
+   "CRASHFLIP"
   ],
   "health": [
    "IMU",
@@ -629,7 +632,8 @@
    "RESCUE_AVAILABLE",
    "NAV_LEAN",
    "POSHOLD_SLOW_GPS",
-   "FENCE"
+   "FENCE",
+   "CRASHFLIP"
   ],
   "ekf_flags": [
    "ALIGNED",
@@ -1684,14 +1688,37 @@
      "min": 20,
      "max": 1000,
      "desc": "for this long"
+    },
+    {
+     "n": "crashflip_rate",
+     "t": "u8",
+     "d": 0,
+     "min": 0,
+     "max": 250,
+     "scale": 10,
+     "desc": "crash flip (Betaflight crashflip_rate x 10, deg/s): the power fades out as the craft turns faster than half of this, and once it has turned past its side; 0 = no fading"
+    },
+    {
+     "n": "crashflip_motor_pct",
+     "t": "u8",
+     "d": 0,
+     "min": 0,
+     "max": 100,
+     "desc": "crash flip: the motors on the other side run at this % of the power (Betaflight crashflip_motor_percent); 0 = they stand"
+    },
+    {
+     "n": "crashflip_auto_rearm",
+     "t": "bool",
+     "d": 0,
+     "desc": "crash flip: the switch off flies on (Betaflight crashflip_auto_rearm); off = disarm, arming again after the arm switch was off"
     }
    ],
    "live": false,
    "compat": [
+    44,
     37,
     36,
-    35,
-    34
+    35
    ]
   },
   {

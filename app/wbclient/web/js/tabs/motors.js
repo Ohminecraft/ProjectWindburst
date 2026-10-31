@@ -421,6 +421,8 @@ export default {
         block(tr('Motor dừng giữa chừng'), fields('motors', ['stall_disarm', 'stall_min_rpm', 'stall_drop', 'stall_min_cmd', 'stall_ms']),
           h('div', { class: 'link-read', id: 'stall-state' }, h('span', {}, tr('Lần gần nhất: '), readout('motors', (mo) => (mo.stall_motor ? tr('motor {n} đã dừng (máy đã disarm)', { n: mo.stall_motor }) : tr('chưa có lần nào'))))),
           note(tr('Cần tốc độ của từng motor: DShot hai chiều hoặc dây telemetry ESC. Motor không có tốc độ thì không bị xét. Có hiệu lực sau khi lưu và khởi động lại.'))),
+        block(tr('Crash flip (lật lại sau khi rơi)'), fields('motors', ['crashflip_rate', 'crashflip_motor_pct', 'crashflip_auto_rearm']),
+          note(tr('Gán công tắc CRASHFLIP ở tab Chế độ. Chỉ chạy với ESC DShot (lệnh 21 đảo chiều quay, không lưu vào ESC; lệnh 20 trả lại). Có hiệu lực sau khi lưu và khởi động lại.'))),
         escToolBlock(),
         servos())));
   },

@@ -22,7 +22,7 @@ OSD hiện trong kính của các hệ FPV digital: DJI O3 / O4, Walksnail Avata
 - Đổi cài đặt cần lưu và khởi động lại.
 
 ## Các mục (thứ tự trong `pos[]`, thêm vào cuối)
-RSSI / LQ, điện áp pin (ký hiệu pin 7 mức theo khoảng cell; nhấp nháy khi pin ở mức critical), điện áp trung bình mỗi cell, dòng, mAh, mode bay (ACRO / ANGL / STAB / ALTH / POSH / RESC, `!FS!` khi failsafe), tên máy bay (chữ in hoa), thời gian bay (chỉ đếm khi arm), thời gian bật nguồn, số vệ tinh (nhấp nháy khi chưa có fix 3D), tốc độ GPS (km/h), hướng về nhà (mũi tên so với mũi máy bay, 16 hướng), khoảng cách về nhà, độ cao (bộ ước lượng), tốc độ lên / xuống, ga, tâm ngắm, đường chân trời giả (giới hạn pitch 20°, roll 40° như mặc định của Betaflight), cảnh báo, hướng mũi, góc pitch, góc roll, nhiệt độ ESC (cao nhất), chữ DISARMED.
+RSSI / LQ, điện áp pin (ký hiệu pin 7 mức theo khoảng cell; nhấp nháy khi pin ở mức critical), điện áp trung bình mỗi cell, dòng, mAh, mode bay (ACRO / ANGL / STAB / ALTH / POSH / RESC / LOIT, `FLIP` khi đang crash flip, `!FS!` khi failsafe), tên máy bay (chữ in hoa), thời gian bay (chỉ đếm khi arm), thời gian bật nguồn, số vệ tinh (nhấp nháy khi chưa có fix 3D), tốc độ GPS (km/h), hướng về nhà (mũi tên so với mũi máy bay, 16 hướng), khoảng cách về nhà, độ cao (bộ ước lượng), tốc độ lên / xuống, ga, tâm ngắm, đường chân trời giả (giới hạn pitch 20°, roll 40° như mặc định của Betaflight), cảnh báo, hướng mũi, góc pitch, góc roll, nhiệt độ ESC (cao nhất), chữ DISARMED.
 
 **Cảnh báo:** chỉ hiện một, theo thứ tự ưu tiên:
 1. `FAILSAFE`

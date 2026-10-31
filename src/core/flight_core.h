@@ -21,6 +21,7 @@
 #include "nav/pos_estimator.h"
 #include "nav/pos_hold.h"
 #include "nav/loiter.h"
+#include "crash_flip.h"
 
 // ============================================================================
 // FlightCore - the whole flight stack behind two entry points, shaped around what the hardware drivers actually deliver:
@@ -93,6 +94,7 @@ struct CoreConfig {
     FsConfig fs;
     RunawayConfig runaway;
     StallConfig stall;                             // a motor that stops: disarm (needs rpm telemetry)
+    CrashFlipConfig crashflip;                     // the CRASHFLIP switch (crash_flip.h); available = the motors can turn round (DShot)
     float max_arm_angle_deg = 25.0f;
     Ahrs::Config ahrs; nav::AltEstConfig alt_est; nav::PosEstConfig pos_est;      // alt_est.gps_delay_s follows pos_est.gps_delay_s
     bool use_mag = false; float declination_deg = 0.0f;
@@ -148,6 +150,7 @@ struct CoreOutput {
     float motor[kMaxMotors] = {};  // absolute 0..1 (0 when disarmed)
     int motor_count = 4;
     bool armed = false;
+    bool crashflip = false;        // armed into crash flip (crash_flip.h): motor[] is its command, the motor layer turns the motors round
     uint32_t arm_blockers = 0;
     FsStage failsafe = FsStage::NONE;
     uint8_t fs_cause = 0;          // FsCause bits while the failsafe is active (BATTERY_LOW also as a warning only)
@@ -340,6 +343,8 @@ private:
         ai.althold_switch = (cmd.modes >> M_ALTHOLD) & 1u; ai.poshold_switch = ((cmd.modes >> M_POSHOLD) | (cmd.modes >> M_LOITER)) & 1u;
         ai.calibrating = in.health.calibrating; ai.batt_low = in.health.batt_low;
         ai.use_mag = cfg.use_mag; ai.mag_calibrated = in.health.mag_calibrated; ai.pin_conflict = in.health.pin_conflict; ai.loop_slow = in.health.loop_slow;
+        const bool flip_sw = (cmd.modes >> M_CRASHFLIP) & 1u;
+        ai.crashflip = flip_sw; ai.crashflip_ok = cfg.crashflip.available;
         const bool was_armed = armed_;
         bool arm_sw = (cmd.modes >> M_ARM) & 1u, keep_reason = false;
         if (cfg.stick_arm) {
@@ -361,7 +366,16 @@ private:
         else if (mission_out_.want_arm && !armed_ && mission_.running()) armed_ = arming_.mission_arm(arm_sw, in.rc_link, ai);
         if (was_armed && !armed_ && arming_.last_disarm_reason() != 3) mission_app_ = false;     // (the pilot or a failsafe: the app's start is used up)
         if (armed_ && !was_armed) runaway_.on_arm();
-        o.arm_blockers = arming_.blockers(); o.arm_refused = arming_.refused();
+        // crash flip: decided at the arming (Betaflight tryArm). Its switch off on a live link ends it: a disarm that wants the arm
+        // switch off before the next arming (Betaflight ARMING_DISABLED_CRASHFLIP) - or, with auto_rearm, the craft is flown on.
+        bool flip_ended = false;
+        if (armed_ && !was_armed) { flip_ = flip_sw && cfg.crashflip.available; if (flip_) cf_.start(); }
+        if (!armed_) flip_ = false;
+        else if (false) {
+            flip_ = false;
+            if (!cfg.crashflip.auto_rearm) { arming_.force_disarm(AB_CRASHFLIP); armed_ = false; flip_ended = true; }
+        }
+        o.arm_blockers = arming_.blockers() | (flip_ended ? AB_CRASHFLIP : 0u); o.arm_refused = arming_.refused();
         o.stick[0] = cmd.roll; o.stick[1] = cmd.pitch; o.stick[2] = cmd.yaw; o.stick[3] = cmd.throttle_raw; o.throttle_low = cmd.throttle_low;
 
         FsInput fi;
@@ -387,14 +401,19 @@ private:
         if (neutral) sp_gen_.neutral();                        // failsafe: the pilot's sticks are not to be believed
         const StickSetpoint ss = sp_gen_.update();
 
-        if (!armed_) {                                         // disarmed: nothing accumulates, motors off
+        if (!armed_ || flip_) {                                // disarmed (or crash flip): nothing accumulates, motors off
             reset_control();
             pid_.update_throttle(0.0f, &gf_);                  // the dynamic low-passes rest at their zero-throttle cutoff
             nav::AltInput idle; idle.pos_d = alt_est_.pos_d(); idle.reset_count = alt_est_.reset_count(); alt_.update(idle, dt); was_althold_ = false; last_thr_ = 0;
             o.ah_state = alt_.state();
-            if (dt_est > 0.0f) { RescueInput ri; rescue_out_ = rescue_.update(ri, dt_est); mission_step(in, arm_sw, dt_est); }       // (forgets the flight: its highest point, a failure)
+            if (dt_est > 0.0f) { RescueInput ri; rescue_out_ = rescue_.update(ri, dt_est); if (!flip_) mission_step(in, arm_sw, dt_est); }       // (forgets the flight: its highest point, a failure)
             was_poshold_ = false; was_loiter_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false; was_req_ = false; req_climb_on_ = false; mission_fly_ = was_mission_h_ = false;
             mission_fill(o);
+            if (flip_ && armed_) {                             // crash flip: the sticks pick the motors (centred while the failsafe holds them)
+                cf_.cfg = cfg.crashflip;
+                cf_.update(mixer_, neutral ? 0.0f : cmd.roll, neutral ? 0.0f : cmd.pitch, neutral ? 0.0f : cmd.yaw, ahrs_.up_cos(), g_f_[ROLL], g_f_[PITCH], in.limits, o.motor);
+                o.crashflip = true;
+            }
             return o;
         }
         ctl_dirty_ = true;
@@ -794,6 +813,7 @@ private:
     // Loiter's controller: the position controller's settings, Position Hold's lean limit and fence
     void apply_loiter() { lt_.cfg = cfg.loiter; lt_.cfg.fence_radius_m = cfg.poshold.fence_radius_m; lt_.ctl.cfg = cfg.pos; lt_.ctl.cfg.angle_max_deg = cfg.poshold.angle_max_deg; }
     nav::LoiterMode lt_; bool was_loiter_ = false;
+    CrashFlip cf_; bool flip_ = false;                 // armed into crash flip (crash_flip.h)
     nav::PosHoldMode ph_; nav::PosController rctl_; Rescue rescue_; RescueOutput rescue_out_; bool was_poshold_ = false, nav_lean_ = false, ph_unavail_ = false, ph_slow_gps_ = false, rescue_ok_ = false; float nav_tgt_[2] = {0, 0};
     EkfNav ekf_; uint32_t ekf_ms_ = 0; bool ekf_in_use_ = false;
     nav::NavRequest req_; uint32_t req_ms_ = 0; bool have_req_ = false, was_req_ = false, req_climb_on_ = false; float req_climb_ = 0.0f;

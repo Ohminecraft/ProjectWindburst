@@ -16,7 +16,7 @@
 //   [0xC8][len][type][payload][crc8 DVB-S2 over type + payload], all multi-byte values big-endian
 //   0x08 battery      voltage u16 (0.1 V), current u16 (0.1 A), used u24 (mAh), remaining u8 (%)
 //   0x1E attitude     pitch, roll, yaw i16 (rad x 10000; yaw sent as -pi..pi)
-//   0x21 flight mode  text + 0: "!FS!" failsafe, "RTH" rescue, "LOIT", "POSH", "ALTH", "ANGL", "STAB", "ACRO"; disarmed: "*" appended,
+//   0x21 flight mode  text + 0: "!FS!" failsafe, "FLIP" crash flip, "RTH" rescue, "LOIT", "POSH", "ALTH", "ANGL", "STAB", "ACRO"; disarmed: "*" appended,
 //                     or "!ERR" when something blocks arming
 //   0x02 GPS          lat, lon i32 (deg x 1e7), ground speed u16 (km/h x 10), course u16 (deg x 100), altitude u16 (m + 1000),
 //                     satellites u8 - only with a GPS module
@@ -36,11 +36,12 @@ struct TelemetryIn {
     float roll_deg = 0, pitch_deg = 0, yaw_deg = 0;
     bool have_gps = false; bool gps_fix = false; int32_t lat = 0, lon = 0; uint16_t gs_cms = 0, course_ddeg = 0; float alt_m = 0; uint8_t sats = 0;
     bool have_vario = false; float vz_ms = 0;
-    bool armed = false, arming_blocked = false, failsafe = false, rescue = false, poshold = false, althold = false, angle = false, stabilize = false, loiter = false;
+    bool armed = false, arming_blocked = false, failsafe = false, rescue = false, poshold = false, althold = false, angle = false, stabilize = false, loiter = false, crashflip = false;
 };
 
 inline const char* flight_mode(const TelemetryIn& t) {
     if (t.failsafe) return "!FS!";
+    if (t.crashflip) return "FLIP";
     if (t.rescue) return "RTH";
     if (t.loiter) return "LOIT";
     if (t.poshold) return "POSH";

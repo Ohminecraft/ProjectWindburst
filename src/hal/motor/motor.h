@@ -72,10 +72,11 @@ public:
     const char* failure() const { return hw_ ? hw_->why_not() : nullptr; }      // the backend's own reason when begin() failed
 
     // now_us from micros(). cmd[] = mixer output for logical motors, absolute 0..1.
-    WB_FAST void update(uint32_t now_us, const float cmd[], bool armed) {
+    // flip: armed into crash flip (fc::CoreOutput::crashflip) - the motors turn the other way (MotorOutputManager::update)
+    WB_FAST void update(uint32_t now_us, const float cmd[], bool armed, bool flip = false) {
         if (!ok_) return;
         motor::Frame f;
-        mgr_.update(now_us, cmd, armed, f);
+        mgr_.update(now_us, cmd, armed, f, flip);
         hw_->write(f);
     }
     WB_FAST void pollTelemetry(uint32_t now_ms) {

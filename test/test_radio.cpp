@@ -87,7 +87,9 @@ static void t_packets() {
       wbr::Telemetry g; CHECK(n == 7 && wbr::decode_telemetry(b, n, g) && g.armed && !g.failsafe && g.mode == wbp::FLY_MODE_ALTHOLD && g.batt_cv == 1587 && g.lq == 97, "telemetry: 7 bytes round trip");
       b[3] ^= 1; CHECK(!wbr::decode_telemetry(b, n, g), "damaged telemetry refused"); }
     { wbr::Telemetry t; t.mode = wbp::FLY_MODE_LOITER; uint8_t b[32]; const uint8_t n = wbr::encode_telemetry(t, b); wbr::Telemetry g;
-      CHECK(wbr::decode_telemetry(b, n, g) && g.mode == wbp::FLY_MODE_LOITER, "Loiter (0.41, the last flight mode) passes on the ACK telemetry"); }
+      CHECK(wbr::decode_telemetry(b, n, g) && g.mode == wbp::FLY_MODE_LOITER, "Loiter (0.41) passes on the ACK telemetry"); }
+    { wbr::Telemetry t; t.mode = wbp::FLY_MODE_CRASHFLIP; uint8_t b[32]; const uint8_t n = wbr::encode_telemetry(t, b); wbr::Telemetry g;
+      CHECK(wbr::decode_telemetry(b, n, g) && g.mode == wbp::FLY_MODE_CRASHFLIP, "crash flip (0.42, the last flight mode) passes on the ACK telemetry"); }
     { wbr::BindOffer o; const uint8_t a[5] = {0x3C, 1, 2, 3, 4}; memcpy(o.addr, a, 5); o.rf_channel = 80; o.rate = wbp::NRF_RATE_R1M; o.pps = wbp::NRF_PPS_HZ150; uint8_t b[32]; const uint8_t n = wbr::encode_bind(o, b);
       wbr::BindOffer g; CHECK(n == 10 && wbr::decode_bind(b, n, g) && !memcmp(g.addr, a, 5) && g.rf_channel == 80 && g.rate == wbp::NRF_RATE_R1M && g.pps == wbp::NRF_PPS_HZ150, "bind offer round trip");
       o.rf_channel = 126; wbr::encode_bind(o, b); CHECK(!wbr::decode_bind(b, n, g), "bind offer with RF channel 126 refused");

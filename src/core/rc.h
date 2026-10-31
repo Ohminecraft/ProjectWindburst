@@ -33,8 +33,10 @@ inline float rc_throttle_cmd(uint16_t us) { return clampf((float)((int)us - kRcM
 // general.airmode / pid.anti_gravity then only say how it works / are ignored); without a switch the setting alone decides.
 // M_BLACKBOX_ERASE = flipping it on while disarmed erases the log memory (bb_service.h; Betaflight BLACKBOX ERASE).
 // M_LOITER = ArduCopter's Loiter (nav/loiter.h, 0.41): the stick asks for a velocity; it brings Angle and Altitude Hold with it.
+// M_CRASHFLIP = Betaflight's crash flip / turtle mode (crash_flip.h, 0.42): on at the arming, the motors turn the other way and the
+// sticks turn an upside-down craft back over. It counts at the arming only.
 enum Mode : uint8_t { M_ARM, M_ANGLE, M_STABILIZE, M_ALTHOLD, M_POSHOLD, M_FAILSAFE_SW, M_BEEPER, M_BLACKBOX, M_CALIB, M_RESCUE,
-                      M_ACRO_TRAINER, M_AIRMODE, M_ANTI_GRAVITY, M_BLACKBOX_ERASE, M_MISSION, M_LOITER, M_COUNT };
+                      M_ACRO_TRAINER, M_AIRMODE, M_ANTI_GRAVITY, M_BLACKBOX_ERASE, M_MISSION, M_LOITER, M_CRASHFLIP, M_COUNT };
 
 struct ModeRange { uint8_t mode; uint8_t aux; uint16_t lo_us, hi_us; }; // active when lo <= aux < hi (like BF, 900..2100 clamp)
 

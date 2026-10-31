@@ -91,6 +91,9 @@ Tab Motor, khối "Motor wizard": thứ tự motor và chiều quay được tì
 Firmware: `FlightApp::apply_motor_order()`. Khi section `motors` được ghi, nếu so với lúc khởi động chỉ có `order` / `reversed_mask` đổi, thì thứ tự và chiều được áp ngay (`MotorOutputManager::set_order()`). Thứ tự phải là hoán vị của các motor, nếu không thì giữ thứ tự cũ. Có field khác đổi thì không áp gì cả và báo cần khởi động lại, như trước. Khi thứ tự thật sự đổi, lệnh test và lệnh DShot đang chờ (nhắm vào slot cũ) bị bỏ.
 Kiểm chứng: `test_motor` (`set_order`), `test_fw` nhóm motor test (thứ tự mới chạy ngay, slot đúng quay, thứ tự sai bị từ chối, đổi giao thức thì không áp), 7 mutant `wizard:`. Trang thật: `test_gui_browser.py::test_motor_wizard` (viết nhưng chưa chạy được trên máy này). **Chưa thử trên mạch.**
 
+### Crash flip (0.42)
+Lúc arm vào crash flip, `MotorOutputManager` gửi DShot 21 cho mọi motor (10 lần), lúc hết thì gửi DShot 20. Các lệnh này quay motor so với chiều đã lưu trong ESC và không được lưu. Đây là trường hợp duy nhất có lệnh DShot gửi đi khi máy đang arm. Trong lúc lệnh chưa đi hết thì motor không nhận gì khác. Khi đang crash flip, motor có lệnh 0 thì đứng yên chứ không chạy idle. Xem `docs/MODES.md`, mục Crash flip.
+
 ## Giao thức (0.8.2)
 - **ProShot1000** (Betaflight `loadDmaBufferProshot`): cùng gói 16 bit như DShot, gửi thành 4 xung nibble (nibble cao trước), mỗi xung trong ô 4 µs, mức cao 1 µs + nibble × 125 ns; 16 µs một khung. Chỉ một chiều. Mang được lệnh DShot (beacon, chiều quay...), như Betaflight coi ProShot là một giao thức DShot. Cần ESC hỗ trợ (BLHeli_32 có; BLHeli_S / Bluejay không).
 - **Brushed**: motor chổi than qua MOSFET, LEDC 16 kHz, 1000..2000 = 0..100 % duty.

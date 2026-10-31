@@ -2765,6 +2765,26 @@ export const EN = {
     "Loiter: top speed",
   "Tốc độ khi đẩy hết cần trong Loiter (LOIT_SPEED_MS của ArduPilot); nửa cần cho khoảng nửa tốc độ đó (theo đường cong rate như Angle). Mặc định 12,5 m/s; người mới nên để 3 - 5 m/s.":
     "The speed at full stick in Loiter (ArduPilot LOIT_SPEED_MS); half the stick gives about half of it (through the rate curve, as Angle). Default 12.5 m/s; 3 - 5 m/s for a beginner.",
+  "Lật máy lại sau khi rơi ngửa (turtle mode của Betaflight). Bật công tắc này rồi mới arm: motor quay ngược chiều, cần pitch / roll chọn phía motor chạy để lật máy (đẩy pitch tới: hai motor trước), cần yaw chạy một cặp chéo (gỡ cánh kẹt). Công tắc chỉ được xét lúc arm. Gạt tắt: máy disarm, phải gạt ARM về OFF rồi mới arm lại (hoặc bay tiếp nếu bật \"tự arm lại\" ở tab Motor). Cần ESC DShot.":
+    "Turns the craft back over after it landed upside down (Betaflight's turtle mode). Switch it on, then arm: the motors turn the other way, the pitch / roll stick picks the side whose motors run to flip it (pitch forward: the two front motors), the yaw stick runs one diagonal pair (a stuck prop). The switch counts at the arming only. Switched off: the craft disarms, and arms again only after ARM was off (or flies on with \"auto re-arm\" in the Motors tab). Needs DShot ESCs.",
+  "công tắc CRASHFLIP đang bật mà ESC không phải DShot (không đảo được chiều quay), hoặc crash flip vừa kết thúc bằng công tắc (gạt ARM về OFF để xoá)":
+    "the CRASHFLIP switch is on but the ESCs are not DShot (the spin direction cannot be reversed), or a crash flip was just ended by its switch (switch ARM off to clear)",
+  "Crash flip: tắt dần theo tốc độ xoay":
+    "Crash flip: fade out with the turn rate",
+  "crashflip_rate của Betaflight (x10): máy xoay nhanh hơn nửa mức này thì lực giảm dần, tới mức này thì motor dừng; lật qua cạnh rồi motor cũng tự dừng. 0 = không giảm (mặc định Betaflight).":
+    "Betaflight crashflip_rate (x10): turning faster than half of this the power fades, at this rate the motors stop; once it has turned past its side the motors stop as well. 0 = no fading (Betaflight's default).",
+  "Crash flip: motor phía bên kia":
+    "Crash flip: motors on the other side",
+  "crashflip_motor_percent của Betaflight: các motor phía không được chọn chạy bằng % này của lực. 0 = đứng yên.":
+    "Betaflight crashflip_motor_percent: the motors on the side not picked run at this % of the power. 0 = they stand.",
+  "Crash flip: tự arm lại":
+    "Crash flip: auto re-arm",
+  "crashflip_auto_rearm của Betaflight: gạt công tắc CRASHFLIP về tắt thì máy vẫn arm và bay như bình thường (motor dừng khoảng 1 s để đổi lại chiều quay). Tắt: máy disarm, gạt ARM về OFF rồi arm lại.":
+    "Betaflight crashflip_auto_rearm: switching CRASHFLIP off keeps the craft armed and it flies as usual (the motors stand about 1 s while their direction is set back). Off: the craft disarms; switch ARM off, then arm again.",
+  "Crash flip (lật lại sau khi rơi)":
+    "Crash flip (turning over after a crash)",
+  "Gán công tắc CRASHFLIP ở tab Chế độ. Chỉ chạy với ESC DShot (lệnh 21 đảo chiều quay, không lưu vào ESC; lệnh 20 trả lại). Có hiệu lực sau khi lưu và khởi động lại.":
+    "Assign a CRASHFLIP switch in the Modes tab. DShot ESCs only (command 21 reverses the spin, not stored in the ESC; command 20 sets it back). Takes effect after saving and a restart.",
   "MSP (MSP_SET_RAW_RC trên cổng MSP)":
     "MSP (MSP_SET_RAW_RC on the MSP port)",
   "Cổng MSP (flow, GPS, la bàn, khí áp kế, receiver)":
@@ -3519,5 +3539,5 @@ export const SAME = [
   "MAVLink 2", "System ID", "Telemetry (MAVLink)", "Telemetry RX", "Telemetry TX",
   "Motor wizard",
   "MSP DisplayPort (DJI, Walksnail, HDZero)", "HD 53 x 20 (DJI, Walksnail)", "HDZero 50 x 18", "SD 30 x 16", "OSD",
-  "SCK", "MISO", "MOSI", "CSN", "CE", "% / s", "Acro", "Alt hold", "Pos hold", "Rescue", "Loiter", "250 kbps", "1 Mbps", "2 Mbps", "Chip", "(ADC 0..4095)",
+  "SCK", "MISO", "MOSI", "CSN", "CE", "% / s", "Acro", "Alt hold", "Pos hold", "Rescue", "Loiter", "Crash flip", "Crash flip (turtle)", "250 kbps", "1 Mbps", "2 Mbps", "Chip", "(ADC 0..4095)",
 ];

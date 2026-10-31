@@ -1,5 +1,6 @@
 
 Cần test:
+- 0.42.0 Crash flip (docs/MODES.md, mục Crash flip): ESC DShot (BLHeli_32 / AM32 / Bluejay, BLHeli_S >= 16.7); gán công tắc CRASHFLIP; không lắp cánh trước: bật CRASHFLIP, arm -> motor đứng yên; đẩy pitch tới -> hai motor trước quay NGƯỢC chiều thường; roll, yaw; tắt CRASHFLIP -> disarm, ARM OFF rồi ON -> motor quay đúng chiều cũ (DShot 20 đã tới). Lắp cánh, máy úp ngửa trên cỏ: lật lại được; thử `crashflip_rate` 350 (motor tự dừng khi lật qua cạnh); thử auto re-arm
 - 0.41.0 Loiter (docs/NAV.md, mục Loiter): gán công tắc LOITER, đặt "Loiter: tốc độ tối đa" 3 - 5 m/s; cất cánh ở Angle + Altitude Hold, bật LOITER khi đang treo: đứng yên; đẩy cần: bay đều theo độ đẩy; buông: tự giảm tốc rồi đứng (không giật ngược); thử gió; bật cùng Position Hold: Loiter. Mission Planner / QGC: chọn Loiter từ ground station
 - 0.40.1 Mission Planner (docs/MAVLINK.md, mục "Dùng với Mission Planner"): bật "Mission Planner: dòng home đầu mission"; nối Mission Planner; tên chế độ đúng; Write WPs (TAKEOFF đầu, Alt Relative) rồi Read WPs: đủ lệnh, không mất TAKEOFF; Actions -> Set Mode AltHold / Auto / RTL; số WP đang bay trên HUD khớp bảng
 - 0.40.0 ground station qua MAVLink (docs/MAVLINK.md, mục "Nhận từ ground station"): nạp firmware + build lại Windburst.exe (schema đổi). Qua link ELRS MAVLink (hoặc radio telemetry có nối dây RX): Mission Planner / QGC nối được, thấy đúng tên chế độ (QGC: danh sách AVAILABLE_MODES), điểm home trên bản đồ; nạp một mission ngắn (TAKEOFF 5 m, WAYPOINT 10 m, LAND) -> MISSION_ACK OK, app (sau khi disarm) báo "Ground station vừa nạp kế hoạch mới" và tab Nhiệm vụ hiện nó; tải mission về khớp; đổi chế độ Alt Hold từ ground station rồi gạt công tắc mode -> tay phát lấy lại; arm bằng công tắc, chọn AUTO -> bay mission, ground station thấy lệnh đang bay; RTL từ ground station; DISARM khi đã đáp. Arm từ ground station chỉ thử khi bật "Cho ground station arm", máy tháo cánh. Mission Planner: xem item 0 có bị hiểu là home không
@@ -21,6 +22,7 @@ Cần test:
 - OSD 0.33: bật vài mục mới (thanh la bàn, thanh bên, vĩ/kinh độ, thanh pin cần battery.capacity_mah) xem đúng chỗ trong kính; bay xong disarm xem bảng thống kê
 
 Hoàn Thành:
+- 0.42.0: crash flip (turtle mode của Betaflight) gán vào mục Mode - lật máy ngửa lại bằng cần, DShot đảo chiều quay (completed, chưa thử trên mạch)
 - 0.41.0: chế độ Loiter kiểu ArduCopter (cần = vận tốc, tự dừng, giữ độ cao), chọn được từ công tắc và ground station (completed, chưa thử trên mạch)
 - 0.40.0: MAVLink hai chiều với ground station - nạp / tải mission (cùng mission của app), tên chế độ (AVAILABLE_MODES), home, đổi chế độ / RTL / bắt đầu mission / arm (cài đặt) / disarm (completed, chưa thử trên mạch)
 - 0.39.0: receiver MAVLink cho ELRS chế độ MAVLink - một link cho cả điều khiển lẫn telemetry, điều tiết theo RADIO_STATUS như Betaflight / ArduPilot (completed, chưa thử trên mạch)

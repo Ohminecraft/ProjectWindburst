@@ -33,6 +33,7 @@ static void t_elements() {
     CHECK(text(E_CURRENT, s) == "12.35" + sym({SYM_AMP}) && text(E_MAH, s) == "1234" + sym({SYM_MAH}), "current, mAh");
     s.mode = MODE_ALTHOLD; CHECK(text(E_MODE, s) == "ALTH", "flight mode");
     s.failsafe = true; CHECK(text(E_MODE, s) == "!FS!", "failsafe wins"); s.failsafe = false;
+    { State f = s; f.mode = MODE_LOITER; CHECK(text(E_MODE, f) == "LOIT", "Loiter (0.41)"); f.mode = MODE_FLIP; CHECK(text(E_MODE, f) == "FLIP", "crash flip (0.42)"); }
     // 0.36: a rescue that flies - ArduPilot's mode names, and on the warning line the way still to fly home
     { State r = s; char w[24];
       r.rescue = RESC_RTL; r.rescue_left_m = 123.4f; rescue_text(r, w, sizeof(w)); CHECK(text(E_MODE, r) == "RTL" && std::string(w) == "RTL 123M", "RTL on the way: mode RTL, '%s'", w);

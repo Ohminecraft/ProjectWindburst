@@ -52,7 +52,7 @@ Có chân `pins.rx_tx` và giao thức `CRSF` → firmware gửi khung telemetry
 |---|---|
 | `0x08` pin | điện áp u16 (0,1 V), dòng u16 (0,1 A), đã dùng u24 (mAh), còn lại u8 (%) |
 | `0x1E` tư thế | pitch, roll, yaw i16 (rad × 10000; yaw gửi trong −π..π) |
-| `0x21` chế độ bay | chuỗi: `!FS!` failsafe, `RTH` rescue, `POSH`, `ALTH`, `ANGL`, `STAB`, `ACRO`; chưa arm: thêm `*`, hoặc `!ERR` khi có thứ chặn arm |
+| `0x21` chế độ bay | chuỗi: `!FS!` failsafe, `FLIP` crash flip, `RTH` rescue, `LOIT`, `POSH`, `ALTH`, `ANGL`, `STAB`, `ACRO`; chưa arm: thêm `*`, hoặc `!ERR` khi có thứ chặn arm |
 | `0x02` GPS (khi có module GPS) | lat, lon i32 (độ × 1e7; 0 khi chưa fix), tốc độ u16 (km/h × 10), hướng u16 (độ × 100), độ cao u16 (m + 1000, độ cao ước lượng), số vệ tinh |
 | `0x07` vario (khi có ước lượng độ cao) | tốc độ lên xuống i16 (cm/s) |
 

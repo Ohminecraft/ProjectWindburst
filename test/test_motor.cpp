@@ -96,7 +96,7 @@ static void t_pulse() {
     CHECK(fabsf(e.high - (2047 - 1999 * 0.5f)) < 0.01f, "DShot limit 50%%");
 }
 
-static Frame run_once(MotorOutputManager& m, uint32_t us, std::vector<float> f, bool armed) { Frame o; float c[8] = {}; for (size_t i = 0; i < f.size(); i++) c[i] = f[i]; m.update(us, c, armed, o); return o; }
+static Frame run_once(MotorOutputManager& m, uint32_t us, std::vector<float> f, bool armed, bool flip = false) { Frame o; float c[8] = {}; for (size_t i = 0; i < f.size(); i++) c[i] = f[i]; m.update(us, c, armed, o, flip); return o; }
 
 static void t_manager() {
     printf("[manager] arm/disarm, idle, limit, reorder, test sliders\n");
@@ -232,6 +232,59 @@ static void t_commands() {
       t.test_motor(1, 0.0f, 2000000); CHECK(!t.testing(2000100), "a slider at zero is not a running test");
       MotorOutputManager w; w.cfg.protocol = PROTO_DSHOT300; w.begin(); run_once(w, 0x90000000u, {0, 0, 0, 0}, false);
       CHECK(!w.testing(0x90000000u) && w.beacon_all(1, 0x90000000u), "36 minutes after power-on (micros() past 2^31): still 'no test', tones still work"); }
+}
+
+// 0.42: crash flip (Betaflight's turtle mode, core.c tryArm / disarm). Armed into it, every motor gets DShot 21 (turn the other way
+// than the stored direction; not saved) ten times before anything is flown; while it lasts a motor commanded 0 STOPS (no idle); when
+// it ends, DShot 20 once the motors have run down.
+static void t_crash_flip() {
+    printf("[crash flip] the spin direction for the flight\n");
+    auto count = [](const Frame& f, uint16_t v) { int n = 0; for (int s = 0; s < 4; s++) if (f.send && f.value[s] == v) n++; return n; };
+    auto driven = [](const Frame& f) { for (int s = 0; s < 4; s++) if (f.send && f.value[s] >= 48) return true; return false; };
+    const uint16_t idle = (uint16_t)lroundf(48 + 0.055f * 1999), v06 = (uint16_t)lroundf(48 + 0.6f * 1999), v01 = (uint16_t)lroundf(48 + 0.1f * 1999);
+    MotorOutputManager m; m.cfg.protocol = PROTO_DSHOT300; m.begin();
+    uint32_t u = 0; Frame f;
+    for (; u < 100000; u += 250) f = run_once(m, u, {0, 0, 0, 0}, false, true);
+    CHECK(!m.commands_pending() && f.value[0] == 0, "disarmed with the crash flip switch on: no command (it counts from the arming)");
+    {   int n21 = 0, partial = 0; uint32_t first = 0, last = 0, flown = 0; const uint32_t t_arm = u;
+        for (; u < t_arm + 200000; u += 250) {
+            f = run_once(m, u, {0, 0.6f, 0, 0}, true, true);
+            const int k = count(f, 21); if (k) { n21++; last = u; if (!first) first = u; if (k != 4) partial++; }
+            if (!flown && driven(f)) flown = u;
+        }
+        CHECK(n21 == 10 && partial == 0 && first >= t_arm + 10000, "armed into it: DShot 21 to all four motors in the same frames, 10 times, after the 10 ms pause (%d, first at +%u us)", n21, first - t_arm);
+        CHECK(flown > last, "nothing is flown before the last of them");
+        CHECK(f.value[1] == v06 && f.value[0] == 0 && f.value[2] == 0 && f.value[3] == 0, "then the commanded motor runs (%u), a motor at 0 STOPS - no idle while it flips (%u)", f.value[1], f.value[0]); }
+    {   const uint32_t t_off = u; int n20 = 0; uint32_t first = 0; bool zeros = true;
+        for (; u < t_off + 1500000; u += 250) {
+            f = run_once(m, u, {0, 0, 0, 0}, false, false);
+            if (count(f, 20) == 4) { n20++; if (!first) first = u; }
+            if (!first && driven(f)) zeros = false;
+        }
+        CHECK(zeros && n20 == 10 && first >= t_off + 1000000, "disarmed: zero frames while the motors run down, then DShot 20 to all of them x10 (first at +%u ms)", (first - t_off) / 1000);
+        f = run_once(m, u, {0, 0, 0, 0}, true, false); u += 250;
+        CHECK(!m.commands_pending() && f.value[0] == idle, "an ordinary arming afterwards: idle from the first frame, no command"); }
+    {   // crashflip_auto_rearm: the switch goes off while armed - the motors stand, DShot 20, then the craft is flown as usual
+        MotorOutputManager a; a.cfg.protocol = PROTO_DSHOT300; a.begin(); uint32_t t = 0;
+        for (; t < 200000; t += 250) run_once(a, t, {0, 0.6f, 0, 0}, true, true);
+        const uint32_t t_off = t; int n20 = 0; uint32_t first = 0, back = 0; bool still = true;
+        for (; t < t_off + 1500000; t += 250) {
+            f = run_once(a, t, {0.1f, 0.1f, 0.1f, 0.1f}, true, false);
+            if (count(f, 20) == 4) { n20++; if (!first) first = t; }
+            if (!back && driven(f)) { back = t; if (f.value[0] != v01) still = false; }
+            if (!first && driven(f)) still = false;
+        }
+        CHECK(still && n20 == 10 && first >= t_off + 1000000 && back > first, "still armed: the motors stand until they have run down and DShot 20 is out, then they run (%u)", f.value[0]); }
+    {   // armed into crash flip again before the 20 went out: 21 again, the 20 is dropped (the ESCs still turn the other way)
+        MotorOutputManager b; b.cfg.protocol = PROTO_DSHOT300; b.begin(); uint32_t t = 0;
+        for (; t < 200000; t += 250) run_once(b, t, {0, 0.6f, 0, 0}, true, true);
+        for (; t < 500000; t += 250) run_once(b, t, {0, 0, 0, 0}, false, false);
+        int n20 = 0, n21 = 0;
+        for (; t < 2500000; t += 250) { f = run_once(b, t, {0, 0.6f, 0, 0}, true, true); n20 += count(f, 20) > 0; n21 += count(f, 21) > 0; }
+        CHECK(n20 == 0 && n21 == 10 && f.value[1] == v06, "re-armed into it within the second: no 20, 21 x10 (%d / %d)", n20, n21); }
+    {   MotorOutputManager p; p.cfg.protocol = PROTO_ONESHOT125; p.cfg.pulse.disarmed = 0; p.begin();
+        f = run_once(p, 0, {0, 0.6f, 0, 0}, true, true);
+        CHECK(!p.commands_pending() && f.value[0] == 1055, "a pulse protocol cannot turn a motor round: no command, idle as usual (%u)", f.value[0]); }
 }
 
 // ESC simulator: builds the reply a real ESC sends for a given rpm
@@ -411,6 +464,6 @@ static void t_esc_wire() {
 }
 
 int main() {
-    t_frame(); t_gcr(); t_pulse(); t_manager(); t_commands(); t_telemetry(); t_proshot_brushed(); t_esc_wire(); t_can_esc();
+    t_frame(); t_gcr(); t_pulse(); t_manager(); t_commands(); t_telemetry(); t_proshot_brushed(); t_esc_wire(); t_can_esc(); t_crash_flip();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

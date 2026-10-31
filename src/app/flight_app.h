@@ -883,7 +883,7 @@ private:
         const uint32_t t_core = micros();
         const bool ctl = last_out_.pid_stepped;           // a control cycle (every pid_denom-th sample): a new motor command, a log record
         if (ctl) {
-            motors.update(now_us, last_out_.motor, last_out_.armed);
+            motors.update(now_us, last_out_.motor, last_out_.armed, last_out_.crashflip);
             motors.pollTelemetry(now_ms);                 // the ESC replies of the previous frame: fresh rpm for the next cycle's filters
             pid_loops_++;
         }
@@ -1207,7 +1207,7 @@ private:
         c.alt_m = t.alt_valid ? t.z : t.alt_cm * 0.01f;
         c.have_vario = t.alt_valid; c.vz_ms = t.vz;
         c.armed = t.armed; c.arming_blocked = !t.armed && t.blockers != 0; c.failsafe = t.failsafe != 0;
-        c.rescue = (t.modes >> fc::M_RESCUE) & 1u; c.loiter = (t.modes >> fc::M_LOITER) & 1u; c.poshold = (t.modes >> fc::M_POSHOLD) & 1u; c.althold = (t.modes >> fc::M_ALTHOLD) & 1u;
+        c.crashflip = (t.nav_flags & wbp::NAV_FLAGS_CRASHFLIP) != 0; c.rescue = (t.modes >> fc::M_RESCUE) & 1u; c.loiter = (t.modes >> fc::M_LOITER) & 1u; c.poshold = (t.modes >> fc::M_POSHOLD) & 1u; c.althold = (t.modes >> fc::M_ALTHOLD) & 1u;
         c.angle = (t.modes >> fc::M_ANGLE) & 1u; c.stabilize = (t.modes >> fc::M_STABILIZE) & 1u;
         return c;
     }
@@ -1255,7 +1255,7 @@ private:
         osd_last_ms_ = now_ms;
         o.armed = t.armed; o.failsafe = t.failsafe != 0; o.fly_s = osd_fly_ms_ / 1000u; o.on_s = now_ms / 1000u;
         const uint32_t m = t.modes;
-        o.mode = (m >> fc::M_RESCUE) & 1u ? osd::MODE_RESCUE : (m >> fc::M_LOITER) & 1u ? osd::MODE_LOITER : (m >> fc::M_POSHOLD) & 1u ? osd::MODE_POSHOLD : (m >> fc::M_ALTHOLD) & 1u ? osd::MODE_ALTHOLD
+        o.mode = (t.nav_flags & wbp::NAV_FLAGS_CRASHFLIP) ? osd::MODE_FLIP : (m >> fc::M_RESCUE) & 1u ? osd::MODE_RESCUE : (m >> fc::M_LOITER) & 1u ? osd::MODE_LOITER : (m >> fc::M_POSHOLD) & 1u ? osd::MODE_POSHOLD : (m >> fc::M_ALTHOLD) & 1u ? osd::MODE_ALTHOLD
                : (m >> fc::M_STABILIZE) & 1u ? osd::MODE_STAB : (m >> fc::M_ANGLE) & 1u ? osd::MODE_ANGLE : osd::MODE_ACRO;
         o.rc_link = t.rc_link; o.rssi_pct = t.rssi;
         o.batt = status.battery && t.batt_v > 0.5f; o.volts = t.batt_v; o.cells = t.batt_cells;
@@ -1429,6 +1429,7 @@ private:
           if (o.nav_lean) f |= wbp::NAV_FLAGS_NAV_LEAN;
           if (o.poshold_slow_gps) f |= wbp::NAV_FLAGS_POSHOLD_SLOW_GPS;
           if (o.fence) f |= wbp::NAV_FLAGS_FENCE;
+          if (o.crashflip) f |= wbp::NAV_FLAGS_CRASHFLIP;
           tel_.nav_flags = f; tel_.flow_quality = flow_quality_; tel_.flow_reject = e.flow_reject; tel_.flow_rate = flow.rateHz();
           // the speed the flow sensor measures, for the eye: single samples of these sensors are coarse (an MSP sensor counts in steps of 0.5 rad/s), so a quarter second of them is averaged
           { const uint32_t d = now_ms - flow_tel_ms_; flow_tel_ms_ = now_ms; const float k = d >= 250u ? 1.0f : (float)d / 250.0f;
@@ -1672,6 +1673,7 @@ private:
     // controllers are not running yet - the transmitter's throttle mode has to suit the choice before the take-off)
     uint8_t fly_mode() const {
         const fc::CoreOutput& o = last_out_; const auto sw = [&](int m) { return ((o.modes >> m) & 1u) != 0; };
+        if (o.crashflip) return wbp::FLY_MODE_CRASHFLIP;
         if ((o.mission_state >= 1 && o.mission_state <= 7) || sw(fc::M_MISSION)) return wbp::FLY_MODE_MISSION;
         return o.rescue_active || sw(fc::M_RESCUE) ? wbp::FLY_MODE_RESCUE : o.loiter_active || sw(fc::M_LOITER) ? wbp::FLY_MODE_LOITER
              : o.poshold_active || sw(fc::M_POSHOLD) ? wbp::FLY_MODE_POSHOLD

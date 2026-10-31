@@ -235,6 +235,21 @@ def test_loiter_on_the_page(gui):
     gui.wait(lambda: gui.setting("nav", "loiter_speed") == 4.0, what="loiter_speed stored: %s" % gui.setting("nav", "loiter_speed"))
 
 
+def test_crash_flip_on_the_page(gui):
+    # 0.42: crash flip (Betaflight's turtle mode) - a mode for a switch, its three settings in the Motors tab
+    pg = gui.connect().page
+    gui.tab("modes")
+    cf = pg.locator('[data-mode="CRASHFLIP"]')
+    cf.wait_for(timeout=8000)
+    assert "Crash flip" in cf.inner_text() and "DShot" in cf.inner_text()
+    gui.tab("motors")
+    pg.wait_for_selector('[data-field="motors.crashflip_rate"]', timeout=8000)
+    assert gui.setting("motors", "crashflip_rate") == 0 and gui.setting("motors", "crashflip_motor_pct") == 0
+    gui.type_into("motors.crashflip_rate", "350")
+    gui.wait(lambda: gui.setting("motors", "crashflip_rate") == 350, what="crashflip_rate stored: %s" % gui.setting("motors", "crashflip_rate"))
+    assert pg.locator('[data-field="motors.crashflip_auto_rearm"]').count() == 1
+
+
 def test_modes_tab(gui):
     pg = gui.connect().page
     gui.tab("modes")

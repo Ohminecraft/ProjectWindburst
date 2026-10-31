@@ -41,6 +41,64 @@ Giống box BLACKBOX ERASE của Betaflight.
 - **Lần gạt bị từ chối thì không thử lại:** ví dụ đang ghi log trên mặt đất (kiểu ghi `ALWAYS`) hoặc không có bộ nhớ log. Muốn xoá thì gạt lại.
 - Mã nguồn: `Service::poll()` trong `src/blackbox/bb_service.h`, dùng `Inputs::erase_switch`.
 
+## Crash flip (`CRASHFLIP`, 0.42)
+Turtle mode của Betaflight, viết theo mã thật: `mixer.c` (`applyCrashFlipModeToMotors`) và `core.c` (`tryArm`, `updateArmingStatus`, `disarm`). Máy rơi ngửa thì lật lại bằng cần, không phải đi nhặt.
+
+**Cách dùng:** gán công tắc CRASHFLIP ở tab **Mode**. Máy nằm ngửa: bật CRASHFLIP, rồi arm. Motor quay ngược chiều, mỗi cần chọn motor chạy:
+
+| Cần | Motor chạy (Quad X, cánh "props in") |
+|---|---|
+| pitch tới | hai motor trước |
+| pitch lùi | hai motor sau |
+| roll phải / trái | hai motor bên phải / trái |
+| gần đường chéo (trong 30°) | một motor ở góc đó |
+| yaw (khi lớn nhất trong ba cần) | một cặp chéo: yaw phải là hai cánh quay theo chiều kim đồng hồ (props out: cặp kia). Dùng khi một cánh bị kẹt |
+
+- Đẩy cần càng xa thì motor càng mạnh (độ dài của roll + pitch). Trong 15 % quanh giữa: không motor nào chạy.
+- Motor không được chọn **đứng yên**, không chạy idle. Lệnh dưới 2 % hành trình cũng là đứng yên.
+- Gạt CRASHFLIP về tắt: máy disarm, lý do `CRASHFLIP` hiện cho tới khi gạt ARM về OFF. Gạt ARM OFF rồi ON để bay như thường.
+- Công tắc chỉ được xét **lúc arm**. Đang bay mà bật CRASHFLIP thì không có gì xảy ra.
+
+**Cài đặt** (tab **Motor**, khối "Crash flip"; cần lưu và khởi động lại), tên và mặc định như Betaflight:
+
+| Cài đặt | Betaflight | Mặc định | Ý nghĩa |
+|---|---|---|---|
+| `motors.crashflip_rate` | `crashflip_rate` (x10) | 0 | °/s. Máy xoay nhanh hơn nửa mức này thì lực giảm dần, tới mức này thì motor dừng. Máy đổi tư thế quá cạnh (cos góc nghiêng đổi hơn 1) thì motor cũng dừng: đã lật xong. 0 = không giảm. Nên thử 350 |
+| `motors.crashflip_motor_pct` | `crashflip_motor_percent` | 0 | các motor phía bên kia chạy bằng % này của lực. 0 = đứng yên |
+| `motors.crashflip_auto_rearm` | `crashflip_auto_rearm` | tắt | bật: gạt CRASHFLIP về tắt thì máy vẫn arm và bay tiếp (motor đứng khoảng 1 s để đổi lại chiều quay) |
+
+**Đổi chiều quay:** lúc arm vào crash flip, mọi ESC nhận lệnh DShot 21 (quay ngược so với chiều đã lưu trong ESC, không lưu lại), 10 lần như Betaflight. Motor chỉ chạy sau lệnh cuối cùng. Hết crash flip (disarm, hoặc tắt công tắc khi có auto re-arm): lệnh DShot 20 (trả lại chiều đã lưu), gửi sau khi motor đã quay chậm lại (1 s kể từ khung cuối có lệnh quay). Lệnh 7 / 8 + 12 của nút "Đảo chiều" ở tab Motor không bị đụng tới.
+
+**Điều kiện arm:**
+- Có công tắc CRASHFLIP bật: không chặn vì nằm nghiêng / ngửa (`ANGLE_TOO_HIGH`), không chặn vì GPS Rescue thiếu fix (`RESCUE_NO_FIX`), như Betaflight. Các điều kiện khác giữ nguyên (ga thấp, gyro đã hiệu chuẩn, có sóng...).
+- ESC không phải DShot (PWM, Oneshot, Multishot, DroneCAN): bật CRASHFLIP thì **chặn arm** (`CRASHFLIP`). Betaflight trong trường hợp này vẫn bỏ qua góc nghiêng và arm với motor quay xuôi chiều. Ở đây chặn luôn cho an toàn.
+
+**Khi đang crash flip:**
+- Mất sóng: cần coi như ở giữa nên motor đứng. Failsafe làm như cũ.
+- Không chạy PID, Altitude Hold, runaway takeoff, phát hiện motor dừng. Motor kẹt trong cỏ là chuyện bình thường lúc lật.
+- OSD và CRSF ghi `FLIP`. Cờ `CRASHFLIP` có trong `nav.flags`, `fly_mode` của tay phát DIY là `CRASHFLIP`.
+
+**Khác Betaflight:**
+- Chặn arm khi không có DShot (xem trên).
+- Lệnh 20 khi kết thúc chờ motor quay chậm lại rồi mới gửi. Trong lúc đó motor đứng. Betaflight bỏ lệnh nếu motor chưa ở 0, nên auto re-arm có thể để motor quay ngược.
+- Arm bình thường (không crash flip) **không** gửi lệnh 20. Betaflight gửi 20 ở mọi lần arm.
+- Không có tiếng beeper riêng cho crash flip.
+- Cần đi thẳng, không qua đường cong rate. Betaflight cũng đọc độ lệch cần như vậy.
+
+**Mã nguồn:**
+- `src/core/crash_flip.h` (lệnh motor);
+- `FlightCore` (lúc nào bật / tắt);
+- `MotorOutputManager::update(..., flip)` (DShot 21 / 20, motor đứng).
+
+**Kiểm chứng:**
+- `test_core` (các giá trị tính tay theo công thức Betaflight cho Quad X, hexa);
+- `test_motor` (21 x10 trước khi bay, motor 0 đứng yên, 20 sau khi quay chậm, auto re-arm, arm lại trong lúc chờ, giao thức xung);
+- `test_flight` (arm khi ngửa, công tắc, auto re-arm, mất sóng, tốc độ xoay và tư thế qua AHRS thật);
+- `test_fw` nhóm `crashflip` (ESC ảo nghe 21 / 20, cần, cài đặt % và tốc độ, Oneshot125 bị chặn);
+- `test_osd`, `test_rx`, `test_radio`, `test_proto`, app (`test_crash_flip_on_the_page`);
+- 36 mutant `crashflip:`.
+- **Chưa thử trên máy thật.** Cũng chưa biết ESC nào nhận lệnh 20 / 21: BLHeli_32, AM32, Bluejay thì có; BLHeli_S thì cần bản 16.7 trở lên.
+
 ## Arm bằng cần (`general.stick_arm`, 0.24)
 Bật ở tab **Mode**, ô "Arm bằng cần". Cần lưu và khởi động lại. Mặc định tắt.
 - **Động tác:** kéo cần ga và cần pitch xuống hết, đồng thời kéo cần yaw và cần roll sang hai phía ngược nhau (yaw trái + roll phải, hoặc yaw phải + roll trái). Với tay điều khiển mode 2, đó là hai cần cùng xuống dưới và cùng hướng ra ngoài, hoặc cùng hướng vào trong (giống "combination stick" của DJI). Mỗi cần phải gạt quá 80 % hành trình.

@@ -166,17 +166,38 @@ public:
 
     // ---------------------------------------------------------------- the per-cycle call
     // cmd[i] = mixer output for LOGICAL motor i, absolute 0..1.  Fills `out` per HARDWARE slot.
-    WB_FAST void update(uint32_t now_us, const float cmd[], bool armed, Frame& out) {
+    // flip: armed into crash flip (fc::CrashFlip, Betaflight's turtle mode; DShot only). Its arming sends DShot 21 to every motor
+    // (turn the other way than the stored direction - not saved, an ESC restart forgets it) and its end sends 20, each 10 times
+    // as Betaflight's setMotorSpinDirection, and only once the motors have run down; until it is out the motors get nothing
+    // else, armed or not. While it lasts a motor commanded 0 stands (no idle).
+    WB_FAST void update(uint32_t now_us, const float cmd[], bool armed, Frame& out, bool flip = false) {
         const Endpoints e = endpoints(cfg.protocol, cfg.pulse, cfg.idle, cfg.output_limit);
         out = Frame();
+        if (is_dshot(cfg.protocol) && (armed && flip) != dir_rev_) {
+            dir_rev_ = armed && flip; cmd_active_ = false; q_head_ = q_tail_ = 0;      // (anything queued was meant for the motors as they were)
+            push(kAllSlots, dir_rev_ ? CMD_SPIN_DIRECTION_REVERSED : CMD_SPIN_DIRECTION_NORMAL, true); dir_busy_ = true;
+        }
         if (armed) {
-            test_stop(); cmd_active_ = false; q_head_ = q_tail_ = 0;
-            for (int i = 0; i < cfg.count; i++) { out.value[cfg.order[i]] = to_value(cmd[i], e); out_frac_[i] = cmd[i] < 0 ? 0 : (cmd[i] > 1 ? 1 : cmd[i]); }
+            test_stop();
+            if (dir_busy_) {
+                for (int i = 0; i < kMaxMotors; i++) out_frac_[i] = 0;
+                if (run_commands(now_us, out)) return;
+                dir_busy_ = false;
+            }
+            cmd_active_ = false; q_head_ = q_tail_ = 0;
+            bool driven = false;
+            for (int i = 0; i < cfg.count; i++) {
+                const bool stand = dir_rev_ && cmd[i] <= 0.0f;
+                out.value[cfg.order[i]] = stand ? (uint16_t)round_pos(e.disarm) : to_value(cmd[i], e); driven |= !stand;
+                out_frac_[i] = cmd[i] < 0 ? 0 : (cmd[i] > 1 ? 1 : cmd[i]);
+            }
+            if (driven) { spun_ = true; spun_us_ = now_us; }                // (a direction command waits until they have run down)
             ask_telemetry(out);
             return;
         }
         for (int i = 0; i < kMaxMotors; i++) out_frac_[i] = 0;
         if (is_dshot(cfg.protocol) && run_commands(now_us, out)) return;           // command sequencer owns the line
+        dir_busy_ = false;
         const bool testing = (int32_t)(test_until_us_ - now_us) > 0;
         for (int i = 0; i < cfg.count; i++) {
             float v = e.disarm;
@@ -351,7 +372,8 @@ private:
     int8_t tlm_ask_ = -1;
     uint32_t crc_bad_ = 0;
     bool cmd_active_ = false; QCmd cur_{0, 0, false}; uint8_t phase_ = 0, sent_ = 0, repeats_ = 0; uint32_t t_phase_ = 0, next_due_ = 0, post_ = 0;
-    bool spun_ = false; uint32_t spun_us_ = 0;                 // a motor test drove a motor; when it last did
+    bool spun_ = false; uint32_t spun_us_ = 0;                 // a motor test or the flight drove a motor; when it last did
+    bool dir_rev_ = false, dir_busy_ = false;                  // crash flip: the motors turn the other way (DShot 21 sent); a direction command still on its way
     float test_frac_[kMaxMotors] = {}; uint32_t test_until_us_ = 0; float out_frac_[kMaxMotors] = {};
 };
 

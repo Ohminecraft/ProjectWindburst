@@ -62,7 +62,7 @@ inline uint8_t encode_telemetry(const Telemetry& t, uint8_t out[32]) {
     out[5] = t.lq > 100 ? 100 : t.lq; out[6] = crc(out, 6); return kTelemetryBytes;
 }
 inline bool decode_telemetry(const uint8_t* p, uint8_t n, Telemetry& t) {
-    if (!sealed(p, n, kTelemetryBytes, T_TELEMETRY) || p[2] > wbp::FLY_MODE_LOITER || p[5] > 100) return false;
+    if (!sealed(p, n, kTelemetryBytes, T_TELEMETRY) || p[2] > wbp::FLY_MODE_CRASHFLIP || p[5] > 100) return false;
     t.armed = p[1] & 1; t.failsafe = (p[1] >> 1) & 1; t.mode = p[2]; t.batt_cv = (uint16_t)(p[3] | (p[4] << 8)); t.lq = p[5]; return true;
 }
 

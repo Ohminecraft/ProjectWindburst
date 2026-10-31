@@ -259,6 +259,7 @@ static void t_crsf_telemetry() {
     m.poshold = true; CHECK(mode(m) == "POSH", "Position Hold");
     { crsf::TelemetryIn l = m; l.loiter = true; CHECK(mode(l) == "LOIT", "Loiter (0.41), before Position Hold"); }
     m.rescue = true; CHECK(mode(m) == "RTH", "GPS Rescue");
+    { crsf::TelemetryIn f = m; f.crashflip = true; CHECK(mode(f) == "FLIP", "crash flip (0.42), before the rescue"); }
     m.failsafe = true; CHECK(mode(m) == "!FS!", "failsafe wins over everything");
     m = crsf::TelemetryIn(); m.armed = true; m.stabilize = true; CHECK(mode(m) == "STAB", "Stabilize");
     t.gps_fix = true; t.lat = 473977419; t.lon = -85455938; t.gs_cms = 1000; t.course_ddeg = 1234; t.alt_m = 123.4f; t.sats = 14; n = crsf::build(crsf::FT_GPS, t, b);
