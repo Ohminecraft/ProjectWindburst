@@ -32,8 +32,9 @@ inline float rc_throttle_cmd(uint16_t us) { return clampf((float)((int)us - kRcM
 // M_AIRMODE, M_ANTI_GRAVITY = once a switch is assigned to one of them, the switch turns it on and off (the settings
 // general.airmode / pid.anti_gravity then only say how it works / are ignored); without a switch the setting alone decides.
 // M_BLACKBOX_ERASE = flipping it on while disarmed erases the log memory (bb_service.h; Betaflight BLACKBOX ERASE).
+// M_LOITER = ArduCopter's Loiter (nav/loiter.h, 0.41): the stick asks for a velocity; it brings Angle and Altitude Hold with it.
 enum Mode : uint8_t { M_ARM, M_ANGLE, M_STABILIZE, M_ALTHOLD, M_POSHOLD, M_FAILSAFE_SW, M_BEEPER, M_BLACKBOX, M_CALIB, M_RESCUE,
-                      M_ACRO_TRAINER, M_AIRMODE, M_ANTI_GRAVITY, M_BLACKBOX_ERASE, M_MISSION, M_COUNT };
+                      M_ACRO_TRAINER, M_AIRMODE, M_ANTI_GRAVITY, M_BLACKBOX_ERASE, M_MISSION, M_LOITER, M_COUNT };
 
 struct ModeRange { uint8_t mode; uint8_t aux; uint16_t lo_us, hi_us; }; // active when lo <= aux < hi (like BF, 900..2100 clamp)
 
@@ -47,7 +48,8 @@ public:
     WB_FAST uint32_t resolve(const uint16_t aux_us[kAuxCount]) const {
         uint32_t m = 0;
         for (int i = 0; i < n; i++) if (aux_us[r[i].aux] >= r[i].lo_us && aux_us[r[i].aux] < r[i].hi_us) m |= 1u << r[i].mode;
-        if (m & ((1u << M_ALTHOLD) | (1u << M_POSHOLD) | (1u << M_RESCUE) | (1u << M_MISSION))) m |= 1u << M_ANGLE; // hold modes, the rescue and the mission force Angle on
+        if (m & ((1u << M_ALTHOLD) | (1u << M_POSHOLD) | (1u << M_RESCUE) | (1u << M_MISSION) | (1u << M_LOITER))) m |= 1u << M_ANGLE; // hold modes, the rescue and the mission force Angle on
+        if (m & (1u << M_LOITER)) m |= 1u << M_ALTHOLD;                                                              // (Loiter holds the height too, as ArduCopter's)
         return m;
     }
 };

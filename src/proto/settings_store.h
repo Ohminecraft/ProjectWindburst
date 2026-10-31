@@ -26,12 +26,15 @@ public:
 class SettingsStore {
 public:
     explicit SettingsStore(Storage& st) : st_(st) {}
+    // the device this store belongs to (wbp::Role): the other device's sections stay at their defaults and are never written
+    void set_role(uint8_t r) { role_ = r; }
 
     struct LoadReport { uint32_t loaded_mask = 0, defaulted_mask = 0, clamped_fields = 0, migrated_mask = 0; };   // bit = section id; migrated = loaded from an older, shorter / longer record
 
     LoadReport load(Settings& s) {
         LoadReport r; defaults(s);
         for (const SectionInfo& si : kSections) {
+            if (si.role != role_) continue;                    // (defaults() above)
             uint8_t buf[kMaxPayload + 8]; char key[8]; make_key(key, si.id);
             const int n = st_.read(key, buf, sizeof(buf));
             uint16_t stored = 0;                              // the size the record was written with, if it is one we can read
@@ -52,11 +55,11 @@ public:
     }
     bool save(Settings& s) {
         bool all = true;
-        for (const SectionInfo& si : kSections) all &= save_section(s, si.id);
+        for (const SectionInfo& si : kSections) if (si.role == role_) all &= save_section(s, si.id);
         return all;
     }
     bool save_section(Settings& s, uint8_t id) {
-        const SectionInfo* si = find_section(id); if (!si) return false;
+        const SectionInfo* si = find_section(id); if (!si || si->role != role_) return false;
         uint8_t buf[kMaxPayload + 8]; buf[0] = kFormat; buf[1] = (uint8_t)si->size; buf[2] = (uint8_t)(si->size >> 8);
         memcpy(buf + 3, section_ptr(s, id), si->size);
         const uint16_t c = crc16(buf, (size_t)si->size + 3); buf[si->size + 3] = (uint8_t)c; buf[si->size + 4] = (uint8_t)(c >> 8);
@@ -68,6 +71,7 @@ private:
     static constexpr uint8_t kFormat = 1;
     static void make_key(char* k, uint8_t id) { k[0] = 'w'; k[1] = 'b'; k[2] = 's'; k[3] = (char)('0' + id / 10); k[4] = (char)('0' + id % 10); k[5] = 0; }
     Storage& st_;
+    uint8_t role_ = 0;
 };
 
 } // namespace wbp

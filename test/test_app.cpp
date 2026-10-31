@@ -14,7 +14,6 @@
 #include "../src/app/link_host.h"
 #include "../src/app/sync.h"
 #include "../src/app/tx_queue.h"
-#include "../src/app/link_mux.h"
 #include "../src/hal/led/ws2812.h"
 #include "../src/app/stick_commands.h"
 #include "../src/proto/settings_apply.h"
@@ -85,7 +84,7 @@ static void t_pack() {
     { app::Telemetry ct; ct.can.state = CAN_STATE_RUNNING; ct.can.node_id = 10; ct.can.nodes = 2; ct.can.node[1] = 125; ct.can.health[1] = 255; ct.can.uptime[1] = 99; memcpy(ct.can.names + 16, "org.ardupilot.he", 16); ct.can.rx_fps = 157;
       CHECK(app::pack_stream(STR_CAN, ct, 0, b, sizeof(b)) == sizeof(T_can), "can"); T_can c; memcpy(&c, b, sizeof(c));
       CHECK(c.state == CAN_STATE_RUNNING && c.node_id == 10 && c.nodes == 2 && c.node[1] == 125 && c.health[1] == 255 && c.uptime[1] == 99 && !memcmp(c.names + 16, "org.ardupilot.he", 16) && c.rx_fps == 157, "can stream: the node table and its names"); }
-    for (const StreamInfo& si : kStreams) CHECK(app::pack_stream(si.id, t, 0, b, sizeof(b)) == (si.id == STR_BLACKBOX ? 0 : si.size), "stream %s packs to its schema size", si.name);
+    for (const StreamInfo& si : kStreams) if (si.role == ROLE_RX) CHECK(app::pack_stream(si.id, t, 0, b, sizeof(b)) == (si.id == STR_BLACKBOX ? 0 : si.size), "stream %s packs to its schema size", si.name);     // (the transmitter fills its own)
     { app::Telemetry bt; bt.batt_v = 15.87f; bt.cell_v = 3.968f; bt.batt_cells = 4; bt.batt_state = BATT_STATE_WARNING; bt.batt_source = BATT_SOURCE_ADC; bt.batt_pin_mv = 1443; bt.beeping = 9;
       app::pack_stream(STR_BATTERY, bt, 0, b, sizeof(b)); T_battery o; memcpy(&o, b, sizeof(o));
       CHECK(o.voltage == 15870 && o.cell == 3968 && o.cells == 4 && o.state == BATT_STATE_WARNING && o.source == BATT_SOURCE_ADC && o.pin_mv == 1443 && o.beeping == 9, "battery stream: mV, state, pin voltage"); }
@@ -290,11 +289,7 @@ static void t_host() {
       clk = 1000; h2.tick(clk); clk = 1001; h2.tick(clk); clk = 1041; h2.tick(clk); clk = 1042; h2.tick(clk);          // one pause of 40 ms
       clk = 61500; const uint16_t n = h2.fill_stream(STR_LINK, b, sizeof(b)); T_link L; memcpy(&L, b, sizeof(L));
       CHECK(n == sizeof(T_link) && L.uptime == 61500 && L.kicks == 3 && L.queued == 10 && L.slow_gap_ms == 7 && L.link_gap_ms == 40 && L.busy == 0,
-            "link stream: uptime %u ms, kicks %u, %u bytes queued, sensor-thread pause %u ms, link-task pause %u ms", (unsigned)L.uptime, L.kicks, L.queued, L.slow_gap_ms, L.link_gap_ms);
-      CHECK(L.wifi == WIFI_STATE_OFF && L.wifi_ip == 0 && L.via == LINK_VIA_SERIAL, "no WiFi wire: OFF, no address, the serial port");
-      h2.set_net([](app::LinkHost::NetInfo& ni) { ni.wifi = WIFI_STATE_CONNECTED; ni.ip = 0x2A01A8C0u; ni.rssi = -61; ni.clients = 0; ni.via = 1; });
-      h2.fill_stream(STR_LINK, b, sizeof(b)); memcpy(&L, b, sizeof(L));
-      CHECK(L.wifi == WIFI_STATE_CONNECTED && L.wifi_ip == 0x2A01A8C0u && L.wifi_rssi == -61 && L.via == LINK_VIA_WIFI, "the WiFi wire: joined, 192.168.1.42 (lowest byte first), -61 dBm, the app on it"); }
+            "link stream: uptime %u ms, kicks %u, %u bytes queued, sensor-thread pause %u ms, link-task pause %u ms", (unsigned)L.uptime, L.kicks, L.queued, L.slow_gap_ms, L.link_gap_ms); }
 }
 
 static void t_exchange() {
@@ -438,7 +433,7 @@ static void t_settings() {
     printf("[settings] validation that protects the flight code\n");
     Settings s; defaults(s);
     CHECK(validate(s.modes) == 0 && s.modes.mode[0] == 255 && s.modes.mode[15] == 255, "defaults are valid; unused mode slots stay 255");
-    s.modes.mode[2] = MODE_MISSION + 1; CHECK(validate(s.modes) == 1 && s.modes.mode[2] == 255, "an unknown mode id (from a newer firmware, or a damaged record) empties its slot - it does not become some other mode");
+    s.modes.mode[2] = MODE_LOITER + 1; CHECK(validate(s.modes) == 1 && s.modes.mode[2] == 255, "an unknown mode id (from a newer firmware, or a damaged record) empties its slot - it does not become some other mode");
     for (const SectionInfo& si : kSections) { Settings d; defaults(d); CHECK(validate_section(d, si.id) == 0, "section %s: defaults pass their own validation", si.name); }
     const float nan = NAN;
     s.pid.stab_p[1] = nan; s.pid.stab_p[2] = nan; s.calibration.acc_scale[2] = nan; s.calibration.mag_matrix[4] = nan;
@@ -450,7 +445,7 @@ static void t_settings() {
       CHECK(b.valid && b.offset[0] == 0.02f && b.offset[2] == -0.03f && b.scale[1] == 1.01f && c.mag_valid == 0, "accelerometer calibration <-> settings round trip, compass part untouched"); }
     { Settings q; defaults(q); q.general.board_trim_roll = 15; q.general.board_trim_yaw = -900; q.calibration.acc_trim_roll = -7; q.calibration.acc_trim_pitch = 22; float r, p, y; board_fine_alignment(q, r, p, y);
       CHECK(fabsf(r - 0.8f) < 1e-5f && fabsf(p - 2.2f) < 1e-5f && fabsf(y + 90.0f) < 1e-5f, "fine alignment = board trim + level trim: %.2f %.2f %.2f", r, p, y); }
-    for (const SectionInfo& si : kSections) CHECK(si.live == (si.id == SEC_MODES || si.id == SEC_RATES || si.id == SEC_PID || si.id == SEC_CALIBRATION || si.id == SEC_BEEPER || si.id == SEC_BATTERY || si.id == SEC_BLACKBOX || si.id == SEC_FILTERS || si.id == SEC_NAV || si.id == SEC_SERVO || si.id == SEC_ALTHOLD || si.id == SEC_MSP || si.id == SEC_MISSION), "section %s live flag", si.name);
+    for (const SectionInfo& si : kSections) CHECK(si.live == (si.id == SEC_TX_STICKS || si.id == SEC_MODES || si.id == SEC_RATES || si.id == SEC_PID || si.id == SEC_CALIBRATION || si.id == SEC_BEEPER || si.id == SEC_BATTERY || si.id == SEC_BLACKBOX || si.id == SEC_FILTERS || si.id == SEC_NAV || si.id == SEC_SERVO || si.id == SEC_ALTHOLD || si.id == SEC_MSP || si.id == SEC_MISSION), "section %s live flag", si.name);
 }
 
 static void t_hwconfig() {
@@ -553,28 +548,6 @@ static void t_uart_plan() {
 }
 
 
-// One server, two wires (app/link_mux.h): the frames follow the wire the app last spoke on.
-static void t_link_mux() {
-    printf("[link mux] serial port and WiFi: replies go where the app spoke\n");
-    FakePort usb(4096, 4096), net(4096, 4096);
-    app::LinkMux mux(usb, &net); app::QueuedTransport q(mux, 0);
-    const uint8_t a[3] = {1, 2, 3}, b[2] = {7, 8};
-    q.write(a, 3);
-    CHECK(usb.wire.size() == 3 && net.wire.empty() && mux.active() == app::LinkMux::SERIAL_WIRE, "at boot: the serial port");
-    CHECK(mux.heard(app::LinkMux::WIFI_WIRE) && !mux.heard(app::LinkMux::WIFI_WIRE) && mux.switches() == 1, "bytes on WiFi: the link moves there once (true), then stays (false)");
-    q.write(b, 2);
-    CHECK(net.wire.size() == 2 && net.wire[0] == 7 && usb.wire.size() == 3, "from then on the frames go out on WiFi");
-    mux.lost(app::LinkMux::SERIAL_WIRE); CHECK(mux.active() == app::LinkMux::WIFI_WIRE, "(the serial port 'lost' changes nothing: it is never down)");
-    mux.lost(app::LinkMux::WIFI_WIRE); q.write(a, 3);
-    CHECK(mux.active() == app::LinkMux::SERIAL_WIRE && usb.wire.size() == 6 && net.wire.size() == 2, "the TCP client went away: back to the serial port");
-    CHECK(mux.heard(app::LinkMux::WIFI_WIRE) && mux.heard(app::LinkMux::SERIAL_WIRE) && mux.active() == app::LinkMux::SERIAL_WIRE, "and the app speaking on the serial port again takes it back");
-    { FakePort u(4096, 4096); app::LinkMux one(u, nullptr); CHECK(!one.heard(app::LinkMux::WIFI_WIRE) && one.active() == app::LinkMux::SERIAL_WIRE, "a board without a radio: never moves"); }
-    { FakePort u(4096, 4096), slow(10, 0); app::LinkMux m(u, &slow); app::QueuedTransport qq(m, 0); m.heard(app::LinkMux::WIFI_WIRE);
-      uint8_t big[40] = {}; qq.write(big, 40);
-      CHECK(slow.wire.size() == 10 && qq.queued() == 30 && u.wire.empty(), "a slow WiFi takes what fits, the rest waits in the queue (never on the serial port)"); }
-}
-
-
 // The LED strip: what it shows for each state, and the WS2812 bits on the SPI line.
 static void t_led() {
     printf("[led strip] pictures and WS2812 bits\n");
@@ -674,7 +647,7 @@ int main() {
     t_usb_name();
     t_pack(); t_sticks();
     t_sync();
-    t_tx_queue(); t_gate(); t_host(); t_exchange(); t_acc(); t_level(); t_settings(); t_hwconfig(); t_pins_load(); t_loop_rate(); t_uart_plan(); t_link_mux(); t_led();
+    t_tx_queue(); t_gate(); t_host(); t_exchange(); t_acc(); t_level(); t_settings(); t_hwconfig(); t_pins_load(); t_loop_rate(); t_uart_plan(); t_led();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

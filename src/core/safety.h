@@ -351,7 +351,8 @@ public:
         in.arm_switch_was_on_at_boot = !seen_off_ && link_ok && switch_on;
         blockers_ = arm_blockers(in);
         if (armed_) {
-            if (!switch_on) { armed_ = false; disarm_reason_ = 1; }
+            if (remote_) { if (link_ok && switch_on && !prev_switch_) remote_ = false; }      // (armed by a ground station: the switch takes it with its next edge on a live link)
+            else if (!switch_on) { armed_ = false; disarm_reason_ = 1; }
         } else if (switch_on && !prev_switch_) {                    // the edge of a switch that is believed
             if (blockers_ == 0) armed_ = true; else refused_++;      // (a switch not yet seen off on a live link is a blocker: AB_ARM_SWITCH_ON)
         }
@@ -367,12 +368,12 @@ public:
     }
     // After this the switch is still on, so there is no edge until the pilot has moved it off and on again.
     // why: a blocker bit to show until then (0 = none).
-    WB_FAST void force_disarm(uint32_t why = 0) { if (armed_) { armed_ = false; disarm_reason_ = 2; } sticky_ |= why; }
+    WB_FAST void force_disarm(uint32_t why = 0) { if (armed_) { armed_ = false; disarm_reason_ = 2; } sticky_ |= why; remote_ = false; }
     // The mission (nav/mission.h) puts the craft down with the motors OFF at a delivery stop and arms it again after the wait:
     // no switch edge for either (the pilot's ARM switch stays on all the while) and no sticky reason. Arming again ignores what
     // a take-off without a pilot cannot satisfy - the throttle stick, the switch being on, the link (the mission carries on
     // without it); every other blocker still holds it off. switch_on: the ARM switch as read (not believed while the link is lost).
-    WB_FAST void mission_disarm() { if (armed_) { armed_ = false; disarm_reason_ = 3; } prev_switch_ = true; }
+    WB_FAST void mission_disarm() { if (armed_) { armed_ = false; disarm_reason_ = 3; } prev_switch_ = true; remote_ = false; }
     WB_FAST bool mission_arm(bool switch_on, bool link_ok, const ArmInput& in) {
         if (armed_) return true;
         if (link_ok && !switch_on) return false;
@@ -380,12 +381,21 @@ public:
         armed_ = true; prev_switch_ = true;
         return true;
     }
+    // A ground station (MAVLink COMPONENT_ARM_DISARM, telemetry.remote_arm) arms without the switch: every blocker of this cycle holds
+    // it off (a switch left on included - Betaflight's tryArm path). The switch, off all the while, does not disarm it; the pilot
+    // takes it over with the switch's next edge (on), and then off disarms as usual. Call after update().
+    WB_FAST bool remote_arm() {
+        if (armed_) return true;
+        if ((blockers_ | sticky_) != 0) { refused_++; return false; }
+        armed_ = true; remote_ = true; return true;
+    }
+    WB_FAST void remote_disarm() { if (armed_) { armed_ = false; disarm_reason_ = 4; } remote_ = false; }
     bool armed() const { return armed_; }
     uint32_t blockers() const { return blockers_; }
     uint32_t refused() const { return refused_; }          // arm attempts rejected by a blocker
-    uint8_t last_disarm_reason() const { return disarm_reason_; }   // 1 switch, 2 forced (failsafe / crash), 3 the mission (a delivery stop)
+    uint8_t last_disarm_reason() const { return disarm_reason_; }   // 1 switch, 2 forced (failsafe / crash), 3 the mission (a delivery stop), 4 a ground station
 private:
-    bool armed_ = false, prev_switch_ = false, seen_off_ = false; uint32_t blockers_ = 0, refused_ = 0, sticky_ = 0; uint8_t disarm_reason_ = 0;
+    bool armed_ = false, prev_switch_ = false, seen_off_ = false, remote_ = false; uint32_t blockers_ = 0, refused_ = 0, sticky_ = 0; uint8_t disarm_reason_ = 0;
 };
 // ---------------------------------------------------------------------------------------------------------------------
 // Arming with the sticks (general.stick_arm): a virtual arm switch for Arming above.

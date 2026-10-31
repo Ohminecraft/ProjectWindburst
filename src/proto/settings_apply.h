@@ -34,7 +34,7 @@ WB_SAME(GPS_STATE_CONFIGURE, gps::ST_CONFIGURE); WB_SAME(GPS_STATE_RECEIVING_DAT
 WB_SAME(MODE_ARM, fc::M_ARM); WB_SAME(MODE_ANGLE, fc::M_ANGLE); WB_SAME(MODE_STABILIZE, fc::M_STABILIZE); WB_SAME(MODE_ALTHOLD, fc::M_ALTHOLD); WB_SAME(MODE_POSHOLD, fc::M_POSHOLD);
 WB_SAME(MODE_FAILSAFE, fc::M_FAILSAFE_SW); WB_SAME(MODE_BEEPER, fc::M_BEEPER); WB_SAME(MODE_BLACKBOX, fc::M_BLACKBOX);
 WB_SAME(MODE_CALIB, fc::M_CALIB); WB_SAME(MODE_RESCUE, fc::M_RESCUE);
-WB_SAME(MODE_ACRO_TRAINER, fc::M_ACRO_TRAINER); WB_SAME(MODE_AIRMODE, fc::M_AIRMODE); WB_SAME(MODE_ANTI_GRAVITY, fc::M_ANTI_GRAVITY); WB_SAME(MODE_BLACKBOX_ERASE, fc::M_BLACKBOX_ERASE); WB_SAME(MODE_MISSION, fc::M_MISSION); WB_SAME(MODE_MISSION + 1, fc::M_COUNT);
+WB_SAME(MODE_ACRO_TRAINER, fc::M_ACRO_TRAINER); WB_SAME(MODE_AIRMODE, fc::M_AIRMODE); WB_SAME(MODE_ANTI_GRAVITY, fc::M_ANTI_GRAVITY); WB_SAME(MODE_BLACKBOX_ERASE, fc::M_BLACKBOX_ERASE); WB_SAME(MODE_MISSION, fc::M_MISSION); WB_SAME(MODE_LOITER, fc::M_LOITER); WB_SAME(MODE_LOITER + 1, fc::M_COUNT);
 WB_SAME(LPF_TYPE_PT1, fc::LPF_PT1); WB_SAME(LPF_TYPE_BIQUAD, fc::LPF_BIQUAD); WB_SAME(LPF_TYPE_PT2, fc::LPF_PT2); WB_SAME(LPF_TYPE_PT3, fc::LPF_PT3);
 WB_SAME(ITERM_RELAX_OFF, fc::RELAX_OFF); WB_SAME(ITERM_RELAX_RP, fc::RELAX_RP); WB_SAME(ITERM_RELAX_RPY, fc::RELAX_RPY); WB_SAME(ITERM_RELAX_RP_INC, fc::RELAX_RP_INC); WB_SAME(ITERM_RELAX_RPY_INC, fc::RELAX_RPY_INC);
 WB_SAME(ITERM_RELAX_TYPE_GYRO, fc::RELAX_GYRO); WB_SAME(ITERM_RELAX_TYPE_SETPOINT, fc::RELAX_SETPOINT); WB_SAME(TPA_MODE_PD, fc::TPA_PD); WB_SAME(TPA_MODE_D, fc::TPA_D);
@@ -162,7 +162,7 @@ inline void apply_nav(const Settings& s, fc::CoreConfig& c) {
     c.rescue_allow_no_fix = n.rescue_allow_no_fix != 0;
     c.gps_alt = n.gps_alt; c.gps_vel_z = n.gps_vel_z != 0;          // (read by the estimator every step: live)
     c.ph_min_gps_hz = (float)n.ph_min_gps_hz;
-    c.alt.ceiling_m = (float)n.fence_alt_max; c.poshold.fence_radius_m = (float)n.fence_radius;      // the fence (nav/alt_control.h, nav/pos_hold.h)
+    c.alt.ceiling_m = (float)n.fence_alt_max; c.poshold.fence_radius_m = (float)n.fence_radius; c.loiter.speed_max_mps = n.loiter_speed * 0.1f;      // the fence (nav/alt_control.h, nav/pos_hold.h)
     c.ekf_nav = n.ekf == EKF_MODE_NAV;
     c.fs.mission_rc_continue = s.mission.rc_lost == MISSION_RC_LOST_CONTINUE;      // (section mission: the link lost while it flies)
 }

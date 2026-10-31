@@ -449,6 +449,25 @@ static void t_safety() {
       ArmInput fs = ok; fs.failsafe_active = true; CHECK(!ar.mission_arm(true, true, fs), "a failsafe still blocks");
       Arming b; b.update(false, true, ok); b.update(true, true, ok); b.mission_disarm(); for (int i = 0; i < 10; i++) b.update(true, true, ok);
       CHECK(!b.armed(), "after mission_disarm the switch left on does not arm by itself"); }
+    // a ground station arms / disarms (0.40, MAVLink COMPONENT_ARM_DISARM; arming only with telemetry.remote_arm)
+    { ArmInput ok; ok.imu_ok = ok.gyro_calibrated = ok.rx_ok = true; ok.throttle_low = true;
+      Arming ar; ar.update(false, true, ok);
+      CHECK(ar.remote_arm() && ar.armed(), "nothing blocks, the ARM switch off: armed from the ground station");
+      bool kept = true; for (int i = 0; i < 20; i++) kept &= ar.update(false, true, ok);
+      CHECK(kept, "the ARM switch that stays off does not disarm it (the ground station armed it, not the switch)");
+      ar.update(true, true, ok); CHECK(ar.armed(), "the pilot puts the switch on: still armed, the switch has it now");
+      CHECK(!ar.update(false, true, ok) && ar.last_disarm_reason() == 1, "and off: disarmed, as always");
+      Arming e; e.update(false, true, ok); e.remote_arm(); ArmInput nolink = ok; nolink.rx_ok = false;
+      for (int i = 0; i < 50; i++) { e.update(false, false, nolink); } bool stays = true; for (int i = 0; i < 20; i++) { stays &= e.update(false, true, ok); }
+      CHECK(stays, "armed from the ground station, the link lost and back with the switch off: still armed (a lost link is no edge)");
+      Arming b; b.update(false, true, ok); ArmInput high = ok; high.throttle_low = false; b.update(false, true, high); const uint32_t r0 = b.refused();
+      CHECK(!b.remote_arm() && !b.armed() && b.refused() == r0 + 1, "a blocker (throttle up): refused and counted");
+      Arming c; c.update(false, true, ok); c.update(true, true, ok); c.force_disarm(); c.update(true, true, ok);
+      CHECK(!c.remote_arm(), "the switch on after a forced disarm (ARM_SWITCH_ON): refused - nothing the pilot does not expect");
+      Arming d; d.update(false, true, ok); d.update(true, true, ok); d.remote_disarm();
+      CHECK(!d.armed() && d.last_disarm_reason() == 4, "remote_disarm: disarmed (reason 4)");
+      for (int i = 0; i < 10; i++) { d.update(true, true, ok); } CHECK(!d.armed(), "the switch still on does not arm it again (an edge is needed)");
+      d.update(false, true, ok); CHECK(d.update(true, true, ok), "off and on: armed"); }
     // standing on the ground?
     { LandDetector ld; LandDetector::Input in; in.throttle_down = true; in.accel_1g = true; in.gyro_dps = 3.0f;
       bool early = false; for (int i = 0; i < 990; i++) early |= ld.update(in, 0.001f); bool at_1s = false; for (int i = 0; i < 20; i++) at_1s |= ld.update(in, 0.001f);

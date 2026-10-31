@@ -44,7 +44,6 @@ struct MemTransport : wbp::Transport {
 inline bool g_rig_usb_link = false;      // this build's app link is the chip's USB socket (main.cpp: ARDUINO_USB_CDC_ON_BOOT)
 
 // One "power cycle" of the firmware: everything main.cpp creates, in the same order.
-inline app::LinkHost::NetInfo g_sim_net;                    // the link stream's WiFi fields of the simulated board (the radio itself is not simulated)
 struct Firmware {
     wbp::Settings settings;
     wbp::SettingsStore store;
@@ -64,7 +63,7 @@ struct Firmware {
     // sdcard: the SD card socket (nullptr = a board without one)
     Firmware(VirtualBoard& b, wbp::Storage& st, wbp::Transport& tx, bb::BlockStore* logmem, bb::FileStore* sdcard = nullptr, uint32_t card_buffer_bytes = 512 * 1024)
         : store(st), host(app.link, &Firmware::wait, this, &Firmware::now), server(settings, &store, host, tx, wbp::ROLE_RX, WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH, "Windburst RX (sim)",
-                                                                                 wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | wbp::FEAT_WIFI),
+                                                                                 wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER),
           blackbox(app.blackbox, tx), bb_header{&settings, "Windburst RX (sim)", WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH}, board(b) {
         load = store.load(settings);
         app.usb_link = g_rig_usb_link;
@@ -93,7 +92,6 @@ struct Firmware {
         blackbox.set_header_source(&bb::FirmwareHeader::write, &bb_header);
         blackbox.set_loop(app.core.cfg.pid_hz(), app.motors.cfg().count, app.core.cfg.loop_hz);   // a record per control cycle at most
         host.set_blackbox(&blackbox, &settings);
-        host.set_net([](app::LinkHost::NetInfo& n) { n = g_sim_net; });       // (what a WiFi wire would report: set by a test)
         host.attach(&server);
         host.set_report(app.report(), app.report_lines());
         for (int i = 0; i < app.report_lines(); i++) server.log(1, app.report()[i]);

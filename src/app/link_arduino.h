@@ -12,7 +12,6 @@
 #include "../proto/wbp_server.h"
 #include "link_host.h"
 #include "tx_queue.h"
-#include "link_mux.h"
 #include "../telemetry/mavlink.h"
 #include "cli.h"
 #include "../hal/motor/esc4way.h"
@@ -118,22 +117,7 @@ private:
     StreamPort port_;
 };
 
-#if WB_PLATFORM_ESP32
-class NvsStorage : public wbp::Storage {
-public:
-    bool begin(const char* ns = "windburst") { ok_ = prefs_.begin(ns, false); return ok_; }
-    int read(const char* key, uint8_t* buf, size_t cap) override {
-        if (!ok_ || !prefs_.isKey(key)) return -1;
-        const size_t len = prefs_.getBytesLength(key);
-        if (len == 0 || len > cap) return -1;
-        return (int)prefs_.getBytes(key, buf, len);
-    }
-    bool write(const char* key, const uint8_t* data, size_t n) override { return ok_ && prefs_.putBytes(key, data, n) == n; }
-private:
-    Preferences prefs_; bool ok_ = false;
-};
-
-#endif  // WB_PLATFORM_ESP32 (NvsStorage)
+#include "nvs_storage.h"                     // (NvsStorage: shared with the transmitter, src/main_tx.cpp)
 
 // The 4-way interface on the board: the PC on `Serial` (through the link's transmit queue), the ESC wires bit-banged with the GPIO
 // driver. Between their bytes the wires are inputs, pulled up (inside, or by the 2k resistors of a board with motors.ext_pullup).
@@ -203,12 +187,8 @@ public:
     // ESC passthrough: the MSP side, and who knows the motor pins (called once the flight side has let go of them)
     using EscPinsFn = void (*)(EscPins&);
     void set_msp(app::MspLink* m, EscPinsFn pins) { msp_ = m; pins_ = pins; }
-    // A second wire (WiFi): read like the serial port; mux decides where the replies go (link_mux.h). ESC tools stay on the serial port.
-    void set_net(app::NetWire* net, app::LinkMux* mux) { net_ = net; mux_ = mux; }
     // The command line (cli.h): a terminal on the serial port sends '#' between two frames.
     void set_cli(app::Cli* cli) { cli_ = cli; }
-    // MAVLink telemetry over WiFi: the frames the sensor thread put into the ring go out as UDP broadcasts (set only when it is on)
-    void set_mav(mav::Ring* ring) { mav_ = ring; }
     // ESC passthrough: what the session did is written here (memory a software restart leaves alone: main.cpp reads it at the next
     // boot and puts it into the boot report)
     void set_trace(esc4way::Trace* t) { trace_ = t; }
@@ -233,7 +213,6 @@ private:
             while (n < (int)sizeof(buf) && port_.available() > 0) buf[n++] = (uint8_t)port_.read();
             const uint32_t now = millis();
             if (n > 0) {
-                if (mux_ && mux_->heard(app::LinkMux::SERIAL_WIRE)) server_.on_idle();              // (the other wire's half frame is given up)
                 last_rx = now;
                 for (int i = 0; i < n; i++) {                       // byte by byte: a '#' between two frames opens the command line
                     if (cli_ && cli_->active()) { cli_->feed(buf[i]); continue; }
@@ -242,16 +221,7 @@ private:
                     if (msp_) if (const uint8_t escs = msp_->on_byte(buf[i])) passthrough(escs);     // (does not return)
                 }
             }
-            int m = 0;
-            if (net_) {
-                net_->poll(now);
-                if (net_->take_dropped() && mux_) mux_->lost(app::LinkMux::WIFI_WIRE);
-                m = net_->read(buf, (int)sizeof(buf));
-                if (m > 0) { if (mux_ && mux_->heard(app::LinkMux::WIFI_WIRE)) server_.on_idle(); server_.on_bytes(buf, (size_t)m); last_rx = now; }
-            }
-            if (net_ && mav_) { uint8_t dg[1024]; size_t k; while ((k = mav_->pop(dg, sizeof(dg))) > 0) net_->datagram(dg, k); }     // (whole frames per datagram)
-            if (n > 0 || m > 0) {}
-            else if ((uint32_t)(now - last_rx) > 20u) { server_.on_idle(); last_rx = now; }   // a half-received frame is given up after 20 ms of silence
+            if (n == 0 && (uint32_t)(now - last_rx) > 20u) { server_.on_idle(); last_rx = now; }   // a half-received frame is given up after 20 ms of silence
             if (!cli_ || !cli_->active()) server_.tick(now);     // (no stream frames into a terminal)
             tx_.pump();
             vTaskDelay(1);
@@ -272,5 +242,5 @@ private:
     }
     wbp::Server& server_; Stream& port_; app::QueuedTransport& tx_; TaskHandle_t handle_ = nullptr;
     app::MspLink* msp_ = nullptr; EscPinsFn pins_ = nullptr;
-    app::NetWire* net_ = nullptr; app::LinkMux* mux_ = nullptr; app::Cli* cli_ = nullptr; mav::Ring* mav_ = nullptr; esc4way::Trace* trace_ = nullptr;
+    app::Cli* cli_ = nullptr; esc4way::Trace* trace_ = nullptr;
 };

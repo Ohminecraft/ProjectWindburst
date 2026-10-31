@@ -36,7 +36,7 @@ def test_defaults_agree_with_the_firmware(tmp_path):
     s = Sim(tmp_path, "--fresh")
     try:
         with WbClient(s.url, timeout=2.0) as fc:
-            for name in fc.schema.sections:
+            for name in fc.schema.sections_of(fc.info.role):          # (the transmitter's: tests of the simulated transmitter)
                 got, want = fc.get(name), fc.schema.layout("section", name).defaults()
                 for k in want:
                     a, b = got[k], want[k]
@@ -48,6 +48,12 @@ def test_defaults_agree_with_the_firmware(tmp_path):
     finally:
         s.stop()
 
+
+
+def test_get_all_reads_the_flight_controllers_own_sections(sim, fc):
+    """0.38: the transmitter's sections are in the same schema but not on this board: reading everything must not ask for them."""
+    got = fc.get_all()
+    assert "receiver" in got and "tx_radio" not in got and "tx_sticks" not in got
 
 def test_two_edits_of_one_section_at_the_same_time_both_stick(sim, fc):
     """The page sends a second change of a section while the first is still on its way (another thread of the local server).
@@ -628,3 +634,43 @@ def test_cli(sim, fc, tmp_path):
     assert run("save").returncode == 0 and "restarted" in run("reboot").stdout
     r = subprocess.run([sys.executable, "-m", "wbclient", "schema"], capture_output=True, text=True, env=env, cwd=APP)
     assert r.returncode == 0 and "MOTOR_TEST" in r.stdout and "calibration" in r.stdout
+
+
+def test_the_simulated_transmitter(tmp_path):
+    """0.38: wb_sim runs the DIY transmitter too (its own WBP port, role TX) in the same air as the board's nRF24 receiver."""
+    from conftest import Sim
+    s = Sim(tmp_path)                                         # (a new flash file: the board comes wired, the nRF24 module included)
+    try:
+        with WbClient(s.tx_url, timeout=2.0) as tx:
+            assert tx.info.role == "TX" and tx.info.name.startswith("Windburst TX")
+            for name in tx.schema.sections_of("TX"):          # the transmitter's defaults = what the client derives from the json
+                got, want = tx.get(name), tx.schema.layout("section", name).defaults()
+                assert got == want, (name, got, want)
+            assert any("radio: nRF24 found" in l for l in tx.report())
+            tx.subscribe("tx", 20)
+            s.do("stick 1 4095")
+            s.sleep(0.5)
+            t = tx.wait_stream("tx")
+            assert t["ch"][0] == 2000 and t["raw"][0] == 4095 and t["bind_state"] == "IDLE"
+            with WbClient(s.url, timeout=2.0) as fc:
+                fc.set("receiver", protocol="NRF24")
+                fc.save()
+                fc.reboot()
+                s.sleep(1.0)
+                assert any("rx: NRF24" in l for l in fc.report())
+                fc.command("BIND", action=1)
+                tx.command("BIND", action=1)
+                s.sleep(2.0)
+                assert fc.get("receiver")["nrf_bound"] == 1 and tx.get("tx_radio")["bound"] == 1
+                fc.subscribe("rc", 20)
+                s.do("stick 1 0")
+                s.sleep(0.5)
+                rc = fc.wait_stream("rc")
+                assert rc["link"] == 1 and rc["ch"][0] == 1000 and rc["bind_state"] == "BOUND"
+                t = tx.wait_stream("tx")
+                assert t["link"] and t["d_seen"] and t["bind_state"] == "BOUND"
+                assert s.do("txpower off").startswith("ok")
+                s.sleep(1.0)
+                assert fc.wait_stream("rc")["link"] == 0
+    finally:
+        s.stop()

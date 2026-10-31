@@ -64,7 +64,7 @@ static void t_schema() {
     CHECK(s.filters.gyro_lpf1_dyn_min_hz == 250 && s.filters.gyro_lpf1_dyn_max_hz == 500 && s.filters.gyro_lpf2_hz == 500 && s.filters.dterm_lpf1_dyn_min_hz == 75 && s.filters.dterm_lpf2_hz == 150 && s.filters.dyn_notch_count == 3 &&
           s.filters.rpm_harmonics == 3 && s.filters.yaw_lowpass_hz == 100 && s.filters.slider_gyro == 1 && s.filters.slider_dterm_mult == 100, "filter defaults = Betaflight's");
     CHECK(s.beeper.conditions == 0x5FFFFu && s.general.fs_guard_ms == 500 && s.general.airmode_start_throttle == 25 && s.receiver.rc_smoothing == 1 && s.receiver.rc_smoothing_factor == 30, "u32 default, general, receiver");
-    size_t total = 0; for (const SectionInfo& si : kSections) total += si.size; CHECK(kSectionCount == 26 && total == sizeof(Settings), "section table covers the Settings struct exactly (%zu vs %zu)", total, sizeof(Settings));
+    size_t total = 0; for (const SectionInfo& si : kSections) total += si.size; CHECK(kSectionCount == 27 && total == sizeof(Settings), "section table covers the Settings struct exactly (%zu vs %zu)", total, sizeof(Settings));
     CHECK(find_section(SEC_PID)->size == sizeof(S_pid) && find_section(99) == nullptr, "lookup");
     S_general g; defaults(g); g.loop_hz = 60000; g.max_arm_angle = 0; g.board_align = 99; g.airmode = 7; g.board_trim_yaw = -9999;
     Settings t; defaults(t); t.general = g; const int fixed = validate_section(t, SEC_GENERAL);
@@ -75,13 +75,14 @@ static void t_schema() {
           t.pid.stab_p[2] == 4.5f && t.pid.iterm_windup == 30, "motors / pid clamps (a NaN gain becomes the default)");
     t.filters.gyro_lpf1_type = 9; t.filters.gyro_lpf2_hz = 4000; t.filters.dyn_notch_count = 20; t.filters.rpm_harmonics = 5; t.filters.rpm_q = 10; t.filters.slider_gyro_mult = 3; t.filters.rpm_weights[2] = 180; validate_section(t, SEC_FILTERS);
     CHECK(t.filters.gyro_lpf1_type == LPF_TYPE_PT3 && t.filters.gyro_lpf2_hz == 1000 && t.filters.dyn_notch_count == 7 && t.filters.rpm_harmonics == 3 && t.filters.rpm_q == 250 && t.filters.slider_gyro_mult == 10 && t.filters.rpm_weights[2] == 100, "filter clamps");
-    CHECK(kProtocolVersion == 1 && kStreamCount == 16 && find_stream(STR_SATELLITES)->size == 257 && find_stream(STR_CAN)->size == sizeof(T_can) && find_stream(STR_LINK)->size == sizeof(T_link) && find_stream(STR_TUNING)->size == sizeof(T_tuning) && find_stream(STR_ATTITUDE)->size == sizeof(T_attitude), "streams");
+    CHECK(kProtocolVersion == 1 && kStreamCount == 17 && find_stream(STR_SATELLITES)->size == 257 && find_stream(STR_CAN)->size == sizeof(T_can) && find_stream(STR_LINK)->size == sizeof(T_link) && find_stream(STR_TUNING)->size == sizeof(T_tuning) && find_stream(STR_ATTITUDE)->size == sizeof(T_attitude), "streams");
 }
 
 static void t_store() {
     printf("[settings store]\n");
     MemStorage m; SettingsStore st(m); Settings a; defaults(a); a.general.max_arm_angle = 33; a.pid.anti_gravity_gain = 123; a.motors.reversed_mask = 0x05; a.modes.mode[0] = 0; a.modes.aux[0] = 4; a.modes.lo[0] = 1700; a.modes.hi[0] = 2100;
-    CHECK(st.save(a) && m.kv.size() == (size_t)kSectionCount, "one record per section written");
+    int rx_secs = 0; for (const SectionInfo& si : kSections) rx_secs += si.role == ROLE_RX;
+    CHECK(st.save(a) && m.kv.size() == (size_t)rx_secs && rx_secs == 25, "one record per section of the flight controller written (%zu)", m.kv.size());
     Settings b; auto r = st.load(b);
     CHECK(r.defaulted_mask == 0 && r.loaded_mask != 0 && b.general.max_arm_angle == 33 && b.pid.anti_gravity_gain == 123 && b.motors.reversed_mask == 5 && b.modes.hi[0] == 2100, "round trip");
     m.kv["wbs05"][6] ^= 0xFF; Settings c; r = st.load(c);
@@ -98,7 +99,7 @@ static void t_store() {
         std::vector<uint8_t> rec(size + 5u); rec[0] = 1; rec[1] = (uint8_t)size; rec[2] = (uint8_t)(size >> 8); memcpy(rec.data() + 3, data, size);
         const uint16_t c = crc16(rec.data(), size + 3u); rec[size + 3u] = (uint8_t)c; rec[size + 4u] = (uint8_t)(c >> 8); ms.kv[key] = rec;
     };
-    CHECK(find_section(SEC_PINS)->compat == 50 && find_section(SEC_PINS)->compat2 == 48 && find_section(SEC_PINS)->compat3 == 47 && find_section(SEC_PINS)->compat4 == 46 && offsetof(S_pins, baro_cs) == 50 && offsetof(S_pins, mag_cs) == 51 && offsetof(S_pins, can_tx) == 48 && offsetof(S_pins, imu2_cs) == 47 && offsetof(S_pins, esc_tlm) == 46 && find_section(SEC_SENSORS)->compat == 20 && find_section(SEC_SENSORS)->compat2 == 19 && find_section(SEC_SENSORS)->compat3 == 18 && find_section(SEC_SENSORS)->compat4 == 16 && offsetof(S_sensors, esc_boot_wait) == 20 && offsetof(S_sensors, baro_primary) == 19 && offsetof(S_sensors, baro_model) == 18 && offsetof(S_sensors, gyro_use) == 16 && offsetof(S_pins, flow_cs) == 27 && offsetof(S_pins, curr_adc) == 37 && offsetof(S_pins, servo) == 33 && find_section(SEC_BATTERY)->compat == 13 && offsetof(S_battery, current_source) == 13 && find_section(SEC_BLACKBOX)->compat == 8 && find_section(SEC_MOTORS)->compat == 37 && find_section(SEC_MOTORS)->compat2 == 36 && find_section(SEC_MOTORS)->compat3 == 35 && find_section(SEC_MOTORS)->compat4 == 34 && offsetof(S_motors, stall_disarm) == 37 && offsetof(S_motors, esc_sensor) == 36 && offsetof(S_motors, reserved1) == 34 && offsetof(S_motors, ext_pullup) == 35 && find_section(SEC_NAV)->compat == 38 && find_section(SEC_NAV)->compat2 == 34 && find_section(SEC_NAV)->compat3 == 31 && find_section(SEC_NAV)->compat4 == 30 && offsetof(S_nav, rescue_cone) == 38 && offsetof(S_nav, fence_alt_max) == 34 && offsetof(S_nav, fence_radius) == 36 && offsetof(S_nav, fs_hold_s) == 31 && offsetof(S_nav, batt_crit_action) == 33 && offsetof(S_nav, gps_alt) == 27 && offsetof(S_nav, ph_min_gps_hz) == 29 && offsetof(S_nav, ekf) == 30 && find_section(SEC_GENERAL)->compat2 == 22 && find_section(SEC_GENERAL)->compat3 == 23 && offsetof(S_general, reserved_g) == 22 && offsetof(S_general, pid_denom) == 23 && find_section(SEC_GPS)->compat == 0 && offsetof(S_blackbox, sd_mode) == 8,
+    CHECK(find_section(SEC_PINS)->compat == 52 && find_section(SEC_PINS)->compat2 == 50 && find_section(SEC_PINS)->compat3 == 48 && find_section(SEC_PINS)->compat4 == 47 && offsetof(S_pins, nrf_sck) == 52 && offsetof(S_pins, baro_cs) == 50 && offsetof(S_pins, mag_cs) == 51 && offsetof(S_pins, can_tx) == 48 && offsetof(S_pins, imu2_cs) == 47 && offsetof(S_pins, esc_tlm) == 46 && find_section(SEC_SENSORS)->compat == 20 && find_section(SEC_SENSORS)->compat2 == 19 && find_section(SEC_SENSORS)->compat3 == 18 && find_section(SEC_SENSORS)->compat4 == 16 && offsetof(S_sensors, esc_boot_wait) == 20 && offsetof(S_sensors, baro_primary) == 19 && offsetof(S_sensors, baro_model) == 18 && offsetof(S_sensors, gyro_use) == 16 && offsetof(S_pins, flow_cs) == 27 && offsetof(S_pins, curr_adc) == 37 && offsetof(S_pins, servo) == 33 && find_section(SEC_BATTERY)->compat == 13 && offsetof(S_battery, current_source) == 13 && find_section(SEC_BLACKBOX)->compat == 8 && find_section(SEC_MOTORS)->compat == 37 && find_section(SEC_MOTORS)->compat2 == 36 && find_section(SEC_MOTORS)->compat3 == 35 && find_section(SEC_MOTORS)->compat4 == 34 && offsetof(S_motors, stall_disarm) == 37 && offsetof(S_motors, esc_sensor) == 36 && offsetof(S_motors, reserved1) == 34 && offsetof(S_motors, ext_pullup) == 35 && find_section(SEC_NAV)->compat == 43 && find_section(SEC_NAV)->compat2 == 38 && find_section(SEC_NAV)->compat3 == 34 && find_section(SEC_NAV)->compat4 == 31 && offsetof(S_nav, loiter_speed) == 43 && offsetof(S_nav, rescue_cone) == 38 && offsetof(S_nav, fence_alt_max) == 34 && offsetof(S_nav, fence_radius) == 36 && offsetof(S_nav, fs_hold_s) == 31 && offsetof(S_nav, batt_crit_action) == 33 && offsetof(S_nav, gps_alt) == 27 && offsetof(S_nav, ph_min_gps_hz) == 29 && offsetof(S_nav, ekf) == 30 && find_section(SEC_GENERAL)->compat2 == 22 && find_section(SEC_GENERAL)->compat3 == 23 && offsetof(S_general, reserved_g) == 22 && offsetof(S_general, pid_denom) == 23 && find_section(SEC_GPS)->compat == 0 && offsetof(S_blackbox, sd_mode) == 8,
           "pins (three times: the flow sensor's, the servos', the current sensor's and PWM receiver's), battery and blackbox grew at their end: their old sizes are known, and the old layout really is the start of the new one");
     { MemStorage ms; SettingsStore so(ms); Settings w; defaults(w); so.save(w);
       S_pins op; defaults(op); op.imu_cs = 10; op.motor[3] = 7; op.batt_adc = 2; op.sd_cs = 42; op.flow_cs = 38; op.servo[0] = 99; op.esc_tlm = 44; op.imu2_cs = 34;   // (imu2_cs lies beyond the 47 bytes that are stored)
@@ -130,7 +131,9 @@ static void t_store() {
       { S_pins p70; defaults(p70); p70.imu_cs = 9; old_record(ms, "wbs11", &p70, 33); Settings g70; const auto rr70 = so.load(g70);
         CHECK(g70.pins.imu_cs == 255 && (rr70.defaulted_mask & (1u << SEC_PINS)), "a pin map of firmware 0.7.0 (33 bytes): no longer known (four older sizes are kept): defaults"); }
       { S_pins p9; defaults(p9); p9.imu_cs = 9; p9.servo[0] = 4; old_record(ms, "wbs11", &p9, 46); Settings g9; const auto rr9 = so.load(g9);
-        CHECK(g9.pins.imu_cs == 9 && g9.pins.servo[0] == 4 && g9.pins.esc_tlm == 255 && (rr9.migrated_mask & (1u << SEC_PINS)), "the pin map of 0.8 - 0.10 (46 bytes): kept, the ESC telemetry pin unset"); }
+        CHECK(g9.pins.imu_cs == 255 && (rr9.defaulted_mask & (1u << SEC_PINS)), "the pin map of 0.8 - 0.10 (46 bytes): no longer known since the nRF24 pins (0.38: four older sizes are kept): defaults"); }
+      { S_pins p47; defaults(p47); p47.imu_cs = 9; p47.servo[0] = 4; old_record(ms, "wbs11", &p47, 47); Settings g47; const auto rr47 = so.load(g47);
+        CHECK(g47.pins.imu_cs == 9 && g47.pins.servo[0] == 4 && g47.pins.imu2_cs == 255 && g47.pins.nrf_cs == 255 && (rr47.migrated_mask & (1u << SEC_PINS)), "the pin map of 47 bytes: kept, the pins after it unset"); }
       old_record(ms, "wbs11", &op, 23); Settings bad2; const auto r4 = so.load(bad2);
       CHECK((r4.defaulted_mask & (1u << SEC_PINS)) && bad2.pins.imu_cs == 255, "a size that is neither today's nor a known old one (23 bytes: firmware 0.5, four layouts ago): defaults");
       S_gps og; defaults(og); og.rate_hz = 5; old_record(ms, "wbs08", &og, (uint16_t)(sizeof(S_gps) - 1)); Settings bad3; const auto r5 = so.load(bad3);
@@ -164,10 +167,8 @@ static void t_store() {
         CHECK(g19.sensors.baro_model == BARO_MODEL_DRONECAN && g19.sensors.baro_primary == 0 && (r19.migrated_mask & (1u << SEC_SENSORS)), "the sensors section of 0.15 - 0.27 (19 bytes): kept, baro_primary 0"); }
       { S_pins p11; defaults(p11); p11.imu_cs = 9; p11.imu2_cs = 34; old_record(ms, "wbs11", &p11, 48); Settings g11; const auto r11 = so.load(g11);
         CHECK(g11.pins.imu2_cs == 34 && g11.pins.can_tx == 255 && g11.pins.can_rx == 255 && (r11.migrated_mask & (1u << SEC_PINS)), "the pin map of 0.14 (48 bytes): kept, the CAN pins unset"); }
-      { S_wifi w; defaults(w); CHECK(sizeof(S_wifi) == 100 && w.mode == WIFI_MODE_OFF && w.port == 5760 && w.channel == 6 && w.ssid[0] == 0 && w.pass[63] == 0 && !find_section(SEC_WIFI)->live, "wifi: off by default, port 5760, channel 6, empty texts, needs a reboot");
-        w.channel = 14; w.mode = 9; validate(w); CHECK(w.channel == 13 && w.mode == WIFI_MODE_STA, "a channel past 13 is clamped (an unknown mode: the last one, as every enum)"); }
       {   // 0.20: receiver.telemetry at the end of the receiver section (12 bytes before)
-        CHECK(sizeof(S_receiver) == 13 && offsetof(S_receiver, telemetry) == 12 && find_section(SEC_RECEIVER)->compat == 12 && find_section(SEC_RECEIVER)->compat2 == 9, "receiver: telemetry switch at the end, the old sizes 12 and 9 known");
+        CHECK(sizeof(S_receiver) == 22 && offsetof(S_receiver, telemetry) == 12 && offsetof(S_receiver, nrf_addr) == 13 && find_section(SEC_RECEIVER)->compat == 13 && find_section(SEC_RECEIVER)->compat2 == 12 && find_section(SEC_RECEIVER)->compat3 == 9, "receiver: telemetry switch, then the nRF24 fields at the end; the old sizes 13, 12 and 9 known");
         S_receiver d; defaults(d); CHECK(d.telemetry == 1, "default: telemetry on (as before)");
         MemStorage ms; SettingsStore so(ms); Settings w; defaults(w); so.save(w);
         S_receiver o; defaults(o); o.protocol = RX_PROTOCOL_SBUS; o.ch_throttle = 0; o.rc_smoothing_throttle = 77; o.telemetry = 0;     // (not stored: beyond 12 bytes)
@@ -213,9 +214,9 @@ static void t_store() {
         CHECK(got.pid.iterm_relax_cutoff == 31 && got.pid.anti_gravity_gain == 120 && got.pid.acro_trainer_gain == 75 && (rr.migrated_mask & (1u << SEC_PID)), "a pid section of 0.22 is kept, the trainer at its defaults"); }
       CHECK(MODE_BLACKBOX_ERASE == 13 && MODE_ACRO_TRAINER == 10, "modes appended after RESCUE: ACRO_TRAINER 10, AIRMODE 11, ANTI_GRAVITY 12, BLACKBOX_ERASE 13");
     { S_telemetry t; defaults(t);
-        CHECK(sizeof(S_telemetry) == 14 && t.protocol == TELEMETRY_PROTOCOL_NONE && t.baud == 57600 && t.tx_pin == 255 && t.rx_pin == 255 && t.sysid == 1 && t.wifi == 1 && t.rate_attitude == 10
+        CHECK(sizeof(S_telemetry) == 16 && t.remote_arm == 0 && t.mp_home_item == 0 && find_section(SEC_TELEMETRY)->compat == 15 && find_section(SEC_TELEMETRY)->compat2 == 14 && t.protocol == TELEMETRY_PROTOCOL_NONE && t.baud == 57600 && t.tx_pin == 255 && t.rx_pin == 255 && t.sysid == 1 && t.reserved_t == 0 && t.rate_attitude == 10
               && t.rate_position == 5 && t.rate_hud == 4 && t.rate_status == 2 && t.rate_rc == 2 && !find_section(SEC_TELEMETRY)->live,
-              "telemetry (0.19): off, 57600 baud, no pins, system id 1, WiFi too, 10 / 5 / 4 / 2 / 2 per second, needs a reboot");
+              "telemetry (0.19): off, 57600 baud, no pins, system id 1, 10 / 5 / 4 / 2 / 2 per second, needs a reboot; 0.40: remote_arm off; 0.40.1: mp_home_item off; the 15- and 14-byte records of before still read");
         t.rate_attitude = 200; t.sysid = 0; t.baud = 300; t.protocol = 9; validate(t);
         CHECK(t.rate_attitude == 50 && t.sysid == 1 && t.baud == 9600 && t.protocol == TELEMETRY_PROTOCOL_MAVLINK, "out of range: clamped (ATTITUDE 50 per second at most, system id 1, 9600 baud)");
         MemStorage m18; SettingsStore s18(m18); Settings o; defaults(o); o.gps.baud = 57600; s18.save(o); m18.kv.erase("wbs23");      // what 0.18 left in the flash: no telemetry record
@@ -268,7 +269,7 @@ static void t_server() {
       r.host.is_armed = true; nr.max_rate[0] = 100; memcpy(p.data() + 1, &nr, sizeof(nr)); r.send(frame(MSG_SECTION_SET, 5, p)); fr = r.tx.frames();
       CHECK(fr[0].first.type == MSG_ACK && fr[0].second[2] == ERR_ARMED && r.s.rates.max_rate[0] == 800, "while ARMED nothing is changed");
       r.host.is_armed = false; p.pop_back(); r.send(frame(MSG_SECTION_SET, 6, p)); fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_SIZE_MISMATCH, "wrong size refused"); }
-    { Rig r; r.s.general.max_arm_angle = 30; r.send(frame(MSG_SETTINGS_SAVE, 1)); auto fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_OK && r.mem.kv.size() == (size_t)kSectionCount && !(r.srv.flags() & SF_DIRTY), "save writes flash and clears the unsaved flag");
+    { Rig r; r.s.general.max_arm_angle = 30; r.send(frame(MSG_SETTINGS_SAVE, 1)); auto fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_OK && r.mem.kv.size() == (size_t)kSectionCount - 2 && !(r.srv.flags() & SF_DIRTY), "save writes flash (the flight controller's sections) and clears the unsaved flag");
       r.mem.fail_write = true; r.send(frame(MSG_SETTINGS_SAVE, 2)); fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_STORAGE, "flash failure reported");
       r.host.is_armed = true; r.send(frame(MSG_SETTINGS_SAVE, 3)); fr = r.tx.frames(); CHECK(fr[0].second[2] == ERR_ARMED, "no flash writes while armed (they stall the loop)"); }
     { Rig r; r.s.pid.tpa_rate = 10; r.s.general.loop_hz = 2000; r.send(frame(MSG_SETTINGS_DEFAULTS, 1, {SEC_PID})); CHECK(r.s.pid.tpa_rate == 65 && r.s.general.loop_hz == 2000, "defaults for one section");
@@ -573,4 +574,40 @@ static void t_mission_schema() {
       m.count = 40; mission_plan_from(m, home, p); CHECK(p.count == 32, "a count beyond 32 is cut to 32"); }
 }
 
-int main() { t_codec(); t_schema(); t_store(); t_server(); t_streams(); t_apply(); t_rules(); t_more(); t_mission_schema(); printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0; }
+static void t_radio_schema() {
+    printf("[schema] transmitter + nRF24 (0.38)\n");
+    { const SectionInfo* tr = find_section(SEC_TX_RADIO); const SectionInfo* ts = find_section(SEC_TX_STICKS); const SectionInfo* rc = find_section(SEC_RECEIVER);
+      CHECK(tr && ts && tr->id == 27 && ts->id == 28 && tr->role == ROLE_TX && ts->role == ROLE_TX && rc->role == ROLE_RX && find_section(SEC_PID)->role == ROLE_RX, "tx_radio (27) and tx_sticks (28) belong to the transmitter, the rest to the flight controller");
+      const StreamInfo* tx = find_stream(STR_TX); CHECK(tx && tx->id == 17 && tx->role == ROLE_TX && find_stream(STR_RC)->role == ROLE_RX, "stream tx (17) is the transmitter's"); }
+    { Settings s; defaults(s);
+      CHECK(s.tx_radio.rf_channel == 76 && s.tx_radio.rate == NRF_RATE_R250K && s.tx_radio.power == NRF_POWER_MAX && s.tx_radio.pps == NRF_PPS_HZ100 && s.tx_radio.bound == 0, "transmitter radio: RF channel 76, 250 kbps, full power, 100 packets/s, not bound");
+      CHECK(s.tx_radio.pin_sck == 7 && s.tx_radio.pin_miso == 6 && s.tx_radio.pin_mosi == 8 && s.tx_radio.pin_cs == 24 && s.tx_radio.pin_ce == 23, "the old project's nRF24 pins on the ESP32-C5");
+      CHECK(s.tx_sticks.adc_pin[0] == 4 && s.tx_sticks.adc_pin[1] == 5 && s.tx_sticks.adc_pin[2] == 3 && s.tx_sticks.adc_pin[3] == 2 && s.tx_sticks.cal_mid[1] == 2048 && s.tx_sticks.cal_max[3] == 4095, "joysticks on GPIO 4 5 3 2, a 12-bit ADC centred at 2048");
+      CHECK(s.tx_sticks.map[0] == 0 && s.tx_sticks.map[1] == 1 && s.tx_sticks.map[2] == 3 && s.tx_sticks.map[3] == 2, "roll = joy1 X, pitch = joy1 Y, throttle = joy2 Y, yaw = joy2 X");
+      CHECK(s.tx_sticks.throttle_mode == TX_THROTTLE_MANUAL && s.tx_sticks.deadband == 3 && s.tx_sticks.throttle_rate == 50, "throttle MANUAL (the safe one) by default");
+      CHECK(s.receiver.nrf_channel == 76 && s.receiver.nrf_rate == NRF_RATE_R250K && s.receiver.nrf_pps == NRF_PPS_HZ100 && s.receiver.nrf_bound == 0 && s.pins.nrf_ce == 255 && s.pins.nrf_cs == 255, "flight controller: nRF24 receiver settings, its pins unset");
+      CHECK(BIND_STATE_BOUND == 3 && FLY_MODE_MISSION == 6 && find_command(CMD_BIND) && find_command(CMD_STICK_CAL), "bind states, flight modes, commands BIND and STICK_CAL"); }
+    { const SectionInfo* rc = find_section(SEC_RECEIVER); const SectionInfo* pn = find_section(SEC_PINS);
+      CHECK(rc->compat == 13 && pn->compat == 52, "receiver and pins remember their 0.37 sizes (%u, %u)", rc->compat, pn->compat);
+      MemStorage ms; SettingsStore so(ms); S_receiver old; defaults(old); old.protocol = RX_PROTOCOL_SBUS;
+      uint8_t buf[64]; buf[0] = 1; buf[1] = 13; buf[2] = 0; memcpy(buf + 3, &old, 13); const uint16_t c = crc16(buf, 16); buf[16] = (uint8_t)c; buf[17] = (uint8_t)(c >> 8); ms.kv["wbs02"] = std::vector<uint8_t>(buf, buf + 18);
+      Settings got; so.load(got); CHECK(got.receiver.protocol == RX_PROTOCOL_SBUS && got.receiver.nrf_channel == 76, "a 0.37 receiver record loads, the nRF24 fields get their defaults"); }
+    { // the flight controller's server does not serve the transmitter's sections, and the other way round
+      Rig r; r.send(frame(MSG_SECTION_GET, 1, {SEC_TX_RADIO})); auto fr = r.tx.frames();
+      CHECK(fr.size() == 1 && fr[0].first.type == MSG_ACK && fr[0].second[2] == ERR_BAD_SECTION, "RX: GET tx_radio -> BAD_SECTION");
+      std::vector<uint8_t> p(1 + sizeof(S_tx_sticks)); p[0] = SEC_TX_STICKS; r.send(frame(MSG_SECTION_SET, 2, p)); fr = r.tx.frames();
+      CHECK(fr.size() == 1 && fr[0].first.type == MSG_ACK && fr[0].second[2] == ERR_BAD_SECTION, "RX: SET tx_sticks -> BAD_SECTION");
+      r.send(frame(MSG_STREAM_CFG, 3, {STR_TX, 10, 0})); fr = r.tx.frames(); CHECK(fr.size() == 1 && fr[0].second[2] == ERR_BAD_ARG, "RX: the tx stream cannot be subscribed");
+      r.send(frame(MSG_SETTINGS_SAVE, 4)); CHECK(r.mem.kv.count("wbs02") && !r.mem.kv.count("wbs27") && !r.mem.kv.count("wbs28"), "RX: SAVE writes its own sections only"); }
+    { Settings s; defaults(s); MemStorage mem; SettingsStore store{mem}; FakeHost host; MemTransport t;
+      Server tx{s, &store, host, t, ROLE_TX, 0, 38, 0, "Windburst TX", 0}; tx.settings_loaded();
+      auto get = [&](uint8_t id) { t.out.clear(); const auto f = frame(MSG_SECTION_GET, 5, {id}); tx.on_bytes(f.data(), f.size()); return t.frames(); };
+      auto a = get(SEC_TX_RADIO); auto b = get(SEC_PID);
+      CHECK(a.size() == 1 && a[0].first.type == MSG_SECTION && b.size() == 1 && b[0].first.type == MSG_ACK && b[0].second[2] == ERR_BAD_SECTION, "TX: GET tx_radio served, GET pid -> BAD_SECTION");
+      t.out.clear(); const auto sv = frame(MSG_SETTINGS_SAVE, 6); tx.on_bytes(sv.data(), sv.size());
+      CHECK(mem.kv.size() == 2 && mem.kv.count("wbs27") && mem.kv.count("wbs28"), "TX: SAVE writes tx_radio + tx_sticks only (%zu records)", mem.kv.size());
+      s.tx_sticks.deadband = 9; mem.kv.clear(); Settings back; SettingsStore st2{mem}; st2.set_role(ROLE_TX); store.save(s); st2.load(back);
+      CHECK(back.tx_sticks.deadband == 9 && !mem.kv.count("wbs05"), "TX store: its sections round-trip, the flight controller's are not written"); }
+}
+
+int main() { t_codec(); t_schema(); t_store(); t_server(); t_streams(); t_apply(); t_rules(); t_more(); t_mission_schema(); t_radio_schema(); printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0; }

@@ -830,3 +830,13 @@ input.switch:checked:active::after { left: 15px; }
 .leg-label { color: #fff; font-weight: 600; font-size: 12px; text-shadow: 0 0 3px #000, 0 0 3px #000; white-space: nowrap; }
 .drone-marker svg { width: 30px; height: 30px; overflow: visible; }
 .drone-marker path { fill: #ff3b1f; stroke: #fff; stroke-width: 2; }
+
+/* ---- the DIY transmitter's sticks (tabs/tx_overview.js) */
+.tx-sticks { display: flex; flex-wrap: wrap; gap: 24px; margin: 6px 0 10px; }
+.tx-stick-fig { margin: 0; text-align: center; color: var(--muted); font-size: 13px; }
+.tx-stick { position: relative; width: 160px; height: 160px; margin-bottom: 6px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--panel-2); overflow: hidden; }
+.tx-cross::before, .tx-cross::after { content: ''; position: absolute; background: var(--line); }
+.tx-cross::before { left: 50%; top: 0; bottom: 0; width: 1px; }
+.tx-cross::after { top: 50%; left: 0; right: 0; height: 1px; }
+.tx-dot { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); transition: left 60ms linear, top 60ms linear; }
+#tx-link.ok { color: var(--ok); } #tx-link.bad { color: var(--bad); }

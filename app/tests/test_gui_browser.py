@@ -221,6 +221,20 @@ def test_a_change_set_back_hides_save(gui):
     assert gui.setting("motors", "protocol") == before
 
 
+def test_loiter_on_the_page(gui):
+    # 0.41: Loiter (ArduCopter's) - a mode for a switch, its top speed in the Position tab
+    pg = gui.connect().page
+    gui.tab("modes")
+    lo = pg.locator('[data-mode="LOITER"]')
+    lo.wait_for(timeout=8000)
+    assert "Loiter" in lo.inner_text() and "Altitude Hold" in lo.inner_text()
+    gui.tab("nav")
+    pg.wait_for_selector('[data-field="nav.loiter_speed"]', timeout=8000)
+    assert gui.setting("nav", "loiter_speed") == 12.5
+    gui.type_into("nav.loiter_speed", "4")
+    gui.wait(lambda: gui.setting("nav", "loiter_speed") == 4.0, what="loiter_speed stored: %s" % gui.setting("nav", "loiter_speed"))
+
+
 def test_modes_tab(gui):
     pg = gui.connect().page
     gui.tab("modes")
@@ -991,7 +1005,7 @@ def test_ppm_and_spektrum_receivers_on_the_page(gui):
     pg.select_option('[data-field="receiver.protocol"]', "PPM")
     pg.wait_for_function("/PPM: một dây tín hiệu/.test(document.getElementById('rx-proto-help').textContent)")
     opt = lambda v: pg.inner_text('[data-field="receiver.protocol"] option[value="%s"]' % v)
-    assert opt("PWM") == "PWM (mỗi kênh một chân)" and opt("SPEKTRUM1024") == "Spektrum 1024 (DSM2 22 ms)" and "chưa hỗ trợ" in opt("NRF24") and "chưa hỗ trợ" not in opt("PPM")
+    assert opt("PWM") == "PWM (mỗi kênh một chân)" and opt("SPEKTRUM1024") == "Spektrum 1024 (DSM2 22 ms)" and opt("NRF24") == "nRF24 (tay phát DIY Windburst)" and "chưa hỗ trợ" not in opt("PPM")      # (0.38: nRF24 is there)
     gui.tab("pins")
     pg.wait_for_function("/Receiver PPM: chưa có chân PPM/.test(document.getElementById('pin-warnings').textContent)")
     gui.type_into("pins.ppm", "40")
@@ -1023,6 +1037,60 @@ def test_ppm_and_spektrum_receivers_on_the_page(gui):
     gui.sim.do("rc 1 1100"); gui.sim.do("rc 2 1700")
     pg.wait_for_function("(c => c.length > 2 && c[2].dataset.us === '1100' && c[0].dataset.us === '1700')(document.querySelectorAll('#chans .chan'))", timeout=8000)   # throttle = channel 1, roll = channel 2
     pg.wait_for_function("/(89|9[0-2]) khung\\/s/.test(document.getElementById('view').textContent)", timeout=8000)
+
+
+def test_mavlink_receiver_on_the_page(gui):
+    pg = gui.connect().page
+    gui.tab("receiver")
+    pg.select_option('[data-field="receiver.protocol"]', "MAVLINK")
+    pg.wait_for_function("/ExpressLRS \\(3.5 trở lên\\) để ở chế độ MAVLink/.test(document.getElementById('rx-proto-help').textContent)")
+    assert pg.inner_text('[data-field="receiver.protocol"] option[value="MAVLINK"]') == "MAVLink (ELRS ở chế độ MAVLink)"
+    gui.tab("pins")
+    pg.wait_for_function("/telemetry đi ra chính UART của receiver/.test(document.getElementById('view').textContent)")
+    tx = gui.setting("pins", "rx_tx")
+    gui.type_into("pins.rx_tx", "")
+    pg.wait_for_function("/Receiver MAVLink: chưa có chân TX của receiver/.test(document.getElementById('pin-warnings').textContent)")
+    gui.type_into("pins.rx_tx", str(tx))
+    pg.wait_for_function("!/Receiver MAVLink: chưa có chân TX/.test(document.getElementById('pin-warnings').textContent)")
+    gui.wait(lambda: gui.setting("receiver", "protocol") == "MAVLINK" and gui.setting("pins", "rx_tx") == tx, what="MAVLink settings reached the firmware")
+    gui.sim.do("rclink mavlink")
+    boots = int(gui.sim.state()["boots"])
+    pg.click("#save")
+    gui.wait(lambda: int(gui.sim.state()["boots"]) == boots + 1, 12, "firmware restart")
+    pg.wait_for_selector("#save", state="hidden", timeout=12000)
+    gui.tab("receiver")
+    gui.sim.do("rc 1 1234")
+    pg.wait_for_function("(document.querySelector('#chans .chan') || {dataset: {}}).dataset.us === '1234'", timeout=8000)
+    pg.wait_for_function("/Tín hiệu: có/.test(document.getElementById('view').textContent) && /(9[89]|10[0-2]) khung\\/s/.test(document.getElementById('view').textContent)", timeout=8000)
+    gui.tab("overview")
+    rows = {r.get_attribute("data-module"): r.inner_text() for r in pg.locator("table.modules tbody tr").all()}
+    assert "MAVLINK on UART2, MAVLink telemetry on its TX pin" in rows["rx"], rows
+
+
+def test_mission_from_a_ground_station(gui):
+    # 0.40: Mission Planner / QGroundControl upload a plan over MAVLink (here: the ExpressLRS MAVLink link of the simulator); the firmware
+    # writes the section mission to flash by itself, the app reloads it and the mission tab shows it
+    pg = gui.connect().page
+    gui.tab("pins")
+    pg.wait_for_selector('[data-field="telemetry.remote_arm"]', timeout=8000)
+    assert "Cho ground station arm" in pg.inner_text("#view") and "Mission Planner: dòng home đầu mission" in pg.inner_text("#view")
+    assert pg.locator('[data-field="telemetry.mp_home_item"]').count() == 1
+    assert gui.setting("telemetry", "remote_arm") in (0, False), "off by default"
+    gui.tab("receiver")
+    pg.select_option('[data-field="receiver.protocol"]', "MAVLINK")
+    gui.wait(lambda: gui.setting("receiver", "protocol") == "MAVLINK", what="MAVLINK stored")
+    gui.sim.do("rclink mavlink")
+    boots = int(gui.sim.state()["boots"])
+    pg.click("#save")
+    gui.wait(lambda: int(gui.sim.state()["boots"]) == boots + 1, 12, "firmware restart")
+    pg.wait_for_selector("#save", state="hidden", timeout=12000)
+    gui.tab("mission")
+    pg.wait_for_selector("#mission-takeoff", timeout=8000)
+    assert gui.sim.do("gcsmission") == "ok"
+    pg.wait_for_function("/Ground station vừa nạp kế hoạch mới vào drone/.test(document.body.textContent)", timeout=10000)
+    gui.wait(lambda: gui.setting("mission", "count") == 2, what="the section mission reloaded: %s" % gui.setting("mission", "count"))
+    pg.wait_for_function("(document.getElementById('mission-takeoff') || {}).value === '17'", timeout=8000)    # the tab took the new plan (nothing edited on the map)
+    assert pg.is_checked("#mission-rtl")
 
 
 def test_serial_ports_table(gui):
@@ -1060,8 +1128,7 @@ def test_telemetry_block(gui):
     pg.wait_for_function("/GPIO38 đang gán cho cả/.test(document.getElementById('pin-warnings').textContent)")
     gui.type_into("pins.led", "")
     gui.type_into("telemetry.tx_pin", "")
-    pg.uncheck('[data-field="telemetry.wifi"]')
-    pg.wait_for_function("/không có chân TX và không gửi qua WiFi/.test(document.getElementById('pin-warnings').textContent)")
+    pg.wait_for_function("/Telemetry MAVLink: không có chân TX/.test(document.getElementById('pin-warnings').textContent)")
 
 
 def test_gps_baud_is_a_list(gui):
@@ -1895,22 +1962,6 @@ def test_pins_tab_stm32(gui_stm32):
     gui.wait(lambda: gui.setting("pins", "buzzer") == 255, what="pin cleared")
 
 
-def test_wifi_settings_text_fields(gui):
-    pg = gui.connect().page
-    gui.tab("system")
-    # (the simulated board says it has a radio): the texts are 0-padded UTF-8 bytes in the section, the password is hidden
-    pg.wait_for_function("(document.getElementById('wifi-state') || { innerText: '' }).innerText.includes('cổng serial (USB / UART)')", timeout=6000)
-    assert gui.field("wifi.pass").get_attribute("type") == "password" and gui.field("wifi.ssid").input_value() == ""
-    gui.field("wifi.ssid").fill("Nhà Nagumo"); gui.field("wifi.ssid").press("Tab")
-    gui.wait(lambda: bytes(gui.hub.fc.get("wifi")["ssid"]).rstrip(b"\0") == "Nhà Nagumo".encode(), timeout=5.0, what="the network name reached the firmware as UTF-8")
-    gui.field("wifi.pass").fill("x" * 80); gui.field("wifi.pass").press("Tab")
-    gui.wait(lambda: bytes(gui.hub.fc.get("wifi")["pass"]) == b"x" * 63 + b"\0", timeout=5.0, what="a password longer than the field: cut to 63 bytes, the end mark kept")
-    gui.field("wifi.ssid").fill(""); gui.field("wifi.ssid").press("Tab"); gui.field("wifi.pass").fill(""); gui.field("wifi.pass").press("Tab")
-    gui.wait(lambda: not any(gui.hub.fc.get("wifi")["ssid"]) and not any(gui.hub.fc.get("wifi")["pass"]), timeout=5.0, what="emptied again")
-    if pg.locator("#revert").is_visible():
-        pg.click("#revert")
-
-
 def test_theme_picker_switches_and_is_remembered(gui):
     """Themes (js/theme.js): the picker at the foot of the rail sets data-theme on <html> at once, and a reload keeps it
     (index.html applies it before the first paint). Carbon is the default and follows the system."""
@@ -2285,3 +2336,103 @@ def test_mission_clear_and_my_position(gui, monkeypatch):
     assert "Vị trí" in pg.inner_text("#map-me-error") and pg.is_enabled("#map-me")
     pg.click("#map-me-settings")
     gui.wait(lambda: opened == ["ms-settings:privacy-location"], what="Windows settings opened")
+
+
+# ---- 0.38: the DIY transmitter (role TX) on the same page
+def _connect_tx(gui):
+    pg = gui.page
+    pg.goto(gui.srv.url)
+    gui.choose_port(gui.sim.tx_url)
+    pg.click("#connect")
+    pg.wait_for_selector("#tab-tx-overview", timeout=15000)
+    pg.wait_for_selector("#view h1")
+    return pg
+
+
+def _rail(pg):
+    return pg.evaluate("() => [...document.querySelectorAll('#rail a.tab')].map(a => a.dataset.tab)")
+
+
+def test_tx_tabs_only(gui):
+    """Plugged into the transmitter the rail has its four tabs and nothing of the flight controller's; back on the flight
+    controller its own tabs come back."""
+    pg = _connect_tx(gui)
+    assert _rail(pg) == ["tx-overview", "tx-sticks", "tx-radio", "tx-system"]
+    assert "Chưa nối drone" in pg.inner_text("#arm-pill")
+    gui.tab("tx-system")
+    assert "Windburst TX" in pg.inner_text("#tx-fw") and "radio: nRF24 found" in pg.inner_text("#tx-report")
+    gui.hub.fc.set("tx_sticks", deadband=9)
+    pg.wait_for_selector("#save:not([hidden])")
+    pg.once("dialog", lambda d: d.accept())
+    pg.click("#tx-defaults")
+    gui.wait(lambda: gui.setting("tx_sticks", "deadband") == 3, what="tx_sticks back to its defaults")
+    pg.click("#connect")                                    # (connected: the button disconnects)
+    pg.wait_for_selector("#arm-pill.off")
+    gui.connect()
+    assert "receiver" in _rail(pg) and "tx-overview" not in _rail(pg), "the flight controller's tabs again"
+
+
+def test_tx_sticks_live_and_calibrate(gui):
+    """The sticks move the dots and the channels; the calibration takes the ends seen and the centre where the sticks rest,
+    and the transmitter keeps it in its flash by itself."""
+    pg = _connect_tx(gui)
+    left = lambda: pg.evaluate("() => document.querySelector('#tx-stick-right .tx-dot').style.left")    # noqa: E731
+    gui.sim.do("stick 1 4095")
+    pg.wait_for_function("document.getElementById('tx-ch-0').textContent === '2000'")
+    assert left() == "100%", "roll full right: the right dot at the right edge (%s)" % left()
+    gui.sim.do("stick 1 2048")
+    gui.tab("tx-sticks")
+    pg.click("#tx-cal-start")
+    pg.wait_for_function("/đang hiệu chỉnh/.test(document.getElementById('tx-cal-state').textContent)")
+    for axis in range(1, 5):
+        gui.sim.do("stick %d 300" % axis); gui.sim.sleep(0.1)
+        gui.sim.do("stick %d 3800" % axis); gui.sim.sleep(0.1)
+        gui.sim.do("stick %d 2000" % axis)
+    gui.sim.sleep(0.2)
+    pg.click("#tx-cal-finish")
+    pg.wait_for_selector(".toast.ok")
+    assert gui.setting("tx_sticks", "cal_min") == [300, 300, 300, 300] and gui.setting("tx_sticks", "cal_mid") == [2000] * 4
+    assert pg.is_hidden("#save"), "written to the transmitter's flash by itself: nothing to save"
+
+
+def test_tx_bind_and_throttle_warning(gui):
+    """Bind from both ends (the flight controller through its own port), then the overview warns when the throttle mode does not
+    suit the flight mode the drone reports."""
+    from wbclient import WbClient
+    pg = _connect_tx(gui)
+    with WbClient(gui.sim.url, timeout=2.0) as fc:
+        fc.set("receiver", protocol="NRF24")
+        fc.save(); fc.reboot(); gui.sim.sleep(1.0)
+        fc.command("BIND", action=1)
+        gui.tab("tx-radio")
+        pg.click("#tx-bind")
+        pg.wait_for_function("document.getElementById('tx-bind-state').textContent === 'đã bind'", timeout=8000)
+        gui.wait(lambda: fc.get("receiver")["nrf_bound"] == 1, what="the flight controller keeps the bind")
+        assert pg.inner_text("#arm-pill") == "Đã nối drone"
+        gui.tab("tx-sticks")
+        pg.select_option('[data-field="tx_sticks.throttle_mode"]', "ALTPOS")
+        gui.wait(lambda: gui.setting("tx_sticks", "throttle_mode") == "ALTPOS", what="throttle mode ALTPOS")
+        gui.tab("tx-overview")
+        pg.wait_for_selector("#tx-throttle-warn:not([hidden])")
+        assert "ALT / POS" in pg.inner_text("#tx-throttle-warn")
+        m = fc.get("modes")
+        m["mode"][0] = "ALTHOLD"; m["aux"][0] = 0; m["lo"][0] = 900; m["hi"][0] = 1100
+        fc.set("modes", **m)
+        pg.wait_for_selector("#tx-throttle-warn", state="hidden", timeout=6000)
+        assert "Alt hold" in pg.inner_text("#tx-drone")
+
+
+def test_receiver_nrf24_block(gui):
+    """The flight controller's Receiver tab: the nRF24 part (bind, its state) only with the NRF24 protocol."""
+    pg = gui.connect().page
+    gui.tab("receiver")
+    assert pg.is_hidden("#nrf-block")
+    pg.select_option('[data-field="receiver.protocol"]', "NRF24")
+    pg.wait_for_selector("#nrf-block:not([hidden])")
+    assert pg.is_visible("#nrf-bind") and "nRF24" in pg.inner_text("#rx-proto-help")
+    assert pg.locator("#nrf-block input, #nrf-block select").count() == 0, "RF channel / rate / packets are set by the bind: shown, not editable (a hand edit would split the pair)"
+    assert pg.inner_text("#nrf-channel") == "76" and "250 kbps" in pg.inner_text("#nrf-rate")
+    pg.select_option('[data-field="receiver.protocol"]', "CRSF")
+    pg.wait_for_selector("#nrf-block", state="hidden")
+    gui.tab("pins")
+    assert "Receiver nRF24" in pg.inner_text("#view")

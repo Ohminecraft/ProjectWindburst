@@ -20,13 +20,16 @@ def _free_port_pair():
         s.bind(("127.0.0.1", 0))
         p = s.getsockname()[1]
         s.close()
-        t = socket.socket()
-        try:
-            t.bind(("127.0.0.1", p + 1))
+        ok = True
+        for q in (p + 1, p + 2):                # the tester's control port, the simulated transmitter's app port
+            t = socket.socket()
+            try:
+                t.bind(("127.0.0.1", q))
+            except OSError:
+                ok = False
             t.close()
+        if ok:
             return p
-        except OSError:
-            t.close()
     raise RuntimeError("no free port pair")
 
 
@@ -55,6 +58,11 @@ class Sim:
     @property
     def url(self):
         return "socket://127.0.0.1:%d" % self.port
+
+    @property
+    def tx_url(self):
+        """The simulated DIY transmitter (0.38): its own app link, two ports above the board's."""
+        return "socket://127.0.0.1:%d" % (self.port + 2)
 
     def start(self):
         self.proc = subprocess.Popen([SIM, "--port", str(self.port), "--flash", self.flash, "--speed", str(self.speed)] + self.extra,

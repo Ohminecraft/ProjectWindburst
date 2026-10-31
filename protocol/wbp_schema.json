@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0xB91CB124",
+ "hash": "0xCAF05FD1",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -40,7 +40,8 @@
    "PPM",
    "PWM",
    "SPEKTRUM1024",
-   "MSP"
+   "MSP",
+   "MAVLINK"
   ],
   "align": [
    "CW0",
@@ -129,7 +130,8 @@
    "AIRMODE",
    "ANTI_GRAVITY",
    "BLACKBOX_ERASE",
-   "MISSION"
+   "MISSION",
+   "LOITER"
   ],
   "failsafe": [
    "NONE",
@@ -446,22 +448,6 @@
    "FAILED",
    "LOST"
   ],
-  "wifi_mode": [
-   "OFF",
-   "AP",
-   "STA"
-  ],
-  "wifi_state": [
-   "OFF",
-   "AP",
-   "CONNECTING",
-   "CONNECTED",
-   "FAILED"
-  ],
-  "link_via": [
-   "SERIAL",
-   "WIFI"
-  ],
   "can_mode": [
    "OFF",
    "DRONECAN"
@@ -538,6 +524,43 @@
   "mission_rc_lost": [
    "CONTINUE",
    "RTL"
+  ],
+  "nrf_rate": [
+   "R250K",
+   "R1M",
+   "R2M"
+  ],
+  "nrf_power": [
+   "MIN",
+   "LOW",
+   "HIGH",
+   "MAX"
+  ],
+  "nrf_pps": [
+   "HZ50",
+   "HZ100",
+   "HZ150"
+  ],
+  "bind_state": [
+   "IDLE",
+   "LISTEN",
+   "BINDING",
+   "BOUND",
+   "FAILED"
+  ],
+  "fly_mode": [
+   "ACRO",
+   "ANGLE",
+   "STABILIZE",
+   "ALTHOLD",
+   "POSHOLD",
+   "RESCUE",
+   "MISSION",
+   "LOITER"
+  ],
+  "tx_throttle": [
+   "ALTPOS",
+   "MANUAL"
   ]
  },
  "bits": {
@@ -857,11 +880,47 @@
      "n": "telemetry",
      "t": "bool",
      "d": 1,
-     "desc": "send telemetry back through the receiver (CRSF on the UART's TX pin: battery, attitude, GPS, flight mode on the transmitter); off = the TX pin stays silent"
+     "desc": "send telemetry back through the receiver on the UART's TX pin: CRSF (battery, attitude, GPS, flight mode on the transmitter), or with protocol MAVLINK the MAVLink telemetry (rates and system id from the telemetry section) to the ground station; off = the TX pin stays silent"
+    },
+    {
+     "n": "nrf_addr",
+     "t": "u8",
+     "d": 0,
+     "desc": "nRF24: the address of the bound transmitter (5 bytes, made by the transmitter at bind)",
+     "count": 5
+    },
+    {
+     "n": "nrf_channel",
+     "t": "u8",
+     "d": 76,
+     "desc": "nRF24: RF channel (2400 + n MHz), set at bind (74 .. 82)",
+     "min": 0,
+     "max": 125
+    },
+    {
+     "n": "nrf_rate",
+     "t": "u8",
+     "d": 0,
+     "desc": "nRF24: air data rate, set at bind",
+     "enum": "nrf_rate"
+    },
+    {
+     "n": "nrf_pps",
+     "t": "u8",
+     "d": 1,
+     "desc": "nRF24: packets per second the transmitter sends, set at bind (the link quality is measured against it)",
+     "enum": "nrf_pps"
+    },
+    {
+     "n": "nrf_bound",
+     "t": "bool",
+     "d": 0,
+     "desc": "nRF24: bound to a transmitter. Never bound: the receiver listens for a bind for 60 s after power-up"
     }
    ],
    "live": false,
    "compat": [
+    13,
     12,
     9
    ]
@@ -2156,14 +2215,44 @@
      "t": "u8",
      "d": 255,
      "desc": "chip select of a compass (RM3100) on the IMU's SPI bus (same SCK / MISO / MOSI)"
+    },
+    {
+     "n": "nrf_sck",
+     "t": "u8",
+     "d": 255,
+     "desc": "nRF24 receiver: SCK on the second SPI bus"
+    },
+    {
+     "n": "nrf_miso",
+     "t": "u8",
+     "d": 255,
+     "desc": "nRF24 receiver: MISO"
+    },
+    {
+     "n": "nrf_mosi",
+     "t": "u8",
+     "d": 255,
+     "desc": "nRF24 receiver: MOSI"
+    },
+    {
+     "n": "nrf_cs",
+     "t": "u8",
+     "d": 255,
+     "desc": "nRF24 receiver: chip select (CSN)"
+    },
+    {
+     "n": "nrf_ce",
+     "t": "u8",
+     "d": 255,
+     "desc": "nRF24 receiver: CE (chip enable)"
     }
    ],
    "live": false,
    "compat": [
+    52,
     50,
     48,
-    47,
-    46
+    47
    ]
   },
   {
@@ -3027,13 +3116,22 @@
      "d": 0,
      "enum": "rescue_mode",
      "desc": "what the rescue does (a RESCUE switch, the failsafe procedure RESCUE, a battery action RTL): RTL = climb (the cone), straight home, wait, land (PX4 / ArduPilot RTL); SMART_RTL = the way this flight came, backwards (ArduPilot SmartRTL: around what it flew around, at the heights it flew there; a path that could not be kept falls back to RTL); LAND = down where the craft is, holding that point (ArduPilot LAND; without GPS only the descent)"
+    },
+    {
+     "n": "loiter_speed",
+     "t": "u8",
+     "d": 125,
+     "min": 5,
+     "max": 250,
+     "scale": 0.1,
+     "desc": "Loiter: the speed at full stick (m/s, ArduPilot LOIT_SPEED_MS); half the stick gives half of it"
     }
    ],
    "compat": [
+    43,
     38,
     34,
-    31,
-    30
+    31
    ]
   },
   {
@@ -3211,54 +3309,6 @@
    ]
   },
   {
-   "id": 20,
-   "name": "wifi",
-   "desc": "The app link over WiFi (ESP32 only): an access point of its own or a WiFi network to join; WBP over TCP. Kept out of the flight log (password).",
-   "live": false,
-   "fields": [
-    {
-     "n": "mode",
-     "t": "u8",
-     "d": 0,
-     "enum": "wifi_mode",
-     "desc": "OFF; AP = its own network (192.168.4.1); STA = join the network ssid / pass"
-    },
-    {
-     "n": "channel",
-     "t": "u8",
-     "d": 6,
-     "min": 1,
-     "max": 13,
-     "desc": "AP: the WiFi channel"
-    },
-    {
-     "n": "port",
-     "t": "u16",
-     "d": 5760,
-     "min": 1,
-     "max": 65535,
-     "desc": "TCP port of the app link"
-    },
-    {
-     "n": "ssid",
-     "t": "u8",
-     "count": 32,
-     "d": 0,
-     "text": true,
-     "desc": "network name, UTF-8, 0-padded. AP: empty = Windburst-XXXX (the end of the chip's MAC address)"
-    },
-    {
-     "n": "pass",
-     "t": "u8",
-     "count": 64,
-     "d": 0,
-     "text": true,
-     "secret": true,
-     "desc": "password, 8 .. 63 characters (WPA2). AP: empty = windburst; STA: empty = an open network"
-    }
-   ]
-  },
-  {
    "id": 21,
    "name": "can",
    "desc": "CAN bus (ESP32 TWAI controller + an external transceiver): DroneCAN GPS / compass modules",
@@ -3360,7 +3410,7 @@
   {
    "id": 23,
    "name": "telemetry",
-   "desc": "Telemetry to a ground station (Mission Planner, QGroundControl, a radio with a MAVLink backpack): MAVLink 2, send only, on a UART (TX pin; AUTO = the UART left after GPS, receiver, flow sensor and ESC wire, TABLE = the UART with the function TELEMETRY) and / or over WiFi (UDP 14550)",
+   "desc": "Telemetry to a ground station (Mission Planner, QGroundControl, a radio with a MAVLink backpack): MAVLink 2 on a UART (TX pin; RX pin: the ground station's commands and missions, 0.40; AUTO = the UART left after GPS, receiver, flow sensor and ESC wire, TABLE = the UART with the function TELEMETRY). With receiver protocol MAVLINK and receiver.telemetry on, it goes back on the receiver's UART instead (ExpressLRS MAVLink mode) and takes only the rates and the system id from here",
    "live": false,
    "fields": [
     {
@@ -3382,13 +3432,13 @@
      "n": "tx_pin",
      "t": "u8",
      "d": 255,
-     "desc": "UART TX of the telemetry: to the RX of the radio (255 = no wire, WiFi only)"
+     "desc": "UART TX of the telemetry: to the RX of the radio (255 = none: telemetry off)"
     },
     {
      "n": "rx_pin",
      "t": "u8",
      "d": 255,
-     "desc": "UART RX (from the radio's TX); not read yet. Needed on an STM32 to start the UART"
+     "desc": "UART RX (from the radio's TX): the ground station's commands and missions (0.40). Needed on an STM32 to start the UART"
     },
     {
      "n": "sysid",
@@ -3399,10 +3449,10 @@
      "desc": "MAVLink system id of this craft (two crafts on one ground station need different ids)"
     },
     {
-     "n": "wifi",
-     "t": "bool",
-     "d": 1,
-     "desc": "also send over WiFi (UDP broadcast to port 14550) while wifi.mode is on"
+     "n": "reserved_t",
+     "t": "u8",
+     "d": 0,
+     "desc": "unused (was wifi until 0.38.3: MAVLink as UDP over WiFi - WiFi was removed in 0.38.4); kept so that the fields after it stay where they were"
     },
     {
      "n": "rate_attitude",
@@ -3443,7 +3493,23 @@
      "min": 0,
      "max": 20,
      "desc": "RC_CHANNELS per second (0 = off)"
+    },
+    {
+     "n": "remote_arm",
+     "t": "bool",
+     "d": 0,
+     "desc": "a ground station may ARM the craft over MAVLink (COMPONENT_ARM_DISARM; every arming blocker still counts, the ARM switch takes it over with its next edge). Disarming is always allowed (in the air only with the force code 21196)"
+    },
+    {
+     "n": "mp_home_item",
+     "t": "bool",
+     "d": 0,
+     "desc": "Mission Planner: a mission download starts with the home point as item 0, as ArduPilot's does (Mission Planner drops item 0 of every download as home); MISSION_CURRENT counts it too. Off for QGroundControl"
     }
+   ],
+   "compat": [
+    15,
+    14
    ]
   },
   {
@@ -3640,6 +3706,187 @@
      "desc": "WAYPOINT / LOITER_TIME / DELAY: seconds; SERVO: pulse (us); SPEED: dm/s"
     }
    ]
+  },
+  {
+   "id": 27,
+   "name": "tx_radio",
+   "role": "tx",
+   "desc": "Transmitter: the nRF24 link",
+   "live": false,
+   "fields": [
+    {
+     "n": "addr",
+     "t": "u8",
+     "d": 0,
+     "desc": "address of the bound receiver pair (5 bytes, made at bind)",
+     "count": 5
+    },
+    {
+     "n": "rf_channel",
+     "t": "u8",
+     "d": 76,
+     "desc": "RF channel (2400 + n MHz). The 2.4 GHz band ends at 2483.5 MHz: 0 .. 83 only; a bind picks one of 74 .. 82 (between WiFi 11 and the band edge)",
+     "min": 0,
+     "max": 125
+    },
+    {
+     "n": "rate",
+     "t": "u8",
+     "d": 0,
+     "desc": "air data rate (250 kbps reaches furthest)",
+     "enum": "nrf_rate"
+    },
+    {
+     "n": "power",
+     "t": "u8",
+     "d": 3,
+     "desc": "transmit power",
+     "enum": "nrf_power"
+    },
+    {
+     "n": "pps",
+     "t": "u8",
+     "d": 1,
+     "desc": "packets per second",
+     "enum": "nrf_pps"
+    },
+    {
+     "n": "bound",
+     "t": "bool",
+     "d": 0,
+     "desc": "bound to a receiver"
+    },
+    {
+     "n": "pin_sck",
+     "t": "u8",
+     "d": 7,
+     "desc": "nRF24 SCK"
+    },
+    {
+     "n": "pin_miso",
+     "t": "u8",
+     "d": 6,
+     "desc": "nRF24 MISO"
+    },
+    {
+     "n": "pin_mosi",
+     "t": "u8",
+     "d": 8,
+     "desc": "nRF24 MOSI"
+    },
+    {
+     "n": "pin_cs",
+     "t": "u8",
+     "d": 24,
+     "desc": "nRF24 chip select (CSN)"
+    },
+    {
+     "n": "pin_ce",
+     "t": "u8",
+     "d": 23,
+     "desc": "nRF24 CE"
+    }
+   ]
+  },
+  {
+   "id": 28,
+   "name": "tx_sticks",
+   "role": "tx",
+   "desc": "Transmitter: joysticks",
+   "live": true,
+   "fields": [
+    {
+     "n": "adc_pin",
+     "t": "u8",
+     "d": [
+      4,
+      5,
+      3,
+      2
+     ],
+     "desc": "ADC pin of joy1 X, joy1 Y, joy2 X, joy2 Y",
+     "count": 4
+    },
+    {
+     "n": "cal_min",
+     "t": "u16",
+     "count": 4,
+     "d": 0,
+     "min": 0,
+     "max": 4095,
+     "desc": "ADC reading at the low end of each axis"
+    },
+    {
+     "n": "cal_mid",
+     "t": "u16",
+     "count": 4,
+     "d": 2048,
+     "min": 0,
+     "max": 4095,
+     "desc": "ADC reading with the stick centred"
+    },
+    {
+     "n": "cal_max",
+     "t": "u16",
+     "count": 4,
+     "d": 4095,
+     "min": 0,
+     "max": 4095,
+     "desc": "ADC reading at the high end of each axis"
+    },
+    {
+     "n": "invert",
+     "t": "bool",
+     "count": 4,
+     "d": 0,
+     "desc": "reverse an axis"
+    },
+    {
+     "n": "map",
+     "t": "u8",
+     "d": [
+      0,
+      1,
+      3,
+      2
+     ],
+     "desc": "which axis (0 joy1 X, 1 joy1 Y, 2 joy2 X, 3 joy2 Y) drives roll, pitch, throttle, yaw",
+     "count": 4,
+     "min": 0,
+     "max": 3
+    },
+    {
+     "n": "deadband",
+     "t": "u8",
+     "d": 3,
+     "desc": "dead zone around the centre (%)",
+     "min": 0,
+     "max": 20
+    },
+    {
+     "n": "expo",
+     "t": "u8",
+     "d": 0,
+     "desc": "expo on roll, pitch, yaw (%)",
+     "min": 0,
+     "max": 100
+    },
+    {
+     "n": "throttle_mode",
+     "t": "u8",
+     "d": 1,
+     "desc": "ALTPOS: the throttle stick as it stands (centre = 1500, for ALT HOLD / POS HOLD); MANUAL: the stick moves the throttle up / down and it stays where it was left (self-centring sticks in ANGLE / ACRO), 1000 while the drone is not armed",
+     "enum": "tx_throttle"
+    },
+    {
+     "n": "throttle_rate",
+     "t": "u8",
+     "d": 50,
+     "desc": "MANUAL throttle: how fast full stick moves it (% of the range per second)",
+     "min": 5,
+     "max": 200
+    }
+   ]
   }
  ],
  "streams": [
@@ -3721,6 +3968,17 @@
      "n": "uart_line",
      "t": "u16",
      "desc": "serial receivers: framing / parity errors in the last second (noise on the wire, wrong baud rate, wrong inversion)"
+    },
+    {
+     "n": "bind_state",
+     "t": "u8",
+     "desc": "nRF24: bind state",
+     "enum": "bind_state"
+    },
+    {
+     "n": "lq",
+     "t": "u8",
+     "desc": "nRF24: % of the packets the transmitter sent that arrived (last second); 0 for other receivers"
     }
    ]
   },
@@ -4745,32 +5003,6 @@
      "n": "queued",
      "t": "u16",
      "desc": "bytes waiting in the transmit queue right now"
-    },
-    {
-     "n": "wifi",
-     "t": "u8",
-     "enum": "wifi_state"
-    },
-    {
-     "n": "wifi_ip",
-     "t": "u32",
-     "desc": "IPv4 address, first byte = lowest byte (192.168.4.1 = 0x0104A8C0); 0 = none"
-    },
-    {
-     "n": "wifi_rssi",
-     "t": "i16",
-     "desc": "STA: signal of the network joined (dBm)"
-    },
-    {
-     "n": "wifi_clients",
-     "t": "u8",
-     "desc": "AP: stations joined"
-    },
-    {
-     "n": "via",
-     "t": "u8",
-     "enum": "link_via",
-     "desc": "where the app talking now is connected"
     }
    ]
   },
@@ -4945,6 +5177,85 @@
      "t": "u8",
      "count": 32,
      "desc": "bits 0-2 signal quality (u-blox qualityInd 0..7), bit 3 used in the fix"
+    }
+   ]
+  },
+  {
+   "id": 17,
+   "name": "tx",
+   "role": "tx",
+   "rate": 20,
+   "max": 50,
+   "desc": "transmitter: sticks, link, what the drone reports",
+   "fields": [
+    {
+     "n": "ch",
+     "t": "u16",
+     "count": 8,
+     "desc": "channels sent (us)"
+    },
+    {
+     "n": "raw",
+     "t": "u16",
+     "count": 4,
+     "desc": "ADC readings of the four axes"
+    },
+    {
+     "n": "link",
+     "t": "bool"
+    },
+    {
+     "n": "ack_pct",
+     "t": "u8",
+     "desc": "% of packets acknowledged (last second)"
+    },
+    {
+     "n": "pps",
+     "t": "u8",
+     "desc": "packets sent per second"
+    },
+    {
+     "n": "bind_state",
+     "t": "u8",
+     "enum": "bind_state"
+    },
+    {
+     "n": "calibrating",
+     "t": "bool"
+    },
+    {
+     "n": "d_seen",
+     "t": "bool",
+     "desc": "telemetry from the drone in the last second"
+    },
+    {
+     "n": "d_armed",
+     "t": "bool"
+    },
+    {
+     "n": "d_failsafe",
+     "t": "bool"
+    },
+    {
+     "n": "d_mode",
+     "t": "u8",
+     "enum": "fly_mode"
+    },
+    {
+     "n": "d_batt_cv",
+     "t": "u16",
+     "desc": "drone battery (centivolts)"
+    },
+    {
+     "n": "d_lq",
+     "t": "u8",
+     "desc": "link quality the drone measures (%)"
+    },
+    {
+     "n": "settings_dirty",
+     "t": "u8",
+     "bits": "settings_flags",
+     "desc": "the transmitter's settings: unsaved / reboot required (as in the flight controller's status stream)"
     }
    ]
   }
@@ -5171,6 +5482,36 @@
    ],
    "armed_ok": true,
    "desc": "action 1 = start the stored mission (the craft must be armed by the pilot; on the ground the first command must be TAKEOFF), 0 = stop it (the pilot's modes fly again). FAILED: refused"
+  },
+  {
+   "id": 24,
+   "name": "BIND",
+   "args": [
+    {
+     "n": "action",
+     "t": "u8"
+    }
+   ],
+   "desc": "nRF24: 1 = start binding (transmitter: send the bind offer; receiver: listen for it), 0 = stop. Refused while armed"
+  },
+  {
+   "id": 25,
+   "name": "STICK_CAL",
+   "args": [
+    {
+     "n": "step",
+     "t": "u8"
+    }
+   ],
+   "writes": "tx_sticks",
+   "desc": "transmitter: 1 = start (move every stick to its ends), 2 = finish (the ends seen + where the sticks rest now = the centre), 0 = cancel",
+   "result": [
+    {
+     "n": "axes",
+     "t": "u8",
+     "desc": "axes calibrated (an axis not moved far enough keeps its old calibration)"
+    }
+   ]
   }
  ],
  "errors": [

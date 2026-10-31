@@ -7,7 +7,7 @@ Drone tự bay một kế hoạch đã nạp: cất cánh, bay qua các điểm,
 Thiết kế: `docs/superpowers/specs/2026-10-29-mission-design.md`. Những quyết định đưa ra lúc bạn vắng: `docs/MISSION_WORKLOG.md`.
 
 ## Đã có (phần 1: firmware)
-- Lưu kế hoạch tối đa **32 lệnh** trong cài đặt (section `mission`, lưu flash như mọi cài đặt), nạp và đọc qua WBP: USB, WiFi của ESP32 (`socket://<ip>:5760`) hoặc bản mô phỏng.
+- Lưu kế hoạch tối đa **32 lệnh** trong cài đặt (section `mission`, lưu flash như mọi cài đặt), nạp và đọc qua WBP: USB / UART hoặc bản mô phỏng.
 - Bắt đầu bằng **công tắc MISSION** (tab Mode) hoặc **lệnh WBP `MISSION`** (`1` = bắt đầu, `0` = dừng).
 - Servo nhiệm vụ: kênh `Nhiệm vụ` ở tab Motor, kèm góc tại xung nhỏ nhất / lớn nhất và xung ban đầu.
 - Còi và motor kêu nhanh trong **10 giây cuối** trước khi drone tự cất cánh lại. Không tắt được.
@@ -37,7 +37,7 @@ Bố cục C đã chọn: bản đồ chiếm hết tab, các ô nổi bên trê
 - Độ đổi sang xung theo "góc ở xung nhỏ nhất / lớn nhất" của servo ở tab Motor.
 - Code: `web/js/tabs/mission.js` (giao diện, Leaflet 1.9.4 đóng gói sẵn trong `web/vendor/leaflet`, giấy phép BSD-2), `web/js/mission_plan.js` (đổi kế hoạch qua lại với section `mission`, ước tính quãng đường).
 
-**Chưa có:** nạp kế hoạch và theo dõi qua MAVLink / ELRS (phần 3). Hiện app nối tới drone bằng USB, WiFi của ESP32 (`socket://<ip>:5760`) hoặc mô phỏng, nên khi bay xa thì chỉ theo dõi được trong tầm WiFi.
+**Qua MAVLink (0.40, phần 3):** Mission Planner / QGroundControl nạp và tải kế hoạch, bắt đầu nó (`MISSION_START` hoặc chế độ AUTO), theo dõi lệnh đang bay (`MISSION_CURRENT`, `MISSION_ITEM_REACHED`) qua link ELRS chế độ MAVLink hoặc radio telemetry (`docs/MAVLINK.md`, `docs/ELRS_MAVLINK.md`). Kế hoạch nạp từ ground station nằm cùng section `mission` với kế hoạch của app; app tự tải lại khi firmware lưu nó (lúc đã disarm), tab Nhiệm vụ hiện ngay nếu kế hoạch trên bản đồ không có chỗ sửa dở. App vẫn nối tới drone bằng dây (USB / UART), nên theo dõi khi đang bay thì dùng ground station.
 
 ## Các lệnh
 | Lệnh | `MAV_CMD` | Dùng | Drone làm gì |
@@ -98,7 +98,7 @@ ArduPilot (`MIS_OPTIONS` CONTINUE_AFTER_LAND) để motor quay ở ga thấp nh�
 - Tab Mode: mode **Nhiệm vụ (AUTO)**. Tab Motor: kênh servo **Nhiệm vụ**, cùng góc ở xung nhỏ nhất / lớn nhất (mặc định 0° và 180°) và xung ban đầu (mặc định 1500 µs). Tab Pin và còi: điều kiện **Nhiệm vụ sắp tự cất cánh**.
 - Stream `nav`: `mission_state`, `mission_index`, `mission_count`, `mission_dist` (m tới điểm hiện tại), `mission_left` (m cả chuyến còn lại), `mission_wait` (giây chờ còn lại).
 - OSD: chế độ `AUTO`, dòng cảnh báo `AUTO 3/9 120M`, `WAIT 45S`, `TAKEOFF 7S`. Lúc nhiệm vụ đang về nhà thì OSD hiện của rescue (`RTL 123M`).
-- MAVLink HEARTBEAT: `custom_mode` AUTO (3), lúc RTL thì RTL (6).
+- MAVLink HEARTBEAT: `custom_mode` AUTO (3), lúc RTL thì RTL (6) (Smart RTL 21 / Land 9 theo kiểu rescue). Từ 0.40: nạp / tải kế hoạch, `MISSION_CURRENT`, `MISSION_ITEM_REACHED`, `MISSION_START`.
 
 ## Mã
 - `src/core/nav/mission.h`: bộ chạy (portable). Bay theo từng chặng giống đường bay của rescue: điểm đích chạy dọc chặng từ chỗ drone dừng được, rồi phanh để dừng ngay trên điểm.

@@ -23,8 +23,10 @@ const GROUPS = [
   [tr('Khí áp kế và la bàn trên bus SPI của IMU'), tr('Khí áp kế (BMP280 / BMP388 / MS5611) và la bàn RM3100 nối chung SCK, MISO, MOSI với IMU, mỗi chip một chân CS riêng. Để trống nếu chúng nằm trên bus I2C.'), [['baro_cs', tr('CS khí áp kế')], ['mag_cs', tr('CS la bàn')]]],
   [tr('Bus I2C cảm biến'), tr('Barometer, lidar, la bàn (và IMU nếu không có chân CS).'), [['i2c_sda', 'SDA'], ['i2c_scl', 'SCL']]],
   ['GPS (UART1)', tr('RX của ESP32 nối với TX của module GPS.'), [['gps_rx', 'RX'], ['gps_tx', 'TX']]],
-  [tr('Receiver nối tiếp (UART2)'), tr('CRSF / SBUS / IBUS / Spektrum. TX chỉ cần khi dùng telemetry.'), [['rx_rx', 'RX'], ['rx_tx', 'TX']]],
+  [tr('Receiver nối tiếp (UART2)'), tr('CRSF / SBUS / IBUS / Spektrum / MAVLink. TX chỉ cần khi dùng telemetry.'), [['rx_rx', 'RX'], ['rx_tx', 'TX']]],
   [tr('Receiver PPM'), tr('Một dây mang mọi kênh. Chỉ dùng khi giao thức receiver (tab Receiver) là PPM; khi đó UART2 để trống cho việc khác.'), [['ppm', 'PPM']]],
+  [tr('Receiver nRF24'), tr('Module nRF24L01+ của tay phát DIY, trên bus SPI thứ hai (chân riêng, không chung với IMU). Chỉ dùng khi giao thức receiver là NRF24.'),
+    [['nrf_sck', 'SCK'], ['nrf_miso', 'MISO'], ['nrf_mosi', 'MOSI'], ['nrf_cs', 'CSN'], ['nrf_ce', 'CE']]],
   [tr('Pin và còi'), tr('ADC đo pin: chân nối với cầu chia áp, trên ESP32-S3 là GPIO1 đến GPIO20. ADC đo dòng: chân ra của cảm biến dòng (cũng GPIO1 đến GPIO20); để trống nếu không có cảm biến dòng. Còi: chân bật / tắt còi, hoặc phát xung cho còi thụ động; để trống nếu máy không gắn còi (motor kêu thay, xem tab Pin và còi).'), [['batt_adc', tr('ADC đo pin')], ['curr_adc', tr('ADC đo dòng')], ['buzzer', tr('Còi')]]],
   [tr('Thẻ SD (log chuyến bay)'), tr('Kiểu SPI: đủ 4 chân. Kiểu SDMMC 1 bit: bỏ trống CS, ba chân còn lại là CLK, CMD, D0. Chọn kiểu nối ở tab Blackbox.'),
     [['sd_cs', 'CS'], ['sd_clk', 'SCK / CLK'], ['sd_cmd', 'MOSI / CMD'], ['sd_d0', 'MISO / D0']]],
@@ -129,7 +131,7 @@ function problems() {
   const flowType = (store.settings.flow || {}).type;
   const unused = (name) => (FLOW_SPI.includes(name) && flowType !== 'PMW3901') || (FLOW_UART.includes(name) && flowType !== 'MSP');
   const stm32 = isStm32(), chip = chipPins(), mcu = mcuName(), s3 = isS3(), esp32 = isPlainEsp32();
-  const OUT_ONLY = ['motor', 'servo', 'buzzer', 'led', 'gps_tx', 'rx_tx', 'imu_cs', 'imu2_cs', 'baro_cs', 'mag_cs', 'imu_mosi', 'imu_sck', 'sd_cs', 'sd_clk', 'sd_cmd', 'i2c_sda', 'i2c_scl', 'flow_cs', 'flow_sck', 'flow_mosi', 'flow_tx', 'can_tx', 'tx_pin'];
+  const OUT_ONLY = ['motor', 'servo', 'buzzer', 'led', 'gps_tx', 'rx_tx', 'imu_cs', 'imu2_cs', 'baro_cs', 'mag_cs', 'imu_mosi', 'imu_sck', 'sd_cs', 'sd_clk', 'sd_cmd', 'i2c_sda', 'i2c_scl', 'flow_cs', 'flow_sck', 'flow_mosi', 'flow_tx', 'can_tx', 'tx_pin', 'nrf_sck', 'nrf_mosi', 'nrf_cs', 'nrf_ce'];
   const visit = (label, v, name) => {
     if (v === 255 || v === undefined || v === null || unused(name)) return;
     if (chip && !chip.has(v)) out.push(tr('{label}: {pin} không có trên {mcu}.', { label, pin: stm32 ? pinName(v, true) : 'GPIO' + v, mcu }));
@@ -146,16 +148,19 @@ function problems() {
     if (used.has(v)) out.push(tr('GPIO{pin} đang gán cho cả "{a}" và "{b}".', { pin: v, a: used.get(v), b: label }));
     else used.set(v, label);
   };
-  for (const [title, , list] of GROUPS) for (const [n, l] of list) visit(FLOW_SPI.includes(n) || FLOW_UART.includes(n) ? `${title} ${l}` : l, p[n], n);
+  const nrf = (store.settings.receiver || {}).protocol === 'NRF24';
+  for (const [title, , list] of GROUPS) for (const [n, l] of list) if (nrf || !n.startsWith('nrf_')) visit(FLOW_SPI.includes(n) || FLOW_UART.includes(n) ? `${title} ${l}` : l, p[n], n);
   p.motor.forEach((v, i) => visit(`Motor slot ${i + 1}`, v, 'motor'));
   (p.servo || []).forEach((v, i) => visit(`Servo ${i + 1}`, v, 'servo'));
   if ((store.settings.receiver || {}).protocol === 'PWM') (p.rx_pwm || []).forEach((v, i) => visit(`PWM CH${i + 1}`, v));
-  const tlm = store.settings.telemetry;
-  const mavlink = tlm && tlm.protocol === 'MAVLINK';
+  const tlm = store.settings.telemetry, rxc = store.settings.receiver || {};
+  const mavRx = rxc.protocol === 'MAVLINK' && !!rxc.telemetry;           // (MAVLink back on the receiver's UART: the telemetry pins are not used)
+  const mavlink = tlm && tlm.protocol === 'MAVLINK' && !mavRx;
   if (mavlink) { visit(tr('Telemetry TX'), tlm.tx_pin, 'tx_pin'); visit(tr('Telemetry RX'), tlm.rx_pin); }
   const osdc = store.settings.osd, osdOn = osdc && osdc.type !== 'NONE';
   if (osdOn) { visit('OSD TX', osdc.tx_pin, 'tx_pin'); visit('OSD RX', osdc.rx_pin); }
-  if (mavlink && tlm.tx_pin === 255 && !tlm.wifi) out.push(tr('Telemetry MAVLink: không có chân TX và không gửi qua WiFi - không có gì được gửi đi.'));
+  if (mavlink && tlm.tx_pin === 255) out.push(tr('Telemetry MAVLink: không có chân TX - không có gì được gửi đi.'));
+  if (mavRx && p.rx_tx === 255) out.push(tr('Receiver MAVLink: chưa có chân TX của receiver - không gửi được telemetry về ground station.'));
   if ((store.settings.receiver || {}).protocol === 'PWM' && p.rx_pwm && p.rx_pwm[0] === 255) out.push(tr('Receiver PWM: chưa có chân của kênh 1.'));
   if ((store.settings.receiver || {}).protocol === 'PPM' && p.ppm === 255) out.push(tr('Receiver PPM: chưa có chân PPM.'));
   if ((p.imu_cs !== 255) && [p.imu_miso, p.imu_mosi, p.imu_sck].some((v) => v === 255)) out.push(tr('IMU SPI: đã có CS nhưng còn thiếu MISO, MOSI hoặc SCK.'));
@@ -186,11 +191,12 @@ function problems() {
   return out;
 }
 
-// MAVLink telemetry to a ground station (docs/MAVLINK.md): a UART (its pins live in the telemetry section) and / or WiFi.
+// MAVLink telemetry to a ground station (docs/MAVLINK.md): a UART (its pins live in the telemetry section).
 function telemetryBlock() {
   return block(tr('Telemetry (MAVLink)'),
-    h('p', { class: 'help' }, tr('Gửi trạng thái máy bay cho Mission Planner / QGroundControl: qua radio telemetry (433 / 915 MHz, ELRS backpack) nối vào một UART, và / hoặc qua WiFi (UDP cổng 14550, ground station tự nhận). Chỉ gửi, chưa nhận lệnh. UART: Tự động lấy UART còn trống sau GPS, receiver, optical flow và dây telemetry ESC; Theo bảng: UART có chức năng Telemetry.')),
-    fields('telemetry', ['protocol', 'baud', 'sysid', 'wifi']),
+    h('p', { class: 'help' }, tr('Gửi trạng thái máy bay cho Mission Planner / QGroundControl qua radio telemetry (433 / 915 MHz, ELRS backpack) nối vào một UART. Chỉ gửi, chưa nhận lệnh. UART: Tự động lấy UART còn trống sau GPS, receiver, optical flow và dây telemetry ESC; Theo bảng: UART có chức năng Telemetry.')),
+    h('p', { class: 'help' }, tr('Receiver chọn MAVLink (ELRS) và bật "Telemetry về tay điều khiển": telemetry đi ra chính UART của receiver, ở đây chỉ còn dùng tốc độ gửi và System ID.')),
+    fields('telemetry', ['protocol', 'baud', 'sysid', 'remote_arm', 'mp_home_item']),
     h('div', { class: 'pins', id: 'tlm-pins' }, pinBox('tx_pin', 'TX', undefined, 'telemetry'), pinBox('rx_pin', 'RX', undefined, 'telemetry')),
     fields('telemetry', ['rate_attitude', 'rate_position', 'rate_hud', 'rate_status', 'rate_rc']));
 }

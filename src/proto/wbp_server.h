@@ -30,7 +30,7 @@ namespace wbp {
 
 enum Role : uint8_t { ROLE_RX = 0, ROLE_TX = 1 };
 enum Feature : uint32_t { FEAT_STREAMS = 1u << 0, FEAT_CALIBRATION = 1u << 1, FEAT_MOTOR_TEST = 1u << 2, FEAT_GPS = 1u << 3, FEAT_BLACKBOX = 1u << 4, FEAT_BATTERY = 1u << 5, FEAT_BEEPER = 1u << 6,
-                         FEAT_STM32 = 1u << 7, FEAT_WIFI = 1u << 8, FEAT_USB_NAME = 1u << 9 };     // USB_NAME: general.usb_name is the board's name on USB   // STM32: pin numbers are port * 16 + pin (PA0 = 0, PB3 = 19: src/port/pin_names.h), not GPIO numbers
+                         FEAT_STM32 = 1u << 7, FEAT_USB_NAME = 1u << 9 };     // (1u << 8: WiFi, removed in 0.38.4)     // USB_NAME: general.usb_name is the board's name on USB   // STM32: pin numbers are port * 16 + pin (PA0 = 0, PB3 = 19: src/port/pin_names.h), not GPIO numbers
 enum SettingsFlags : uint8_t { SF_DIRTY = SETTINGS_FLAGS_DIRTY, SF_REBOOT_REQUIRED = SETTINGS_FLAGS_REBOOT_REQUIRED };
 
 class Transport {
@@ -65,7 +65,8 @@ public:
 class Server {
 public:
     Server(Settings& live, SettingsStore* store, Host& host, Transport& tx, Role role, uint8_t maj, uint8_t min, uint8_t patch, const char* name, uint32_t features)
-        : s_(live), store_(store), host_(host), tx_(tx), role_(role), maj_(maj), min_(min), patch_(patch), name_(name), features_(features) {}
+        : s_(live), store_(store), host_(host), tx_(tx), role_(role), maj_(maj), min_(min), patch_(patch), name_(name), features_(features) { if (store_) store_->set_role(role); }
+    Role role() const { return role_; }
     void set_features(uint32_t f) { features_ = f; }                 // (the simulator plays an STM32 board with wb_sim --stm32)
     // The chip by name (port/chip.h WB_MCU_NAME) and the pin numbers it has (32 bytes, bit n = pin n): sent with DEVICE_INFO, so
     // the app shows which MCU it talks to and offers only pins that exist on it.
@@ -151,11 +152,11 @@ private:
             }
             send(MSG_DEVICE_INFO, f.seq, b, (uint16_t)n, false); break; }
         case MSG_SECTION_GET:
-            if (f.len != 1 || !find_section(f.payload[0])) { ack(f.type, f.seq, ERR_BAD_SECTION); break; }
+            if (f.len != 1 || !own(f.payload[0])) { ack(f.type, f.seq, ERR_BAD_SECTION); break; }
             send_section(f.seq, f.payload[0]); break;
         case MSG_SECTION_SET: {
             if (f.len < 1) { ack(f.type, f.seq, ERR_BAD_ARG); break; }
-            const SectionInfo* si = find_section(f.payload[0]);
+            const SectionInfo* si = own(f.payload[0]);
             if (!si) { ack(f.type, f.seq, ERR_BAD_SECTION); break; }
             if (f.len != si->size + 1) { ack(f.type, f.seq, ERR_SIZE_MISMATCH); break; }
             if (host_.armed()) { ack(f.type, f.seq, ERR_ARMED); break; }
@@ -169,8 +170,8 @@ private:
         case MSG_SETTINGS_DEFAULTS: {
             if (f.len != 1) { ack(f.type, f.seq, ERR_BAD_ARG); break; }
             if (host_.armed()) { ack(f.type, f.seq, ERR_ARMED); break; }
-            if (f.payload[0] == 0xFF) { defaults(s_); for (const SectionInfo& si : kSections) changed(si.id, host_.apply_live(si.id)); }
-            else { if (!defaults_section(s_, f.payload[0])) { ack(f.type, f.seq, ERR_BAD_SECTION); break; } changed(f.payload[0], host_.apply_live(f.payload[0])); }
+            if (f.payload[0] == 0xFF) { for (const SectionInfo& si : kSections) if (si.role == role_) { defaults_section(s_, si.id); changed(si.id, host_.apply_live(si.id)); } }
+            else { if (!own(f.payload[0]) || !defaults_section(s_, f.payload[0])) { ack(f.type, f.seq, ERR_BAD_SECTION); break; } changed(f.payload[0], host_.apply_live(f.payload[0])); }
             ack(f.type, f.seq, ERR_OK); break; }
         case MSG_REBOOT:
             if (host_.armed()) { ack(f.type, f.seq, ERR_ARMED); break; }
@@ -179,7 +180,7 @@ private:
             if (f.len != 3) { ack(f.type, f.seq, ERR_BAD_ARG); break; }
             const uint16_t rate = (uint16_t)(f.payload[1] | (f.payload[2] << 8));
             if (f.payload[0] == 0xFF) { for (auto& r : rate_) r = 0; ack(f.type, f.seq, ERR_OK); break; }
-            int idx = -1; for (int i = 0; i < kStreamCount; i++) if (kStreams[i].id == f.payload[0]) idx = i;
+            int idx = -1; for (int i = 0; i < kStreamCount; i++) if (kStreams[i].id == f.payload[0] && kStreams[i].role == role_) idx = i;
             if (idx < 0) { ack(f.type, f.seq, ERR_BAD_ARG); break; }
             rate_[idx] = rate > kStreams[idx].max_rate ? kStreams[idx].max_rate : rate;
             next_[idx] = host_.now_ms(); ack(f.type, f.seq, ERR_OK); break; }
@@ -193,6 +194,9 @@ private:
         default: ack(f.type, f.seq, ERR_UNKNOWN); break;
         }
     }
+
+    // a section of this device (its role), or nullptr: the other device's sections are not served
+    const SectionInfo* own(uint8_t id) const { const SectionInfo* si = find_section(id); return si && si->role == role_ ? si : nullptr; }
 
     // ---- unsaved / reboot required, per section (bit i = kSections[i])
     static_assert(kSectionCount <= 32, "one bit per section");

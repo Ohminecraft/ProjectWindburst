@@ -51,6 +51,11 @@ public:
         limited_ = false; fresh_ = true;
     }
     void set_target(float pos_n, float pos_e) { tgt_[0] = pos_n; tgt_[1] = pos_e; }
+    // Loiter (loiter.h): the position, velocity and acceleration it wants for the next update(), taken as they are - no shaping
+    // (AC_PosControl::set_pos_vel_accel_NE_m). update() still keeps the target within pos_err_max_m of the craft.
+    void set_pva(float pos_n, float pos_e, float vel_n, float vel_e, float acc_n, float acc_e) {
+        tgt_[0] = pos_n; tgt_[1] = pos_e; vel_des_[0] = vel_n; vel_des_[1] = vel_e; acc_des_[0] = acc_n; acc_des_[1] = acc_e; direct_ = true;
+    }
     // let what it holds fade (landing, the sticks in charge): time constant tc seconds
     void relax(float dt, float tc = 0.16f) { const float k = dt / (dt + tc); for (int a = 0; a < 2; a++) { i_[a] -= i_[a] * k; acc_[a] -= acc_[a] * k; } }
     // the estimator SET its position (a reset): the target moves with it
@@ -61,9 +66,12 @@ public:
     WB_FAST void update(float pos_n, float pos_e, float vel_n, float vel_e, float dt, bool hold_position, float vel_want_n = 0, float vel_want_e = 0) {
         if (!(dt > 0.0f) || dt > 0.1f) return;
         const float pos[2] = {pos_n, pos_e}, vel[2] = {vel_n, vel_e};
-        { const float want[2] = {vel_want_n, vel_want_e}, ff[2] = {0, 0};
+        if (!direct_) {
+          const float want[2] = {vel_want_n, vel_want_e}, ff[2] = {0, 0};
           kin::update_vel_accel_xy(vel_des_, acc_des_, dt);
-          kin::shape_vel_accel_xy(want, ff, vel_des_, acc_des_, cfg.shape_accel_mps2, cfg.shape_jerk_mps3, dt, false); }
+          kin::shape_vel_accel_xy(want, ff, vel_des_, acc_des_, cfg.shape_accel_mps2, cfg.shape_jerk_mps3, dt, false);
+        }
+        direct_ = false;
         float corr[2] = {0, 0};
         if (hold_position) {
             float e[2] = {tgt_[0] - pos[0], tgt_[1] - pos[1]};
@@ -105,7 +113,7 @@ public:
 private:
     float vel_des_[2] = {0, 0}, acc_des_[2] = {0, 0};
     float tgt_[2] = {0, 0}, vel_tgt_[2] = {0, 0}, err_[2] = {0, 0}, err_last_[2] = {0, 0}, d_[2] = {0, 0}, i_[2] = {0, 0}, acc_[2] = {0, 0}, lim_dir_[2] = {0, 0}, pos_err_ = 0;
-    bool limited_ = false, fresh_ = true;
+    bool limited_ = false, fresh_ = true, direct_ = false;
 };
 
 }  // namespace nav

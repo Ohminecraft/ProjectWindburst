@@ -47,6 +47,20 @@ Mã lỗi (`errors` trong json): `OK, UNKNOWN, BAD_ARG, ARMED, BUSY, NOT_SUPPORT
 
 ## 2. Settings
 
+**0.41.0: Loiter.** Enum `mode` và `fly_mode` thêm `LOITER` ở cuối. Section `nav` thêm `loiter_speed` ở cuối (43 → 44 byte). `compat` của `nav` nay là 43, 38, 34, 31: bản ghi 30 byte (firmware khoảng 0.30 trở về trước) không còn được đọc, vì `compat` giữ tối đa 4 kích thước; khi đó section `nav` về mặc định. Schema hash đổi.
+
+**0.40.1:** section `telemetry` thêm `mp_home_item` ở cuối (15 → 16 byte, `compat` 15 và 14). Schema hash đổi.
+
+**0.40.0: ground station qua MAVLink.** Section `telemetry` thêm `remote_arm` ở cuối (14 → 15 byte, `compat` 14: bản ghi cũ vẫn đọc, `remote_arm` = tắt). Schema hash đổi: app và firmware phải cùng bản. Firmware tự ghi section `mission` khi ground station nạp kế hoạch (như level trim: lưu khi đã disarm, dòng log `settings: section mission written by the firmware`).
+
+**0.39.0: receiver MAVLink.** Enum `rx_protocol` thêm `MAVLINK` (= 9, ở cuối: các giá trị cũ không đổi, bản ghi cũ đọc như trước). Chỉ mô tả của `receiver.telemetry` và section `telemetry` đổi. Schema hash đổi: app và firmware phải cùng bản.
+
+**0.38.4: bỏ WiFi.** Section `wifi` (id 20) không còn: bản ghi cũ của nó trong NVS chỉ nằm đó, không ai đọc; id 20 không dùng lại. Field `telemetry.wifi` thành `reserved_t` (giữ chỗ để các field sau không dời). Stream `link` bỏ 5 field cuối (`wifi`, `wifi_ip`, `wifi_rssi`, `wifi_clients`, `via`) và các enum `wifi_mode`, `wifi_state`, `link_via`. Bit tính năng 8 (`WIFI`) không dùng nữa. Cờ field `secret` (chỉ `wifi.pass` có) cũng bỏ. Schema đổi: app và firmware phải cùng bản.
+
+**Nâng cấp lên 0.38**: section `receiver` (13 → 22 byte) và `pins` (52 → 57 byte) dài thêm ở cuối; bản ghi cũ vẫn đọc được qua `compat`. `pins` chỉ còn nhớ 4 kích thước cũ (52, 50, 48, 47): bảng chân của firmware cũ hơn khoảng 0.30 (46 byte trở xuống) về mặc định - đặt lại chân trong tab Chân và cổng sau khi nạp. 0.38.1: kênh tần số mặc định của nRF24 đổi 100 → 76 (100 = 2500 MHz, ngoài dải 2,4 GHz được phép); bản ghi đã lưu giữ giá trị cũ cho tới lần bind sau.
+
+**Hai thiết bị, một schema (0.38).** Mạch bay (role RX) và tay phát DIY (role TX, `docs/TX.md`) dùng chung `protocol/wbp_schema.json` và một hash. Section / stream có `"role": "tx"` là của tay phát (`tx_radio`, `tx_sticks`, stream `tx`), không ghi = của mạch bay. Mỗi thiết bị chỉ phục vụ phần của mình: `SECTION_GET` / `SECTION_SET` / `DEFAULTS` một section của thiết bị kia → `ERR_BAD_SECTION`, `STREAM_CFG` stream của thiết bị kia → `ERR_BAD_ARG`, `SAVE` / `DEFAULTS` tất cả / bộ nhớ flash / CLI chỉ đụng section của mình. App biết thiết bị nào qua `role` của `DEVICE_INFO` (`Schema.sections_of(role)`).
+
 17 section, mỗi section là một struct packed (`S_<tên>`). Trường có `scale` thì `giá trị thật = số trên dây × scale`; `enum` là chỉ số trong danh sách tên; `optional` + 255 = ô trống.
 
 | id | section | byte | áp dụng | nội dung |
@@ -120,6 +134,8 @@ Tên các bit (`bits` trong json) được firmware kiểm tra lúc biên dịch
 | 2 | ACC_CAL_POINT | — | lấy trung bình ~1 s một mặt; firmware **tự nhận ra mặt nào** (bit trong `calibration.mask`) |
 | 3 | ACC_CAL_FINISH | — | cần đủ 6 mặt; khớp offset + scale, ghi vào section `calibration` (RAM) |
 | 16 | ACC_CAL_CANCEL | — | |
+| 24 | BIND | action u8 (1 bắt đầu, 0 dừng) | nRF24, cả hai thiết bị: tay phát phát lời mời bind, mạch bay nghe; từ chối khi đang arm |
+| 25 | STICK_CAL | step u8 (1 bắt đầu, 2 xong, 0 huỷ) | tay phát: đẩy mọi cần ra hai đầu rồi thả về tâm, xong = ghi `tx_sticks.cal_*` (RAM) |
 | 4 | LEVEL_TRIM | — | máy nằm phẳng, đứng yên; từ chối nếu lệch > 20° |
 | 5/6/7 | MAG_CAL_START / FINISH / CANCEL | — | FINISH trả `reason` (enum `mag_cal_result`); thất bại thì vẫn tiếp tục thu mẫu |
 | 8 | MOTOR_TEST | motor u8 (255 = tất cả), value u16 0..1000 | **phải gửi lại ≤ 0,5 s/lần**, nếu không motor tự dừng; **tháo cánh** |

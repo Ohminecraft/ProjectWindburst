@@ -79,6 +79,15 @@ def test_schema_matches_generated_header():
         assert getattr(F, {"SECTION_GET": "SECTION_GET"}.get(msg, msg)) == int(val, 16)
 
 
+
+def test_schema_roles():
+    """0.38: one schema for the flight controller and the transmitter; each device has its own sections and streams."""
+    s = Schema()
+    assert s.sections_of("TX") == ["tx_radio", "tx_sticks"] and s.streams_of("TX") == ["tx"]
+    rx = s.sections_of("RX")
+    assert "receiver" in rx and "pins" in rx and not any(n.startswith("tx_") for n in rx) and len(rx) == 25
+    assert "tx" not in s.streams_of("RX") and "rc" in s.streams_of("RX")
+
 def test_layout_pack_unpack():
     s = Schema()
     lay = s.layout("section", "modes")

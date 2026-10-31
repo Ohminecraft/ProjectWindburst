@@ -32,7 +32,7 @@
 #include "../core/ekf.h"
 #include "../proto/settings_apply.h"
 #include "telemetry.h"
-#include "../telemetry/mavlink_telemetry.h"
+#include "../telemetry/mavlink_gcs.h"
 #include "../osd/osd.h"
 #include "../proto/wbp_fields.h"
 #include "exchange.h"
@@ -45,7 +45,7 @@
 #include "../port/pin_names.h"
 #include "sysload.h"
 // the enums the settings select drivers by (cast straight from the schema)
-static_assert((int)wbp::RX_PROTOCOL_MSP == (int)rx::PROTO_MSP && (int)wbp::RX_PROTOCOL_SPEKTRUM1024 == (int)rx::PROTO_SPEKTRUM1024, "rx_protocol");
+static_assert((int)wbp::RX_PROTOCOL_MSP == (int)rx::PROTO_MSP && (int)wbp::RX_PROTOCOL_SPEKTRUM1024 == (int)rx::PROTO_SPEKTRUM1024 && (int)wbp::RX_PROTOCOL_MAVLINK == (int)rx::PROTO_MAVLINK, "rx_protocol");
 static_assert((int)wbp::MAG_MODEL_MSP == (int)MagSensor::Model::MSP && (int)wbp::MAG_MODEL_RM3100 == (int)MagSensor::Model::RM3100, "mag_model");
 static_assert((int)wbp::BARO_MODEL_MSP == (int)BaroSensor::Model::MSP && (int)wbp::BARO_MODEL_DRONECAN == (int)BaroSensor::Model::DRONECAN, "baro_model");
 
@@ -101,7 +101,6 @@ public:
     bb::Recorder blackbox;                                // the flight-loop end of the flight log (the rest is bb::Service in the link task)
     I2CBus sensorBus{I2C_DEVICE_0};
     app::Exchange link;                                   // the only object shared with the link task
-    mav::Ring mav_net;                                    // MAVLink frames for the WiFi side (the link task sends them as UDP): sensor thread -> link task
     fc::InflightTrim inflight_trim;
     bool use_external_rc = false;                         // true: channels come from set_rc() (tests / a radio module) instead of `rc`
     bool usb_link = false;                                // the app link is the chip's own USB (GPIO19 / 20): set before begin(), for the pin check
@@ -248,7 +247,7 @@ public:
         port::SerialPort* const uarts[3] = {uart0, uart1, uart2};
         static const char* const uname[3] = {"UART0", "UART1", "UART2"};
         const rx::Protocol rxp_ = (rx::Protocol)s.receiver.protocol;
-        const bool serial_rx = !use_external_rc && rxp_ != rx::PROTO_PPM && rxp_ != rx::PROTO_PWM && rxp_ != rx::PROTO_MSP;
+        const bool serial_rx = !use_external_rc && rxp_ != rx::PROTO_PPM && rxp_ != rx::PROTO_PWM && rxp_ != rx::PROTO_MSP && rxp_ != rx::PROTO_NRF24;
         msp_gps_ = s.sensors.gps_enabled && s.gps.provider == wbp::GPS_PROVIDER_MSP; msp_rc_ = !use_external_rc && rxp_ == rx::PROTO_MSP;
         msp_mag_ = s.sensors.mag_enabled && s.sensors.mag_model == wbp::MAG_MODEL_MSP; msp_baro_ = s.sensors.baro_enabled && s.sensors.baro_model == wbp::BARO_MODEL_MSP;
         const bool msp_port = msp_port_wanted(s, use_external_rc);
@@ -274,11 +273,24 @@ public:
                 if (rp == rx::PROTO_PPM) { char pb[8]; say(status.rx, "rx", rc.name(), rc.failReason(), "PPM on %s", pin_str(pp[0], pb)); }
                 else { char pb[8]; say(status.rx, "rx", rc.name(), rc.failReason(), "PWM, %d channel%s from %s", wired, wired == 1 ? "" : "s", pin_str(pp[0], pb)); }
             } else if (rp == rx::PROTO_MSP) {                                  // (MSP_SET_RAW_RC on the MSP port, opened below)
+            } else if (rp == rx::PROTO_NRF24) {                                // the DIY transmitter's radio on the second SPI bus (docs/TX.md)
+                const char* why = spi2_owner(s);
+                if (!why) {
+                    const uint8_t np[5] = {s.pins.nrf_sck, s.pins.nrf_miso, s.pins.nrf_mosi, s.pins.nrf_cs, s.pins.nrf_ce};
+                    nrf::Config c; memcpy(c.addr, s.receiver.nrf_addr, 5); c.rf_channel = s.receiver.nrf_channel; c.rate = s.receiver.nrf_rate; c.pps = s.receiver.nrf_pps;
+                    status.rx = rc.beginNrf24(np, c, s.receiver.nrf_bound != 0, millis());
+                    why = rc.failReason();
+                } else status.rx = false;
+                static const char* const rate[3] = {"250 kbps", "1 Mbps", "2 Mbps"};
+                char pb[8]; say(status.rx, "rx", "NRF24", why, "NRF24 (CSN %s), RF channel %u, %s, %s", pin_str(s.pins.nrf_cs, pb), (unsigned)s.receiver.nrf_channel, rate[s.receiver.nrf_rate % 3],
+                                s.receiver.nrf_bound ? "bound" : "never bound: listening for a bind for 60 s");
             } else if (plan.rx >= 0) {
                 uint8_t rxp[3]; hw.getSerialRxPins(rxp);
                 status.rx = rc.begin(rp, *uarts[plan.rx], rxp[0], rxp[1]);
                 rx_tlm_on_ = s.receiver.telemetry != 0;
-                say(status.rx, "rx", rc.name(), rc.failReason(), "%s on %s%s", rc.name(), uname[plan.rx], !rc.telemetryPossible() ? "" : rx_tlm_on_ ? ", telemetry on its TX pin" : ", telemetry off (receiver.telemetry)");
+                const bool tlm_kind = rc.telemetryPossible() || rc.mavlinkUart();
+                say(status.rx, "rx", rc.name(), rc.failReason(), "%s on %s%s", rc.name(), uname[plan.rx], !tlm_kind ? "" : !rx_tlm_on_ ? ", telemetry off (receiver.telemetry)"
+                                                                                 : rc.mavlinkUart() ? ", MAVLink telemetry on its TX pin" : ", telemetry on its TX pin");
                 crsf_tlm_.reset();
             } else { status.rx = false; say(false, "rx", "", "no UART has the function SERIAL_RX in the serial ports table (Pins and ports tab)", ""); }
         }
@@ -369,17 +381,25 @@ public:
         }
 
         // ---- MAVLink telemetry (section telemetry, telemetry/mavlink_telemetry.h): a UART TX (AUTO: the UART left; TABLE: the one with
-        //      the function TELEMETRY) and / or WiFi (the link task sends the frames as UDP broadcasts to port 14550)
-        mav_uart_ = nullptr; mav_on_ = mav_wifi_ = false; mav_report_i_ = 0; mav_blk_sent_ = kMavNeverSent; mav_blk_ms_ = 0; mav_armed_ = false;
-        if (s.telemetry.protocol == wbp::TELEMETRY_PROTOCOL_MAVLINK) {
+        //      the function TELEMETRY); or, with an ExpressLRS receiver in MAVLink mode (receiver protocol MAVLINK, receiver.telemetry on),
+        //      back on the receiver's own UART - one link for the sticks and the telemetry, its RADIO_STATUS the flow control
+        mav_uart_ = nullptr; mav_on_ = false; mav_report_i_ = 0; mav_blk_sent_ = kMavNeverSent; mav_blk_ms_ = 0; mav_armed_ = false; mav_status_n_ = 0;
+        const bool mav_on_rx = !use_external_rc && rxp_ == rx::PROTO_MAVLINK && status.rx && s.receiver.telemetry;
+        if (mav_on_rx || s.telemetry.protocol == wbp::TELEMETRY_PROTOCOL_MAVLINK) {
             const wbp::S_telemetry& tc = s.telemetry;
             mav::Rates mr; mr.attitude = tc.rate_attitude; mr.position = tc.rate_position; mr.hud = tc.rate_hud; mr.status = tc.rate_status; mr.rc = tc.rate_rc;
             mav_.configure(mr, tc.sysid);
+            gcs_.configure(tc.sysid, ((uint32_t)WB_FW_MAJOR << 24) | ((uint32_t)WB_FW_MINOR << 16) | ((uint32_t)WB_FW_PATCH << 8) | 255u, tc.mp_home_item != 0);   // (255: an official release)
+            gcs_parser_ = mav::Parser(); mav_rwait_ = false;
             const int nm = fc::mixer_motor_count((fc::Layout)s.motors.layout);
             mav_type_ = nm == 6 ? mav::MAV_TYPE_HEXAROTOR : nm == 8 ? mav::MAV_TYPE_OCTOROTOR : nm == 4 ? mav::MAV_TYPE_QUADROTOR : mav::MAV_TYPE_GENERIC;
-            mav_wifi_ = !WB_PLATFORM_STM32 && tc.wifi && s.wifi.mode != wbp::WIFI_MODE_OFF;
-            const char* why = nullptr; int u = -1; char wire[64] = "";
-            if (tc.tx_pin != 255) {
+            const char* why = nullptr; int u = -1; char wire[96] = "";
+            if (mav_on_rx) {
+                if (!(mav_uart_ = rc.mavlinkUart())) why = "the receiver's UART has no TX pin (pins.rx_tx)";
+                else { uint8_t rxp[3]; hw.getSerialRxPins(rxp); char pb[8];
+                       snprintf(wire, sizeof(wire), "on the receiver's UART (%s TX %s, %lu baud)%s", uname[plan.rx], pin_str(rxp[1], pb), (unsigned long)rc.mavlink()->baud(),
+                                s.telemetry.protocol == wbp::TELEMETRY_PROTOCOL_MAVLINK && tc.tx_pin != 255 ? "; telemetry.tx_pin is not used" : ""); }
+            } else if (tc.tx_pin != 255) {
                 u = port_table ? plan.tlm : app::telemetry_uart(status.gps, status.rx && !use_external_rc && rc.onUart(), uart0 != nullptr, flow_u, esc_u, osd_u);
                 if (u < 0) why = port_table ? "no UART has the function TELEMETRY in the serial ports table" : "no UART left (GPS, receiver, flow sensor, ESC wire and OSD have them)";
                 else {
@@ -389,13 +409,10 @@ public:
                     if (!port::uart_begin(*uarts[u], tc.baud, SERIAL_8N1, tc.rx_pin, tc.tx_pin, false, 256)) why = WB_PLATFORM_STM32 ? "the UART did not start on those pins (an STM32 needs telemetry.rx_pin as well)" : "the UART did not start on that pin";
                     else { mav_uart_ = uarts[u]; char pb[8]; snprintf(wire, sizeof(wire), "%s TX %s, %lu baud", uname[u], pin_str(tc.tx_pin, pb), (unsigned long)tc.baud); }
                 }
-            } else if (!mav_wifi_) why = "no TX pin (telemetry.tx_pin) and no WiFi (telemetry.wifi with wifi.mode on)";
-            mav_on_ = mav_uart_ || mav_wifi_;
+            } else why = "no TX pin (telemetry.tx_pin)";
+            mav_on_ = mav_uart_ != nullptr;
             if (!mav_on_) say(false, "telemetry", "", why, "");
-            else {
-                say(true, "telemetry", "", "", "MAVLink 2, system id %u, %s%s%s", (unsigned)tc.sysid, wire, *wire && mav_wifi_ ? " + " : "", mav_wifi_ ? "WiFi UDP 14550" : "");
-                if (why) { char line[kReportLen]; snprintf(line, sizeof(line), "telemetry: WARNING - no UART: %s", why); add_report(line); }
-            }
+            else say(true, "telemetry", "", "", "MAVLink 2, system id %u, %s", (unsigned)tc.sysid, wire);
         }
 
         // ---- core + motors
@@ -452,9 +469,9 @@ public:
         // ---- LED strip (WS2812 on pins.led: the ESP32 through the second SPI bus, an STM32 on the pin's timer channel + DMA)
         status.led = false;
         if (s.led.count) {
-            const bool spi2_taken = !WB_PLATFORM_STM32 && ((s.blackbox.device == bb::DEV_SDCARD && s.blackbox.sd_mode == wbp::SD_MODE_SPI) || s.flow.type == FlowSensor::PMW3901);
+            const bool nrf_rx = !use_external_rc && s.receiver.protocol == rx::PROTO_NRF24;
             const char* why = s.pins.led == GPIO_UNUSED ? "no pin for the LED strip (Pins tab: LED)"
-                            : spi2_taken ? "the second SPI bus is taken (SD card on SPI, or a PMW3901)" : nullptr;
+                            : WB_PLATFORM_STM32 ? nullptr : nrf_rx ? "the second SPI bus is taken (the nRF24 receiver)" : spi2_owner(s);
 #if WB_HAS_LED_STRIP
             if (!why && !led_strip_.begin(s.pins.led)) why = led_strip_.why() ? led_strip_.why() : "the SPI bus did not start";
 #else
@@ -605,6 +622,20 @@ public:
                 const uint16_t* c = msp_rc_ ? msp_port_.rc().channels() : rc.channels(); for (int i = 0; i < 16; i++) rc_[i] = c[i];
             }
             for (int i = 0; i < 16; i++) servo_rc_[i] = rc_[i];                      // (the servos keep the last channels when the link drops)
+            if (rx::Nrf24Rx* radio = use_external_rc ? nullptr : rc.radio()) {      // nRF24: what the DIY transmitter is told on its ACKs
+                wbr::Telemetry t; t.armed = now_armed; t.failsafe = last_out_.failsafe != fc::FsStage::NONE; t.mode = fly_mode();
+                const float cv = tel_.batt_v * 100.0f; t.batt_cv = (uint16_t)(cv <= 0.0f ? 0 : cv >= 65535.0f ? 65535 : cv + 0.5f);
+                radio->set_telemetry(t);
+                nrf::Config c; const bool bound = radio->take_bound(c);
+                if (bound || radio->take_changed(c)) {                            // a bind / new radio settings from the transmitter: kept in flash (by the link task)
+                    memcpy(s_->receiver.nrf_addr, c.addr, 5); s_->receiver.nrf_channel = c.rf_channel; s_->receiver.nrf_rate = c.rate; s_->receiver.nrf_pps = c.pps; s_->receiver.nrf_bound = 1;
+                    tel_.fw_saved_section = wbp::SEC_RECEIVER; tel_.fw_saved_seq++;
+                    char line[kReportLen];
+                    if (bound) snprintf(line, sizeof(line), "rx: bound to %02X%02X%02X%02X%02X, RF channel %u", c.addr[0], c.addr[1], c.addr[2], c.addr[3], c.addr[4], (unsigned)c.rf_channel);
+                    else snprintf(line, sizeof(line), "rx: radio settings from the transmitter: RF channel %u", (unsigned)c.rf_channel);
+                    add_report(line);
+                }
+            }
             servo_have_rc_ = rc_seq_ != 0;
             if (gps_new) core.on_gps(gm, now_ms);
             if (baro_out) core.on_baro(baro_alt, baro_sig, now_ms);
@@ -664,7 +695,10 @@ public:
         {
             app::Guard g(*sync_);
             if (rx_tlm_on_ && rc.telemetryPossible() && rc_link_) tlm_n_ = crsf_tlm_.next(now_us, crsf_in(), tlm_buf_);     // (only while the receiver is there to take it)
-            if (mav_on_) { mav_st_ = mav_in(now_ms); mav_blk_ = tel_.blockers; }
+            if (mav_on_) {
+                mav_st_ = mav_in(now_ms); mav_blk_ = tel_.blockers; mav_rseq_ = last_out_.remote_seq; mav_rres_ = last_out_.remote_result;
+                if (gnss.home().has_home()) { const gps::Location& h = gnss.home().home(); mav_st_.have_home = true; mav_st_.home_lat = h.lat; mav_st_.home_lon = h.lon; mav_st_.home_alt_mm = h.alt_cm * 10; }
+            }
             if (osd_uart_) { osd_st_ = osd_in(now_ms); app::msp_info_of(tel_, s_, osd_info_); }
             if ((uint32_t)(now_ms - bb_slow_ms_) >= 1000u / bb::kSlowHz) { bb_slow_ms_ = now_ms; blackbox.log_slow(now_us, tel_); }
         }
@@ -776,6 +810,11 @@ public:
             if (!status.motors) return wbp::ERR_NO_SENSOR;
             return mm.enable_extended_telemetry(r.args[0] != 0) ? wbp::ERR_OK : wbp::ERR_NOT_SUPPORTED;
 
+        case wbp::CMD_BIND: {                                  // nRF24: listen for the transmitter's bind offer (30 s) / stop
+            rx::Nrf24Rx* radio = use_external_rc ? nullptr : rc.radio();
+            if (!radio) return wbp::ERR_BAD_STATE;
+            if (r.args[0] == 0) { radio->stop_bind(); return wbp::ERR_OK; }
+            return radio->start_bind(now_ms, 30000, armed) ? wbp::ERR_OK : wbp::ERR_ARMED; }
         case wbp::CMD_MISSION:                                 // the app's start / stop (a MISSION switch does the same)
             if (r.args[0] > 1) return wbp::ERR_BAD_ARG;
             if (r.args[0] == 1 && (!last_out_.armed || s_->mission.count == 0 || !gnss.home().has_home())) return wbp::ERR_FAILED;   // (the pilot arms first)
@@ -1130,6 +1169,7 @@ private:
             static const char* const pwname[8] = {"rx_pwm 1", "rx_pwm 2", "rx_pwm 3", "rx_pwm 4", "rx_pwm 5", "rx_pwm 6", "rx_pwm 7", "rx_pwm 8"};
             if (s.receiver.protocol == rx::PROTO_PPM) add(s.pins.ppm, "ppm");
             else if (s.receiver.protocol == rx::PROTO_PWM) { for (int i = 0; i < 8; i++) add(s.pins.rx_pwm[i], pwname[i]); }
+            else if (s.receiver.protocol == rx::PROTO_NRF24) { add(s.pins.nrf_sck, "nrf_sck"); add(s.pins.nrf_miso, "nrf_miso"); add(s.pins.nrf_mosi, "nrf_mosi"); add(s.pins.nrf_cs, "nrf_cs"); add(s.pins.nrf_ce, "nrf_ce"); }
             else { hw.getSerialRxPins(p); add(p[0], "rx_rx"); add(p[1], "rx_tx"); }
         }
         static const char* const mname[8] = {"motor 1", "motor 2", "motor 3", "motor 4", "motor 5", "motor 6", "motor 7", "motor 8"};
@@ -1167,7 +1207,7 @@ private:
         c.alt_m = t.alt_valid ? t.z : t.alt_cm * 0.01f;
         c.have_vario = t.alt_valid; c.vz_ms = t.vz;
         c.armed = t.armed; c.arming_blocked = !t.armed && t.blockers != 0; c.failsafe = t.failsafe != 0;
-        c.rescue = (t.modes >> fc::M_RESCUE) & 1u; c.poshold = (t.modes >> fc::M_POSHOLD) & 1u; c.althold = (t.modes >> fc::M_ALTHOLD) & 1u;
+        c.rescue = (t.modes >> fc::M_RESCUE) & 1u; c.loiter = (t.modes >> fc::M_LOITER) & 1u; c.poshold = (t.modes >> fc::M_POSHOLD) & 1u; c.althold = (t.modes >> fc::M_ALTHOLD) & 1u;
         c.angle = (t.modes >> fc::M_ANGLE) & 1u; c.stabilize = (t.modes >> fc::M_STABILIZE) & 1u;
         return c;
     }
@@ -1178,7 +1218,7 @@ private:
         m.time_ms = now_ms; m.vehicle_type = mav_type_;
         m.armed = t.armed; m.failsafe = t.failsafe != 0; m.calibrating = busy_other_ || gyro_cal_state() == CalState::RUNNING;
         m.angle = (t.modes >> fc::M_ANGLE) & 1u; m.stabilize = (t.modes >> fc::M_STABILIZE) & 1u; m.althold = (t.modes >> fc::M_ALTHOLD) & 1u;
-        m.poshold = (t.modes >> fc::M_POSHOLD) & 1u; m.rescue = (t.modes >> fc::M_RESCUE) & 1u;
+        m.poshold = (t.modes >> fc::M_POSHOLD) & 1u; m.loiter = (t.modes >> fc::M_LOITER) & 1u; m.rescue = (t.modes >> fc::M_RESCUE) & 1u;
         m.mission = t.mission_state >= wbp::MISSION_STATE_TAKEOFF && t.mission_state <= wbp::MISSION_STATE_ARMING; m.rescue = m.rescue || (t.nav_flags & wbp::NAV_FLAGS_RESCUE);      // (the mission's RTL, or the failsafe's)
         // pilot convention (pitch nose up negative) -> MAVLink (FRD: pitch nose up positive); yaw -180 .. 180
         m.roll = t.roll * d2r; m.pitch = -t.pitch * d2r; m.yaw = t.yaw * d2r;
@@ -1198,6 +1238,12 @@ private:
         m.batt_present = status.battery && t.batt_v > 0.5f; m.volts = t.batt_v; m.cells = t.batt_cells; m.remaining = m.batt_present ? (int8_t)(t.batt_remaining > 100 ? 100 : t.batt_remaining) : -1;
         m.have_current = t.curr_source == batt::CUR_ADC || t.curr_source == batt::CUR_ESC || t.curr_source == batt::CUR_DRONECAN; m.amps = t.batt_amps; m.mah = t.batt_mah;
         m.rc_errors = t.rc_bad; m.rc_link = t.rc_link; for (int i = 0; i < 16; i++) m.rc[i] = t.rc[i]; m.rssi_pct = t.rssi;
+        m.rescue_kind = t.rescue_mode;
+        const uint8_t ms = t.mission_state; const bool flies = ms >= wbp::MISSION_STATE_TAKEOFF && ms <= wbp::MISSION_STATE_RTL;
+        const uint16_t h = s_->telemetry.mp_home_item && s_->mission.count ? 1 : 0;      // (Mission Planner's home item counts as item 0, mavlink_gcs.h)
+        m.mission_total = (uint16_t)(s_->mission.count + h);
+        m.mission_state = !m.mission_total ? mav::MISSION_STATE_NO_MISSION : flies ? mav::MISSION_STATE_ACTIVE : ms == wbp::MISSION_STATE_DONE ? mav::MISSION_STATE_COMPLETE : mav::MISSION_STATE_NOT_STARTED;
+        m.mission_mode = flies ? 1 : 2; m.mission_seq = (uint16_t)((flies || ms == wbp::MISSION_STATE_DONE ? t.mission_index : 0) + h);
         return m;
     }
     // Texts for the ground station: the boot report (one line whenever the queue is empty), why the craft cannot arm (when it changes,
@@ -1209,7 +1255,7 @@ private:
         osd_last_ms_ = now_ms;
         o.armed = t.armed; o.failsafe = t.failsafe != 0; o.fly_s = osd_fly_ms_ / 1000u; o.on_s = now_ms / 1000u;
         const uint32_t m = t.modes;
-        o.mode = (m >> fc::M_RESCUE) & 1u ? osd::MODE_RESCUE : (m >> fc::M_POSHOLD) & 1u ? osd::MODE_POSHOLD : (m >> fc::M_ALTHOLD) & 1u ? osd::MODE_ALTHOLD
+        o.mode = (m >> fc::M_RESCUE) & 1u ? osd::MODE_RESCUE : (m >> fc::M_LOITER) & 1u ? osd::MODE_LOITER : (m >> fc::M_POSHOLD) & 1u ? osd::MODE_POSHOLD : (m >> fc::M_ALTHOLD) & 1u ? osd::MODE_ALTHOLD
                : (m >> fc::M_STABILIZE) & 1u ? osd::MODE_STAB : (m >> fc::M_ANGLE) & 1u ? osd::MODE_ANGLE : osd::MODE_ACRO;
         o.rc_link = t.rc_link; o.rssi_pct = t.rssi;
         o.batt = status.battery && t.batt_v > 0.5f; o.volts = t.batt_v; o.cells = t.batt_cells;
@@ -1262,6 +1308,19 @@ private:
     }
 
     void mav_send(uint32_t now_ms) {
+        // on the receiver's UART: each RADIO_STATUS it sent sets the pace (flow control, see mavlink_telemetry.h)
+        if (const rx::MavlinkDecoder* d = !use_external_rc && mav_uart_ && mav_uart_ == rc.mavlinkUart() ? rc.mavlink() : nullptr) {
+            uint32_t k = d->radio_status_count() - mav_status_n_; if (k > 8) k = 8;          // (one every 10 ms: rarely more than one per pass)
+            for (; k; k--) mav_.radio_status(d->txbuf());
+            mav_status_n_ = d->radio_status_count();
+        }
+        // the ground station's frames (mavlink_gcs.h): through the ExpressLRS receiver (its decoder keeps them), or on this UART's RX wire
+        mav::Parser::Frame gf;
+        if (mav_uart_ && mav_uart_ == rc.mavlinkUart()) { while (rc.takeGcsFrame(gf)) gcs_.handle(gf, mav_vehicle_, mav_, mav_st_, now_ms, micros()); }
+        else if (mav_uart_) { for (int k = 0; k < 64 && mav_uart_->available() > 0; k++) if (gcs_parser_.feed((uint8_t)mav_uart_->read())) gcs_.handle(gcs_parser_.frame(), mav_vehicle_, mav_, mav_st_, now_ms, micros()); }
+        if (mav_rwait_ && mav_rseq_ == mav_rseq_want_) { mav_rwait_ = false; gcs_.command_done(mav_rres_ == 0 ? mav::RESULT_ACCEPTED : mav::RESULT_TEMPORARILY_REJECTED, mav_); }
+        else if (mav_rwait_ && (uint32_t)(now_ms - mav_rwait_ms_) > 1000u) { mav_rwait_ = false; gcs_.command_done(mav::RESULT_FAILED, mav_); }     // (the flight loop never answered)
+        gcs_.update(mav_vehicle_, mav_, mav_st_, now_ms);
         if (mav_.queued_texts() == 0 && mav_report_i_ < n_report_) {
             const char* l = report_ptr_[mav_report_i_++];
             mav_.text(strstr(l, "FAILED") ? mav::MAV_SEVERITY_ERROR : strstr(l, "WARNING") ? mav::MAV_SEVERITY_WARNING : mav::MAV_SEVERITY_INFO, l);
@@ -1283,7 +1342,6 @@ private:
         const size_t n = mav_.poll(now_ms, mav_st_, mav_buf_, room);
         if (!n) return;
         if (mav_uart_) mav_uart_->write(mav_buf_, n);
-        if (mav_wifi_) for (size_t i = 0; i + mav::kHeaderLen + 2 <= n;) { const size_t l = mav::kHeaderLen + mav_buf_[i + 1] + 2u; mav_net.push(mav_buf_ + i, l); i += l; }
     }
 
     fc::GpsMeas gps_meas() {
@@ -1383,6 +1441,7 @@ private:
           tel_.mission_dist = o.mission_dist; tel_.mission_left = o.mission_left; }
         for (int i = 0; i < 16; i++) tel_.rc[i] = rc_[i];
         tel_.rc_link = rc_link_; tel_.rssi = rc.linkQuality(); tel_.rc_rate = rc.rateHz();
+        { const rx::Nrf24Rx* radio = use_external_rc ? nullptr : rc.radio(); tel_.rc_bind = radio ? radio->bind_state() : 0; tel_.rc_lq = radio ? radio->lq() : 0; }
         // ---- live state of the filters and the PID helpers (the app's tuning stream)
         { const fc::GyroFilter& gf = core.gyro_filter(); const fc::PidController& pc = core.pid();
           tel_.gyro_lpf1_hz = gf.lpf1_cutoff_hz(); tel_.dterm_lpf1_hz = pc.dterm_lpf1_cutoff_hz();
@@ -1475,6 +1534,13 @@ private:
         app::Guard g(*sync_); return b.update(now_us, now_ms, armed);
     }
 
+    // who has the second SPI bus of an ESP32 (HSPI) before the nRF24 receiver / the LED strip: nullptr = nobody
+    static const char* spi2_owner(const wbp::Settings& s) {
+        if (WB_PLATFORM_STM32) return nullptr;
+        if (s.blackbox.device == bb::DEV_SDCARD && s.blackbox.sd_mode == wbp::SD_MODE_SPI) return "the second SPI bus is taken (the SD card on SPI)";
+        if (s.flow.type == FlowSensor::PMW3901) return "the second SPI bus is taken (the PMW3901 flow sensor)";
+        return nullptr;
+    }
     void say(bool ok, const char* what, const char* name, const char* why, const char* fmt, ...) {
         if (n_report_ >= kReportLines) return;
         char* line = report_[n_report_]; report_ptr_[n_report_] = line; n_report_++;
@@ -1484,7 +1550,7 @@ private:
         (void)name;
     }
 
-    static constexpr int kReportLines = 40, kReportLen = 176;      // (the longest boot: 16 devices, 3 pin lines, SD card, WiFi, loop, link, settings)
+    static constexpr int kReportLines = 40, kReportLen = 176;      // (the longest boot: 16 devices, 3 pin lines, SD card, loop, link, settings)
     char report_[kReportLines][kReportLen] = {}; const char* report_ptr_[kReportLines] = {}; int n_report_ = 0;
 
     wbp::Settings* s_ = nullptr;
@@ -1496,10 +1562,83 @@ private:
     uint16_t rc_[16] = {1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
     uint32_t rc_seq_ = 0;
     bool rc_link_ = false, was_armed_ = false, reboot_pending_ = false, land_on_critical_ = true, acc_was_running_ = false; uint16_t capacity_mah_ = 0; bool edt_wanted_ = false, edt_asked_ = false;
-    mav::Scheduler mav_; mav::State mav_st_; port::SerialPort* mav_uart_ = nullptr; bool mav_on_ = false, mav_wifi_ = false, mav_armed_ = false; uint8_t mav_type_ = mav::MAV_TYPE_QUADROTOR;
+    mav::Scheduler mav_; mav::State mav_st_; port::SerialPort* mav_uart_ = nullptr; bool mav_on_ = false, mav_armed_ = false; uint8_t mav_type_ = mav::MAV_TYPE_QUADROTOR;
     static constexpr uint32_t kMavNeverSent = 0xFFFFFFFFu;     // (mav_blk_sent_ before the first text: 'Ready to arm' is news as well)
-    uint8_t mav_buf_[512] = {}; int mav_report_i_ = 0; uint32_t mav_blk_ = 0, mav_blk_sent_ = kMavNeverSent, mav_blk_ms_ = 0;
+    uint8_t mav_buf_[512] = {}; int mav_report_i_ = 0; uint32_t mav_blk_ = 0, mav_blk_sent_ = kMavNeverSent, mav_blk_ms_ = 0, mav_status_n_ = 0;
     crsf::Scheduler crsf_tlm_; uint8_t tlm_buf_[crsf::kMaxFrame] = {}; size_t tlm_n_ = 0;
+    // ---- the ground station's side of MAVLink (telemetry/mavlink_gcs.h): what it may ask of this craft. Called from mav_send() (the
+    //      sensor thread, outside the lock): whatever touches the flight loop's state takes the lock.
+    struct MavVehicle : mav::Vehicle {
+        FlightApp& a;
+        explicit MavVehicle(FlightApp& app) : a(app) {}
+        uint8_t arm(bool on, bool force) override {
+            if (on && !a.s_->telemetry.remote_arm) return mav::RESULT_DENIED;              // (arming from afar only when the settings allow it)
+            app::Guard g(*a.sync_);
+            a.mav_rseq_want_ = (uint8_t)(a.mav_rseq_want_ + 1); a.core.remote_arm(on, force, a.mav_rseq_want_); a.mav_rwait_ = true; a.mav_rwait_ms_ = millis();
+            return mav::RESULT_IN_PROGRESS;                                                 // (the flight loop tries it in its next cycle)
+        }
+        uint8_t set_mode(uint32_t m) override {
+            const uint32_t ang = 1u << fc::M_ANGLE, ah = 1u << fc::M_ALTHOLD; uint32_t bits;
+            switch (m) {
+            case mav::COPTER_ACRO: bits = 0; break;
+            case mav::COPTER_STABILIZE: bits = ang; break;
+            case mav::COPTER_ALT_HOLD: bits = ang | ah; break;
+            case mav::COPTER_POSHOLD: bits = ang | ah | (1u << fc::M_POSHOLD); break;
+            case mav::COPTER_LOITER: bits = ang | ah | (1u << fc::M_LOITER); break;
+            case mav::COPTER_AUTO: bits = ang | ah | (1u << fc::M_MISSION); break;
+            case mav::COPTER_RTL: bits = ang | ah | (1u << fc::M_RESCUE); break;
+            default: return mav::RESULT_DENIED;                     // (Smart RTL, Land: what the rescue setting / the failsafe fly, not chosen)
+            }
+            app::Guard g(*a.sync_);
+            if ((m == mav::COPTER_AUTO || m == mav::COPTER_RTL) && !a.last_out_.armed) return mav::RESULT_TEMPORARILY_REJECTED;
+            if (m == mav::COPTER_AUTO && (a.s_->mission.count == 0 || !a.gnss.home().has_home())) return mav::RESULT_TEMPORARILY_REJECTED;
+            a.core.set_mode_override(bits);
+            return mav::RESULT_ACCEPTED;
+        }
+        uint8_t set_home_here() override {                          // (as the app's SET_HOME, but never in flight: the position estimate starts again)
+            app::Guard g(*a.sync_);
+            if (a.last_out_.armed) return mav::RESULT_TEMPORARILY_REJECTED;
+            if (!a.status.gps || !a.gnss.usable()) return mav::RESULT_FAILED;
+            a.gnss.home().reset(a.gnss.solution()); a.core.reset_position(); a.mission_dirty_ = true;
+            return a.gnss.home().has_home() ? mav::RESULT_ACCEPTED : mav::RESULT_FAILED;
+        }
+        uint8_t reboot() override {
+            app::Guard g(*a.sync_);
+            if (a.last_out_.armed) return mav::RESULT_TEMPORARILY_REJECTED;
+            a.motors.manager().test_stop(); a.reboot_pending_ = true; a.reboot_at_ms_ = millis() + 300;      // (300 ms: the COMMAND_ACK leaves first)
+            return mav::RESULT_ACCEPTED;
+        }
+        uint8_t mission_start() override {                          // (as the app's MISSION 1: the pilot arms first)
+            app::Guard g(*a.sync_);
+            if (!a.last_out_.armed || a.s_->mission.count == 0 || !a.gnss.home().has_home()) return mav::RESULT_TEMPORARILY_REJECTED;
+            a.core.mission_command(true);
+            return mav::RESULT_ACCEPTED;
+        }
+        int mission_count() const override { return a.s_->mission.count; }
+        mav::StoreItem mission_item(int i) const override {
+            const wbp::S_mission& m = a.s_->mission; mav::StoreItem o;
+            o.cmd = fc::mav_cmd_of((fc::MissionCmd)m.cmd[i]); o.arg = m.arg[i]; o.alt_dm = m.alt[i]; o.lat = m.lat[i]; o.lon = m.lon[i]; o.p = m.p[i];
+            return o;
+        }
+        bool mission_busy() const override { const uint8_t st = a.tel_.mission_state; return st >= wbp::MISSION_STATE_TAKEOFF && st <= wbp::MISSION_STATE_RTL; }
+        bool home_alt_mm(int32_t& alt) const override { if (!a.gnss.home().has_home()) return false; alt = a.gnss.home().home().alt_cm * 10; return true; }
+        // the section `mission` - the one the app shows and edits - takes the new plan; kept in the flash once disarmed (the app reloads it then)
+        bool mission_replace(const mav::StoreItem* it, int n) override {
+            app::Guard g(*a.sync_);
+            if (mission_busy() || n < 0 || n > fc::kMissionMax) return false;
+            wbp::S_mission& m = a.s_->mission;
+            for (int i = 0; i < fc::kMissionMax; i++) {
+                const bool on = i < n;
+                m.cmd[i] = on ? (uint8_t)fc::mission_cmd_of_mav(it[i].cmd) : 0; m.arg[i] = on ? it[i].arg : 0; m.alt[i] = on ? it[i].alt_dm : 0;
+                m.lat[i] = on ? it[i].lat : 0; m.lon[i] = on ? it[i].lon : 0; m.p[i] = on ? it[i].p : 0;
+            }
+            m.count = (uint8_t)n; a.mission_dirty_ = true;
+            a.tel_.fw_saved_section = wbp::SEC_MISSION; a.tel_.fw_saved_seq++;
+            return true;
+        }
+    };
+    MavVehicle mav_vehicle_{*this}; mav::Gcs gcs_; mav::Parser gcs_parser_;
+    uint8_t mav_rseq_want_ = 0, mav_rseq_ = 0, mav_rres_ = 0; bool mav_rwait_ = false; uint32_t mav_rwait_ms_ = 0;      // a ground station's arm / disarm on its way through the flight loop
 public:
     osd::DisplayPort osd_;                                // (public for the tests: what the video transmitter asked)
 private:
@@ -1529,6 +1668,16 @@ private:
 #if WB_HAS_LED_STRIP
     led::Strip led_strip_;
 #endif
+    // (lock held) what the DIY transmitter shows: the mode that flies, or the one the pilot chose (on the ground the hold
+    // controllers are not running yet - the transmitter's throttle mode has to suit the choice before the take-off)
+    uint8_t fly_mode() const {
+        const fc::CoreOutput& o = last_out_; const auto sw = [&](int m) { return ((o.modes >> m) & 1u) != 0; };
+        if ((o.mission_state >= 1 && o.mission_state <= 7) || sw(fc::M_MISSION)) return wbp::FLY_MODE_MISSION;
+        return o.rescue_active || sw(fc::M_RESCUE) ? wbp::FLY_MODE_RESCUE : o.loiter_active || sw(fc::M_LOITER) ? wbp::FLY_MODE_LOITER
+             : o.poshold_active || sw(fc::M_POSHOLD) ? wbp::FLY_MODE_POSHOLD
+             : o.althold_active || sw(fc::M_ALTHOLD) ? wbp::FLY_MODE_ALTHOLD
+             : sw(fc::M_ANGLE) ? wbp::FLY_MODE_ANGLE : sw(fc::M_STABILIZE) ? wbp::FLY_MODE_STABILIZE : wbp::FLY_MODE_ACRO;
+    }
     app::LedInput led_input() const {                     // (lock held)
         app::LedInput in; const fc::CoreOutput& o = last_out_;
         in.armed = o.armed; in.ready = o.arm_blockers == 0; in.failsafe = o.failsafe != fc::FsStage::NONE;

@@ -104,7 +104,7 @@ def test_not_connected_is_an_answer_not_a_crash(gui):
     assert isinstance(ports["ports"], list) and 230400 in ports["bauds"] and ports["default_baud"] == 230400
     for p in ports["ports"]:
         assert set(p) >= {"port", "description", "likely", "sim", "vid", "pid"}
-    assert [p for p in ports["ports"] if p.get("wifi")] == [p for p in ports["ports"] if p["port"] == "socket://192.168.4.1:5760"] != [], "the board's own access point is always offered (never probed)"
+    assert not [p for p in ports["ports"] if "192.168.4.1" in p["port"]], "no WiFi access point offered (WiFi was removed in 0.38.4)"
     assert gui.raw("POST", "/api/connect", {"port": "socket://127.0.0.1:1", "baud": "fast"})[1]["error"] == "BAD_REQUEST"
     assert gui.raw("POST", "/api/connect", {"port": "socket://127.0.0.1:1", "baud": 50})[1]["error"] == "BAD_REQUEST"
 
@@ -132,7 +132,7 @@ def test_connect_settings_save_reboot(linked, sim):
     assert st["info"]["role"] == "RX" and st["info"]["schema_hash"] == gui.get("/api/schema")["hash"].upper().replace("0X", "0x")
     assert any(l.startswith("imu:") for l in st["report"]), st["report"]
     s = gui.get("/api/settings")
-    assert set(s) == set(x["name"] for x in gui.get("/api/schema")["sections"])
+    assert set(s) == set(x["name"] for x in gui.get("/api/schema")["sections"] if x.get("role", "rx") == "rx"), "every section of the flight controller (0.38: the transmitter's are not on it)"
     assert s["motors"]["protocol"] == "DSHOT300" or isinstance(s["motors"]["protocol"], str)
     stored = gui.post("/api/set", {"section": "rates", "changes": {"angle_limit": 500, "max_rate": [700, 710, 420]}})["values"]
     assert stored["angle_limit"] == 80 and stored["max_rate"] == [700, 710, 420], "the firmware's clamped value comes back"

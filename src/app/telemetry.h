@@ -27,7 +27,7 @@ struct Telemetry {
     float acc[3] = {};                                  // board frame, g
     // ---- receiver
     uint16_t rc[16] = {1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
-    bool rc_link = false; uint8_t rssi = 0; uint16_t rc_rate = 0, rc_bad = 0, rc_ovf = 0, rc_line = 0;      // rc_*: per second
+    bool rc_link = false; uint8_t rssi = 0, rc_bind = 0, rc_lq = 0; uint16_t rc_rate = 0, rc_bad = 0, rc_ovf = 0, rc_line = 0;      // rc_*: per second
     // ---- status
     bool armed = false; uint32_t blockers = 0; uint8_t failsafe = 0, fs_cause = 0, fs_action = 0; uint32_t modes = 0; uint16_t health = 0; uint8_t ah_state = 0;
     uint16_t loop_us = 0, loop_max_us = 0, gap_max_us = 0, loop_hz = 0; float throttle = 0;
@@ -58,7 +58,6 @@ struct Telemetry {
     // ---- the app link (link stream): slow_gap_ms from the sensor thread, the rest filled in by the link task itself (LinkHost)
     uint16_t slow_gap_ms = 0;
     uint32_t up_ms = 0, boot_id = 0, link_rx = 0, link_dropped = 0; uint16_t link_bad = 0, link_busy = 0, link_tx_lost = 0, link_kicks = 0, link_cmd_max_ms = 0, link_gap_ms = 0, link_queued = 0;
-    uint8_t wifi_state = 0, wifi_clients = 0, link_via = 0; uint32_t wifi_ip = 0; int16_t wifi_rssi = 0;     // the WiFi wire (link task: LinkHost::set_net)
     struct Can {                                        // the CAN bus (once a second, sensor thread)
         uint8_t state = 0, node_id = 0, tec = 0, rec = 0, allocations = 0, gnss_node = 0, mag_node = 0, nodes = 0;
         uint16_t rx_fps = 0, tx_fps = 0, tx_dropped = 0, crc_errors = 0, bus_off = 0;
@@ -123,7 +122,7 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
         memcpy(out, &o, sizeof(o)); break; }
     case STR_RC: {
         T_rc o; for (int i = 0; i < 16; i++) o.ch[i] = t.rc[i];
-        o.link = t.rc_link ? 1 : 0; o.rssi = t.rssi; o.rate = t.rc_rate; o.bad_frames = t.rc_bad; o.uart_ovf = t.rc_ovf; o.uart_line = t.rc_line;
+        o.link = t.rc_link ? 1 : 0; o.rssi = t.rssi; o.rate = t.rc_rate; o.bad_frames = t.rc_bad; o.uart_ovf = t.rc_ovf; o.uart_line = t.rc_line; o.bind_state = t.rc_bind; o.lq = t.rc_lq;
         memcpy(out, &o, sizeof(o)); break; }
     case STR_STATUS: {
         T_status o; o.armed = t.armed ? 1 : 0; o.blockers = t.blockers; o.failsafe = t.failsafe; o.modes = t.modes; o.health = t.health; o.ah_state = t.ah_state;
@@ -176,7 +175,6 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
     case STR_LINK: {
         T_link o; o.uptime = t.up_ms; o.boot_id = t.boot_id; o.rx_frames = t.link_rx; o.rx_bad = t.link_bad; o.busy = t.link_busy; o.tx_lost = t.link_tx_lost; o.dropped = t.link_dropped;
         o.kicks = t.link_kicks; o.cmd_max_ms = t.link_cmd_max_ms; o.link_gap_ms = t.link_gap_ms; o.slow_gap_ms = t.slow_gap_ms; o.queued = t.link_queued;
-        o.wifi = t.wifi_state; o.wifi_ip = t.wifi_ip; o.wifi_rssi = t.wifi_rssi; o.wifi_clients = t.wifi_clients; o.via = t.link_via;
         memcpy(out, &o, sizeof(o)); break; }
     case STR_GYRO_FAST: {
         T_gyro_fast o; for (int i = 0; i < 3; i++) { o.raw[i] = s16(t.gyro_raw[i], scale::gyro_fast_raw); o.filt[i] = s16(t.gyro_f[i], scale::gyro_fast_filt); }

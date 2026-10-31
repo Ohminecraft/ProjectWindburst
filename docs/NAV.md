@@ -63,6 +63,33 @@ Bộ điều khiển vị trí là tầng của `AC_PosControl`: sai lệch vị
 
 **Arm với công tắc Position Hold bật sẵn** chỉ được khi có thứ để giữ: cảm biến flow khoẻ **và có lidar**, hoặc GPS fix + la bàn đã hiệu chuẩn.
 
+### Loiter (0.41) — `src/core/nav/loiter.h`
+
+Viết theo `mode_loiter.cpp` và `AC_WPNav/AC_Loiter.cpp` của ArduCopter. Đây là cách giữ vị trí thứ hai, khác Position Hold ở chỗ **cần cho gia tốc, không cho góc nghiêng**, và bộ điều khiển vị trí luôn chạy:
+
+| | Position Hold | Loiter |
+|---|---|---|
+| Cần roll / pitch | góc nghiêng như Angle | gia tốc mong muốn (góc nghiêng mà cần sẽ cho ở Angle, tối đa 2/3 góc giới hạn = 20° mặc định, đổi ra gia tốc) |
+| Buông cần | phanh kiểu cố định, dừng rồi mới giữ điểm | vận tốc mong muốn giảm dần theo "lực cản", sau 1 s thì phanh thêm (tối đa 2,5 m/s², jerk 5 m/s³) |
+| Tốc độ | tuỳ phi công | hết cần = `loiter_speed` (mặc định 12,5 m/s như `LOIT_SPEED_MS`), nửa cần cho khoảng nửa (qua đường cong rate như Angle) |
+| Độ cao | theo công tắc Altitude Hold | luôn giữ độ cao (công tắc LOITER tự bật Angle + Altitude Hold) |
+| Hợp với | bay tay, FPV | người mới, quay phim, căn vị trí |
+
+**Cách chạy** (`AC_Loiter::calc_desired_velocity`):
+1. Cần → góc nghiêng mong muốn → gia tốc mong muốn (bắc / đông theo hướng mũi), đưa thẳng vào bộ điều khiển (feed-forward).
+2. Góc nghiêng máy sẽ có được dự đoán bằng bộ lọc bậc một 0,15 s (`ATC_INPUT_TC`; ArduPilot dùng mô hình lệnh của bộ điều khiển tư thế), rồi tích phân thành vận tốc mong muốn.
+3. Lực cản: vận tốc mong muốn mất (gia tốc ở góc tối đa) × tốc độ / `loiter_speed`, nên hết cần thì dừng lại ở `loiter_speed`.
+4. Buông cần quá 1 s thì phanh: `sqrt_controller(tốc độ, vel_p / 2, jerk)`, tối đa 2,5 m/s², lên xuống với jerk tối đa 5 m/s³.
+5. Vận tốc mong muốn tích phân thành điểm đích. Điểm đích, vận tốc và gia tốc đưa thẳng vào `PosController` (`set_pva`, như `set_pos_vel_accel_NE_m`); khâu tích phân của nó học gió.
+
+**Hàng rào** (`fence_radius`, dùng chung với Position Hold), theo cách `AC_Avoid` giới hạn vận tốc: đi ra ngoài thì vận tốc không quá mức còn dừng kịp trước vạch cách hàng rào 1 m (`sqrt_controller` của khoảng còn lại), và điểm đích không bao giờ vượt vạch đó. Trên máy mô phỏng, lao hết cần vào hàng rào 20 m thì dừng ở 19,0 m, không vượt.
+
+**Bật cùng Position Hold:** Loiter được ưu tiên. Failsafe "giữ vị trí" vẫn dùng Position Hold. Thiếu nguồn vị trí thì như Position Hold: chặn arm (`POSHOLD_NO_GPS`), đang bay thì nhả về Angle + Altitude Hold.
+
+**Khác ArduPilot, có chủ ý:** cần đi qua đường cong rate giống Angle và Position Hold của Windburst, nên cùng một vị trí cần ra cùng góc nghiêng ở cả ba chế độ (ArduPilot đọc cần tuyến tính). Góc dự đoán dùng bộ lọc bậc một. Hàng rào là vòng tròn của Position Hold, chưa có `AC_Avoid` đầy đủ.
+
+**Ground station:** chế độ 5 (LOITER) của ArduCopter. HEARTBEAT báo 5. `DO_SET_MODE` 5 bật được (giữ tới khi gạt công tắc chế độ). `AVAILABLE_MODES` có "Loiter" ở chỉ số 9, standard mode `POSITION_HOLD`; Position Hold đổi sang `NON_STANDARD`, như ArduCopter. OSD và CRSF ghi `LOIT`.
+
 ## 4. GPS Rescue
 
 Từ 0.36 rescue bay như ArduPilot và PX4. Code viết lại sau khi đọc nguồn của họ: PX4 `navigator/rtl.cpp` (`computeReturnAltitude`) và `rtl_direct.cpp`; ArduCopter `mode_rtl.cpp`, `mode_smart_rtl.cpp`, `mode_land.cpp` và `libraries/AP_SmartRTL`. Ô **"Kiểu rescue"** (`nav.rescue_mode`) có 3 lựa chọn.

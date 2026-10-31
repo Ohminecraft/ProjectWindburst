@@ -20,6 +20,7 @@
 #include "nav/alt_control.h"
 #include "nav/pos_estimator.h"
 #include "nav/pos_hold.h"
+#include "nav/loiter.h"
 
 // ============================================================================
 // FlightCore - the whole flight stack behind two entry points, shaped around what the hardware drivers actually deliver:
@@ -108,7 +109,7 @@ struct CoreConfig {
     TiltAid::Config tilt_aid; bool use_tilt_aid = true;      // tilt from the measured acceleration (GPS / flow velocity) while armed
     float aid_max_sigma_vel = 0.5f;                  // a GPS velocity less sure than this (m/s) is not used for it
     FlowConfig flow; float flow_stale_ms = 300.0f;
-    nav::PosCtlConfig pos; nav::PosHoldConfig poshold; RescueConfig rescue;      // nav/pos_control.h, nav/pos_hold.h, rescue.h; poshold.angle_max_deg is the lean limit of both
+    nav::PosCtlConfig pos; nav::PosHoldConfig poshold; nav::LoiterConfig loiter; RescueConfig rescue;      // nav/pos_control.h, nav/pos_hold.h, rescue.h; poshold.angle_max_deg is the lean limit of both
     uint32_t nav_request_timeout_ms = 500;          // a NavRequest older than this is not flown (nav/nav_math.h)
     float ph_min_gps_hz = 5.0f;     // Position Hold on GPS alone wants at least this solution rate (0 = no check); see flight_core.h 6b
     bool rescue_configured = false, rescue_allow_no_fix = false;          // a RESCUE switch is assigned or the failsafe procedure is RESCUE: arming wants a GPS fix (home)
@@ -170,6 +171,7 @@ struct CoreOutput {
     uint32_t arm_refused = 0;      // arm attempts rejected by a blocker since boot
     // navigation
     bool poshold_slow_gps = false;  // ... unavailable because the GPS sends too few solutions a second (CoreConfig::ph_min_gps_hz)
+    bool loiter_active = false;    // Loiter flies (nav/loiter.h); poshold_unavailable / poshold_slow_gps say why it cannot, as for Position Hold
     bool poshold_active = false, poshold_unavailable = false;         // Position Hold flies / is switched on but has no velocity over the ground to work with
     uint8_t ph_state[2] = {0, 0};  // PhAxis of roll, pitch
     bool rescue_active = false, rescue_available = false; uint8_t rescue_phase = 0, rescue_fail = 0;      // RescuePhase, RescueFail
@@ -184,6 +186,9 @@ struct CoreOutput {
     bool mission_warn = false;                     // the motors are about to be armed by the mission (beeper / LED)
     bool mission_holds_home = false;               // a mid-mission landing: home and the height origin must not move at the next arming
     uint16_t mission_servo_us[4] = {0, 0, 0, 0};   // what DO_SET_SERVO last set (0 = nothing yet): servos with the source MISSION
+    // a ground station (0.40, MAVLink): its flight mode stands in for the pilot's; the answer to its last arm / disarm request
+    bool mode_override = false;
+    uint8_t remote_seq = 0, remote_result = 0;     // FlightCore::remote_arm's seq once it has been tried; 0 = done, 1 = refused
     Estimate est;
 };
 
@@ -202,7 +207,7 @@ public:
         alt_est_.cfg = cfg.alt_est; alt_est_.cfg.gps_delay_s = cfg.pos_est.gps_delay_s; alt_est_.reset(0.0f);
         pos_est_.cfg = cfg.pos_est; pos_est_.reset(); tilt_aid_.cfg = cfg.tilt_aid; tilt_aid_.reset(); gyro_hist_.configure(1.0f / cfg.est_hz);
         gyro_sum_ = Vec3(); flow_new_ = false; have_flow_ = false; have_gps_xy_ = false; heading_ok_ = false;
-        ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue;
+        ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue; apply_loiter(); was_loiter_ = false;
         was_poshold_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false; rescue_out_ = RescueOutput(); nav_tgt_[0] = nav_tgt_[1] = 0;
         mission_.cfg = cfg.rescue; mission_.stop(); mission_out_ = MissionOutput(); mission_req_ = mission_app_ = mission_sw_ = mission_fly_ = was_mission_h_ = false; for (auto& u : mission_servo_) u = 0;
         alt_.cfg = cfg.alt; alt_.init();
@@ -239,11 +244,21 @@ public:
     // Re-zero the horizontal position (e.g. when the home point is set at arming).
     void reset_position() { pos_est_.reset(); tilt_aid_.restart(); alt_est_.restart_gps_ref(); have_gps_ = false; have_gps_xy_ = false; }
     // Live re-tune of the navigation settings from the app (disarmed)
-    void apply_nav() { alt_.cfg.ceiling_m = cfg.alt.ceiling_m; ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue; mission_.cfg = cfg.rescue; tilt_aid_.cfg = cfg.tilt_aid; fs_.cfg = cfg.fs; }
+    void apply_nav() { alt_.cfg.ceiling_m = cfg.alt.ceiling_m; ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue; mission_.cfg = cfg.rescue; tilt_aid_.cfg = cfg.tilt_aid; fs_.cfg = cfg.fs; apply_loiter(); }
     // The mission (nav/mission.h): the plan, in metres from home (flown from the next start on), and the app's start / stop.
     // A MISSION switch starts it too; either way it starts once per request (a refused or finished mission waits for the next).
     void set_mission(const MissionPlan& p) { mission_plan_ = p; }
     void mission_command(bool start) { mission_app_ = start; }
+    // A ground station's flight mode (MAVLink DO_SET_MODE / NAV_RETURN_TO_LAUNCH, telemetry/mavlink_gcs.h): `bits` stand in for the
+    // pilot's flight-mode switches (kOverrideModes; 0 = Acro) until the pilot moves one of them, or another request comes. The other
+    // switches (ARM, BEEPER, ...) stay the pilot's. (Betaflight ORs its override onto the switches and keeps it; here the pilot's
+    // switch takes the craft back.)
+    static constexpr uint32_t kOverrideModes = (1u << M_ANGLE) | (1u << M_STABILIZE) | (1u << M_ALTHOLD) | (1u << M_POSHOLD) | (1u << M_RESCUE) | (1u << M_MISSION) | (1u << M_LOITER);
+    void set_mode_override(uint32_t bits) { ovr_req_ = bits & kOverrideModes; ovr_set_ = true; }
+    void clear_mode_override() { ovr_clear_ = true; }
+    // A ground station's COMPONENT_ARM_DISARM: tried in the next control cycle (Arming::remote_arm: every blocker counts); a disarm
+    // in the air only with `force` (ArduPilot's 21196). The answer: CoreOutput::remote_seq / remote_result.
+    void remote_arm(bool on, bool force, uint8_t seq) { rem_on_ = on; rem_force_ = force; rem_seq_req_ = seq; rem_req_ = true; }
     const MissionRunner& mission() const { return mission_; }
 
     // One gyro sample. Every sample goes through the gyro filters; every pid_denom-th one is also a control cycle (control()).
@@ -309,7 +324,8 @@ private:
         }
 
         // ---- 4. pilot command, arming, failsafe
-        const RcCommand cmd = rc.process(in.rc_us, in.rc_link);
+        RcCommand cmd = rc.process(in.rc_us, in.rc_link);
+        apply_mode_override(cmd, in.rc_link); o.mode_override = ovr_on_;
         o.modes = cmd.modes;
         ArmInput ai;
         ai.imu_ok = in.health.imu_ok; ai.gyro_calibrated = in.health.gyro_calibrated; ai.rx_ok = in.rc_link; ai.throttle_low = cmd.throttle_low;
@@ -321,7 +337,7 @@ private:
         const bool compass = cfg.use_mag && in.health.mag_calibrated;
         ai.pos_source = in.health.flow_ok || (in.health.gps_ok && compass);
         ai.rescue_configured = cfg.rescue_configured; ai.rescue_allow_no_fix = cfg.rescue_allow_no_fix; ai.rescue_no_compass = cfg.rescue_configured && !cfg.use_mag;
-        ai.althold_switch = (cmd.modes >> M_ALTHOLD) & 1u; ai.poshold_switch = (cmd.modes >> M_POSHOLD) & 1u;
+        ai.althold_switch = (cmd.modes >> M_ALTHOLD) & 1u; ai.poshold_switch = ((cmd.modes >> M_POSHOLD) | (cmd.modes >> M_LOITER)) & 1u;
         ai.calibrating = in.health.calibrating; ai.batt_low = in.health.batt_low;
         ai.use_mag = cfg.use_mag; ai.mag_calibrated = in.health.mag_calibrated; ai.pin_conflict = in.health.pin_conflict; ai.loop_slow = in.health.loop_slow;
         const bool was_armed = armed_;
@@ -332,6 +348,13 @@ private:
             keep_reason = !g;
         }
         armed_ = arming_.update(arm_sw, in.rc_link, ai, keep_reason);
+        if (rem_req_) {                                        // a ground station's arm / disarm
+            rem_req_ = false; bool done;
+            if (rem_on_) { done = arming_.remote_arm(); armed_ = arming_.armed(); }
+            else { done = !armed_ || !airborne_ || rem_force_; if (done) { arming_.remote_disarm(); armed_ = false; } }
+            rem_seq_ = rem_seq_req_; rem_result_ = done ? 0 : 1;
+        }
+        o.remote_seq = rem_seq_; o.remote_result = rem_result_;
         if (in.rc_link) mission_sw_ = (cmd.modes >> M_MISSION) & 1u;          // (lost link: the switch as it was)
         // the mission turns the motors off at a delivery stop and on again after the wait (Arming::mission_disarm / mission_arm)
         if (mission_out_.want_disarm && armed_ && mission_out_.active) { arming_.mission_disarm(); armed_ = false; }
@@ -370,7 +393,7 @@ private:
             nav::AltInput idle; idle.pos_d = alt_est_.pos_d(); idle.reset_count = alt_est_.reset_count(); alt_.update(idle, dt); was_althold_ = false; last_thr_ = 0;
             o.ah_state = alt_.state();
             if (dt_est > 0.0f) { RescueInput ri; rescue_out_ = rescue_.update(ri, dt_est); mission_step(in, arm_sw, dt_est); }       // (forgets the flight: its highest point, a failure)
-            was_poshold_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false; was_req_ = false; req_climb_on_ = false; mission_fly_ = was_mission_h_ = false;
+            was_poshold_ = false; was_loiter_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false; was_req_ = false; req_climb_on_ = false; mission_fly_ = was_mission_h_ = false;
             mission_fill(o);
             return o;
         }
@@ -471,10 +494,13 @@ private:
             // Betaflight's Position Hold wants a GPS rate too (gps_update_rate_hz, 10 by default); ArduPilot's EKF wants 5 Hz or more.
             const bool gps_rate_ok = !(cfg.ph_min_gps_hz > 0.0f) || gps_.rate_hz >= cfg.ph_min_gps_hz;
             const bool ph_ok = vel_valid && (est_.flow_valid || (heading_valid && gps_rate_ok));
-            ph_slow_gps_ = ((cmd.modes >> M_POSHOLD) & 1u) && !est_.flow_valid && heading_valid && vel_valid && !gps_rate_ok;
+            ph_slow_gps_ = (((cmd.modes >> M_POSHOLD) | (cmd.modes >> M_LOITER)) & 1u) && !est_.flow_valid && heading_valid && vel_valid && !gps_rate_ok;
             // (the failsafe's HOLD: Position Hold with the sticks neutral, if there is a position to hold - else Altitude Hold alone)
             const bool ph_on = ((((cmd.modes >> M_POSHOLD) & 1u) && !neutral) || (fo.hold && ph_ok)) && !rescue_out_.active && !mission_fly_;
-            ph_unavail_ = ph_on && !ph_ok;
+            // Loiter (a switch, or a ground station's mode): before Position Hold when both are on; the failsafe's hold stays Position Hold's
+            const bool lt_on = ((cmd.modes >> M_LOITER) & 1u) && !neutral && !rescue_out_.active && !mission_fly_;
+            bool loiter_now = false;
+            ph_unavail_ = (ph_on || lt_on) && !ph_ok;
             // an outside autopilot's request (P7) is flown while Position Hold could fly, it is fresh, and the sticks are centred
             const bool req_on = ph_on && ph_ok && have_req_ && age_ms(now, req_ms_) <= cfg.nav_request_timeout_ms && !neutral && cmd.roll == 0.0f && cmd.pitch == 0.0f;
             if (rescue_out_.active && rescue_out_.horizontal) {
@@ -503,6 +529,13 @@ private:
                 req_climb_on_ = req_.height && est_.alt_valid;
                 req_climb_ = clampf(nav::sqrt_controller(req_.height_m - est_.z, cfg.alt.pos_p, cfg.alt.accel_max_mps2), -cfg.alt.descend_max_mps, cfg.alt.climb_max_mps);
                 nav_lean_ = true; was_poshold_ = false; was_req_ = true;
+            } else if (lt_on && ph_ok) {
+                nav::LoiterInput li; li.airborne = airborne_; li.reset_count = pos_est_.reset_count(); li.reset_step_n = pos_est_.reset_step_n(); li.reset_step_e = pos_est_.reset_step_e();
+                li.yaw_deg = yaw; li.pos_n = npn; li.pos_e = npe; li.vel_n = nvn; li.vel_e = nve; li.roll_deg = angle_.target_deg(ROLL); li.pitch_deg = angle_.target_deg(PITCH);
+                li.stick_roll = ss.rate[ROLL] / maxf(cfg.rates.max_rate_dps[ROLL], 1.0f); li.stick_pitch = ss.rate[PITCH] / maxf(cfg.rates.max_rate_dps[PITCH], 1.0f);
+                if (!was_loiter_) lt_.init(li);
+                lt_.update(li, dt_est, nav_tgt_[ROLL], nav_tgt_[PITCH]);
+                nav_lean_ = true; was_poshold_ = false; loiter_now = true;
             } else if (ph_on && ph_ok) {
                 nav::PosHoldInput pi; pi.airborne = airborne_; pi.reset_count = pos_est_.reset_count(); pi.reset_step_n = pos_est_.reset_step_n(); pi.reset_step_e = pos_est_.reset_step_e(); pi.yaw_deg = yaw; pi.pos_n = npn; pi.pos_e = npe; pi.vel_n = nvn; pi.vel_e = nve;
                 pi.pilot_roll_deg = cfg.angle.limit_deg * ss.rate[ROLL] / maxf(cfg.rates.max_rate_dps[ROLL], 1.0f); pi.pilot_pitch_deg = cfg.angle.limit_deg * ss.rate[PITCH] / maxf(cfg.rates.max_rate_dps[PITCH], 1.0f);
@@ -512,17 +545,18 @@ private:
                 nav_lean_ = true; was_poshold_ = true;
             } else { nav_lean_ = false; was_poshold_ = false; }
             if (!req_on || rescue_out_.active) { was_req_ = false; req_climb_on_ = false; }
+            was_loiter_ = loiter_now;
             was_mission_h_ = mission_fly_ && mission_out_.horizontal && !rescue_out_.active;
         }
         o.rescue_active = rescue_out_.active; o.rescue_available = rescue_ok_; o.rescue_phase = (uint8_t)rescue_.phase(); o.rescue_fail = (uint8_t)rescue_.failure();
         o.rescue_mode = rescue_out_.active ? rescue_.kind() : cfg.rescue.mode; o.rescue_left = rescue_.remaining();
         mission_fill(o);
-        o.poshold_active = was_poshold_; o.poshold_unavailable = ph_unavail_; o.poshold_slow_gps = ph_slow_gps_; o.ph_state[0] = (uint8_t)ph_.state(0); o.ph_state[1] = (uint8_t)ph_.state(1);
+        o.loiter_active = was_loiter_; o.poshold_active = was_poshold_; o.poshold_unavailable = ph_unavail_; o.poshold_slow_gps = ph_slow_gps_; o.ph_state[0] = (uint8_t)ph_.state(0); o.ph_state[1] = (uint8_t)ph_.state(1);
         o.nav_lean = nav_lean_; o.nav_roll = nav_tgt_[ROLL]; o.nav_pitch = nav_tgt_[PITCH];
         o.nav_request = was_req_;
-        o.fence = (was_poshold_ && ph_.fence_breached()) || (o.althold_active && cfg.alt.ceiling_m > 0.0f && est_.z > cfg.alt.ceiling_m - 1.0f);      // (it stops half a metre under)
+        o.fence = (was_poshold_ && ph_.fence_breached()) || (was_loiter_ && lt_.fence_breached()) || (o.althold_active && cfg.alt.ceiling_m > 0.0f && est_.z > cfg.alt.ceiling_m - 1.0f);      // (it stops half a metre under)
         navlog_.alt_tgt_pos_d = alt_.controller().pos_target_d(); navlog_.alt_tgt_vel_d = alt_.controller().vel_target_d(); navlog_.hover = alt_.hover();
-        const nav::PosController& nctl = rescue_out_.active || mission_fly_ ? rctl_ : ph_.ctl;      // (the rescue and the mission fly their own controller)
+        const nav::PosController& nctl = rescue_out_.active || mission_fly_ ? rctl_ : was_loiter_ ? lt_.ctl : ph_.ctl;      // (the rescue and the mission fly their own controller)
         navlog_.pos_tgt[0] = nctl.target_n(); navlog_.pos_tgt[1] = nctl.target_e();
         navlog_.ctl_flags = (uint8_t)((o.althold_active ? 1u : 0u) | (was_poshold_ ? 2u : 0u) | (was_poshold_ && ph_.holding() ? 4u : 0u) | (o.fence ? 8u : 0u));
         o.nav_target_n = nctl.target_n(); o.nav_target_e = nctl.target_e(); o.nav_wind_n = ph_.wind_n(); o.nav_wind_e = ph_.wind_e(); o.nav_home_dist = sqrtf(est_.pos_n * est_.pos_n + est_.pos_e * est_.pos_e);
@@ -630,6 +664,14 @@ private:
         else if (!want && mission_req_) { mission_req_ = false; mission_.stop(); }
         mission_out_ = mission_.update(mi, dt_est);
         if (mission_out_.servo >= 1 && mission_out_.servo <= 4) mission_servo_[mission_out_.servo - 1] = mission_out_.servo_us;
+    }
+    // the ground station's flight mode in place of the switches' (set_mode_override); the pilot moving a flight-mode switch ends it
+    void apply_mode_override(RcCommand& cmd, bool link) {
+        const uint32_t pilot = cmd.modes & kOverrideModes;
+        if (ovr_clear_) { ovr_clear_ = false; ovr_on_ = false; }
+        if (ovr_set_) { ovr_set_ = false; ovr_on_ = true; ovr_bits_ = ovr_req_; ovr_pilot_ = pilot; }
+        else if (ovr_on_ && link && pilot != ovr_pilot_) ovr_on_ = false;
+        if (ovr_on_) cmd.modes = (cmd.modes & ~kOverrideModes) | ovr_bits_;
     }
     void mission_fill(CoreOutput& o) const {
         o.mission_state = (uint8_t)mission_.state(); o.mission_index = mission_.index(); o.mission_count = mission_.count(); o.mission_wait = mission_.wait_s();
@@ -749,11 +791,16 @@ private:
         navlog_.est_pos[0] = pos_est_.pos_n(); navlog_.est_pos[1] = pos_est_.pos_e(); navlog_.est_vel[0] = pos_est_.vel_n(); navlog_.est_vel[1] = pos_est_.vel_e();
     }
     TiltAid tilt_aid_; GyroHistory gyro_hist_; FlowSample flow_; bool flow_new_ = false, flow_seen_ = false, have_flow_ = false, have_gps_xy_ = false, heading_ok_ = false; uint32_t flow_ms_ = 0, flow_ok_ms_ = 0, gps_xy_ms_ = 0;
+    // Loiter's controller: the position controller's settings, Position Hold's lean limit and fence
+    void apply_loiter() { lt_.cfg = cfg.loiter; lt_.cfg.fence_radius_m = cfg.poshold.fence_radius_m; lt_.ctl.cfg = cfg.pos; lt_.ctl.cfg.angle_max_deg = cfg.poshold.angle_max_deg; }
+    nav::LoiterMode lt_; bool was_loiter_ = false;
     nav::PosHoldMode ph_; nav::PosController rctl_; Rescue rescue_; RescueOutput rescue_out_; bool was_poshold_ = false, nav_lean_ = false, ph_unavail_ = false, ph_slow_gps_ = false, rescue_ok_ = false; float nav_tgt_[2] = {0, 0};
     EkfNav ekf_; uint32_t ekf_ms_ = 0; bool ekf_in_use_ = false;
     nav::NavRequest req_; uint32_t req_ms_ = 0; bool have_req_ = false, was_req_ = false, req_climb_on_ = false; float req_climb_ = 0.0f;
     MissionRunner mission_; MissionPlan mission_plan_; MissionOutput mission_out_; uint16_t mission_servo_[4] = {0, 0, 0, 0};
     bool mission_req_ = false, mission_app_ = false, mission_sw_ = false, mission_fly_ = false, was_mission_h_ = false;
+    bool ovr_set_ = false, ovr_clear_ = false, ovr_on_ = false; uint32_t ovr_req_ = 0, ovr_bits_ = 0, ovr_pilot_ = 0;
+    bool rem_req_ = false, rem_on_ = false, rem_force_ = false; uint8_t rem_seq_req_ = 0, rem_seq_ = 0, rem_result_ = 0;
     bool have_att_ = false, mag_seeded_ = false, armed_ = false, was_althold_ = false;
     LandDetector land_; bool airborne_ = false; float up_t_ = 0.0f;
     bool have_rc_ = false, raised_ = false, was_angle_ = false, was_stab_ = false, ctl_dirty_ = true; uint32_t rc_seq_ = 0;

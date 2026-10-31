@@ -12,6 +12,7 @@
 //
 // A second TCP port (port + 1) is the "hand of the tester": one text command per line, answered with "ok" / "err ...":
 //   rc <channel 1..16> <us>      move a stick / switch of the simulated transmitter      tx on|off      switch the transmitter
+//   stick <axis 1..4> <0..4095>  a joystick of the simulated DIY transmitter (port + 2)   txpower on|off   switch it
 //   rclink crsf|spektrum2048|spektrum1024|ppm|pwm   the receiver on the board (PPM on GPIO40; PWM on GPIO39, 40, 41, 42, 1, 3, 45, 46)
 //   pose <roll> <nose_down> <yaw>  put the craft on the ground in this attitude (degrees)   shake 0|1      move it by hand
 //   mount <roll> <pitch>         the board sits crooked in the frame (for level trim)    accerr ox oy oz sx sy sz   accelerometer offset / scale error
@@ -69,6 +70,7 @@
   #define BAD_SOCK (-1)
 #endif
 #include "../test/fw_rig.h"
+#include "../test/tx_rig.h"
 
 static sock_t listen_on(int port) {
     sock_t s = socket(AF_INET, SOCK_STREAM, 0);
@@ -104,7 +106,7 @@ static bool send_all(sock_t c, const uint8_t* d, size_t n) {
 }
 
 // ---- flash image in a file, so settings survive a restart of the simulator like they survive a power cycle
-static void flash_load(MemStorage& f, const std::string& path) {
+template <class F> static void flash_load(F& f, const std::string& path) {
     FILE* fp = fopen(path.c_str(), "rb"); if (!fp) return;
     for (;;) {
         uint8_t kl; uint32_t n; if (fread(&kl, 1, 1, fp) != 1) break;
@@ -114,7 +116,7 @@ static void flash_load(MemStorage& f, const std::string& path) {
     }
     fclose(fp);
 }
-static void flash_save(const MemStorage& f, const std::string& path) {
+template <class F> static void flash_save(const F& f, const std::string& path) {
     FILE* fp = fopen(path.c_str(), "wb"); if (!fp) return;
     for (const auto& kv : f.kv) { const uint8_t kl = (uint8_t)kv.first.size(); const uint32_t n = (uint32_t)kv.second.size(); fwrite(&kl, 1, 1, fp); fwrite(kv.first.data(), 1, kl, fp); fwrite(&n, 4, 1, fp); if (n) fwrite(kv.second.data(), 1, n, fp); }
     fclose(fp);
@@ -131,17 +133,31 @@ static void logmem_save(const MemFlash& m, const std::string& path) {
     fwrite(m.mem.data(), 1, m.mem.size(), fp); fclose(fp);
 }
 
+static TxRig* g_tx = nullptr;         // the simulated DIY transmitter (its app link: port + 2)
+
 static std::string control(Rig& r, const std::string& line, bool& quit) {
     char cmd[32] = ""; double a = 0, b = 0, c = 0; char word[16] = "";
     if (sscanf(line.c_str(), "%31s", cmd) != 1) return "err empty";
     if (!strcmp(cmd, "rc") && sscanf(line.c_str(), "%*s %lf %lf", &a, &b) == 2 && a >= 1 && a <= 16 && b >= 800 && b <= 2200) { r.board.rc[(int)a - 1] = (uint16_t)b; return "ok"; }
     if (!strcmp(cmd, "tx") && sscanf(line.c_str(), "%*s %15s", word) == 1) { r.board.tx_on = !strcmp(word, "on"); return "ok"; }
+    // the DIY transmitter: a joystick axis (1 joy1 X, 2 joy1 Y, 3 joy2 X, 4 joy2 Y) to an ADC reading; its power switch
+    if (!strcmp(cmd, "stick") && g_tx && sscanf(line.c_str(), "%*s %lf %lf", &a, &b) == 2 && a >= 1 && a <= 4 && b >= 0 && b <= 4095) { g_tx->stick((int)a - 1, (uint16_t)b); return "ok"; }
+    if (!strcmp(cmd, "txpower") && g_tx && sscanf(line.c_str(), "%*s %15s", word) == 1) { if (!strcmp(word, "on")) g_tx->power(r.board.air, (uint32_t)g_stub_us); else g_tx->off(); return "ok"; }
     if (!strcmp(cmd, "rclink") && sscanf(line.c_str(), "%*s %15s", word) == 1) {          // what the receiver on the board speaks
-        static const char* const k[5] = {"crsf", "spektrum2048", "spektrum1024", "ppm", "pwm"};
-        for (int i = 0; i < 5; i++) if (!strcmp(word, k[i])) { r.board.rc_link = (VirtualBoard::RcLink)i; return "ok"; }
-        return "err rclink crsf|spektrum2048|spektrum1024|ppm|pwm";
+        static const char* const k[6] = {"crsf", "spektrum2048", "spektrum1024", "ppm", "pwm", "mavlink"};
+        for (int i = 0; i < 6; i++) if (!strcmp(word, k[i])) { r.board.rc_link = (VirtualBoard::RcLink)i; return "ok"; }
+        return "err rclink crsf|spektrum2048|spektrum1024|ppm|pwm|mavlink";
     }
-    if (!strcmp(cmd, "pose") && sscanf(line.c_str(), "%*s %lf %lf %lf", &a, &b, &c) == 3) { r.board.plant.set_tilt((float)a, (float)b, (float)c); r.board.plant.w[0] = r.board.plant.w[1] = r.board.plant.w[2] = 0; r.board.plant.z = 0; r.board.plant.vz = 0; r.board.plant.ground = true; return "ok"; }
+    if (!strcmp(cmd, "gcsmission")) {                   // a ground station uploads TAKEOFF 17 m + RTL over the ExpressLRS MAVLink link (rclink mavlink)
+        if (r.board.rc_link != VirtualBoard::RC_MAVLINK) return "err needs rclink mavlink";
+        mav::Encoder e; e.sysid = 255; e.compid = 190; uint8_t f[mav::kMaxFrame];
+        mav::MissionCount c; c.target_system = 1; c.count = 2; size_t n = mav::pack(e, c, f); r.board.gcs_send(f, n);
+        mav::MissionItemInt it; it.target_system = 1; it.frame = mav::FRAME_GLOBAL_RELATIVE_ALT_INT; it.command = mav::CMD_NAV_TAKEOFF; it.z = 17.0f;
+        n = mav::pack(e, it, f); r.board.gcs_send(f, n);
+        it.seq = 1; it.command = mav::CMD_NAV_RETURN_TO_LAUNCH; it.z = 0; n = mav::pack(e, it, f); r.board.gcs_send(f, n);
+        return "ok";
+    }
+    if (!strcmp(cmd, "pose") &&sscanf(line.c_str(), "%*s %lf %lf %lf", &a, &b, &c) == 3) { r.board.plant.set_tilt((float)a, (float)b, (float)c); r.board.plant.w[0] = r.board.plant.w[1] = r.board.plant.w[2] = 0; r.board.plant.z = 0; r.board.plant.vz = 0; r.board.plant.ground = true; return "ok"; }
     if (!strcmp(cmd, "shake") && sscanf(line.c_str(), "%*s %lf", &a) == 1) { r.board.shaking = a != 0; return "ok"; }
     if (!strcmp(cmd, "mount") && sscanf(line.c_str(), "%*s %lf %lf", &a, &b) == 2) { r.board.mount_roll_deg = (float)a; r.board.mount_pitch_deg = (float)b; return "ok"; }
     { double o[3], k[3]; if (!strcmp(cmd, "accerr") && sscanf(line.c_str(), "%*s %lf %lf %lf %lf %lf %lf", &o[0], &o[1], &o[2], &k[0], &k[1], &k[2]) == 6) { for (int i = 0; i < 3; i++) { r.board.acc_offset[i] = (float)o[i]; r.board.acc_scale[i] = (float)k[i]; } return "ok"; } }
@@ -218,7 +234,7 @@ int main(int argc, char** argv) {
         else { fprintf(stderr, "usage: wb_sim [--port N] [--flash FILE] [--fresh] [--speed X] [--no-baro] [--no-mag] [--no-imu] [--no-flow] [--stm32] [--logmem KB]\n"); return 2; }
     }
     sock_init();
-    const sock_t l_app = listen_on(port), l_ctl = listen_on(port + 1);
+    const sock_t l_app = listen_on(port), l_ctl = listen_on(port + 1), l_tx = listen_on(port + 2);
     if (l_app == BAD_SOCK || l_ctl == BAD_SOCK) { fprintf(stderr, "cannot listen on 127.0.0.1:%d / %d\n", port, port + 1); return 1; }
 
     g_stub_us = 0; g_stub_delay_advances = true;
@@ -239,8 +255,17 @@ int main(int argc, char** argv) {
         s.modes.mode[0] = wbp::MODE_ARM; s.modes.aux[0] = 0; s.modes.lo[0] = 1700; s.modes.hi[0] = 2100;
         s.modes.mode[1] = wbp::MODE_ANGLE; s.modes.aux[1] = 1; s.modes.lo[1] = 1700; s.modes.hi[1] = 2100;
         s.modes.mode[2] = wbp::MODE_ALTHOLD; s.modes.aux[2] = 2; s.modes.lo[2] = 1700; s.modes.hi[2] = 2100;
+        { wbp::Settings n = s; VirtualBoard::wire_nrf(n); s.pins.nrf_sck = n.pins.nrf_sck; s.pins.nrf_miso = n.pins.nrf_miso; s.pins.nrf_mosi = n.pins.nrf_mosi; s.pins.nrf_cs = n.pins.nrf_cs; s.pins.nrf_ce = n.pins.nrf_ce; }   // (the nRF24 module is wired; receiver.protocol picks it)
         st.save(s);
     }
+    // the DIY transmitter in the same air as the board's nRF24 module, with its own settings file and its own app port
+    TxRig txr; MemTransport tx_link; const std::string tx_flash_path = flash_path + ".tx";
+    if (!fresh) { flash_load(txr.flash, tx_flash_path); txr.store.load(txr.s); }
+    wbp::Server tx_srv(txr.s, &txr.store, txr.app, tx_link, wbp::ROLE_TX, WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH, "Windburst TX (sim)", wbp::FEAT_STREAMS);
+    txr.self_save = false; txr.srv = &tx_srv; g_tx = &txr; rig.board.has_nrf = true;
+    rig.board.radio_tick = [&txr](uint32_t us) { txr.step(us); };
+    txr.power(rig.board.air, 0); tx_srv.settings_loaded();
+    int tx_writes = txr.flash.writes; uint32_t tx_ms = 0;
     int flash_writes = rig.flash.writes; uint32_t log_ops = rig.logmem.writes + rig.logmem.erases; double log_saved = 0;
     rig.boot();
     auto play_stm32 = [&]() {          // an STM32H563 in a 144-pin package as far as the app can tell: PA0 .. PG15
@@ -252,12 +277,22 @@ int main(int argc, char** argv) {
     for (int i = 0; i < rig.app().report_lines(); i++) printf("  %s\n", rig.app().report()[i]);
     fflush(stdout);
 
-    sock_t app = BAD_SOCK, ctl = BAD_SOCK; std::string ctl_line; bool quit = false;
+    if (l_tx == BAD_SOCK) printf("wb_sim: port %d is taken - no simulated transmitter link\n", port + 2);
+    else printf("wb_sim: DIY transmitter (nRF24) on socket://127.0.0.1:%d\n", port + 2);
+    fflush(stdout);
+    sock_t app = BAD_SOCK, ctl = BAD_SOCK, txc = BAD_SOCK; std::string ctl_line; bool quit = false; uint64_t tx_rx_us = 0;
     const auto t0 = std::chrono::steady_clock::now(); const uint64_t sim0 = g_stub_us; uint64_t last_rx_us = g_stub_us; int boots = rig.boots;
     while (!quit) {
         if (app == BAD_SOCK) { app = accept_on(l_app); if (app != BAD_SOCK) { rig.tx.out.clear(); last_rx_us = g_stub_us; } }
         else { sock_t extra = accept_on(l_app); if (extra != BAD_SOCK) sock_close(extra); }       // one app at a time, like one USB cable
         if (ctl == BAD_SOCK) ctl = accept_on(l_ctl);
+        if (l_tx != BAD_SOCK && txc == BAD_SOCK) { txc = accept_on(l_tx); if (txc != BAD_SOCK) { tx_link.out.clear(); tx_rx_us = g_stub_us; } }
+        if (txc != BAD_SOCK) {
+            uint8_t buf[1024]; const int n = recv_some(txc, buf, sizeof(buf));
+            if (n > 0) { tx_srv.on_bytes(buf, (size_t)n); tx_rx_us = g_stub_us; }
+            else if (n < 0) { sock_close(txc); txc = BAD_SOCK; }
+            else if (g_stub_us - tx_rx_us > 20000) { tx_srv.on_idle(); tx_rx_us = g_stub_us; }
+        }
 
         if (app != BAD_SOCK) {
             uint8_t buf[2048]; const int n = recv_some(app, buf, sizeof(buf));
@@ -281,6 +316,9 @@ int main(int argc, char** argv) {
         while (g_stub_us < target && budget-- > 0) rig.run(0.001);
         if (rig.boots != boots) { boots = rig.boots; if (stm32) play_stm32(); printf("wb_sim: firmware restarted (boot %d)\n", boots); fflush(stdout); }
         if (rig.flash.writes != flash_writes) { flash_writes = rig.flash.writes; flash_save(rig.flash, flash_path); }
+        if (millis() != tx_ms) { tx_ms = millis(); tx_srv.tick(tx_ms); }
+        if (txr.flash.writes != tx_writes) { tx_writes = txr.flash.writes; flash_save(txr.flash, tx_flash_path); }
+        if (!tx_link.out.empty()) { if (txc != BAD_SOCK && !send_all(txc, tx_link.out.data(), tx_link.out.size())) { sock_close(txc); txc = BAD_SOCK; } tx_link.out.clear(); }
         if (rig.has_logmem && rig.logmem.writes + rig.logmem.erases != log_ops && wall - log_saved > 0.5) { log_ops = rig.logmem.writes + rig.logmem.erases; log_saved = wall; logmem_save(rig.logmem, log_path); }
 
         if (!rig.tx.out.empty()) {
@@ -292,6 +330,7 @@ int main(int argc, char** argv) {
     if (rig.has_logmem) logmem_save(rig.logmem, log_path);
     if (app != BAD_SOCK) sock_close(app);
     if (ctl != BAD_SOCK) sock_close(ctl);
-    sock_close(l_app); sock_close(l_ctl);
+    if (txc != BAD_SOCK) sock_close(txc);
+    sock_close(l_app); sock_close(l_ctl); if (l_tx != BAD_SOCK) sock_close(l_tx);
     return 0;
 }

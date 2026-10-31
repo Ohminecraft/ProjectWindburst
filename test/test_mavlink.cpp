@@ -1,5 +1,5 @@
 // MAVLink telemetry (src/telemetry/mavlink.h, mavlink_telemetry.h): frames byte for byte against pymavlink (test/mavlink_vectors.h),
-// the frame parser, the scheduler (rates, room on the UART, STATUSTEXT chunks), the HEARTBEAT modes, the ring to the WiFi side.
+// the frame parser, the scheduler (rates, room on the UART, STATUSTEXT chunks), the HEARTBEAT modes.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,23 +54,70 @@ static void t_vectors() {
       StatusText a; a.severity = 4; a.id = 1; a.chunk_seq = 0; memcpy(a.text, s, 50); Encoder e = enc_at("statustext_chunk0"); n = pack(e, a, f); const bool c0 = same("statustext_chunk0", f, n);
       StatusText b; b.severity = 4; b.id = 1; b.chunk_seq = 1; memcpy(b.text, s + 50, strlen(s) - 50); n = pack(e, b, f);
       CHECK(c0 && same("statustext_chunk1", f, n), "STATUSTEXT in two chunks (id 1, chunk_seq 0 and 1)"); }
+    { RcChannelsOverride o; o.target_system = 1; const uint16_t v[16] = {1500, 1250, 988, 1750, 2012, 1000, 1500, 2000, 1100, 1200, 1300, 1400, 1600, 1700, 1800, 1900};
+      for (int i = 0; i < 16; i++) o.chan[i] = v[i];
+      Encoder e; e.sysid = 255; e.compid = 68; e.set_seq(vec("rc_channels_override").seq); n = pack(e, o, f);
+      CHECK(same("rc_channels_override", f, n), "RC_CHANNELS_OVERRIDE as an ExpressLRS receiver sends it (system 255, component 68)"); }
+    { RadioStatus r; r.rssi = 204; r.remrssi = 70; r.txbuf = 87; r.noise = 8;
+      Encoder e; e.sysid = 255; e.compid = 68; e.set_seq(vec("radio_status").seq); n = pack(e, r, f);
+      CHECK(same("radio_status", f, n), "RADIO_STATUS"); }
 }
 
-static void t_parser() {
-    printf("[parser] frames out of a byte stream, CRC checked\n");
-    std::vector<uint8_t> s = {0x00, 0x55, 0xFE};                                   // garbage first (a MAVLink 1 start byte among it)
-    for (const MavVector& v : kMavVectors) s.insert(s.end(), v.bytes, v.bytes + v.n);
-    Parser p; int got = 0; bool ids = true; const MavVector* exp = kMavVectors;
-    for (uint8_t c : s) if (p.feed(c)) { if (p.frame().seq != exp->seq || p.frame().sysid != exp->bytes[5]) ids = false; got++; exp++; }
-    const int n = (int)(sizeof(kMavVectors) / sizeof(kMavVectors[0]));
-    CHECK(got == n && ids && p.bad() == 0, "all %d vectors read back (%d), sequence and system id right", n, got);
-    { Parser q; const MavVector& v = vec("attitude"); for (int i = 0; i < v.n; i++) q.feed(v.bytes[i]);
-      const Parser::Frame& f = q.frame();
-      CHECK(f.msgid == MSG_ATTITUDE && Parser::get<uint32_t>(f, 0) == 654321u && Parser::get<float>(f, 4) == 0.125f && Parser::get<float>(f, 24) == 0.0625f, "fields of ATTITUDE read back"); }
-    { Parser q; const MavVector& v = vec("rc_channels_no_link"); bool ok = false; for (int i = 0; i < v.n; i++) ok = q.feed(v.bytes[i]);
-      CHECK(ok && Parser::get<uint16_t>(q.frame(), 2) == 0 && q.frame().payload[41] == 0, "a truncated payload is zero-filled"); }
-    { Parser q; const MavVector& v = vec("vfr_hud"); std::vector<uint8_t> b(v.bytes, v.bytes + v.n); b[14] ^= 0x01; bool any = false; for (uint8_t c : b) any |= q.feed(c);
-      CHECK(!any && q.bad() == 1, "one bit wrong: dropped (CRC)"); }
+// 0.40: the ground station's messages and the craft's answers, both ways: packed as pymavlink packs them, read back from its frames
+template <class M> static bool both_ways(const char* name, const M& m, uint8_t sysid, uint8_t compid, M& back) {
+    Encoder e; e.sysid = sysid; e.compid = compid; e.set_seq(vec(name).seq); uint8_t f[kMaxFrame]; const size_t n = pack(e, m, f);
+    Parser p; const MavVector& v = vec(name); bool got = false; for (int i = 0; i < v.n; i++) got = p.feed(v.bytes[i]);
+    return same(name, f, n) && got && unpack(p.frame(), back);
+}
+static void t_gcs_messages() {
+    printf("[gcs messages] commands, mission protocol, home, modes: byte for byte as pymavlink, and read back\n");
+    { CommandLong c; c.target_system = 1; c.target_component = 1; c.command = CMD_DO_SET_MODE; c.param[0] = 1; c.param[1] = 16; CommandLong b;
+      CHECK(both_ways("command_long", c, 255, 190, b) && b.command == 176 && b.param[1] == 16.0f && b.target_system == 1, "COMMAND_LONG (DO_SET_MODE 16)"); }
+    { CommandInt c; c.target_system = 1; c.frame = 6; c.command = CMD_DO_SET_HOME; c.param[0] = 1; c.x = 473977418; c.y = 85455939; c.z = 12.5f; CommandInt b;
+      CHECK(both_ways("command_int", c, 255, 190, b) && b.command == 179 && b.x == 473977418 && b.y == 85455939 && b.z == 12.5f && b.frame == 6, "COMMAND_INT (DO_SET_HOME, x / y degE7)"); }
+    { CommandAck c; c.command = CMD_COMPONENT_ARM_DISARM; c.result = RESULT_TEMPORARILY_REJECTED; c.target_system = 255; c.target_component = 190; CommandAck b;
+      CHECK(both_ways("command_ack", c, 1, 1, b) && b.command == 400 && b.result == 1 && b.target_component == 190, "COMMAND_ACK (with the extension fields)"); }
+    { AutopilotVersion a; a.capabilities = CAP_MAVLINK2 | CAP_MISSION_INT | CAP_COMMAND_INT; a.flight_sw_version = (40u << 16) | 255u; AutopilotVersion b;
+      CHECK(both_ways("autopilot_version", a, 1, 1, b) && b.capabilities == 8204u && b.flight_sw_version == ((40u << 16) | 255u), "AUTOPILOT_VERSION"); }
+    { HomePosition h; h.latitude = 473977418; h.longitude = 85455939; h.altitude = 488123; HomePosition b;
+      CHECK(both_ways("home_position", h, 1, 1, b) && b.latitude == 473977418 && b.altitude == 488123 && b.q[0] == 1.0f, "HOME_POSITION (q = no rotation)"); }
+    { GpsGlobalOrigin g; g.latitude = 473977418; g.longitude = 85455939; g.altitude = 488123; GpsGlobalOrigin b;
+      CHECK(both_ways("gps_global_origin", g, 1, 1, b) && b.longitude == 85455939, "GPS_GLOBAL_ORIGIN"); }
+    { AvailableModes a; a.number_modes = 8; a.mode_index = 4; a.standard_mode = STANDARD_MODE_POSITION_HOLD; a.custom_mode = 16; memcpy(a.mode_name, "Pos Hold", 8); AvailableModes b;
+      CHECK(both_ways("available_modes", a, 1, 1, b) && b.custom_mode == 16 && b.mode_index == 4 && !strcmp(b.mode_name, "Pos Hold"), "AVAILABLE_MODES (development.xml)"); }
+    { AvailableModesMonitor a; a.seq = 1; AvailableModesMonitor b; CHECK(both_ways("available_modes_monitor", a, 1, 1, b) && b.seq == 1, "AVAILABLE_MODES_MONITOR"); }
+    { MissionRequestList r; r.target_system = 1; r.target_component = 1; MissionRequestList b;
+      CHECK(both_ways("mission_request_list", r, 255, 190, b) && b.target_system == 1 && b.mission_type == 0, "MISSION_REQUEST_LIST"); }
+    { MissionCount c; c.target_system = 1; c.target_component = 1; c.count = 3; MissionCount b; CHECK(both_ways("mission_count", c, 255, 190, b) && b.count == 3, "MISSION_COUNT"); }
+    { MissionRequestInt r; r.target_system = 255; r.target_component = 190; r.seq = 2; MissionRequestInt b;
+      CHECK(both_ways("mission_request_int", r, 1, 1, b) && b.seq == 2 && b.target_component == 190, "MISSION_REQUEST_INT"); }
+    { MissionItemInt it; it.target_system = 1; it.target_component = 1; it.seq = 1; it.frame = FRAME_GLOBAL_RELATIVE_ALT; it.command = CMD_NAV_WAYPOINT; it.param[0] = 5;
+      it.param[3] = NAN; it.x = 473980000; it.y = 85460000; it.z = 25.5f; MissionItemInt b;
+      CHECK(both_ways("mission_item_int", it, 255, 190, b) && b.seq == 1 && b.command == 16 && b.param[0] == 5.0f && b.param[3] != b.param[3] && b.x == 473980000 && b.z == 25.5f && b.autocontinue == 1,
+            "MISSION_ITEM_INT (WAYPOINT, hold 5 s, yaw NaN, 25.5 m above home)"); }
+    { MissionAck a; a.target_system = 255; a.target_component = 190; MissionAck b; CHECK(both_ways("mission_ack", a, 1, 1, b) && b.type == MISSION_ACCEPTED && b.target_system == 255, "MISSION_ACK"); }
+    { MissionClearAll c; c.target_system = 1; c.target_component = 1; c.mission_type = MISSION_TYPE_ALL; MissionClearAll b;
+      CHECK(both_ways("mission_clear_all", c, 255, 190, b) && b.mission_type == 255, "MISSION_CLEAR_ALL (all types)"); }
+    { MissionSetCurrent c; c.target_system = 1; c.target_component = 1; c.seq = 2; MissionSetCurrent b; CHECK(both_ways("mission_set_current", c, 255, 190, b) && b.seq == 2, "MISSION_SET_CURRENT"); }
+    { MissionCurrent c; c.seq = 2; c.total = 5; c.mission_state = MISSION_STATE_ACTIVE; c.mission_mode = 1; MissionCurrent b;
+      CHECK(both_ways("mission_current", c, 1, 1, b) && b.total == 5 && b.mission_state == 3, "MISSION_CURRENT (with total and state)"); }
+    { MissionItemReached r; r.seq = 1; MissionItemReached b; CHECK(both_ways("mission_item_reached", r, 1, 1, b) && b.seq == 1, "MISSION_ITEM_REACHED"); }
+    { Timesync t; t.ts1 = 1234567890123ll; Timesync b; CHECK(both_ways("timesync", t, 255, 190, b) && b.tc1 == 0 && b.ts1 == 1234567890123ll, "TIMESYNC (a request: tc1 = 0)"); }
+    { MissionItem it; it.target_system = 1; it.target_component = 1; it.seq = 1; it.frame = FRAME_GLOBAL_RELATIVE_ALT; it.command = CMD_NAV_WAYPOINT; it.param[0] = 5; it.x = 47.398f; it.y = 8.546f; it.z = 25.5f; MissionItem b;
+      CHECK(both_ways("mission_item", it, 255, 190, b) && b.x == 47.398f && b.y == 8.546f && b.z == 25.5f && b.command == 16, "MISSION_ITEM (the float form: degrees)"); }
+    { MissionRequest r; r.target_system = 1; r.target_component = 1; r.seq = 2; MissionRequest b; CHECK(both_ways("mission_request", r, 255, 190, b) && b.seq == 2, "MISSION_REQUEST"); }
+}
+
+static void t_receive() {
+    printf("[receive] RC_CHANNELS_OVERRIDE and RADIO_STATUS read back (what an ExpressLRS receiver sends)\n");
+    auto frame = [](const char* name) { Parser p; const MavVector& v = vec(name); for (int i = 0; i < v.n; i++) if (p.feed(v.bytes[i])) return p.frame(); return Parser::Frame(); };
+    { const Parser::Frame f = frame("rc_channels_override"); RcChannelsOverride o; RadioStatus wrong;
+      CHECK(unpack(f, o) && o.target_system == 1 && o.target_component == 0 && o.chan[0] == 1500 && o.chan[2] == 988 && o.chan[4] == 2012 && o.chan[8] == 1100 && o.chan[15] == 1900 && o.chan[16] == 0 && o.chan[17] == 0,
+            "RC_CHANNELS_OVERRIDE: target 1, channel 1 = 1500, 3 = 988, 9 = 1100 (an extension field), 16 = 1900, 17 and 18 cut (0)");
+      CHECK(!unpack(f, wrong), "not read as another message"); }
+    { const Parser::Frame f = frame("radio_status"); RadioStatus r; RcChannelsOverride wrong;
+      CHECK(unpack(f, r) && r.rssi == 204 && r.remrssi == 70 && r.txbuf == 87 && r.noise == 8 && r.rxerrors == 0, "RADIO_STATUS: rssi 204, remote rssi 70, 87 %% of the buffer free, noise 8");
+      CHECK(!unpack(f, wrong), "not read as another message"); }
 }
 
 static State base_state() {
@@ -144,6 +191,93 @@ static void t_scheduler() {
         CHECK(raw && raw->payload[28] == GPS_FIX_3D && raw->payload[29] == 12 && Parser::get<uint16_t>(*raw, 20) == 90 && Parser::get<uint16_t>(*raw, 26) == 9000, "GPS_RAW_INT: 3D fix, 12 satellites, HDOP 0.90, course 90 deg"); }
 }
 
+static void t_flow() {
+    printf("[flow control] RADIO_STATUS.txbuf: ArduPilot's stream slowdown, Betaflight's gate at 35 %%\n");
+    {   Scheduler sch; sch.configure(Rates(), 1);
+        CHECK(!sch.flow_control() && sch.slowdown_ms() == 0, "no RADIO_STATUS yet: no flow control");
+        sch.radio_status(10); CHECK(sch.flow_control() && sch.slowdown_ms() == 60, "txbuf 10 (< 20): 60 ms slower (%u)", sch.slowdown_ms());
+        sch.radio_status(40); CHECK(sch.slowdown_ms() == 80, "txbuf 40 (< 50): 20 ms more (%u)", sch.slowdown_ms());
+        sch.radio_status(70); CHECK(sch.slowdown_ms() == 80, "txbuf 70: unchanged (%u)", sch.slowdown_ms());
+        sch.radio_status(93); CHECK(sch.slowdown_ms() == 60, "txbuf 93 (> 90): 20 ms faster (%u)", sch.slowdown_ms());
+        sch.radio_status(99); CHECK(sch.slowdown_ms() == 40, "txbuf 99 with 200 ms or less: 20 ms faster only (%u)", sch.slowdown_ms());
+        sch.radio_status(91); sch.radio_status(91); sch.radio_status(91); CHECK(sch.slowdown_ms() == 0, "back to 0, never below (%u)", sch.slowdown_ms());
+        for (int i = 0; i < 30; i++) sch.radio_status(30);
+        CHECK(sch.slowdown_ms() == 600, "txbuf 30: 20 ms per message (30 messages: %u)", sch.slowdown_ms());
+        sch.radio_status(96); CHECK(sch.slowdown_ms() == 560, "txbuf 96 above 200 ms: 40 ms faster (%u)", sch.slowdown_ms());
+        for (int i = 0; i < 100; i++) sch.radio_status(10);
+        CHECK(sch.slowdown_ms() >= 2000 && sch.slowdown_ms() < 2060, "and at most about 2 s (%u)", sch.slowdown_ms());
+        for (int i = 0; i < 100; i++) sch.radio_status(40);
+        CHECK(sch.slowdown_ms() >= 2000 && sch.slowdown_ms() < 2060, "txbuf 40 does not push it further (%u)", sch.slowdown_ms());
+        sch.configure(Rates(), 1); CHECK(!sch.flow_control() && sch.slowdown_ms() == 0, "configure() starts without flow control again"); }
+    {   // the gate: nothing at all while the radio has 35 % or less of its buffer free
+        Scheduler sch; sch.configure(Rates(), 1); uint8_t buf[1024]; State s = base_state(); size_t sent = 0;
+        sch.radio_status(35); for (uint32_t t = 0; t < 1000; t++) sent += sch.poll(t, s, buf, sizeof(buf));
+        CHECK(sent == 0, "txbuf 35: nothing sent for 1 s (%zu bytes)", sent);
+        sch.radio_status(36); const size_t first = sch.poll(1000, s, buf, sizeof(buf)); Parser p; int hb = 0, att = 0;
+        for (size_t i = 0; i < first; i++) if (p.feed(buf[i])) { if (p.frame().msgid == MSG_HEARTBEAT) hb++; if (p.frame().msgid == MSG_ATTITUDE) att++; }
+        CHECK(hb == 1 && att == 1 && p.bad() == 0, "txbuf 36: what was due goes out, one of each (HEARTBEAT %d, ATTITUDE %d)", hb, att); }
+    {   // the slowdown lengthens every period: ATTITUDE at 10 Hz with 1 s more is one every 1.1 s
+        Scheduler sch; sch.configure(Rates(), 1); for (int i = 0; i < 50; i++) sch.radio_status(40);
+        sch.radio_status(80);                                                 // (80 % free: the gate open, the slowdown kept)
+        const Seen s = run(sch, base_state(), 11000);
+        CHECK(sch.slowdown_ms() == 1000 && s.count[MSG_ATTITUDE] == 10 && s.count[MSG_RC_CHANNELS] == 8,
+              "1000 ms slower for 11 s: ATTITUDE %d (every 1.1 s), RC_CHANNELS %d (every 1.5 s)", s.count[MSG_ATTITUDE], s.count[MSG_RC_CHANNELS]);
+        CHECK(s.count[MSG_HEARTBEAT] == 11, "HEARTBEAT keeps its 1 Hz (ArduPilot sends it outside the streams; a ground station counts a missing one as a lost link): %d", s.count[MSG_HEARTBEAT]); }
+    {   // texts are not slowed down either (ArduPilot's own queue): one every 100 ms, as long as the gate is open
+        Rates off; off.attitude = off.position = off.hud = off.status = off.rc = 0; Scheduler sch; sch.configure(off, 1); for (int i = 0; i < 50; i++) sch.radio_status(40); sch.radio_status(80);
+        sch.text(MAV_SEVERITY_INFO, "one"); sch.text(MAV_SEVERITY_INFO, "two"); sch.text(MAV_SEVERITY_INFO, "three");
+        const Seen s = run(sch, State(), 300);
+        CHECK(sch.slowdown_ms() == 1000 && s.count[MSG_STATUSTEXT] == 3, "1000 ms slower: three texts in 300 ms still (%d)", s.count[MSG_STATUSTEXT]); }
+}
+
+static void t_parser() {
+    printf("[parser] frames out of a byte stream, CRC checked\n");
+    std::vector<uint8_t> s = {0x00, 0x55, 0xFE};                                   // garbage first (a MAVLink 1 start byte among it)
+    for (const MavVector& v : kMavVectors) s.insert(s.end(), v.bytes, v.bytes + v.n);
+    Parser p; int got = 0; bool ids = true; const MavVector* exp = kMavVectors;
+    for (uint8_t c : s) if (p.feed(c)) { if (p.frame().seq != exp->seq || p.frame().sysid != exp->bytes[5]) ids = false; got++; exp++; }
+    const int n = (int)(sizeof(kMavVectors) / sizeof(kMavVectors[0]));
+    CHECK(got == n && ids && p.bad() == 0, "all %d vectors read back (%d), sequence and system id right", n, got);
+    { Parser q; const MavVector& v = vec("attitude"); for (int i = 0; i < v.n; i++) q.feed(v.bytes[i]);
+      const Parser::Frame& f = q.frame();
+      CHECK(f.msgid == MSG_ATTITUDE && Parser::get<uint32_t>(f, 0) == 654321u && Parser::get<float>(f, 4) == 0.125f && Parser::get<float>(f, 24) == 0.0625f, "fields of ATTITUDE read back"); }
+    { Parser q; const MavVector& v = vec("rc_channels_no_link"); bool ok = false; for (int i = 0; i < v.n; i++) ok = q.feed(v.bytes[i]);
+      CHECK(ok && Parser::get<uint16_t>(q.frame(), 2) == 0 && q.frame().payload[41] == 0, "a truncated payload is zero-filled"); }
+    { Parser q; const MavVector& v = vec("vfr_hud"); std::vector<uint8_t> b(v.bytes, v.bytes + v.n); b[14] ^= 0x01; bool any = false; for (uint8_t c : b) any |= q.feed(c);
+      CHECK(!any && q.bad() == 1, "one bit wrong: dropped (CRC)"); }
+}
+
+static void t_scheduler_gcs() {
+    printf("[scheduler 0.40] replies first, HOME_POSITION / GPS_GLOBAL_ORIGIN, MISSION_CURRENT\n");
+    Rates off; off.attitude = off.position = off.hud = off.status = off.rc = 0;
+    {   Scheduler sch; sch.configure(off, 1); uint8_t buf[512]; State s;
+        CommandAck a; a.command = CMD_DO_SET_MODE; a.target_system = 255; a.target_component = 190;
+        MissionCount c; c.count = 4; c.target_system = 255;
+        CHECK(sch.reply(a) && sch.reply(c) && sch.queued_replies() == 2, "two replies queued");
+        size_t n = sch.poll(0, s, buf, sizeof(buf)); Parser p; std::vector<uint32_t> ids; for (size_t i = 0; i < n; i++) if (p.feed(buf[i])) ids.push_back(p.frame().msgid);
+        CHECK(ids.size() >= 3 && ids[0] == MSG_COMMAND_ACK && ids[1] == MSG_MISSION_COUNT && ids[2] == MSG_HEARTBEAT && sch.queued_replies() == 0, "sent before the due frames, in the order given (%zu frames)", ids.size());
+        for (int i = 0; i < Scheduler::kReplies; i++) sch.reply(a);
+        CHECK(!sch.reply(a) && sch.dropped_replies() == 1, "a full queue (%d) refuses the next one and counts it", Scheduler::kReplies);
+        n = sch.poll(1000, s, buf, 30); Parser q; int acks = 0; for (size_t i = 0; i < n; i++) if (q.feed(buf[i]) && q.frame().msgid == MSG_COMMAND_ACK) acks++;
+        CHECK(acks == 1 && sch.queued_replies() == Scheduler::kReplies - 1, "30 bytes of room: one COMMAND_ACK (22 bytes), the rest wait their turn");
+        sch.radio_status(20); const size_t gated = sch.poll(2000, s, buf, sizeof(buf));
+        CHECK(gated == 0 && sch.queued_replies() == Scheduler::kReplies - 1, "the radio full (txbuf 20): replies wait too"); }
+    {   Scheduler sch; sch.configure(off, 1); State s = base_state(); s.have_home = false;
+        Seen a = run(sch, s, 3000);
+        CHECK(a.count[MSG_HOME_POSITION] == 0 && a.count[MSG_GPS_GLOBAL_ORIGIN] == 0, "no home: no HOME_POSITION");
+        s.have_home = true; s.home_lat = 473977418; s.home_lon = 85455939; s.home_alt_mm = 488123;
+        Seen b = run(sch, s, 25000, 512, 3000);
+        const Parser::Frame* h = nullptr; for (const Parser::Frame& f : b.frames) if (f.msgid == MSG_HOME_POSITION) { h = &f; break; }
+        HomePosition hp; CHECK(h && unpack(*h, hp) && hp.latitude == 473977418 && hp.longitude == 85455939 && hp.altitude == 488123, "home set: HOME_POSITION at once, with the home point");
+        CHECK(b.count[MSG_HOME_POSITION] == 3 && b.count[MSG_GPS_GLOBAL_ORIGIN] == 3, "then every 10 s (25 s: %d HOME_POSITION, %d GPS_GLOBAL_ORIGIN)", b.count[MSG_HOME_POSITION], b.count[MSG_GPS_GLOBAL_ORIGIN]);
+        s.home_lat += 1000; Seen c = run(sch, s, 100, 512, 28000);
+        CHECK(c.count[MSG_HOME_POSITION] == 1, "a new home point: sent at once (%d)", c.count[MSG_HOME_POSITION]); }
+    {   Scheduler sch; sch.configure(off, 1); State s; s.mission_total = 5; s.mission_seq = 2; s.mission_state = MISSION_STATE_ACTIVE; s.mission_mode = 1;
+        Seen m = run(sch, s, 5000); const Parser::Frame* f = nullptr; for (const Parser::Frame& x : m.frames) if (x.msgid == MSG_MISSION_CURRENT) f = &x;
+        MissionCurrent mc; CHECK(m.count[MSG_MISSION_CURRENT] == 5 && f && unpack(*f, mc) && mc.seq == 2 && mc.total == 5 && mc.mission_state == MISSION_STATE_ACTIVE && mc.mission_mode == 1,
+                                 "MISSION_CURRENT at 1 Hz (%d in 5 s): command 2 of 5, active", m.count[MSG_MISSION_CURRENT]); }
+}
+
 static void t_text() {
     printf("[statustext] queue and chunks\n");
     auto texts = [](const Seen& s) {
@@ -193,7 +327,10 @@ static void t_heartbeat() {
       a.rescue = true; CHECK(heartbeat_of(a).custom_mode == COPTER_RTL, "its RTL: RTL"); }
     s.althold = true; CHECK(heartbeat_of(s).custom_mode == COPTER_ALT_HOLD, "Altitude Hold: ALT_HOLD");
     s.poshold = true; CHECK(heartbeat_of(s).custom_mode == COPTER_POSHOLD, "Position Hold: POSHOLD");
+    { State l = s; l.loiter = true; CHECK(heartbeat_of(l).custom_mode == COPTER_LOITER && COPTER_LOITER == 5 && (heartbeat_of(l).base_mode & MAV_MODE_FLAG_STABILIZE_ENABLED), "Loiter (0.41): LOITER (5), before Position Hold"); }
     s.rescue = true; CHECK(heartbeat_of(s).custom_mode == COPTER_RTL, "GPS Rescue: RTL");
+    { State k = s; k.rescue_kind = 1; CHECK(heartbeat_of(k).custom_mode == COPTER_SMART_RTL && COPTER_SMART_RTL == 21, "the rescue as SMART_RTL: SMART_RTL (21)");
+      k.rescue_kind = 2; CHECK(heartbeat_of(k).custom_mode == COPTER_LAND, "the rescue as LAND: LAND"); k.failsafe = true; k.rescue_kind = 1; CHECK(heartbeat_of(k).custom_mode == COPTER_SMART_RTL, "the failsafe's rescue as SMART_RTL"); }
     s.rescue = false; s.failsafe = true; h = heartbeat_of(s); CHECK(h.custom_mode == COPTER_LAND && h.system_status == MAV_STATE_CRITICAL, "failsafe landing: LAND, CRITICAL");
     s = State(); s.calibrating = true; CHECK(heartbeat_of(s).system_status == MAV_STATE_CALIBRATING, "calibrating: CALIBRATING");
     State g; CHECK(gps_fix_of(g) == GPS_FIX_NO_GPS, "no GPS: NO_GPS"); g.have_gps = true; g.gps_fix = 0; CHECK(gps_fix_of(g) == GPS_FIX_NONE, "GPS without a fix: NO_FIX");
@@ -201,21 +338,8 @@ static void t_heartbeat() {
     CHECK(cdeg360(-90.0f) == 27000 && cdeg360(359.999f) == 0 && cdeg360(720.5f) == 50, "heading in cdeg, 0 .. 35999");
 }
 
-static void t_ring() {
-    printf("[ring] frames to the WiFi side\n");
-    Ring r; uint8_t f[100], out[600]; for (int i = 0; i < 100; i++) f[i] = (uint8_t)i;
-    int pushed = 0; while (r.push(f, 100)) pushed++;
-    CHECK(pushed == (int)(Ring::kSize / 102) && r.dropped() == 1, "full: whole frames only (%d of 100 bytes), the next one dropped and counted", pushed);
-    const size_t n = r.pop(out, 350);
-    CHECK(n == 300 && out[0] == 0 && out[99] == 99 && out[100] == 0, "a datagram of 350 bytes takes three whole frames, never half of one");
-    size_t rest = 0, k; while ((k = r.pop(out, sizeof(out))) > 0) rest += k;
-    CHECK(rest == (size_t)(pushed - 3) * 100 && r.pop(out, sizeof(out)) == 0, "the rest comes out, then nothing");
-    for (int i = 0; i < 100; i++) { r.push(f, 37); r.pop(out, sizeof(out)); }
-    CHECK(r.push(f, 100) && r.pop(out, sizeof(out)) == 100 && out[42] == 42, "across the end of the buffer many times: still whole");
-}
-
 int main() {
-    t_vectors(); t_parser(); t_scheduler(); t_text(); t_heartbeat(); t_ring();
+    t_vectors(); t_gcs_messages(); t_parser(); t_receive(); t_scheduler(); t_flow(); t_scheduler_gcs(); t_text(); t_heartbeat();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

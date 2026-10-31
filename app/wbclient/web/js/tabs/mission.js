@@ -3,7 +3,7 @@
 // `mission` section and saves it; Start / Stop send the MISSION command (the pilot arms first). The craft's GPS position, its
 // heading and the way it flew are drawn live. The map tiles come through the local server, which keeps them on disk
 // (wbclient/maptiles.py): a place looked at once is there again without a network.
-import { store, reloadSection, command } from '../store.js';
+import { store, on, reloadSection, command } from '../store.js';
 import { api } from '../api.js';
 import { h, toast, showError, listen, track } from '../ui.js';
 import { ENUM_LABELS } from '../labels.js';
@@ -12,6 +12,9 @@ import { encodePlan, decodePlan, estimate, distance, commandCount, MAX_COMMANDS 
 
 // the plan being edited: kept while the app runs (switching tabs does not lose it)
 const plan = { takeoff_alt: 10, speed: 0, rtl: true, rc_lost: 'CONTINUE', points: [] };
+let synced = '';             // the plan as it was when it last came from / went to the drone: anything else is an edit of the user's
+let droneNew = false;        // a ground station's plan came that the tab has not taken in yet
+on('mission:from-drone', () => { droneNew = true; });
 const view = { base: 'sat', names: true, selected: -1, center: null, zoom: 17, trail: [], me: null };     // me: where this computer is ({lat, lon, acc})
 const acts = () => ({ fly: tr('Bay tới'), servo: tr('Đứng yên · servo'), land: tr('Hạ cánh · chờ · cất cánh') });
 const DEFAULT_CENTER = [21.0285, 105.8542];       // (no GPS yet, nothing saved: Hà Nội)
@@ -274,11 +277,20 @@ export default {
     listen('stream:attitude', paintDrone);
 
     // ---- the drone: download, upload, start, stop
+    // a ground station put a new plan into the drone (MAVLink, main.js): shown at once, unless the plan on the map has edits of its own
+    function fromDrone() {
+      droneNew = false;
+      if (plan.points.length && JSON.stringify(plan) !== synced) { toast(tr('Drone có kế hoạch mới (từ ground station). Kế hoạch trên bản đồ đang sửa dở nên chưa bị thay: bấm "Tải từ drone" để xem kế hoạch mới.'), 'info', 9000); return; }
+      Object.assign(plan, decodePlan(store.settings.mission, store.settings.servo)); view.selected = -1; synced = JSON.stringify(plan);
+      paintOpts(); redraw();
+    }
+    listen('mission:from-drone', fromDrone);
+    if (droneNew) fromDrone();                                    // (it came while the tab was being built again)
     async function download() {
       try {
         await reloadSection('mission');
         const got = decodePlan(store.settings.mission, store.settings.servo);
-        Object.assign(plan, got); view.selected = -1;
+        Object.assign(plan, got); view.selected = -1; synced = JSON.stringify(plan);
         paintOpts(); redraw();
         if (plan.points.length) map.fitBounds(plan.points.map((p) => [p.lat, p.lon]), { padding: [60, 60], maxZoom: 18 });
         toast(tr('Đã tải kế hoạch từ drone.'), 'ok');
@@ -290,7 +302,7 @@ export default {
       if (!plan.points.length) { toast(tr('Chưa có điểm nào: bấm lên bản đồ để thêm.'), 'bad'); return; }
       try {
         const r = await api.post('/api/set', { section: 'mission', changes: s });
-        store.settings.mission = r.values;
+        store.settings.mission = r.values; synced = JSON.stringify(plan);
         await api.post('/api/save');
         toast(tr('Đã nạp kế hoạch vào drone và lưu.'), 'ok');
       } catch (e) { showError(e); }

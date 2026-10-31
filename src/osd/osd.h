@@ -62,7 +62,7 @@ enum : uint8_t { DP_HEARTBEAT = 0, DP_RELEASE = 1, DP_CLEAR = 2, DP_WRITE = 3, D
 constexpr uint8_t kAttrBlink = 0x40;                  // DISPLAYPORT_MSP_ATTR_BLINK: the goggles blink it
 constexpr int kMaxString = 30;                        // MSP_OSD_MAX_STRING_LENGTH
 
-enum Mode : uint8_t { MODE_ACRO, MODE_ANGLE, MODE_STAB, MODE_ALTHOLD, MODE_POSHOLD, MODE_RESCUE };
+enum Mode : uint8_t { MODE_ACRO, MODE_ANGLE, MODE_STAB, MODE_ALTHOLD, MODE_POSHOLD, MODE_RESCUE, MODE_LOITER };
 // a GPS Rescue that flies (nav.rescue_mode + 1), and where it is: on the way home, over home (coming down, waiting), landing
 enum RescueShown : uint8_t { RESC_NONE, RESC_RTL, RESC_SMART_RTL, RESC_LAND };
 // the mission (0.37): flying it, or waiting on the ground at a delivery stop
@@ -135,7 +135,7 @@ inline const char* mode_name(const State& s) {
     if (s.failsafe) return "!FS!";
     if (s.rescue) { static const char* const r[] = {"", "RTL", "SRTL", "LAND"}; return s.rescue <= RESC_LAND ? r[s.rescue] : "RESC"; }    // (ArduPilot's mode names)
     if (s.mission) return "AUTO";
-    static const char* const n[] = {"ACRO", "ANGL", "STAB", "ALTH", "POSH", "RESC"};
+    static const char* const n[] = {"ACRO", "ANGL", "STAB", "ALTH", "POSH", "RESC", "LOIT"};
     return s.mode < 6 ? n[s.mode] : "ACRO";
 }
 // The warning line while a rescue flies (it comes before every other warning: the failsafe that started it shows in the mode):

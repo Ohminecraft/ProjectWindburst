@@ -21,6 +21,8 @@
 #include "sim_mag.h"
 #include "sim_gps.h"
 #include "sim_flow.h"
+#include "sim_nrf24.h"
+#include <functional>
 #include "../src/app/flight_app.h"
 
 struct VirtualBoard;
@@ -34,6 +36,12 @@ struct VirtualBoard {
     static constexpr uint8_t kBattAdc = 2, kBuzzer = 21;
     // optical flow: a PMW3901 on the second SPI bus, or an MSP sensor on a UART (44 / 43 are UART0's own pins on an ESP32-S3)
     static constexpr uint8_t kFlowCs = 38, kFlowSck = 47, kFlowMiso = 48, kFlowMosi = 14, kFlowRx = 44, kFlowTx = 43;
+    // an nRF24 receiver module (fitted when has_nrf) on the second SPI bus: SCK / MISO / MOSI on three pins of the PWM receiver (the
+    // two never run together: receiver.protocol picks one), its own CSN / CE -
+    // in `air` with whatever a test puts there (test/tx_rig.h: the DIY transmitter, stepped through radio_tick before the firmware runs)
+    static constexpr uint8_t kNrfCs = 19, kNrfCe = 20;
+    Air air; SimNrf24 nrf; bool has_nrf = false, nrf_sel = false; std::function<void(uint32_t)> radio_tick;
+    static void wire_nrf(wbp::Settings& s) { s.receiver.protocol = wbp::RX_PROTOCOL_NRF24; s.pins.nrf_sck = kPwmPin[0]; s.pins.nrf_miso = kPwmPin[2]; s.pins.nrf_mosi = kPwmPin[3]; s.pins.nrf_cs = kNrfCs; s.pins.nrf_ce = kNrfCe; }
     static constexpr float kBattDivider = 11.0f;                    // 10k : 1k
     static constexpr double kLat0 = 47.3977419, kLon0 = 8.5455938;  // where this board stands when the plant is at its origin
 
@@ -96,8 +104,18 @@ struct VirtualBoard {
     uint16_t rc[16] = {1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000};
     bool tx_on = true; uint8_t lq = 100;
     uint32_t rc_frames = 0;
-    // what the receiver on this board speaks: CRSF on UART2 (default), a Spektrum satellite on UART2, or pulses on GPIO pins
-    enum RcLink { RC_CRSF, RC_SPEKTRUM2048, RC_SPEKTRUM1024, RC_PPM, RC_PWM } rc_link = RC_CRSF;
+    // what the receiver on this board speaks: CRSF on UART2 (default), a Spektrum satellite on UART2, pulses on GPIO pins, or an
+    // ExpressLRS receiver in MAVLink mode on UART2 (below)
+    enum RcLink { RC_CRSF, RC_SPEKTRUM2048, RC_SPEKTRUM1024, RC_PPM, RC_PWM, RC_MAVLINK } rc_link = RC_CRSF;
+    // ExpressLRS in MAVLink mode (its SerialMavlink.cpp): RC_CHANNELS_OVERRIDE every 10 ms while the link is up, RADIO_STATUS every
+    // 10 ms with txbuf = the free part of its 1 kB buffer (MAV_INPUT_BUF_LEN). What the firmware writes goes into that buffer (only
+    // while the link is up) and leaves it at elrs_air_bps - the downlink of the packet rate (docs/ELRS_MAVLINK.md); bytes that do not
+    // fit are lost (elrs_lost). elrs_air: what went over the air to the ground station.
+    static constexpr size_t kElrsBuf = 1024;
+    uint32_t elrs_air_bps = 2375; size_t elrs_lost = 0, elrs_peak = 0, elrs_status = 0; std::vector<uint8_t> elrs_air;
+    int elrs_txbuf_fixed = -1;                                       // >= 0: RADIO_STATUS says this txbuf whatever the buffer holds
+    // the ground station's frames: the receiver passes them on whole to the flight controller (only while the link is up)
+    void gcs_send(const uint8_t* f, size_t n) { if (rc_link == RC_MAVLINK && has_rc && tx_on) for (size_t i = 0; i < n; i++) rc_uart.q.push_back(f[i]); }
     static constexpr uint8_t kPpmPin = 40;
     static constexpr uint8_t kPwmPin[8] = {39, 40, 41, 42, 1, 3, 45, 46};
     int ppm_channels = 8, pwm_channels = 8;                          // how many channels the PPM / PWM receiver puts out
@@ -112,7 +130,8 @@ struct VirtualBoard {
         g_board = this;
         gps.version = gps::UBX_M10; gps.module_baud = 115200; gps.truth.fix_after_ms = 3000;
         gps_uart.b = this; rc_uart.b = this; flow_uart.b = this; mtf.present = false;
-        g_stub_spi2 = [](uint8_t v) -> uint8_t { return g_board && g_board->has_pmw ? g_board->pmw.xfer(v) : (uint8_t)0xFF; };
+        g_stub_spi2 = [](uint8_t v) -> uint8_t { return !g_board ? (uint8_t)0xFF : g_board->nrf_sel ? (g_board->has_nrf ? g_board->nrf.xfer(v) : (uint8_t)0xFF) : g_board->has_pmw ? g_board->pmw.xfer(v) : (uint8_t)0xFF; };
+        air.attach(&nrf);
         for (auto& p : g_stub_pwm) p = StubPwm(); g_stub_pwm_free = 8; for (auto& g : g_stub_gpio) g = 0; for (auto& a : g_stub_adc_mv) a = 0; g_stub_adc_reads = 0; for (auto& i : g_stub_isr) i = StubIsr(); for (auto& l : g_stub_pin_in) l = 0;
         Serial0 = HardwareSerial(); Serial1 = HardwareSerial(); Serial2 = HardwareSerial();
         Serial1.dev = &gps_uart; Serial2.dev = &rc_uart; Serial0.dev = &flow_uart;
@@ -149,6 +168,8 @@ struct VirtualBoard {
               const bool edt_frame = (esc_edt_on & (1u << slot)) && steps % 8 == (uint32_t)i;
               esc->reply[slot] = edt_frame ? motor::gcr_encode((uint16_t)(0x0600 | (uint8_t)lroundf(esc_amps[i] < 0 ? 0 : esc_amps[i] > 255 ? 255 : esc_amps[i]))) : esc_gcr(motor_rpm(i), app.motors.cfg().pole_count);
               esc->has_reply[slot] = true; } }
+        if (radio_tick) radio_tick((uint32_t)g_stub_us);   // (the transmitter sends, the air carries it, then the firmware reads)
+        air.step((uint32_t)g_stub_us);
         app.run();
         { HostMotorHw* esc = host_hw(app);               // ESC telemetry wire: an ESC asked by the telemetry bit answers (KISS)
           if (esc && esc_wire_on && esc->last.send) for (int i = 0; i < plant.n && i < app.motors.cfg().count; i++) {
@@ -240,6 +261,8 @@ struct VirtualBoard {
     uint32_t cost_i2c_us = 0;                                       // ... and one read on the sensor I2C bus
     void cs(uint8_t pin, uint8_t val) {
         if (pin == kFlowCs) { pmw.cs(val == LOW); return; }
+        if (pin == kNrfCs) { nrf_sel = val == LOW; nrf.select(nrf_sel); return; }
+        if (pin == kNrfCe) { nrf.ce(val == HIGH); return; }
         if (pin == kCs) imu_cs(t, imu, has_imu, val);
         else if (pin == kCs2) imu_cs(t2, imu2, has_imu2, val);
         else if (pin == kMagCs) imu_cs(t4, spi_mag, has_spi_mag, val);
@@ -303,9 +326,31 @@ private:
         VirtualBoard* b = nullptr; std::deque<uint8_t> q; uint32_t baud = 0, format = 0; bool inverted = false; std::vector<uint8_t> sent;     // sent: what the firmware wrote (telemetry)
         int dev_read() override { if (q.empty()) return -1; const uint8_t c = q.front(); q.pop_front(); return c; }
         int dev_pending() override { return (int)q.size(); }
-        void dev_write(const uint8_t* d, size_t n) override { sent.insert(sent.end(), d, d + n); }
+        void dev_write(const uint8_t* d, size_t n) override { sent.insert(sent.end(), d, d + n); if (b->rc_link == RC_MAVLINK) b->elrs_take(d, n); }
         void dev_config(uint32_t bd, uint32_t f, bool inv) override { baud = bd; format = f; inverted = inv; }
     } rc_uart;
+    std::deque<uint8_t> elrs_fifo_; double elrs_credit_ = 0;
+    void elrs_take(const uint8_t* d, size_t n) {
+        if (!has_rc || !tx_on) return;                                // (no link: the receiver does not take them)
+        for (size_t i = 0; i < n; i++) { if (elrs_fifo_.size() < kElrsBuf) elrs_fifo_.push_back(d[i]); else elrs_lost++; }
+        if (elrs_fifo_.size() > elrs_peak) elrs_peak = elrs_fifo_.size();
+    }
+    void elrs_ms(uint32_t now_ms) {
+        if (tx_on) {
+            elrs_credit_ += elrs_air_bps / 1000.0;
+            while (elrs_credit_ >= 1.0 && !elrs_fifo_.empty()) { elrs_air.push_back(elrs_fifo_.front()); elrs_fifo_.pop_front(); elrs_credit_ -= 1.0; }
+            if (elrs_fifo_.empty() && elrs_credit_ > 1.0) elrs_credit_ = 1.0;      // (an idle slot is not saved up)
+        }
+        if (now_ms % 10) return;
+        uint8_t f[mav::kMaxFrame];
+        if (tx_on) {
+            mav::RcChannelsOverride o; o.target_system = 1; for (int i = 0; i < 16; i++) o.chan[i] = rc[i];
+            const size_t n = mav::pack(elrs_enc_, o, f); for (size_t i = 0; i < n; i++) rc_uart.q.push_back(f[i]); rc_frames++;
+        }
+        mav::RadioStatus s; s.rssi = (uint8_t)(lq * 255 / 100); s.remrssi = 70; s.noise = 8; s.txbuf = elrs_txbuf_fixed >= 0 ? (uint8_t)elrs_txbuf_fixed : (uint8_t)((kElrsBuf - elrs_fifo_.size()) * 100 / kElrsBuf);
+        const size_t n = mav::pack(elrs_enc_, s, f); for (size_t i = 0; i < n; i++) rc_uart.q.push_back(f[i]); elrs_status++;
+    }
+    mav::Encoder elrs_enc_ = [] { mav::Encoder e; e.sysid = 255; e.compid = 68; return e; }();       // (system 255, TELEMETRY_RADIO)
 public:
     int rc_corrupt = 0;                                   // this many of the next CRSF frames arrive with one byte damaged
     uint32_t rc_uart_baud() const { return rc_uart.baud; }
@@ -375,6 +420,7 @@ private:
             if (rc_frames % 10 == 0) send_crsf_link();
         }
         if (has_rc && tx_on && ((rc_link == RC_SPEKTRUM2048 && now_ms % 11 == 0) || (rc_link == RC_SPEKTRUM1024 && now_ms % 22 == 0))) { send_spektrum(); rc_frames++; }
+        if (has_rc && rc_link == RC_MAVLINK) elrs_ms(now_ms);
     }
     // ---- CRSF encoder (written independently of the decoder: plain bit loop + bitwise CRC)
     static uint8_t crc8(const uint8_t* p, size_t n) {

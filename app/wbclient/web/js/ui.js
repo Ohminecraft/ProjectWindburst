@@ -77,8 +77,8 @@ export function control(section, name, opts = {}) {
     el = h('select', {}, opts.choices.map((v) => h('option', { value: String(v) }, String(v))));
     el.addEventListener('change', () => put(Number(el.value)));
     sync = () => { const v = get(); if (v !== undefined && v !== null && !opts.choices.includes(v)) el.append(h('option', { value: String(v) }, String(v))); el.value = v === undefined || v === null ? '' : String(v); };
-  } else if (f.text) {                                     // a text kept as a 0-padded byte array (UTF-8): wifi.ssid, wifi.pass
-    el = h('input', { type: f.secret ? 'password' : 'text', class: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: opts.placeholder });
+  } else if (f.text) {                                     // a text kept as a 0-padded byte array (UTF-8): general.usb_name
+    el = h('input', { type: 'text', class: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: opts.placeholder });
     const enc = new TextEncoder(), dec = new TextDecoder();
     el.addEventListener('change', () => {
       let s = opts.ascii ? el.value.replace(/[^\x20-\x7E]/g, '_') : el.value, b = enc.encode(s);     // ascii: printable ASCII only (a USB name)

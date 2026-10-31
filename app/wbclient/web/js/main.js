@@ -1,6 +1,6 @@
 // Page chrome: connection bar (port, baud, language), arm-readiness line, save buttons, tab rail. The tabs live in js/tabs/.
 import { api, ApiError } from './api.js';
-import { store, on, loadSchema, loadSettings, reloadSection, wantStreams, pushStreams, flushAll, handleEvent } from './store.js';
+import { store, on, emit, loadSchema, loadSettings, reloadSection, wantStreams, pushStreams, flushAll, handleEvent } from './store.js';
 import { h, clear, toast, showError, disposeScope, errorText, failsafeText } from './ui.js';
 import { BLOCKERS } from './labels.js';
 import { tr, LANGS, getLang, setLang } from './i18n.js';
@@ -22,15 +22,26 @@ import blackbox from './tabs/blackbox.js';
 import pins from './tabs/pins.js';
 import osd from './tabs/osd.js';
 import system from './tabs/system.js';
+import txOverview from './tabs/tx_overview.js';
+import txSticks from './tabs/tx_sticks.js';
+import txRadio from './tabs/tx_radio.js';
+import txSystem from './tabs/tx_system.js';
 
-const TABS = [overview, receiver, modes, sensors, motors, tuning, rates, filters, nav, mission, power, osd, blackbox, pins, system];
+const RX_TABS = [overview, receiver, modes, sensors, motors, tuning, rates, filters, nav, mission, power, osd, blackbox, pins, system];
 // the rail in the order of building a craft: put it together, tune it, what it does in the air, then its logs and the board itself
-const GROUPS = [
+const RX_GROUPS = [
   [tr('Lắp máy'), ['overview', 'receiver', 'modes', 'sensors', 'motors']],
   [tr('Tinh chỉnh'), ['tuning', 'rates', 'filters']],
   [tr('Khi bay'), ['nav', 'mission', 'power', 'osd']],
   [tr('Log và mạch'), ['blackbox', 'pins', 'system']],
 ];
+// the DIY transmitter (role TX, docs/TX.md): only its own tabs
+const TX_TABS = [txOverview, txSticks, txRadio, txSystem];
+const TX_GROUPS = [[tr('Tay phát'), ['tx-overview', 'tx-sticks', 'tx-radio', 'tx-system']]];
+let TABS = RX_TABS, GROUPS = RX_GROUPS, role = 'RX';
+// the device on the link decides the tabs; true when they changed
+function setRole(r) { if (r === role) return false; role = r; TABS = r === 'TX' ? TX_TABS : RX_TABS; GROUPS = r === 'TX' ? TX_GROUPS : RX_GROUPS; return true; }
+const isTx = () => role === 'TX';
 // one line drawing per tab (24 x 24, stroked in the text colour)
 const ICONS = {
   overview: '<path d="M4 16a8 8 0 1 1 16 0"/><path d="M12 16l4.5-5"/><path d="M4 20h16"/>',
@@ -48,6 +59,10 @@ const ICONS = {
   blackbox: '<path d="M3 4v16h18"/><path d="M6.5 15l4-5 3 3 5-7"/>',
   pins: '<rect x="4" y="9" width="16" height="7" rx="1.5"/><path d="M8 9V4.5M12 9V4.5M16 9V4.5M8 16v3.5M16 16v3.5"/>',
   system: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12.5 15H17"/>',
+  'tx-overview': '<rect x="2.5" y="7" width="19" height="11" rx="4"/><circle cx="7.5" cy="12.5" r="2"/><circle cx="16.5" cy="12.5" r="2"/><path d="M12 7V3"/>',
+  'tx-sticks': '<circle cx="12" cy="16" r="4"/><path d="M12 12V4"/><circle cx="12" cy="4" r="1.6"/>',
+  'tx-radio': '<path d="M12 21v-9"/><circle cx="12" cy="10" r="2"/><path d="M8.5 6.5a5 5 0 0 0 0 7M15.5 6.5a5 5 0 0 1 0 7M5.6 3.6a9 9 0 0 0 0 12.8M18.4 3.6a9 9 0 0 1 0 12.8"/>',
+  'tx-system': '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12.5 15H17"/>',
 };
 const $ = (id) => document.getElementById(id);
 let current = null;          // id of the tab on screen
@@ -111,7 +126,6 @@ let customPort = '';       // a port typed by hand: an unusual device name, or s
 let portsKey = '';
 function portLabel(p) {
   if (p.sim) return tr('Mô phỏng wb_sim (127.0.0.1:5760)');
-  if (p.wifi) return tr('WiFi của máy bay (điểm phát riêng, 192.168.4.1:5760)');
   // the name the device gives itself (USB iProduct) before the driver's ("USB Serial Device (COM5)")
   const name = p.product || p.description;
   const what = [name, p.chip && !String(name).includes(p.chip) ? p.chip : ''].filter(Boolean).join(', ');
@@ -141,14 +155,13 @@ async function refreshPorts(force, quiet) {
   portsKey = key;
   const keep = portSel.value && portSel.value !== '__custom__' ? portSel.value : saved('wb-port');
   clear(portSel);
-  const real = res.ports.filter((p) => !p.wifi);           // (the board's WiFi access point is always listed: it is never the default)
-  if (!real.length) portSel.append(h('option', { value: '' }, tr('Không thấy cổng nào')));
+  if (!res.ports.length) portSel.append(h('option', { value: '' }, tr('Không thấy cổng nào')));
   for (const p of res.ports) portSel.append(h('option', { value: p.port, 'data-likely': p.likely ? '1' : null }, portLabel(p)));
   for (const extra of [store.conn.port, customPort]) if (extra && ![...portSel.options].some((o) => o.value === extra)) portSel.append(h('option', { value: extra }, extra));
   portSel.append(h('option', { value: '__custom__' }, tr('Nhập cổng khác…')));
   const has = (v) => v && [...portSel.options].some((o) => o.value === v);
   const likely = res.ports.find((p) => p.likely);
-  const pick = has(store.conn.port) ? store.conn.port : has(keep) ? keep : likely ? likely.port : real.length ? real[0].port : '';
+  const pick = has(store.conn.port) ? store.conn.port : has(keep) ? keep : likely ? likely.port : res.ports.length ? res.ports[0].port : '';
   portSel.value = pick;
 }
 
@@ -176,7 +189,7 @@ async function disconnect() {
 }
 
 async function save() {
-  const flags = (store.streams.status || {}).settings_dirty || [];
+  const flags = (store.streams[isTx() ? 'tx' : 'status'] || {}).settings_dirty || [];
   const reboot = flags.includes('REBOOT_REQUIRED');
   busy = true; paintBar();
   try {
@@ -236,6 +249,7 @@ function paintBar() {
     readyLine.textContent = ''; saveBtn.hidden = true; revertBtn.hidden = true;
     return;
   }
+  if (isTx()) { paintTxBar(); return; }
   if (!st) { armPill.className = 'pill off'; armPill.textContent = tr('Đang chờ dữ liệu'); readyLine.textContent = ''; return; }
   if (st.armed) {
     armPill.className = 'pill bad'; armPill.textContent = 'ARMED';
@@ -262,8 +276,23 @@ function paintBar() {
   saveBtn.disabled = busy || st.armed; revertBtn.disabled = busy || st.armed;
 }
 
+// the transmitter: is it in touch with a drone, what the drone says; its own unsaved settings
+function paintTxBar() {
+  const t = store.streams.tx;
+  if (!t) { armPill.className = 'pill off'; armPill.textContent = tr('Đang chờ dữ liệu'); readyLine.textContent = ''; saveBtn.hidden = revertBtn.hidden = true; return; }
+  armPill.className = 'pill ' + (t.link ? 'ok' : 'warn'); armPill.textContent = t.link ? tr('Đã nối drone') : tr('Chưa nối drone');
+  readyLine.textContent = t.d_seen ? (t.d_armed ? 'ARMED' : tr('Drone chưa arm')) : '';
+  chips.append(chip('Radio', tr('{n} gói/s', { n: t.pps }), t.link ? '' : 'bad'));
+  if (t.d_seen) chips.append(chip(tr('Pin drone'), (t.d_batt_cv / 100).toFixed(2) + ' V', ''));
+  const dirty = t.settings_dirty.includes('DIRTY'), reboot = t.settings_dirty.includes('REBOOT_REQUIRED');
+  saveBtn.hidden = !dirty && !reboot; revertBtn.hidden = !dirty;
+  saveBtn.textContent = reboot ? tr('Lưu và khởi động lại') : tr('Lưu');
+  saveBtn.disabled = busy; revertBtn.disabled = busy;
+}
+
 // ------------------------------------------------------------------ tabs
 function buildRail() {
+  clear($('rail'));
   const placed = new Set();
   const add = (tab) => {
     const a = h('a', { href: '#' + tab.id, class: 'tab', id: 'tab-' + tab.id, 'data-tab': tab.id }, h('span', {}, tab.title));
@@ -345,6 +374,10 @@ async function onConn({ before }) {
   paintBar();
   if (before.connected && (c.stalls || 0) > (before.stalls || 0)) toast(noteText(c.note), 'warn');
   if (fresh) {
+    if (setRole(c.info && c.info.role === 'TX' ? 'TX' : 'RX')) {           // a transmitter / a flight controller after the other: its own tabs
+      buildRail();
+      if (!TABS.some((t) => t.id === current)) { current = TABS[0].id; history.replaceState(null, '', '#' + current); }
+    }
     if (c.note && c.note.code === 'RECONNECTED') toast(noteText(c.note), 'ok');
     lastFailure = null;
     refreshPorts(true);                   // a page opened on an existing connection shows the port that is in use
@@ -360,7 +393,7 @@ async function onConn({ before }) {
       clearTimeout(late);
       settingsReady = true;
       linkSuccess(tr('Đã đọc cấu hình'));
-      wantStreams('global', { status: 10, rc: 5 });
+      wantStreams('global', isTx() ? { tx: 10 } : { status: 10, rc: 5 });
       await pushStreams(true);
       show(current);
     } catch (e) {
@@ -382,13 +415,17 @@ async function start() {
   on('conn', onConn);
   on('stream:status', paintBar);
   on('stream:rc', paintBar);
+  on('stream:tx', paintBar);
   on('armed', paintBar);
   on('error', showError);
-  // the firmware changed a section by itself and wrote it to flash (in-flight level trim): show what it holds now
+  // the firmware changed a section by itself and wrote it to flash (in-flight level trim; a mission from a ground station over MAVLink):
+  // show what it holds now. The mission tab takes the new plan when it has no edits of its own ('mission:from-drone').
   on('log', (rows) => {
     for (const [, text] of rows) {
       const m = /^settings: section (\w+) written by the firmware/.exec(text || '');
-      if (m && store.settings[m[1]]) { reloadSection(m[1]).catch(() => {}); toast(tr('Firmware vừa tự lưu phần "{name}" (level trim khi bay).', { name: m[1] }), 'ok'); }
+      if (!m || !store.settings[m[1]]) continue;
+      if (m[1] === 'mission') { reloadSection('mission').then(() => emit('mission:from-drone')).catch(() => {}); toast(tr('Ground station vừa nạp kế hoạch mới vào drone (đã lưu vào flash).'), 'ok', 6000); }
+      else { reloadSection(m[1]).catch(() => {}); toast(tr('Firmware vừa tự lưu phần \"{name}\" (level trim khi bay).', { name: m[1] }), 'ok'); }
     }
   });
   await refreshPorts(true);

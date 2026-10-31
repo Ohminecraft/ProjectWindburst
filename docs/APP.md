@@ -79,6 +79,9 @@ Cách tune và ý nghĩa từng thanh trượt: `docs/TUNING.md`.
 
 **Hình vẽ không được lệch khỏi firmware**: `tools/ui_reference.cpp` in ra hàng mixer, đường cong rate, đường cong ga, deadband do **mã firmware** tính; `app/tests/test_gui_math.py` so với `js/gfx/fwmath.js` (chạy bằng node).
 
+## Tay phát DIY (0.38)
+Cắm tay phát (firmware `tx_c5`, `docs/TX.md`) thì app nhận ra qua `role` của `DEVICE_INFO` và thanh tab chỉ còn 4 tab của tay: **Tổng quan** (hai ô cần, 8 kênh, sóng tới drone, drone báo về, cảnh báo chế độ ga không hợp chế độ bay), **Joystick** (chế độ ga, hiệu chỉnh, gán trục, đảo chiều, vùng chết, expo, giá trị ADC), **Radio** (bind, kênh tần số, tốc độ, công suất, số gói, chân nRF24), **Hệ thống** (phiên bản, boot report, về mặc định, khởi động lại). Thanh trên cùng: đã / chưa nối drone, số gói, pin drone, nút Lưu theo cờ `settings_dirty` của stream `tx`. Cắm lại mạch bay thì các tab của mạch bay quay lại. Tab Receiver của mạch bay có khung nRF24 (bind, trạng thái, LQ) khi giao thức là NRF24; tab Chân và cổng có nhóm Receiver nRF24. Kiểm chứng: `test_gui_browser.py` (`test_tx_*`, `test_receiver_nrf24_block`).
+
 ## Thư viện client và dòng lệnh
 
 ```

@@ -2,7 +2,6 @@
 import { store, loadSettings } from '../store.js';
 import { api } from '../api.js';
 import { h, block, fields, listen, toast, showError, kv, note } from '../ui.js';
-import { ENUM_LABELS } from '../labels.js';
 import { tr } from '../i18n.js';
 
 export default {
@@ -33,7 +32,7 @@ export default {
       file.value = '';
     });
     // ---- defaults
-    const sectionSel = h('select', { id: 'defaults-section' }, h('option', { value: '' }, tr('Tất cả các mục')), store.schema.sections.map((s) => h('option', { value: s.name }, s.name)));
+    const sectionSel = h('select', { id: 'defaults-section' }, h('option', { value: '' }, tr('Tất cả các mục')), store.schema.sections.filter((s) => (s.role || 'rx') === 'rx').map((s) => h('option', { value: s.name }, s.name)));
     const defaults = h('button', { type: 'button', class: 'btn danger', id: 'defaults' }, tr('Về mặc định'));
     defaults.addEventListener('click', async () => {
       const what = sectionSel.value || tr('TOÀN BỘ cấu hình (kể cả chân và hiệu chuẩn)');
@@ -67,26 +66,11 @@ export default {
         [tr('Cổng USB bị kẹt phải kích lại'), String(l.kicks)],
         [tr('Byte đang chờ gửi'), String(l.queued)],
       ]));
-      paintWifi(l);
     };
-    // ---- WiFi (a board with a radio: feature WIFI)
-    const hasWifi = (info.features || []).includes('WIFI') && !!store.schema.sections.find((s) => s.name === 'wifi');
     // ---- the board's name on USB (feature USB_NAME: builds whose USB stack is the firmware's own)
     const hasUsbName = (info.features || []).includes('USB_NAME') && !!store.schema.sectionByName.general.fields.find((x) => x.n === 'usb_name');
     const usbDefault = 'Windburst ' + ((info.features || []).includes('STM32') ? 'STM32' : 'ESP32-S3');
     const usbNow = () => { const l = (store.conn.report || []).find((x) => x.startsWith("usb: '")); return l ? l.slice(6, l.indexOf("'", 6)) : ''; };
-    const wifiState = h('div', { id: 'wifi-state' });
-    const ip4 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255].join('.');
-    function paintWifi(l) {
-      if (!hasWifi || !l || l.wifi === undefined) return;
-      const st = ENUM_LABELS.wifi_state[l.wifi] ? tr(ENUM_LABELS.wifi_state[l.wifi]) : l.wifi;
-      const rows = [[tr('Trạng thái'), st]];
-      if (l.wifi_ip) rows.push([tr('Địa chỉ cho app'), `socket://${ip4(l.wifi_ip)}:${(store.settings.wifi || {}).port || 5760}`]);
-      if (l.wifi === 'CONNECTED') rows.push([tr('Sóng'), `${l.wifi_rssi} dBm`]);
-      if (l.wifi === 'AP') rows.push([tr('Thiết bị đang nối vào'), String(l.wifi_clients)]);
-      rows.push([tr('App đang nối qua'), l.via === 'WIFI' ? 'WiFi' : tr('cổng serial (USB / UART)')]);
-      wifiState.replaceChildren(kv(rows));
-    }
     listen('stream:link', paintLink); paintLink();
 
     view.append(h('div', { class: 'cols' },
@@ -96,10 +80,7 @@ export default {
           h('p', { class: 'help' }, tr('Pin dưới mức tối thiểu cũng làm máy tự hạ xuống (tab Pin và còi), nhưng roll, pitch và yaw vẫn theo cần của bạn để chọn chỗ đáp; lần hạ cánh này không huỷ được. Đang đứng trên mặt đất mà mất sóng thì motor tắt luôn.'))),
         hasUsbName ? block(tr('Tên USB'), fields('general', ['usb_name'], { usb_name: { placeholder: usbDefault, ascii: true } }),
           h('p', { class: 'help', id: 'usb-name-now' }, tr('Tên đang dùng: {name}', { name: usbNow() || '–' })),
-          note(tr('Tên máy tính thấy khi cắm USB (Linux / macOS: tên cổng; Windows: thuộc tính thiết bị, "Bus reported device description"). Để trống = tên mặc định. Chỉ chữ, số và ký hiệu ASCII, tối đa 31 ký tự. Có hiệu lực sau khi lưu và khởi động lại.'))) : null,
-        hasWifi ? block('WiFi', fields('wifi', ['mode', 'ssid', 'pass', 'channel', 'port']), wifiState,
-          note(tr('Có hiệu lực sau khi lưu và khởi động lại. Điểm phát riêng (AP): mạch là 192.168.4.1, tên mặc định Windburst-XXXX, mật khẩu mặc định windburst - hãy đổi mật khẩu, ai vào được mạng này cũng điều khiển được máy (kể cả thử motor). Ở app chọn cổng "WiFi của máy bay", hoặc nhập socket://<địa chỉ>:5760 khi máy nối vào mạng nhà bạn (STA).')),
-          h('p', { class: 'help' }, tr('Trên ESP32-S3 các chân ADC2 (GPIO11 đến GPIO20) không đọc được khi WiFi bật: chân đo pin và đo dòng phải nằm ở GPIO1 đến GPIO10.'))) : null),
+          note(tr('Tên máy tính thấy khi cắm USB (Linux / macOS: tên cổng; Windows: thuộc tính thiết bị, "Bus reported device description"). Để trống = tên mặc định. Chỉ chữ, số và ký hiệu ASCII, tối đa 31 ký tự. Có hiệu lực sau khi lưu và khởi động lại.'))) : null),
       h('div', {},
         block(tr('Công cụ khác qua MSP'), fields('msp', ['identity', 'writes']),
           h('p', { class: 'help' }, tr('Cùng cổng với app này. Betaflight Configurator / SpeedyBee đọc được tư thế, receiver, GPS, pin, PID, rate, mode, map kênh, tên máy bay; ghi được các mục đó khi được phép.'))),

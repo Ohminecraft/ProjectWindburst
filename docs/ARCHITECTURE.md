@@ -13,6 +13,8 @@
 | **`docs/NAV.md`** | optical flow (PMW3901, cảm biến MSP), ước lượng vị trí, Position Hold, GPS Rescue: phần cứng cần, cài đặt, cách hoạt động, thứ tự thử trên mạch |
 | `docs/TUNING.md` | bộ lọc, PID, thanh trượt, Angle / Stabilize, ga treo của Altitude Hold, level trim khi bay, thứ tự tune, điều chưa đo trên mạch |
 | `docs/RX.md` | receiver CRSF / SBUS / IBUS |
+| `docs/MAVLINK.md` | telemetry MAVLink: gửi gì, cách chọn UART; từ 0.40 lệnh, chế độ, arm và mission từ ground station (`telemetry/mavlink_gcs.h`) |
+| `docs/ELRS_MAVLINK.md` | MAVLink qua ELRS: một link ELRS chế độ MAVLink cho cả điều khiển lẫn telemetry (0.39), hoặc cặp ELRS riêng làm radio telemetry; nối dây, cài đặt, điều tiết, băng thông |
 | `docs/BOARD_N16R8.md` | mạch ESP32-S3 N16R8: build, chân không dùng được, bộ chân gợi ý, ADC, nối thẻ SD, việc cần thử trên mạch |
 | `docs/POWER.md` | đo pin (ADC / ESC), ngưỡng, tiếng báo bằng còi và bằng motor (DShot beacon) |
 | `docs/BLACKBOX.md` | log chuyến bay: định dạng `.wblog`, ghi flash / thẻ SD / gửi về app, tab Blackbox, điều phải đo trên mạch |

@@ -1,6 +1,7 @@
 // Receiver: live channels, protocol, channel map.
 import { store, setFields } from '../store.js';
-import { h, block, fields, form, row, listen, note, readout } from '../ui.js';
+import { h, block, fields, form, row, listen, note, readout, cmdButton, toast, kv } from '../ui.js';
+import { ENUM_LABELS } from '../labels.js';
 import { tr } from '../i18n.js';
 import { stickPreview } from '../gfx/stickpreview.js';
 
@@ -33,13 +34,35 @@ function bars() {
   return box;
 }
 
+// nRF24 (the DIY transmitter): bind, its state, what the link looks like from here
+function nrfBlock() {
+  const state = h('b', { id: 'nrf-bind-state' }, '–'), lq = h('span', { class: 'num', id: 'nrf-lq' }, '–');
+  const paint = () => { const rc = store.streams.rc; if (!rc) return; state.textContent = tr(ENUM_LABELS.bind_state[rc.bind_state] || rc.bind_state); lq.textContent = rc.lq + ' %'; };
+  listen('stream:rc', paint); paint();
+  const bind = cmdButton(tr('Bind nRF24'), 'BIND', { action: 1 }, { done: () => toast(tr('Đang nghe bind 30 giây: bấm "Bind với drone" ở tab Radio của tay phát.'), 'info', 7000) });
+  bind.id = 'nrf-bind';
+  // set by the bind / the transmitter's Radio tab: shown, not editable here (a hand edit would split the pair after a restart)
+  const ch = h('span', { class: 'num', id: 'nrf-channel' }, '–'), rate = h('span', { id: 'nrf-rate' }, '–'), pps = h('span', { id: 'nrf-pps' }, '–');
+  const paintCfg = () => { const r = store.settings.receiver; if (!r) return; ch.textContent = String(r.nrf_channel); rate.textContent = tr(ENUM_LABELS.nrf_rate[r.nrf_rate] || r.nrf_rate); pps.textContent = tr(ENUM_LABELS.nrf_pps[r.nrf_pps] || r.nrf_pps); };
+  listen('settings:receiver', paintCfg); paintCfg();
+  const el = block('nRF24', h('p', {}, tr('Trạng thái: '), state, ' · ', tr('Gói nhận được: '), lq), h('div', { class: 'btn-row' }, bind),
+    kv([[tr('Kênh tần số nRF24'), ch], [tr('Tốc độ sóng nRF24'), rate], [tr('Số gói mỗi giây của tay phát'), pps]]),
+    h('p', { class: 'help' }, tr('Ba giá trị trên do việc bind (và tab Radio của tay phát) đặt. Mạch chưa bind lần nào tự nghe bind trong 60 giây sau khi bật.')));
+  el.id = 'nrf-block';
+  const show = () => { el.hidden = (store.settings.receiver || {}).protocol !== 'NRF24'; };
+  listen('settings:receiver', show); show();
+  return el;
+}
+
 // what to know about the chosen protocol (wiring, channel order, failsafe)
 function protoHelp() {
   const el = h('p', { class: 'help', id: 'rx-proto-help' });
   const spek = () => tr('Spektrum (satellite DSMX / DSM2) nối vào RX của UART2, 3,3 V. Spektrum gửi kênh theo thứ tự TAER: chọn "TAER" ở Thứ tự kênh. Firmware chưa làm được việc bind: bind satellite bằng receiver chính hoặc tay phát trước.');
   const text = {
     SPEKTRUM: spek, SPEKTRUM1024: spek,
+    MAVLINK: () => tr('MAVLink: receiver ExpressLRS (3.5 trở lên) để ở chế độ MAVLink, nối vào UART2 như CRSF (RX và TX), 460800 baud. Một link mang cả cần điều khiển lẫn telemetry MAVLink về Mission Planner / QGroundControl (bật "Telemetry về tay điều khiển"); khi bộ đệm của receiver gần đầy, firmware tự gửi chậm lại. Cách cài đặt: docs/ELRS_MAVLINK.md.'),
     PPM: () => tr('PPM: một dây tín hiệu vào chân "PPM" ở tab Chân và cổng (mức 3,3 V; receiver 5 V cần mạch chia áp). Số kênh (4 đến 12) firmware tự nhận sau khoảng nửa giây. UART2 để trống cho việc khác.'),
+    NRF24: () => tr('nRF24: module nRF24L01+ nối vào bus SPI thứ hai (chân ở tab Chân và cổng, nhóm Receiver nRF24), cấp 3,3 V và thêm tụ 10 µF sát chân nguồn của module. Dùng với tay phát DIY Windburst; bind ở khung nRF24 bên dưới. Không dùng cùng lúc được với thẻ SD kiểu SPI, cảm biến PMW3901 hay dải LED.'),
     PWM: () => tr('PWM: mỗi kênh một dây, chân đặt ở nhóm "Receiver PWM" của tab Chân và cổng (mức 3,3 V). Đặt failsafe của receiver là "không phát xung": receiver phát xung failsafe thì firmware không biết là đã mất sóng.'),
   };
   const paint = () => { const f = text[(store.settings.receiver || {}).protocol]; el.textContent = f ? f() : ''; el.hidden = !f; };
@@ -80,6 +103,7 @@ export default {
           fields('receiver', ['protocol', 'rx_timeout_ms', 'deadband', 'telemetry']),
           note(tr('CRSF dùng cho mọi receiver ELRS và Crossfire nối qua UART. Chân UART của receiver đặt ở tab Chân và cổng. Có chân TX (nối vào RX của receiver) thì firmware gửi telemetry CRSF về tay phát: pin, dòng, mAh, tư thế, chế độ bay, GPS, vario. Đổi giao thức cần lưu và khởi động lại.')),
           protoHelp()),
+        nrfBlock(),
         block(tr('RC smoothing'), fields('receiver', ['rc_smoothing', 'rc_smoothing_factor', 'rc_smoothing_throttle']),
           h('p', { class: 'help' }, tr('Receiver chỉ gửi vị trí cần vài chục đến vài trăm lần mỗi giây; firmware nối các bậc đó thành đường cong trơn trước khi đưa vào PID. Tần số cắt tự theo tốc độ khung đo được. Có hiệu lực sau khi lưu và khởi động lại.'))),
         block(tr('Thứ tự kênh'),

@@ -123,7 +123,7 @@ export default {
               [tr('Điểm đang giữ (bắc / đông)'), withId('ph-target', readout('nav', (n) => (has(n.flags, 'POSHOLD') ? pair(n.target_n, n.target_e, 1, 'm') : '–')))],
               [tr('Bù gió đã học (bắc / đông)'), withId('ph-wind', readout('nav', (n) => (has(n.flags, 'POSHOLD') ? pair(n.wind_n, n.wind_e, 2, 'm/s²') : '–')))],
             ]),
-            fields('nav', ['ph_angle_max', 'ph_brake_rate', 'ph_brake_angle', 'pos_p', 'vel_p', 'vel_i', 'vel_d', 'ph_min_gps_hz', 'fence_radius', 'fence_alt_max'])),
+            fields('nav', ['ph_angle_max', 'ph_brake_rate', 'ph_brake_angle', 'pos_p', 'vel_p', 'vel_i', 'vel_d', 'ph_min_gps_hz', 'fence_radius', 'fence_alt_max', 'loiter_speed'])),
           block(tr('GPS Rescue và failsafe'),
             h('p', { class: 'help' }, tr('Rescue, theo cách của ArduPilot và PX4. Bay về (RTL): leo lên độ cao bay về (gần home thì leo ít, theo hình nón), bay thẳng về home với mũi hướng theo đường bay, hạ xuống độ cao chờ, chờ vài giây, hạ cánh và tắt motor. Bay về theo đường cũ (SmartRTL): lần ngược lại đường vừa bay, vòng qua những chỗ đã vòng, ở độ cao đã bay. Hạ cánh tại chỗ: hạ ngay chỗ đang bay, giữ vị trí bằng GPS. Chạy khi bật công tắc GPS Rescue (tab Mode), hoặc khi mất sóng nếu chọn ở ô dưới. Sóng trở lại giữa chừng: gạt cần roll hoặc pitch quá 30 % để lấy lại quyền điều khiển. Pin dưới mức tối thiểu thì luôn hạ cánh tại chỗ.')),
             kv([

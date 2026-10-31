@@ -9,12 +9,14 @@
 #include "../../port/gpio.h"
 #include "rx_proto.h"
 #include "rx_pulse.h"
-#include "crsf_telemetry.h"
+#include "../../telemetry/crsf_telemetry.h"
+#include "rx_nrf24.h"
+#include "rx_mavlink.h"
 #include "../../config/fast_code.h"
 
 // ============================================================================
 // RcReceiver: the RC receiver.
-//   serial (CRSF / SBUS / IBUS / Spektrum) on a hardware UART, or
+//   serial (CRSF / SBUS / IBUS / Spektrum / MAVLink) on a hardware UART, or
 //   pulses on GPIO pins: PPM (one pin) or PWM (one pin per channel, up to 8), timed by a GPIO interrupt.
 //
 //   RcReceiver rc;
@@ -26,7 +28,7 @@
 // SBUS is an inverted signal: the ESP32 UART inverts it in hardware (no external inverter needed).
 // The pulse interrupt only stores the time of the edge (rx::EdgeRing); update() decodes. An interrupt that comes late (another
 // interrupt, a flash write with the cache off) only shifts a pulse by microseconds, or loses a frame that is then skipped.
-// Not implemented: NRF24 (begin() refuses it with a clear reason).
+//   or the nRF24 radio of the Windburst DIY transmitter on the second SPI bus (beginNrf24, rx_nrf24.h, docs/TX.md).
 //
 // Serial: a 2 kB receive buffer (48 ms of CRSF at full speed, so a sensor thread that is held up does not lose bytes), the
 // hardware FIFO handed to it every 64 bytes (the driver's default at these rates is 120 of 128: 190 us of slack for its
@@ -46,11 +48,15 @@ public:
         case rx::PROTO_SBUS: dec_ = &sbus_; break;
         case rx::PROTO_IBUS: dec_ = &ibus_; break;
         case rx::PROTO_SPEKTRUM: case rx::PROTO_SPEKTRUM1024: spek_.setResolution(proto == rx::PROTO_SPEKTRUM); dec_ = &spek_; break;
+        case rx::PROTO_MAVLINK: dec_ = &mav_; break;
         case rx::PROTO_PPM: case rx::PROTO_PWM: fail_ = "PPM / PWM receivers are started with beginPulse()"; return false;
-        default: fail_ = "receiver protocol not implemented yet (available: CRSF, SBUS, IBUS, SPEKTRUM, PPM, PWM)"; return false;
+        default: fail_ = "receiver protocol not implemented yet (available: CRSF, SBUS, IBUS, SPEKTRUM, MAVLINK, PPM, PWM)"; return false;
         }
         if (rx_pin == 255) { dec_ = nullptr; fail_ = "receiver RX pin not set (app: Pins tab, or hardware_config.h)"; return false; }
         uart_ = &uart;
+#if !WB_PLATFORM_STM32
+        if (proto == rx::PROTO_MAVLINK) uart.setTxBufferSize(1024);  // (the MAVLink telemetry goes out here: frames wait there, the sensor thread never does)
+#endif
         // (1 ms of CRSF at 420 kbaud is 42 bytes; the buffer leaves room for a stalled loop)
         if (!port::uart_begin(uart, dec_->baud(), dec_->even_parity_2stop() ? SERIAL_8E2 : SERIAL_8N1, rx_pin, tx_pin, dec_->inverted(), kRxBuffer)) {
             dec_ = nullptr; fail_ = "receiver: the UART did not start on these pins (STM32: RX and TX must belong to the same UART)"; return false;
@@ -97,7 +103,20 @@ public:
         return true;
     }
 
-    // Drains the UART / the edges. Returns true when at least one new RC frame arrived.
+    // nRF24: pins = SCK, MISO, MOSI, CSN, CE on the second SPI bus; c = the pair's address / RF channel (receiver.nrf_*)
+    bool beginNrf24(const uint8_t pins[5], const nrf::Config& c, bool bound, uint32_t now_ms) {
+        stop_pulses(); dec_ = nullptr; kind_ = K_NONE; fail_ = "";
+#if !WB_HAS_NRF24
+        (void)pins; (void)c; (void)bound; (void)now_ms; fail_ = "the nRF24 receiver is not in the STM32 builds yet"; return false;
+#else
+        if (!nrf_bus_.begin(pins[0], pins[1], pins[2], pins[3], pins[4])) { fail_ = "no pin for the nRF24 receiver (Pins tab: nrf_sck, nrf_miso, nrf_mosi, nrf_cs, nrf_ce)"; return false; }
+        if (!nrf_.begin(nrf_bus_, c, bound, now_ms)) { fail_ = "the nRF24 module does not answer (wiring, 3.3 V supply, a 10 uF capacitor at its power pins)"; return false; }
+        kind_ = K_RADIO; proto_ = rx::PROTO_NRF24; return true;
+#endif
+    }
+    rx::Nrf24Rx* radio() { return kind_ == K_RADIO ? &nrf_ : nullptr; }
+
+    // Drains the UART / the edges / the radio. Returns true when at least one new RC frame arrived.
     bool update(uint32_t now_us, uint32_t now_ms) {
         bool got = false; rx::Frame f;
         if (kind_ == K_SERIAL) {
@@ -111,6 +130,8 @@ public:
                 for (size_t i = 0; i < n; i++) if (dec_->feed(buf[i], now_us, f)) { link_.on_frame(f, now_ms); got = true; }
                 total += n;
             }
+        } else if (kind_ == K_RADIO) {
+            if (nrf_.update(now_us, now_ms)) { for (int i = 0; i < rx::kChannels; i++) f.ch[i] = nrf_.channels()[i]; link_.on_frame(f, now_ms); got = true; }
         } else if (kind_ == K_PPM || kind_ == K_PWM) {
             rx::Edge e; int budget = 256;                     // (PPM: 9 edges a frame; PWM: 16)
             while (budget-- > 0 && ring_.pop(e)) {
@@ -124,6 +145,11 @@ public:
 
     // CRSF telemetry back to the receiver: only on CRSF with the UART's TX pin set
     bool telemetryPossible() const { return kind_ == K_SERIAL && tx_ok_ && proto_ == rx::PROTO_CRSF; }
+    // MAVLink: the decoder (RADIO_STATUS: flow control), and the UART the MAVLink telemetry goes back on (nullptr: no TX pin)
+    const rx::MavlinkDecoder* mavlink() const { return kind_ == K_SERIAL && proto_ == rx::PROTO_MAVLINK ? &mav_ : nullptr; }
+    port::SerialPort* mavlinkUart() const { return mavlink() && tx_ok_ ? uart_ : nullptr; }
+    // ... and the ground station's frames it passed on (mav::Gcs; false: none waiting)
+    bool takeGcsFrame(mav::Parser::Frame& f) { return kind_ == K_SERIAL && proto_ == rx::PROTO_MAVLINK && mav_.take_gcs(f); }
     void sendTelemetry(const uint8_t* frame, size_t n) { if (telemetryPossible() && n) { uart_->write(frame, n); tlm_frames_++; } }
     uint32_t telemetryFrames() const { return tlm_frames_; }
     bool available() const { return kind_ != K_NONE; }
@@ -131,18 +157,18 @@ public:
     bool linkOk(uint32_t now_ms) const { return kind_ != K_NONE && link_.ok(now_ms); }
     const uint16_t* channels() const { return link_.channels(); }
     uint16_t rateHz() const { return link_.rate_hz(); }
-    uint8_t linkQuality() const { return kind_ == K_SERIAL ? dec_->link_quality() : 0; }
+    uint8_t linkQuality() const { return kind_ == K_SERIAL ? dec_->link_quality() : kind_ == K_RADIO ? nrf_.lq() : 0; }
     uint32_t uartOverflows() const { return kind_ == K_SERIAL ? g_uart_ovf : 0; }     // receive buffer / FIFO overflow events since begin()
     uint32_t uartLineErrors() const { return kind_ == K_SERIAL ? g_uart_line : 0; }   // framing / parity errors since begin()
-    uint32_t frameErrors() const { return kind_ == K_SERIAL ? dec_->errors() : kind_ == K_PPM ? ppm_.errors() + ring_.lost() : kind_ == K_PWM ? pwm_.errors() + ring_.lost() : 0; }
-    const char* name() const { return kind_ == K_SERIAL ? dec_->name() : kind_ == K_PPM ? "PPM" : kind_ == K_PWM ? "PWM" : "none"; }
+    uint32_t frameErrors() const { return kind_ == K_RADIO ? nrf_.bad() : kind_ == K_SERIAL ? dec_->errors() : kind_ == K_PPM ? ppm_.errors() + ring_.lost() : kind_ == K_PWM ? pwm_.errors() + ring_.lost() : 0; }
+    const char* name() const { return kind_ == K_RADIO ? "NRF24" : kind_ == K_SERIAL ? dec_->name() : kind_ == K_PPM ? "PPM" : kind_ == K_PWM ? "PWM" : "none"; }
     int ppmChannels() const { return kind_ == K_PPM ? ppm_.channels() : 0; }      // learnt from the frames, 0 = not yet
     const char* failReason() const { return fail_; }
 
 private:
     static constexpr size_t kRxBuffer = 2048;
     static inline volatile uint32_t g_uart_ovf = 0, g_uart_line = 0;      // (one receiver per firmware)
-    enum Kind : uint8_t { K_NONE, K_SERIAL, K_PPM, K_PWM };
+    enum Kind : uint8_t { K_NONE, K_SERIAL, K_PPM, K_PWM, K_RADIO };
     struct Ctx { RcReceiver* self; uint8_t input, pin; };
     static void WB_FAST on_edge(void* arg) {                  // the GPIO interrupt: the time and the level, nothing else
         const Ctx* c = (const Ctx*)arg;
@@ -150,9 +176,13 @@ private:
     }
     void stop_pulses() { for (int i = 0; i < n_pins_; i++) if (pins_[i] != 255) detachInterrupt(port::apin(pins_[i])); n_pins_ = 0; }
 
-    rx::CrsfDecoder crsf_; rx::SbusDecoder sbus_; rx::IbusDecoder ibus_; rx::SpektrumDecoder spek_;
+    rx::CrsfDecoder crsf_; rx::SbusDecoder sbus_; rx::IbusDecoder ibus_; rx::SpektrumDecoder spek_; rx::MavlinkDecoder mav_;
     rx::PpmDecoder ppm_; rx::PwmDecoder pwm_; rx::EdgeRing<64> ring_;
     Ctx ctx_[kMaxPulsePins] = {}; uint8_t pins_[kMaxPulsePins] = {}; int n_pins_ = 0;
     bool tx_ok_ = false; rx::Protocol proto_ = rx::PROTO_CRSF; uint32_t tlm_frames_ = 0;
+#if WB_HAS_NRF24
+    nrf::ArduinoBus nrf_bus_{(int)SPI_DEVICE_1};
+#endif
+    rx::Nrf24Rx nrf_;
     rx::Decoder* dec_ = nullptr; Kind kind_ = K_NONE; rx::Link link_; port::SerialPort* uart_ = nullptr; const char* fail_ = "receiver not started";
 };

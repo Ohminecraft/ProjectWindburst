@@ -10,6 +10,7 @@
 #include <string>
 #include "wblog_reader.h"      // before the Arduino stub: its macros (bit, word ...) would break <sstream>
 #include "fw_rig.h"
+#include "tx_rig.h"
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(cond, ...) do { const bool ok_ = (cond); if (getenv("V")) { printf("    "); printf(__VA_ARGS__); printf("\n"); } if (ok_) g_pass++; else { g_fail++; printf("  FAIL line %d: %s   ", __LINE__, #cond); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -1041,7 +1042,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.37.2" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.wifi") == 0 && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.41.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -2369,7 +2370,7 @@ static void t_osd() {
         b.rc[8] = 1000; r->run(0.3); b.tlm_wire.sent.clear(); r->run(0.5); scr = dp_screen(dp_read(b.tlm_wire.sent, bad));
         bool any = false; for (auto& l : scr) if (l.find("RTL") != std::string::npos) any = true;
         CHECK(!any, "switched off: gone from the screen"); }
-    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.telemetry.protocol = TELEMETRY_PROTOCOL_MAVLINK; s.telemetry.tx_pin = 38; s.telemetry.wifi = 0; });
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.telemetry.protocol = TELEMETRY_PROTOCOL_MAVLINK; s.telemetry.tx_pin = 38; });
         CHECK(has_line(*r, "osd: MSP DisplayPort on UART0") && has_line(*r, "telemetry: FAILED - no UART left (GPS, receiver, flow sensor, ESC wire and OSD have them)"), "OSD and MAVLink both on AUTO: the OSD has the last UART"); }
     {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { osd_on(s, b); s.ports.assign = PORT_ASSIGN_TABLE; s.ports.function[0] = PORT_FUNCTION_NONE; s.ports.function[1] = PORT_FUNCTION_GPS; s.ports.function[2] = PORT_FUNCTION_SERIAL_RX; });
         CHECK(has_line(*r, "osd: FAILED - no UART has the function DISPLAYPORT in the serial ports table"), "port table without DISPLAYPORT: says so"); }
@@ -2382,7 +2383,7 @@ static void t_osd() {
 }
 
 static void t_mavlink() {
-    printf("[mavlink] telemetry on a UART: rates, values from the plant, texts, room on the UART, WiFi, no UART\n");
+    printf("[mavlink] telemetry on a UART: rates, values from the plant, texts, room on the UART, no UART\n");
     using P = mav::Parser;
     const uint8_t tx = 43;
     auto tlm = [&](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.telemetry.protocol = TELEMETRY_PROTOCOL_MAVLINK; s.telemetry.tx_pin = tx; Serial0.dev = &b.tlm_wire; };
@@ -2435,18 +2436,59 @@ static void t_mavlink() {
     {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { tlm(s, b); s.ports.assign = PORT_ASSIGN_TABLE; s.ports.function[0] = PORT_FUNCTION_TELEMETRY; s.ports.function[1] = PORT_FUNCTION_GPS; s.ports.function[2] = PORT_FUNCTION_SERIAL_RX; });
         r->run(1.0); CHECK(has_line(*r, "telemetry: MAVLink 2, system id 1, UART0 TX GPIO43") && !r->board.tlm_wire.sent.empty(), "port table: the UART with the function TELEMETRY"); }
     {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { tlm(s, b); s.telemetry.tx_pin = 255; });
-        CHECK(has_line(*r, "telemetry: FAILED - no TX pin (telemetry.tx_pin) and no WiFi"), "no pin and no WiFi: says why"); }
-    {   // WiFi only: the frames go to the ring the link task sends as UDP
-        auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { tlm(s, b); s.telemetry.tx_pin = 255; s.wifi.mode = WIFI_MODE_AP; });
-        std::vector<uint8_t> udp; uint8_t dg[1460]; size_t n; int datagrams = 0;
-        for (int i = 0; i < 40; i++) { r->run(0.05); while ((n = r->app().mav_net.pop(dg, sizeof(dg))) > 0) { udp.insert(udp.end(), dg, dg + n); datagrams++; } }     // (as the link task: emptied all the time)
-        const MavSeen m = mav_read(udp);
-        CHECK(has_line(*r, "telemetry: MAVLink 2, system id 1, WiFi UDP 14550") && m.bad == 0 && m.count[mav::MSG_HEARTBEAT] >= 1 && m.count[mav::MSG_ATTITUDE] >= 15 && r->board.tlm_wire.sent.empty(),
-              "WiFi only: %u frames in %d datagrams for the link task, nothing on the UART", m.good, datagrams); }
+        CHECK(has_line(*r, "telemetry: FAILED - no TX pin (telemetry.tx_pin)") && r->board.tlm_wire.sent.empty(), "no pin: says why, nothing sent"); }
     {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { tlm(s, b); s.pins.buzzer = tx; });
         CHECK(has_line(*r, "pins: FAILED - GPIO43 is set for both") && r->app().status.pin_conflict, "its pin is checked against the others (buzzer on the same pin)"); }
     {   auto r = nav_rig([&](wbp::Settings&, VirtualBoard& b) { Serial0.dev = &b.tlm_wire; }); r->run(2.0);
         CHECK(!has_line(*r, "telemetry:") && r->board.tlm_wire.sent.empty() && Serial0.baud == 0, "protocol NONE (the default): no UART taken, nothing sent"); }
+}
+
+static void t_mavlink_rx() {
+    printf("[mavlink receiver] ExpressLRS in MAVLink mode: sticks from RC_CHANNELS_OVERRIDE, telemetry on the same UART, RADIO_STATUS flow control\n");
+    auto elrs = [](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.receiver.protocol = RX_PROTOCOL_MAVLINK; b.rc_link = VirtualBoard::RC_MAVLINK; };
+    {   auto r = nav_rig(elrs); Rig& g = *r; VirtualBoard& b = g.board;
+        CHECK(has_line(g, "rx: MAVLINK on UART2, MAVLink telemetry on its TX pin") && b.rc_uart_baud() == 460800 && Serial2.format == SERIAL_8N1 && !Serial2.inverted,
+              "boot report: MAVLINK on UART2, 460800 8N1 (%u baud)", b.rc_uart_baud());
+        CHECK(has_line(g, "telemetry: MAVLink 2, system id 1, on the receiver's UART (UART2 TX"), "and the telemetry goes back on the receiver's TX pin");
+        const uint16_t v[16] = {1500, 1250, 1000, 1750, 1000, 1100, 1200, 1300, 1400, 1600, 1700, 1800, 1900, 2000, 1050, 1950}; for (int i = 0; i < 16; i++) b.rc[i] = v[i];
+        b.lq = 80; g.run(2.0);
+        bool same = true; for (int i = 0; i < 16; i++) if (g.tel().rc[i] != v[i]) same = false;
+        CHECK(g.tel().rc_link && same, "the 16 channels exactly as the transmitter sends them (ch 2 %u, ch 16 %u)", g.tel().rc[1], g.tel().rc[15]);
+        CHECK(g.tel().rc_rate >= 98 && g.tel().rc_rate <= 102 && g.tel().rssi == 80, "a frame every 10 ms (%u Hz); link quality from RADIO_STATUS: %u %%", g.tel().rc_rate, g.tel().rssi);
+        b.elrs_air.clear(); g.run(5.0); const MavSeen m = mav_read(b.elrs_air);
+        CHECK(m.bad == 0 && b.elrs_lost == 0 && m.count[mav::MSG_HEARTBEAT] >= 4 && m.count[mav::MSG_ATTITUDE] >= 45 && m.count[mav::MSG_GLOBAL_POSITION_INT] >= 22,
+              "5 s over the air at 2375 B/s (F1000): HEARTBEAT %d, ATTITUDE %d, POSITION %d, none damaged or lost (%zu lost)", m.count[mav::MSG_HEARTBEAT], m.count[mav::MSG_ATTITUDE], m.count[mav::MSG_GLOBAL_POSITION_INT], b.elrs_lost);
+        const mav::Parser::Frame* hb = mav_last(m, mav::MSG_HEARTBEAT);
+        CHECK(hb && hb->sysid == 1 && hb->compid == 1, "the ground station sees system 1");
+        for (int i = 0; i < 16; i++) b.rc[i] = i == 2 ? 1000 : 1500; b.rc[7] = 1000; b.plant.set_tilt(0, 0, 0); g.run(1.0);
+        nav_takeoff(g, 2.0);
+        CHECK(g.tel().armed && b.plant.z > 0.5f, "armed and flown on it (Angle + Altitude Hold): %.2f m", b.plant.z);
+        b.rc[2] = 1000; b.rc[4] = 1000; g.run(1.0);
+        b.tx_on = false; g.run(1.0);
+        CHECK(!g.tel().rc_link, "the transmitter off: the receiver stops sending channels, the link is lost"); }
+    {   // 250 Hz packet rate: 360 B/s down (docs/ELRS_MAVLINK.md), the default rates want ~1400. RADIO_STATUS slows the firmware down: the
+        // receiver's 1 kB buffer never overflows (it would lose bytes, and frames with them)
+        auto r = nav_rig(elrs); VirtualBoard& b = r->board; b.elrs_air_bps = 360;
+        r->run(3.0); b.elrs_air.clear(); b.elrs_lost = 0; b.elrs_peak = 0; r->run(10.0); const MavSeen m = mav_read(b.elrs_air);
+        CHECK(b.elrs_lost == 0 && b.elrs_peak < VirtualBoard::kElrsBuf && m.bad == 0, "10 s at 360 B/s: nothing lost (%zu bytes), the buffer at most %zu of %zu bytes, every frame whole",
+              b.elrs_lost, b.elrs_peak, VirtualBoard::kElrsBuf);
+        CHECK(m.count[mav::MSG_HEARTBEAT] >= 9 && m.count[mav::MSG_ATTITUDE] >= 5 && b.elrs_air.size() > 2500, "slower, but it keeps coming: HEARTBEAT %d (still 1 Hz), ATTITUDE %d, %zu bytes",
+              m.count[mav::MSG_HEARTBEAT], m.count[mav::MSG_ATTITUDE], b.elrs_air.size());
+        CHECK(r->tel().rc_link && r->tel().rc_rate >= 98, "the sticks keep their 100 Hz (%u)", r->tel().rc_rate); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { elrs(s, b); s.receiver.telemetry = 0; }); r->run(2.0); r->board.rc_uart_sent().clear(); r->run(1.0);
+        CHECK(has_line(*r, "rx: MAVLINK on UART2, telemetry off (receiver.telemetry)") && !has_line(*r, "telemetry: MAVLink") && r->board.rc_uart_sent().empty() && r->tel().rc_link,
+              "receiver.telemetry off: the TX pin stays silent, the sticks still work (%zu bytes)", r->board.rc_uart_sent().size()); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { elrs(s, b); s.receiver.telemetry = 0; s.telemetry.protocol = TELEMETRY_PROTOCOL_MAVLINK; s.telemetry.tx_pin = 43; Serial0.dev = &b.tlm_wire; });
+        r->board.elrs_txbuf_fixed = 10;                                       // (the receiver says it is full: not the business of the other radio)
+        r->run(2.0); r->board.tlm_wire.sent.clear(); r->run(3.0); const MavSeen m = mav_read(r->board.tlm_wire.sent);
+        CHECK(has_line(*r, "telemetry: MAVLink 2, system id 1, UART0 TX GPIO43") && r->board.rc_uart_sent().empty() && m.count[mav::MSG_ATTITUDE] >= 28,
+              "receiver.telemetry off, telemetry section on: its own UART as before, at its own pace whatever the receiver's RADIO_STATUS says (ATTITUDE %d in 3 s)", m.count[mav::MSG_ATTITUDE]); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { elrs(s, b); s.telemetry.protocol = TELEMETRY_PROTOCOL_MAVLINK; s.telemetry.tx_pin = 43; s.telemetry.sysid = 9; Serial0.dev = &b.tlm_wire; });
+        r->run(2.0); const MavSeen m = mav_read(r->board.elrs_air); const mav::Parser::Frame* hb = mav_last(m, mav::MSG_HEARTBEAT);
+        CHECK(has_line(*r, "telemetry: MAVLink 2, system id 9, on the receiver's UART") && has_line(*r, "telemetry.tx_pin is not used") && r->board.tlm_wire.sent.empty() && hb && hb->sysid == 9,
+              "both on: the receiver's UART wins (one MAVLink stream), with the telemetry section's system id; the report says telemetry.tx_pin is not used"); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { elrs(s, b); s.pins.rx_tx = 255; }); r->run(2.0);
+        CHECK(has_line(*r, "telemetry: FAILED - the receiver's UART has no TX pin (pins.rx_tx)") && r->tel().rc_link && r->board.rc_uart_sent().empty(), "no TX pin on the receiver's UART: says so, the sticks still work"); }
 }
 
 // ESC telemetry on its own wire (hal/motor/esc_sensor.h): KISS frames on a UART RX, one ESC asked at a time
@@ -2945,6 +2987,262 @@ static void t_mission_fw() {
       CHECK(armed && !q->tel().armed && q->app().gnss.home().has_home() && q->command(CMD_MISSION, {1}).err == ERR_FAILED, "home kept from an earlier arming (set_home_once), disarmed: MISSION start FAILED"); }
 }
 
+// ---- 0.38: the nRF24 receiver on the flight controller, with the real DIY transmitter (test/tx_rig.h) in the same air
+template <class F> static std::unique_ptr<Rig> nrf_rig(TxRig& t, F edit) {
+    g_stub_us = 0; g_stub_delay_advances = true;
+    std::unique_ptr<Rig> r(new Rig()); r->provision();
+    { wbp::Settings s; wbp::SettingsStore st(r->flash); st.load(s); VirtualBoard::wire_nrf(s); s.general.stick_arm = 1; edit(s, t); st.save(s); }
+    r->board.has_nrf = true; t.power(r->board.air, 0);
+    TxRig* tp = &t; r->board.radio_tick = [tp](uint32_t us) { tp->step(us); };
+    r->boot();
+    return r;
+}
+static void always_on(wbp::Settings& s, uint8_t slot, uint8_t mode) { s.modes.mode[slot] = mode; s.modes.aux[slot] = 0; s.modes.lo[slot] = 900; s.modes.hi[slot] = 1100; }   // (AUX1 stays 1000: no switches)
+static wbp::Settings flash_of(Rig& r) { wbp::Settings s; wbp::SettingsStore st(r.flash); st.load(s); return s; }
+
+static void t_nrf24_fw() {
+    printf("[nRF24 receiver] on the flight controller\n");
+    { TxRig t; auto r = nrf_rig(t, [](wbp::Settings& s, TxRig& tx) { tx.pair_with(s); }); r->run(2.0);
+      CHECK(has_line(*r, "rx: NRF24") && has_line(*r, "RF channel 76") && has_line(*r, "bound"), "boot report: the nRF24 receiver, its RF channel, bound");
+      t.stick(0, 4095); r->run(0.3);
+      CHECK(r->tel().rc_link && r->tel().rc[0] >= 1990 && r->tel().rc[2] == 1000, "the transmitter's roll reaches the flight controller (%u), throttle 1000", r->tel().rc[0]);
+      t.centre(); r->run(1.2); T_rc rc; r->stream(STR_RC, 20); r->run(0.2);
+      CHECK(r->latest(STR_RC, rc) && rc.bind_state == BIND_STATE_BOUND && rc.lq >= 95 && rc.rate >= 95, "rc stream: BOUND, link quality %u %%, %u packets/s", rc.lq, rc.rate);
+      t.stick(0, 4095); t.stick(1, 0); t.stick(2, 0); t.stick(3, 0); r->run(1.3); t.centre(); r->run(0.3);
+      CHECK(r->tel().armed, "armed with the stick gesture of the two joysticks");
+      r->run(0.3); CHECK(t.stream().d_armed && t.stream().d_seen && t.stream().d_batt_cv > 1400, "the transmitter hears it: armed, battery %u cV", t.stream().d_batt_cv);
+      CHECK(r->command(CMD_BIND, {1}).err == ERR_ARMED, "BIND refused while armed"); }
+    { // the flight mode the transmitter is told is the one the pilot chose (on the ground the hold controllers are not running yet)
+      TxRig t; auto r = nrf_rig(t, [](wbp::Settings& s, TxRig& tx) { tx.pair_with(s); always_on(s, 0, MODE_ALTHOLD); }); r->run(2.0);
+      CHECK(!r->tel().armed && t.stream().d_seen && t.stream().d_mode == FLY_MODE_ALTHOLD, "ALT HOLD on a switch, disarmed: the transmitter hears ALTHOLD (%u)", t.stream().d_mode); }
+    { TxRig t; auto r = nrf_rig(t, [](wbp::Settings& s, TxRig& tx) { tx.pair_with(s); s.pins.nrf_cs = 255; }); r->run(0.5);
+      CHECK(has_line(*r, "rx: FAILED") && has_line(*r, "no pin for the nRF24 receiver"), "a pin not set: the receiver does not start, the report says which"); }
+    { TxRig t; auto r = nrf_rig(t, [](wbp::Settings& s, TxRig& tx) { tx.pair_with(s); s.blackbox.device = bb::DEV_SDCARD; s.blackbox.sd_mode = SD_MODE_SPI; }); r->run(0.5);
+      CHECK(has_line(*r, "rx: FAILED") && has_line(*r, "second SPI bus is taken"), "the SD card on SPI: the second bus is taken, said so"); }
+    { TxRig t; auto r = nrf_rig(t, [](wbp::Settings& s, TxRig& tx) { tx.pair_with(s); s.led.count = 4; s.pins.led = 41; }); r->run(0.5);
+      CHECK(has_line(*r, "rx: NRF24") && has_line(*r, "led: FAILED") && has_line(*r, "second SPI bus is taken"), "an LED strip as well: the receiver keeps the bus, the strip is refused"); }
+    { // never bound: the first 60 s it listens; the transmitter's BIND pairs them, the flight controller keeps it in flash
+      TxRig t; auto r = nrf_rig(t, [](wbp::Settings&, TxRig&) {}); r->run(1.0);
+      CHECK(has_line(*r, "listening for a bind"), "boot report: never bound, listening");
+      CHECK(t.command(CMD_BIND, 1) == ERR_OK, "BIND on the transmitter"); r->run(1.5);
+      const wbp::Settings f = flash_of(*r);
+      CHECK(f.receiver.nrf_bound == 1 && !memcmp(f.receiver.nrf_addr, t.s.tx_radio.addr, 5) && t.s.tx_radio.bound == 1, "bound: both keep the same address (flight controller in flash)");
+      t.stick(0, 0); r->run(0.3); CHECK(r->tel().rc_link && r->tel().rc[0] <= 1010, "and the sticks work (%u)", r->tel().rc[0]);
+      CHECK(has_line(*r, "rx: bound to"), "the report says so"); }
+    { // review C2: an unbound transmitter and an unbound flight controller (after its 60 s window) never fly each other
+      TxRig t; auto r = nrf_rig(t, [](wbp::Settings&, TxRig&) {}); r->run(61.0); t.stick(0, 4095); r->run(1.0);
+      CHECK(!r->tel().rc_link && r->tel().rc[0] != 2000, "both unbound: no link (rc[0] %u)", r->tel().rc[0]); }
+    { TxRig t; auto r = nrf_rig(t, [](wbp::Settings&, TxRig&) {}); r->run(61.0);
+      t.command(CMD_BIND, 1); r->run(2.0);
+      CHECK(flash_of(*r).receiver.nrf_bound == 0 && t.stream().bind_state == BIND_STATE_BINDING, "60 s after power-up the window is closed: no bind");
+      CHECK(r->command(CMD_BIND, {1}).err == ERR_OK, "BIND from the app opens it again"); r->run(1.5);
+      CHECK(flash_of(*r).receiver.nrf_bound == 1, "bound"); }
+}
+
+// ---- 0.38: the DIY transmitter flying the flight controller (both real firmware, one simulated air)
+static void arm_by_sticks(Rig& r, TxRig& t) { t.stick(0, 4095); t.stick(1, 0); t.stick(2, 0); t.stick(3, 0); r.run(1.3); t.centre(); }
+
+static void t_tx_flight() {
+    printf("[DIY transmitter] flying with two joysticks\n");
+    { // MANUAL throttle: arm with the gesture, let go of the sticks - the craft stays on the ground
+      TxRig t; auto r = nrf_rig(t, [](wbp::Settings& s, TxRig& tx) { tx.pair_with(s); always_on(s, 0, MODE_ANGLE); }); r->run(3.0);
+      arm_by_sticks(*r, t); r->run(0.1); CHECK(r->tel().armed, "armed");
+      uint16_t thr_max = 0; float z_max = 0; for (int i = 0; i < 30; i++) { r->run(0.1); if (r->tel().rc[2] > thr_max) thr_max = r->tel().rc[2]; if (r->board.plant.z > z_max) z_max = r->board.plant.z; }
+      CHECK(thr_max <= 1050 && z_max < 0.05f, "sticks released for 3 s: throttle channel <= %u, height %.2f m (manual_throttle_release_after_arm_stays_down)", thr_max, z_max);
+      t.stick(3, 4095); r->run(1.2); t.centre(); r->run(0.5);
+      CHECK(r->tel().rc[2] > 1450 && r->board.plant.z > 0.3f, "throttle stick up 1.2 s: the throttle went up (%u) and stays when let go, the craft climbs (%.2f m)", r->tel().rc[2], r->board.plant.z); }
+    { // ALTPOS throttle in ALT HOLD: centre = hold the height
+      TxRig t; auto r = nrf_rig(t, [](wbp::Settings& s, TxRig& tx) { tx.s.tx_sticks.throttle_mode = TX_THROTTLE_ALTPOS; tx.pair_with(s); always_on(s, 0, MODE_ANGLE); always_on(s, 1, MODE_ALTHOLD); }); r->run(3.0);
+      t.stick(3, 0); arm_by_sticks(*r, t); t.stick(3, 0); r->run(0.2); CHECK(r->tel().armed, "armed (ALTPOS: the throttle stick held down for the gesture)");
+      t.stick(3, 4095); r->run(2.0); t.centre(); r->run(1.0); const float z0 = r->board.plant.z; float lo = z0, hi = z0;
+      for (int i = 0; i < 30; i++) { r->run(0.1); const float z = r->board.plant.z; if (z < lo) lo = z; if (z > hi) hi = z; }
+      CHECK(z0 > 0.3f && hi - lo < 0.5f, "climbed to %.2f m, the stick centred: held within %.2f m for 3 s (altpos_throttle_centre_holds_height)", z0, hi - lo); }
+    { TxRig t; auto r = nrf_rig(t, [](wbp::Settings& s, TxRig& tx) { tx.pair_with(s); s.receiver.rx_timeout_ms = 300; }); r->run(2.0);
+      CHECK(r->tel().rc_link, "link up");
+      t.off(); r->run(0.2); const bool still = r->tel().rc_link; r->run(0.2); const bool gone = !r->tel().rc_link; r->run(0.6);
+      CHECK(still && gone && (r->tel().blockers & ARM_BLOCKER_RX_LOST), "transmitter off: the link holds 200 ms, gone after the 300 ms timeout; on the ground that blocks arming (radio_off_failsafe_and_back)");
+      t.power(r->board.air, (uint32_t)g_stub_us); r->run(1.0); CHECK(r->tel().rc_link && !(r->tel().blockers & ARM_BLOCKER_RX_LOST), "on again: the link is back");
+      arm_by_sticks(*r, t); t.stick(3, 4095); r->run(1.5); t.centre(); r->run(0.5); const bool flying = r->tel().armed && r->board.plant.z > 0.2f;
+      t.off(); r->run(1.5); CHECK(flying && r->tel().failsafe != 0, "in the air, transmitter off: failsafe (stage %u)", r->tel().failsafe); }
+    { TxRig t; auto r = nrf_rig(t, [](wbp::Settings& s, TxRig& tx) { tx.pair_with(s); }); r->run(2.0); r->board.air.loss = 0.3;
+      bool dropped = false; for (int i = 0; i < 30; i++) { r->run(0.1); if (!r->tel().rc_link) dropped = true; }
+      T_rc rc; r->stream(STR_RC, 20); r->run(0.2); r->latest(STR_RC, rc);
+      CHECK(!dropped && rc.lq >= 90, "30 %% of every attempt lost: the retransmissions keep the link (never dropped, LQ %u %%) (thirty_percent_loss_still_flies)", rc.lq); }
+    { // a second Windburst pair in the same air: its transmitter does not move this craft
+      TxRig t, other; auto r = nrf_rig(t, [](wbp::Settings& s, TxRig& tx) { tx.pair_with(s); }); wbp::Settings dummy; other.pair_with(dummy, 0x5B); other.power(r->board.air, (uint32_t)g_stub_us);
+      TxRig* op = &other; TxRig* tp = &t; r->board.radio_tick = [tp, op](uint32_t us) { tp->step(us); op->step(us); };
+      r->run(1.0); other.stick(0, 0); t.stick(0, 3500); r->run(0.5);
+      CHECK(r->tel().rc[0] > 1600 && r->tel().rc[0] < 1900, "the other transmitter's roll full left changes nothing: roll follows our own (%u) (two_pairs_do_not_hear_each_other)", r->tel().rc[0]);
+      t.off(); r->run(0.5); CHECK(!r->tel().rc_link, "ours off: no link, the other one is not taken for it"); }
+    { // a new RF channel from the transmitter's app tab: both move, and both keep it
+      TxRig t; auto r = nrf_rig(t, [](wbp::Settings& s, TxRig& tx) { tx.pair_with(s); }); r->run(2.0);
+      t.s.tx_radio.rf_channel = 80; CHECK(t.app.apply_live(SEC_TX_RADIO), "accepted (disarmed)"); r->run(2.0);
+      CHECK(r->board.nrf.reg[nrf::RF_CH] == 80 && t.chip.reg[nrf::RF_CH] == 80 && r->tel().rc_link, "both on RF channel 80, link up (config_change_over_the_air)");
+      CHECK(flash_of(*r).receiver.nrf_channel == 80, "the flight controller keeps 80 in flash (a reboot would otherwise lose the transmitter)");
+      r->boot(); r->run(1.0); CHECK(r->tel().rc_link && r->board.nrf.reg[nrf::RF_CH] == 80, "after a reboot: still on 80, link up"); }
+}
+
+// A ground station on the craft's MAVLink link (0.40): what it sends goes in through the ExpressLRS receiver (gcs_send) or the
+// telemetry radio's wire (tlm_wire.q); what it reads is what reached it (elrs_air / tlm_wire.sent).
+struct GcsLink {
+    Rig& r; bool elrs; size_t seen = 0, used = 0; mav::Parser p; std::vector<mav::Parser::Frame> got;
+    std::vector<uint8_t>& sink() { return elrs ? r.board.elrs_air : r.board.tlm_wire.sent; }
+    template <class M> void send(const M& m) {
+        mav::Encoder e; e.sysid = 255; e.compid = 190; uint8_t f[mav::kMaxFrame]; const size_t n = mav::pack(e, m, f);
+        if (elrs) r.board.gcs_send(f, n); else for (size_t i = 0; i < n; i++) r.board.tlm_wire.q.push_back(f[i]);
+    }
+    void read() { std::vector<uint8_t>& s = sink(); if (seen > s.size()) seen = 0; for (; seen < s.size(); seen++) if (p.feed(s[seen])) got.push_back(p.frame()); }
+    void clear() { read(); got.clear(); used = 0; }
+    template <class M> bool last(M& m) { read(); for (auto it = got.rbegin(); it != got.rend(); ++it) if (mav::unpack(*it, m)) return true; return false; }
+    // a command and its COMMAND_ACK (-1: none within 2 s)
+    int command(uint16_t c, float p1 = 0, float p2 = 0) {
+        clear(); mav::CommandLong m; m.target_system = 1; m.target_component = 1; m.command = c; m.param[0] = p1; m.param[1] = p2; send(m);
+        for (int k = 0; k < 40; k++) { r.run(0.05); read(); mav::CommandAck a; for (const auto& f : got) if (mav::unpack(f, a) && a.command == c) return a.result; }
+        return -1;
+    }
+    // the mission protocol as Mission Planner runs it; the MISSION_ACK's result (-1: none)
+    int upload(const std::vector<mav::MissionItemInt>& items) {
+        clear(); mav::MissionCount c; c.target_system = 1; c.target_component = 1; c.count = (uint16_t)items.size(); send(c);
+        for (int k = 0; k < 200; k++) {
+            r.run(0.05); read();
+            for (; used < got.size(); used++) {
+                mav::MissionRequestInt q; mav::MissionAck a;
+                if (mav::unpack(got[used], q) && q.seq < items.size()) send(items[q.seq]);
+                if (mav::unpack(got[used], a)) return a.type;
+            }
+        }
+        return -1;
+    }
+    std::vector<mav::MissionItemInt> download() {
+        std::vector<mav::MissionItemInt> out; clear(); mav::MissionRequestList l; l.target_system = 1; send(l);
+        int want = -1;
+        for (int k = 0; k < 200 && (want < 0 || (int)out.size() < want); k++) {
+            r.run(0.05); read();
+            for (; used < got.size(); used++) {
+                mav::MissionCount c; mav::MissionItemInt it;
+                if (mav::unpack(got[used], c)) { want = c.count; if (want > 0) { mav::MissionRequestInt q; q.target_system = 1; q.seq = 0; send(q); } }
+                if (mav::unpack(got[used], it) && it.seq == out.size()) { out.push_back(it); mav::MissionRequestInt q; q.target_system = 1; q.seq = (uint16_t)out.size(); if ((int)out.size() < want) send(q); }
+            }
+        }
+        if (want >= 0) { mav::MissionAck a; a.target_system = 1; send(a); }
+        return out;
+    }
+    uint32_t mode() { mav::Heartbeat h; read(); for (auto it = got.rbegin(); it != got.rend(); ++it) if (it->msgid == mav::MSG_HEARTBEAT) return mav::Parser::get<uint32_t>(*it, 0); return 0xFFFFFFFFu; }
+};
+
+static void t_mavlink_gcs() {
+    printf("[mavlink gcs] a ground station over the ExpressLRS MAVLink link and over a telemetry radio: missions up and down, modes, arming, MISSION_START, RTL\n");
+    using namespace mav;
+    auto elrs = [](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.receiver.protocol = RX_PROTOCOL_MAVLINK; b.rc_link = VirtualBoard::RC_MAVLINK; };
+    auto item = [](uint16_t seq, uint16_t cmd, double n, double e, float alt, float p1 = 0, bool pos = true) {
+        MissionItemInt it; it.target_system = 1; it.target_component = 1; it.seq = seq; it.command = cmd; it.frame = FRAME_GLOBAL_RELATIVE_ALT_INT;
+        if (pos) { it.x = m_lat(n); it.y = m_lon(e); } it.z = alt; it.param[0] = p1; return it; };
+    {   auto r = nav_rig(elrs); VirtualBoard& b = r->board; GcsLink g{*r, true}; r->run(3.0);
+        AutopilotVersion v;
+        CHECK(g.command(CMD_REQUEST_MESSAGE, MSG_AUTOPILOT_VERSION) == RESULT_ACCEPTED && g.last(v) && v.flight_sw_version == (((uint32_t)WB_FW_MAJOR << 24) | ((uint32_t)WB_FW_MINOR << 16) | ((uint32_t)WB_FW_PATCH << 8) | 255u)
+              && (v.capabilities & CAP_MISSION_INT), "REQUEST_MESSAGE AUTOPILOT_VERSION over the ELRS link: this firmware's version, MISSION_INT");
+        const std::vector<MissionItemInt> plan = {item(0, CMD_NAV_TAKEOFF, 0, 0, 6, 0, false), item(1, CMD_NAV_WAYPOINT, 12, 0, 6, 1), item(2, CMD_NAV_LAND, 12, 0, 0)};
+        CHECK(g.upload(plan) == MISSION_ACCEPTED, "a mission uploaded as Mission Planner does it: MISSION_ACK ACCEPTED");
+        S_mission m{};
+        CHECK(r->get_section(SEC_MISSION, &m, sizeof(m)) && m.count == 3 && m.cmd[0] == MISSION_CMD_TAKEOFF && m.alt[0] == 60 && m.cmd[1] == MISSION_CMD_WAYPOINT && m.lat[1] == m_lat(12)
+              && m.lon[1] == m_lon(0) && m.alt[1] == 60 && m.p[1] == 1 && m.cmd[2] == MISSION_CMD_LAND && m.lat[2] == m_lat(12), "the section mission holds it - the mission the app shows (count %u)", m.count);
+        r->run(0.5); bool logged = false; for (const auto& l : r->logs()) if (l.find("settings: section mission written by the firmware") != std::string::npos) logged = true;
+        wbp::Settings fl; wbp::SettingsStore st(r->flash); st.load(fl);
+        CHECK(logged && fl.mission.count == 3 && fl.mission.lat[1] == m_lat(12), "kept in the flash by the firmware itself (disarmed), and the app told so by the log line it reloads the section on");
+        const auto down = g.download();
+        CHECK(down.size() == 3 && down[0].command == CMD_NAV_TAKEOFF && down[1].x == m_lat(12) && fabsf(down[1].z - 6.0f) < 0.01f && down[1].param[0] == 1.0f && down[2].command == CMD_NAV_LAND,
+              "downloaded again: the same %zu commands", down.size());
+        CHECK(g.command(CMD_DO_SET_MODE, 1, COPTER_ALT_HOLD) == RESULT_ACCEPTED && ((r->tel().modes >> fc::M_ALTHOLD) & 1u), "DO_SET_MODE ALT_HOLD with the switches in Acro: Altitude Hold");
+        r->run(1.5); CHECK(g.mode() == COPTER_ALT_HOLD, "HEARTBEAT says ALT_HOLD (%u)", g.mode());
+        b.rc[5] = 2000; r->run(1.5);
+        CHECK(!((r->tel().modes >> fc::M_ALTHOLD) & 1u) && g.mode() == COPTER_STABILIZE, "the pilot flips the ANGLE switch: his switches again (HEARTBEAT %u)", g.mode());
+        CHECK(g.command(CMD_COMPONENT_ARM_DISARM, 1) == RESULT_DENIED && !r->tel().armed, "ARM from the ground station with telemetry.remote_arm off (the default): DENIED");
+        CHECK(g.command(CMD_MISSION_START) == RESULT_TEMPORARILY_REJECTED, "MISSION_START while disarmed: TEMPORARILY_REJECTED (the pilot arms first)");
+        b.rc[4] = 2000; r->run(0.7); CHECK(r->tel().armed, "armed by the pilot (ANGLE)");
+        { HomePosition hp; r->run(0.5); CHECK(g.last(hp) && abs(hp.latitude - r->tel().lat) < 300 && abs(hp.longitude - r->tel().lon) < 300 && hp.altitude != 0,
+                "the arming set home: HOME_POSITION reaches the ground station (%d, %d)", hp.latitude, hp.longitude); }
+        CHECK(g.command(CMD_DO_SET_MODE, 1, COPTER_AUTO) == RESULT_ACCEPTED, "DO_SET_MODE AUTO: the mission starts");
+        g.clear(); std::vector<int> reached; int max_seq = -1; double t = 0;
+        for (; t < 90.0; t += 0.1) {
+            r->run(0.1); g.read();
+            for (; g.used < g.got.size(); g.used++) { MissionItemReached rr; MissionCurrent mc; if (unpack(g.got[g.used], rr)) reached.push_back(rr.seq); if (unpack(g.got[g.used], mc) && mc.mission_state == MISSION_STATE_ACTIVE && (int)mc.seq > max_seq) max_seq = mc.seq; }
+            if (r->tel().mission_state == MISSION_STATE_DONE && !r->tel().armed) break;
+        }
+        r->run(1.0); g.read();                                                  // (what was sent at the end is still on its way through the receiver)
+        for (; g.used < g.got.size(); g.used++) { MissionItemReached rr; if (unpack(g.got[g.used], rr)) reached.push_back(rr.seq); }
+        std::string rs; for (int x : reached) rs += std::to_string(x) + " ";
+        CHECK(r->tel().mission_state == MISSION_STATE_DONE && !r->tel().armed && hypotf(b.plant.pn - 12.0f, b.plant.pe) < 2.5f, "flown: up, to the point 12 m north, landed there, motors off (%.1f m from it, %.0f s)",
+              hypotf(b.plant.pn - 12.0f, b.plant.pe), t);
+        CHECK(reached.size() >= 3 && reached[0] == 0 && reached[1] == 1 && reached.back() == 2 && max_seq == 2, "MISSION_ITEM_REACHED %sand MISSION_CURRENT up to command %d", rs.c_str(), max_seq); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { elrs(s, b); s.telemetry.remote_arm = 1; }); VirtualBoard& b = r->board; GcsLink g{*r, true}; r->run(3.0);
+        CHECK(g.command(CMD_DO_SET_MODE, 1, COPTER_RTL) == RESULT_TEMPORARILY_REJECTED && !((r->tel().modes >> fc::M_RESCUE) & 1u), "DO_SET_MODE RTL while disarmed: TEMPORARILY_REJECTED");
+        CHECK(g.command(CMD_COMPONENT_ARM_DISARM, 1) == RESULT_ACCEPTED && r->tel().armed, "telemetry.remote_arm on: armed from the ground station");
+        r->run(1.0); CHECK(r->tel().armed, "the ARM switch, off, leaves it armed");
+        CHECK(g.command(CMD_DO_SET_MODE, 1, COPTER_RTL) == RESULT_ACCEPTED && ((r->tel().modes >> fc::M_RESCUE) & 1u), "DO_SET_MODE RTL: the rescue switch on, for the ground station");
+        CHECK(g.command(CMD_DO_SET_HOME, 1) == RESULT_TEMPORARILY_REJECTED, "DO_SET_HOME armed: TEMPORARILY_REJECTED");
+        CHECK(g.command(CMD_COMPONENT_ARM_DISARM, 0) == RESULT_ACCEPTED && !r->tel().armed, "DISARM (on the ground): disarmed");
+        b.rc[2] = 1600; r->run(0.2);
+        CHECK(g.command(CMD_COMPONENT_ARM_DISARM, 1) == RESULT_TEMPORARILY_REJECTED && !r->tel().armed, "the throttle up: TEMPORARILY_REJECTED, as the switch would be");
+        b.rc[2] = 1000; r->run(0.2);
+        CHECK(g.command(CMD_DO_SET_HOME, 1) == RESULT_ACCEPTED, "DO_SET_HOME disarmed: here");
+        const int boots = r->boots; CHECK(g.command(CMD_PREFLIGHT_REBOOT_SHUTDOWN, 1) == RESULT_ACCEPTED, "reboot: ACCEPTED first");
+        r->run(1.0); CHECK(r->boots == boots + 1, "then it restarts (%d boots)", r->boots); }
+    {   auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.telemetry.protocol = TELEMETRY_PROTOCOL_MAVLINK; s.telemetry.tx_pin = 43; s.telemetry.rx_pin = 44; Serial0.dev = &b.tlm_wire; });
+        GcsLink g{*r, false}; r->run(3.0);
+        CHECK(g.upload({item(0, CMD_NAV_TAKEOFF, 0, 0, 4, 0, false), item(1, CMD_NAV_RETURN_TO_LAUNCH, 0, 0, 0, 0, false)}) == MISSION_ACCEPTED, "over a telemetry radio (its RX wire read): uploaded");
+        const auto down = g.download(); CHECK(down.size() == 2 && down[1].command == CMD_NAV_RETURN_TO_LAUNCH, "and downloaded (%zu)", down.size());
+        AvailableModes am; CHECK(g.command(CMD_REQUEST_MESSAGE, MSG_AVAILABLE_MODES, 4) == RESULT_ACCEPTED && g.last(am) && !strcmp(am.mode_name, "Pos Hold"), "AVAILABLE_MODES: Pos Hold"); }
+    {   // Mission Planner as its sources show it (0.40.1): MISSION_ITEM in degrees when it has not seen MISSION_INT; with mp_home_item the download
+        // starts with home, which it drops; MISSION_CURRENT counts that item in
+        auto r = nav_rig([&](wbp::Settings& s, VirtualBoard& b) { elrs(s, b); s.telemetry.mp_home_item = 1; }); VirtualBoard& b = r->board; GcsLink g{*r, true}; r->run(3.0);
+        g.clear(); MissionCount c; c.target_system = 1; c.count = 2; g.send(c); int ack = -1;
+        for (int k = 0; k < 100 && ack < 0; k++) {
+            r->run(0.05); g.read();
+            for (; g.used < g.got.size(); g.used++) {
+                MissionRequestInt q; MissionAck a;
+                if (unpack(g.got[g.used], q)) { MissionItem it; it.target_system = 1; it.seq = q.seq; it.frame = FRAME_GLOBAL_RELATIVE_ALT;
+                    if (q.seq == 0) { it.command = CMD_NAV_TAKEOFF; it.z = 5; } else { it.command = CMD_NAV_WAYPOINT; it.x = (float)(m_lat(10) * 1e-7); it.y = (float)(m_lon(0) * 1e-7); it.z = 5; }
+                    g.send(it); }
+                if (unpack(g.got[g.used], a)) ack = a.type;
+            }
+        }
+        S_mission m{}; r->get_section(SEC_MISSION, &m, sizeof(m));
+        CHECK(ack == MISSION_ACCEPTED && m.count == 2 && m.cmd[1] == MISSION_CMD_WAYPOINT && abs(m.lat[1] - m_lat(10)) < 30, "uploaded with MISSION_ITEM (degrees): the point within 3 mm (%d / %d)", m.lat[1], m_lat(10));
+        b.rc[5] = 2000; r->run(0.3); b.rc[4] = 2000; r->run(1.0);                // (armed: a home point)
+        const auto down = g.download();
+        CHECK(down.size() == 3 && down[0].frame == FRAME_GLOBAL_INT && abs(down[0].x - r->tel().lat) < 300 && down[0].z > 400.0f && down[1].command == CMD_NAV_TAKEOFF && down[2].command == CMD_NAV_WAYPOINT,
+              "downloaded: home first (as ArduPilot, %.0f m above sea level), then the 2 commands (%zu items)", down.empty() ? 0.0 : down[0].z, down.size());
+        r->run(1.5); MissionCurrent mc; CHECK(g.last(mc) && mc.total == 3 && mc.seq == 1, "MISSION_CURRENT counts the home item: command 1 of 3 (%u of %u)", mc.seq, mc.total); }
+}
+
+
+// 0.41: Loiter on the virtual board: a switch, flown with GPS + compass; a ground station picks it (MAVLink custom mode 5)
+static void t_loiter_fw() {
+    printf("[loiter] a LOITER switch on the virtual board (GPS + compass); a ground station picks it (MAVLink 5)\n");
+    using namespace mav;
+    auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.receiver.protocol = RX_PROTOCOL_MAVLINK; b.rc_link = VirtualBoard::RC_MAVLINK;
+                                                         s.modes.mode[4] = MODE_LOITER; s.modes.aux[4] = 4; s.modes.lo[4] = 1700; s.modes.hi[4] = 2100; });
+    VirtualBoard& b = r->board; GcsLink g{*r, true}; r->run(3.0);
+    b.rc[8] = 2000; r->run(0.3); double waited = 0; for (; waited < 60.0 && r->tel().blockers; waited += 0.5) r->run(0.5);
+    CHECK(r->tel().blockers == 0, "the LOITER switch on: arming waits for a position (POSHOLD_NO_GPS, %.1f s more)", waited);
+    b.rc[4] = 2000; r->run(0.7);
+    const uint32_t m = r->tel().modes;
+    CHECK(r->tel().armed && ((m >> fc::M_LOITER) & 1u) && ((m >> fc::M_ALTHOLD) & 1u) && ((m >> fc::M_ANGLE) & 1u), "armed with the LOITER switch on: Angle and Altitude Hold come with it");
+    b.rc[2] = 1750; r->run(3.0); b.rc[2] = 1500; r->run(4.0);
+    CHECK(b.plant.z > 1.0f && g.mode() == COPTER_LOITER, "taken off in Loiter (%.1f m); HEARTBEAT says LOITER (%u)", b.plant.z, g.mode());
+    { const float n0 = b.plant.pn, e0 = b.plant.pe; float far = 0; for (int i = 0; i < 100; i++) { r->run(0.1); far = fmaxf(far, hypotf(b.plant.pn - n0, b.plant.pe - e0)); }
+      CHECK(far < 1.5f, "10 s let alone: within %.2f m", far); }
+    b.rc[1] = 1800; r->run(5.0); const float v = b.plant.vn;
+    CHECK(v > 1.0f, "pitch stick forward: flies north at %.1f m/s", v);
+    b.rc[1] = 1500; r->run(8.0);
+    CHECK(hypotf(b.plant.vn, b.plant.ve) < 0.4f && fabsf(b.plant.z - 1.0f) < 4.0f, "let go: stopped by itself (%.2f m/s), the height held", hypotf(b.plant.vn, b.plant.ve));
+    b.rc[5] = 2000; b.rc[6] = 2000; r->run(0.3); b.rc[8] = 1000; r->run(1.0);
+    CHECK(!((r->tel().modes >> fc::M_LOITER) & 1u) && ((r->tel().modes >> fc::M_ALTHOLD) & 1u), "the LOITER switch off (Angle + Altitude Hold on): Altitude Hold");
+    CHECK(g.command(CMD_DO_SET_MODE, 1, COPTER_LOITER) == RESULT_ACCEPTED && ((r->tel().modes >> fc::M_LOITER) & 1u), "DO_SET_MODE 5 from the ground station: Loiter");
+    r->run(1.5); CHECK(g.mode() == COPTER_LOITER, "HEARTBEAT LOITER again (%u)", g.mode());
+    AvailableModes am; CHECK(g.command(CMD_REQUEST_MESSAGE, MSG_AVAILABLE_MODES, 9) == RESULT_ACCEPTED && g.last(am) && !strcmp(am.mode_name, "Loiter"), "AVAILABLE_MODES 9: Loiter");
+}
+
 int main() {
     if (const char* only = getenv("WB_ONLY")) {            // one group alone (while working on it): WB_ONLY=nav ./build/test_fw
         if (!strcmp(only, "nav")) { t_nav_flow(); t_nav_mounting(); t_nav_uarts(); }
@@ -2970,10 +3268,13 @@ int main() {
         if (!strcmp(only, "led")) t_led();
         if (!strcmp(only, "dronecan2")) t_dronecan2();
         if (!strcmp(only, "magauto")) t_mag_autocal();
-        if (!strcmp(only, "mavlink")) t_mavlink();
+        if (!strcmp(only, "mavlink")) { t_mavlink(); t_mavlink_rx(); t_mavlink_gcs(); }
+        if (!strcmp(only, "loiter")) t_loiter_fw();
         if (!strcmp(only, "osd")) t_osd();
         if (!strcmp(only, "switch")) t_switch_modes();
         if (!strcmp(only, "stickarm")) t_stick_arm();
+        if (!strcmp(only, "nrf24")) t_nrf24_fw();
+        if (!strcmp(only, "txfly")) t_tx_flight();
         if (!strcmp(only, "sensors")) t_sensors_bus();
         if (!strcmp(only, "bbuart")) t_bb_uart_stream();
         if (!strcmp(only, "fsact")) t_failsafe_actions_fw();
@@ -3022,12 +3323,17 @@ int main() {
     t_osd();
     t_switch_modes();
     t_stick_arm();
+    t_nrf24_fw();
+    t_tx_flight();
     t_sensors_bus();
     t_bb_uart_stream();
     t_failsafe_actions_fw();
     t_msp_port();
     t_msp_configurator();
     t_mavlink();
+    t_mavlink_rx();
+    t_mavlink_gcs();
+    t_loiter_fw();
     t_esc_passthrough();
     t_ekf();
     t_gps_alt();

@@ -1,8 +1,9 @@
-# Receiver: CRSF, SBUS, IBUS, Spektrum, PPM, PWM — `src/hal/rx`
+# Receiver: CRSF, SBUS, IBUS, Spektrum, MAVLink, PPM, PWM — `src/hal/rx`
 
 | File | Nội dung |
 |---|---|
 | `rx_proto.h` | **portable**: `rx::CrsfDecoder`, `rx::SbusDecoder`, `rx::IbusDecoder` (luồng byte → 16 kênh µs), `rx::Link` (link ok / mất, giữ kênh cuối) |
+| `rx_mavlink.h` | **portable**: `rx::MavlinkDecoder` (ELRS chế độ MAVLink: `RC_CHANNELS_OVERRIDE` → 16 kênh µs; `RADIO_STATUS` → LQ, RSSI, `txbuf` cho việc điều tiết telemetry) |
 | `rx_pulse.h` | **portable**: `rx::PpmDecoder`, `rx::PwmDecoder` (thời điểm cạnh xung → kênh), `rx::EdgeRing` (hàng đợi ngắt → luồng cảm biến) |
 | `rx_base.h` | `RcReceiver`: decoder + `HardwareSerial` (baud, 8E2, đảo mức), hoặc ngắt GPIO cho PPM / PWM |
 
@@ -23,6 +24,7 @@ rc.channels();  rc.linkOk(millis());  rc.rateHz();  rc.linkQuality();
 | IBUS (FlySky) | 115200 8N1 | `20 40, 14 × u16, checksum = 0xFFFF − tổng` | giá trị là µs |
 | Spektrum 2048 (`SPEKTRUM`: DSMX, DSM2 11 ms) | 115200 8N1 | 16 byte: `fades, system, 7 × u16 big-endian`; bit 14..11 = số kênh, 10..0 = giá trị; `FFFF` = ô trống | `988 + giá trị / 2` |
 | Spektrum 1024 (`SPEKTRUM1024`: DSM2 22 ms) | 115200 8N1 | như trên, bit 13..10 = số kênh, 9..0 = giá trị | `988 + giá trị` |
+| MAVLink (`MAVLINK`: **ExpressLRS** chế độ MAVLink, 0.39) | 460800 8N1 | MAVLink 2; `RC_CHANNELS_OVERRIDE` (id 70) mỗi 10 ms = 16 kênh; `RADIO_STATUS` (id 109) mỗi 10 ms | giá trị là µs; 0 hoặc 65535 = giữ kênh cũ |
 | PPM | chân `pins.ppm`, ngắt cạnh lên | thời gian giữa hai cạnh cùng loại = một kênh; khoảng > 2,7 ms = đồng bộ | là µs |
 | PWM | chân `pins.rx_pwm[0..7]`, ngắt hai cạnh | cạnh lên → cạnh xuống trên từng chân = một kênh | là µs |
 
@@ -34,7 +36,9 @@ Kênh bị kẹp trong 885..2115 µs. Thứ tự kênh mặc định AETR (roll,
 
 **Mất sóng**: `Link::ok()` = có khung **không mang cờ failsafe của receiver** trong `rx_timeout_ms`. Khung failsafe của SBUS không giữ link sống và không ghi đè cần điều khiển. CRSF/ELRS báo mất sóng bằng cách ngừng gửi khung kênh. Khi link mất, core chạy failsafe (xem `docs/CORE.md`).
 
-Lưu ý ELRS: receiver ELRS nói CRSF qua UART → chọn `CRSF`.
+Lưu ý ELRS: receiver ELRS nói CRSF qua UART → chọn `CRSF`. Đặt ELRS ở chế độ MAVLink (Link Mode = MAVLink) → chọn `MAVLINK` (dưới).
+
+**MAVLink** (firmware 0.39, `rx_mavlink.h`, cách dùng: `docs/ELRS_MAVLINK.md`): như `rx/mavlink.c` của Betaflight. Khung tìm bằng byte đầu `0xFD` và CRC (`mav::Parser`, như `mavlink_parse_char`: khung hỏng bị bỏ, đợi byte đầu tiếp theo). `RC_CHANNELS_OVERRIDE`: kênh 1..16, giá trị 0 hoặc 65535 giữ kênh cũ ("bỏ qua trường này" của MAVLink), kênh chưa nhận = 1500; không kiểm `target_system`. `RADIO_STATUS`: LQ = `rssi` × 100 / 255 (ELRS gửi LQ × 2,55), RSSI = −`remrssi` dBm, `txbuf` = % bộ đệm còn trống của receiver. Mọi message khác (từ ground station) bị bỏ qua, không tính là lỗi. Mất sóng: ELRS ngừng gửi kênh → hết `rx_timeout_ms` thì failsafe. Telemetry MAVLink đi ngược ra chân TX của chính UART này khi `receiver.telemetry` bật (`docs/MAVLINK.md`).
 
 **Spektrum** (satellite DSMX / DSM2, firmware 0.8): không có checksum → khung tìm từ khoảng lặng > 4 ms giữa các khung (một khung dài 1,4 ms), rồi đếm từng 16 byte (đọc dồn sau khi vòng lặp bị treo vẫn đúng). Hơn 7 kênh thì các khung thay phiên nhau mang kênh: decoder giữ giá trị cuối của từng kênh. Kênh 0..11 (như Betaflight), kênh chưa nhận = 1500. Thứ tự kênh của Spektrum là **TAER**: chọn TAER ở tab Receiver. **Chưa làm bind** (`spektrum_sat_bind` của Betaflight): bind satellite bằng receiver chính hoặc tay phát trước.
 
@@ -77,7 +81,10 @@ Spektrum / PPM / PWM: `test_rx` (khung dựng từng bit theo mô tả, 2048 / 1
 
 **Chưa kiểm chứng trên mạch**: UART 420 kbaud của ESP32 có rớt byte khi vòng bay bận không (bộ đệm RX đã đặt 512 byte), đảo mức SBUS bằng phần cứng.
 **Chưa kiểm chứng trên mạch (Spektrum / PPM / PWM)**: độ trễ ngắt GPIO thật (ngắt khác, ghi flash tắt cache → mất một khung), receiver 5 V cần chia áp, satellite thật (byte `system`, thứ tự khung), bind.
-**Chưa làm**: nRF24 (WireEnvelope) — `begin()` từ chối kèm lý do; bind Spektrum.
+**Chưa làm**: bind Spektrum.
+
+## nRF24 (0.38)
+Giao thức `NRF24`: module nRF24L01+ trên bus SPI thứ hai (chân `nrf_*`), nhận tay phát DIY Windburst (`docs/TX.md`). `RcReceiver::beginNrf24` + `rx::Nrf24Rx` (`src/hal/rx/rx_nrf24.h`): đọc mọi gói chờ trong luồng sensor, 8 kênh (9..16 = 1000), gói hỏng vào `rc.bad_frames`, `rc.lq` = % gói nhận được trên số gói tay phát gửi, `rc.bind_state`. Bind: tự nghe 60 s sau khi bật nếu chưa bind lần nào, hoặc lệnh `BIND` (tab Receiver, 30 s), không bao giờ khi đang arm. Telemetry về tay qua ACK. Chưa có trên STM32. Kiểm chứng: `test_rx` (`t_nrf24`), `test_fw` nhóm `nrf24` / `txfly`.
 
 ## Telemetry về tay điều khiển: bật / tắt (0.20)
 `receiver.telemetry` (tab Receiver, mặc định bật): bật thì firmware gửi telemetry CRSF trên chân TX của receiver (pin, tư thế, GPS, vario, mode). Tắt thì chân TX im lặng, receiver vẫn nhận kênh bình thường; báo cáo khởi động ghi `rx: CRSF on UART2, telemetry off (receiver.telemetry)`. Có hiệu lực sau khi lưu và khởi động lại. Bản ghi cài đặt receiver của bản cũ (12 byte) vẫn đọc được, telemetry giữ bật. Kiểm chứng: `test_fw` nhóm `crsf`, `test_proto`.

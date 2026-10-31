@@ -303,8 +303,8 @@ export const EN = {
     "RX of the ESP32 goes to TX of the GPS module.",
   "Receiver nối tiếp (UART2)":
     "Serial receiver (UART2)",
-  "CRSF / SBUS / IBUS / Spektrum. TX chỉ cần khi dùng telemetry.":
-    "CRSF / SBUS / IBUS / Spektrum. TX is only needed for telemetry.",
+  "CRSF / SBUS / IBUS / Spektrum / MAVLink. TX chỉ cần khi dùng telemetry.":
+    "CRSF / SBUS / IBUS / Spektrum / MAVLink. TX is only needed for telemetry.",
   "Khác":
     "Other",
   "ADC đo pin":
@@ -2451,48 +2451,8 @@ export const EN = {
     "stopped answering",
   "{state}, vòng bay dùng {src}; gyro IMU 2 {g2} (IMU 1 {g1}) °/s":
     "{state}, the loop flies on {src}; IMU 2 gyro {g2} (IMU 1 {g1}) °/s",
-  "WiFi của máy bay (điểm phát riêng, 192.168.4.1:5760)":
-    "The craft's WiFi (its own access point, 192.168.4.1:5760)",
-  "Địa chỉ cho app":
-    "Address for the app",
   "Sóng":
     "Signal",
-  "Thiết bị đang nối vào":
-    "Devices connected",
-  "App đang nối qua":
-    "The app is connected via",
-  "cổng serial (USB / UART)":
-    "the serial port (USB / UART)",
-  "Có hiệu lực sau khi lưu và khởi động lại. Điểm phát riêng (AP): mạch là 192.168.4.1, tên mặc định Windburst-XXXX, mật khẩu mặc định windburst - hãy đổi mật khẩu, ai vào được mạng này cũng điều khiển được máy (kể cả thử motor). Ở app chọn cổng \"WiFi của máy bay\", hoặc nhập socket://<địa chỉ>:5760 khi máy nối vào mạng nhà bạn (STA).":
-    "Takes effect after saving and rebooting. Own access point (AP): the board is 192.168.4.1, default name Windburst-XXXX, default password windburst - change the password: whoever joins this network controls the craft (motor test included). In the app pick the port \"The craft's WiFi\", or type socket://<address>:5760 when the craft joins your home network (STA).",
-  "Trên ESP32-S3 các chân ADC2 (GPIO11 đến GPIO20) không đọc được khi WiFi bật: chân đo pin và đo dòng phải nằm ở GPIO1 đến GPIO10.":
-    "On the ESP32-S3 the ADC2 pins (GPIO11 to GPIO20) cannot be read while WiFi is on: the battery and current sensor pins must be on GPIO1 to GPIO10.",
-  "Tắt; Điểm phát riêng (AP): máy bay tự phát mạng WiFi, máy tính nối vào đó; Nối vào mạng có sẵn (STA): máy bay vào mạng WiFi nhà bạn (tên và mật khẩu bên dưới).":
-    "Off; Own access point (AP): the craft makes a WiFi network of its own, the computer joins it; Join a network (STA): the craft joins your WiFi network (name and password below).",
-  "Tên mạng (SSID)":
-    "Network name (SSID)",
-  "AP: để trống thì là Windburst-XXXX (bốn ký tự cuối của địa chỉ MAC). STA: tên mạng cần vào.":
-    "AP: empty = Windburst-XXXX (the last four characters of the MAC address). STA: the network to join.",
-  "Mật khẩu":
-    "Password",
-  "Từ 8 đến 63 ký tự (WPA2). AP: để trống thì là windburst. STA: để trống cho mạng không mật khẩu.":
-    "8 to 63 characters (WPA2). AP: empty = windburst. STA: empty for an open network.",
-  "Kênh (AP)":
-    "Channel (AP)",
-  "Cổng TCP":
-    "TCP port",
-  "Cổng app nối vào. Mặc định 5760, giống trình mô phỏng.":
-    "The port the app connects to. 5760 by default, like the simulator.",
-  "Điểm phát riêng (AP)":
-    "Own access point (AP)",
-  "Nối vào mạng có sẵn (STA)":
-    "Join a network (STA)",
-  "đang phát mạng":
-    "access point running",
-  "đang nối vào mạng…":
-    "joining the network…",
-  "đã nối vào mạng":
-    "connected to the network",
   "không khởi động được (xem nhật ký firmware)":
     "could not start (see the firmware log)",
   "(chưa biết tên)":
@@ -2779,6 +2739,32 @@ export const EN = {
     "Other tools over MSP",
   "Cùng cổng với app này. Betaflight Configurator / SpeedyBee đọc được tư thế, receiver, GPS, pin, PID, rate, mode, map kênh, tên máy bay; ghi được các mục đó khi được phép.":
     "On the same port as this app. Betaflight Configurator / SpeedyBee can read the attitude, receiver, GPS, battery, PID, rates, modes, channel map and craft name, and write those when allowed.",
+  "MAVLink (ELRS ở chế độ MAVLink)":
+    "MAVLink (ELRS in MAVLink mode)",
+  "MAVLink: receiver ExpressLRS (3.5 trở lên) để ở chế độ MAVLink, nối vào UART2 như CRSF (RX và TX), 460800 baud. Một link mang cả cần điều khiển lẫn telemetry MAVLink về Mission Planner / QGroundControl (bật \"Telemetry về tay điều khiển\"); khi bộ đệm của receiver gần đầy, firmware tự gửi chậm lại. Cách cài đặt: docs/ELRS_MAVLINK.md.":
+    "MAVLink: an ExpressLRS receiver (3.5 or newer) in MAVLink mode, wired to UART2 like CRSF (RX and TX), 460800 baud. One link carries the sticks and the MAVLink telemetry to Mission Planner / QGroundControl (turn on \"Telemetry to the transmitter\"); when the receiver's buffer gets full, the firmware sends more slowly by itself. How to set it up: docs/ELRS_MAVLINK.md.",
+  "Receiver MAVLink: chưa có chân TX của receiver - không gửi được telemetry về ground station.":
+    "Receiver MAVLink: the receiver has no TX pin - no telemetry can go to the ground station.",
+  "Receiver chọn MAVLink (ELRS) và bật \"Telemetry về tay điều khiển\": telemetry đi ra chính UART của receiver, ở đây chỉ còn dùng tốc độ gửi và System ID.":
+    "Receiver on MAVLink (ELRS) with \"Telemetry to the transmitter\" on: the telemetry goes out on the receiver's own UART; only the rates and the System ID here are used.",
+  "Cho ground station arm":
+    "Let the ground station arm",
+  "Mission Planner / QGroundControl được arm máy bay qua MAVLink. Mọi điều kiện chặn arm vẫn áp dụng; công tắc ARM nhận lại quyền ở lần gạt tiếp theo. Disarm từ ground station luôn được (khi đang bay phải có mã force 21196). Mặc định tắt.":
+    "Mission Planner / QGroundControl may arm the craft over MAVLink. Every arming blocker still applies; the ARM switch takes it over at its next flip. Disarming from the ground station is always allowed (in the air only with the force code 21196). Off by default.",
+  "Ground station vừa nạp kế hoạch mới vào drone (đã lưu vào flash).":
+    "A ground station just put a new plan into the drone (saved to flash).",
+  "Drone có kế hoạch mới (từ ground station). Kế hoạch trên bản đồ đang sửa dở nên chưa bị thay: bấm \"Tải từ drone\" để xem kế hoạch mới.":
+    "The drone has a new plan (from a ground station). The plan on the map has unsaved edits, so it was not replaced: press \"Download from the craft\" to see the new one.",
+  "Mission Planner: dòng home đầu mission":
+    "Mission Planner: home as the first mission item",
+  "Bật khi dùng Mission Planner: lúc tải mission về (Read WPs), Mission Planner luôn bỏ dòng đầu vì coi đó là home. Bật thì firmware gửi thêm điểm home ở dòng đầu như ArduPilot, và số thứ tự lệnh đang bay cũng tính dòng đó. Tắt khi dùng QGroundControl.":
+    "Turn on for Mission Planner: when it reads a mission back (Read WPs) it always drops the first item as home. On, the firmware sends the home point as the first item as ArduPilot does, and the number of the command being flown counts it too. Off for QGroundControl.",
+  "Giữ vị trí kiểu Loiter của ArduPilot: buông cần là máy tự giảm tốc rồi đứng yên, đẩy cần là bay với vận tốc theo độ đẩy cần (hết cần = \"Loiter: tốc độ tối đa\" ở tab Vị trí). Tự bật Angle và Altitude Hold. Cần GPS + la bàn hoặc optical flow như Position Hold. Bật cùng lúc với Position Hold thì Loiter được ưu tiên.":
+    "Holds the spot like ArduPilot's Loiter: let go of the stick and the craft slows down by itself and stands still; push it and it flies at a speed that follows the stick (full stick = \"Loiter: top speed\" in the Position tab). Turns on Angle and Altitude Hold. Needs GPS + compass or optical flow, as Position Hold. On together with Position Hold: Loiter wins.",
+  "Loiter: tốc độ tối đa":
+    "Loiter: top speed",
+  "Tốc độ khi đẩy hết cần trong Loiter (LOIT_SPEED_MS của ArduPilot); nửa cần cho khoảng nửa tốc độ đó (theo đường cong rate như Angle). Mặc định 12,5 m/s; người mới nên để 3 - 5 m/s.":
+    "The speed at full stick in Loiter (ArduPilot LOIT_SPEED_MS); half the stick gives about half of it (through the rate curve, as Angle). Default 12.5 m/s; 3 - 5 m/s for a beginner.",
   "MSP (MSP_SET_RAW_RC trên cổng MSP)":
     "MSP (MSP_SET_RAW_RC on the MSP port)",
   "Cổng MSP (flow, GPS, la bàn, khí áp kế, receiver)":
@@ -3001,14 +2987,10 @@ export const EN = {
     "GLOBAL_POSITION_INT and GPS_RAW_INT. 0 = not sent.",
   "Giao thức telemetry":
     "Telemetry protocol",
-  "Gửi cả qua WiFi":
-    "Also send over WiFi",
-  "Gửi trạng thái máy bay cho Mission Planner / QGroundControl: qua radio telemetry (433 / 915 MHz, ELRS backpack) nối vào một UART, và / hoặc qua WiFi (UDP cổng 14550, ground station tự nhận). Chỉ gửi, chưa nhận lệnh. UART: Tự động lấy UART còn trống sau GPS, receiver, optical flow và dây telemetry ESC; Theo bảng: UART có chức năng Telemetry.":
-    "Sends the state of the craft to Mission Planner / QGroundControl: through a telemetry radio (433 / 915 MHz, ELRS backpack) on a UART, and / or over WiFi (UDP port 14550, the ground station finds it by itself). Send only, no commands yet. UART: Automatic takes the UART left after GPS, receiver, optical flow and the ESC telemetry wire; Table: the UART with the function Telemetry.",
+  "Gửi trạng thái máy bay cho Mission Planner / QGroundControl qua radio telemetry (433 / 915 MHz, ELRS backpack) nối vào một UART. Chỉ gửi, chưa nhận lệnh. UART: Tự động lấy UART còn trống sau GPS, receiver, optical flow và dây telemetry ESC; Theo bảng: UART có chức năng Telemetry.":
+    "Sends the state of the craft to Mission Planner / QGroundControl through a telemetry radio (433 / 915 MHz, ELRS backpack) on a UART. Send only, no commands yet. UART: Automatic takes the UART left after GPS, receiver, optical flow and the ESC telemetry wire; Table: the UART with the function Telemetry.",
   "HUD (tốc độ, độ cao, ga)":
     "HUD (speed, altitude, throttle)",
-  "Khi WiFi đang bật: gửi broadcast UDP tới cổng 14550, Mission Planner / QGroundControl trên cùng mạng tự nhận.":
-    "While WiFi is on: UDP broadcast to port 14550; Mission Planner / QGroundControl on the same network pick it up by themselves.",
   "MAVLink 2: Mission Planner, QGroundControl, radio telemetry, ELRS backpack. Có hiệu lực sau khi lưu và khởi động lại.":
     "MAVLink 2: Mission Planner, QGroundControl, telemetry radios, ELRS backpack. Takes effect after saving and restarting.",
   "Mã của máy bay trong MAVLink. Hai máy bay cùng một ground station cần mã khác nhau.":
@@ -3017,8 +2999,8 @@ export const EN = {
     "RC_CHANNELS. 0 = not sent.",
   "SYS_STATUS và BATTERY_STATUS. 0 = không gửi.":
     "SYS_STATUS and BATTERY_STATUS. 0 = not sent.",
-  "Telemetry MAVLink: không có chân TX và không gửi qua WiFi - không có gì được gửi đi.":
-    "MAVLink telemetry: no TX pin and WiFi sending off - nothing is sent.",
+  "Telemetry MAVLink: không có chân TX - không có gì được gửi đi.":
+    "MAVLink telemetry: no TX pin - nothing is sent.",
   "Trạng thái và pin":
     "Status and battery",
   "Tư thế (ATTITUDE)":
@@ -3077,8 +3059,8 @@ export const EN = {
     "reversed",
   "Telemetry về tay điều khiển":
     "Telemetry to the transmitter",
-  "CRSF / ELRS: pin, tư thế, GPS, mode hiện trên màn hình tay điều khiển (cần chân TX của receiver). Tắt: chân TX im lặng. Có hiệu lực sau khi lưu và khởi động lại.":
-    "CRSF / ELRS: battery, attitude, GPS and flight mode on the transmitter's screen (needs the receiver's TX pin). Off: the TX pin stays silent. Takes effect after saving and restarting.",
+  "CRSF / ELRS: pin, tư thế, GPS, mode hiện trên màn hình tay điều khiển (cần chân TX của receiver). Giao thức MAVLink (ELRS ở chế độ MAVLink): telemetry MAVLink về Mission Planner / QGroundControl qua chính receiver đó. Tắt: chân TX im lặng. Có hiệu lực sau khi lưu và khởi động lại.":
+    "CRSF / ELRS: battery, attitude, GPS and flight mode on the transmitter's screen (needs the receiver's TX pin). Protocol MAVLink (ELRS in MAVLink mode): MAVLink telemetry to Mission Planner / QGroundControl through that same receiver. Off: the TX pin stays silent. Takes effect after saving and restarting.",
   "Tên USB":
     "USB name",
   "Tên thiết bị USB":
@@ -3323,6 +3305,189 @@ export const EN = {
     "Delete all points",
   "Xoá cả {n} điểm trên bản đồ? Kế hoạch đã nạp trong drone giữ nguyên cho tới khi bạn bấm \"Nạp vào drone\".":
     "Delete all {n} points on the map? The plan already in the craft stays as it is until you press \"Upload to the craft\".",
+  // 0.38: the DIY transmitter, the nRF24 receiver
+  "Tay phát":
+    "Transmitter",
+  "Đã nối drone":
+    "Drone linked",
+  "Chưa nối drone":
+    "No drone link",
+  "Drone chưa arm":
+    "Drone disarmed",
+  "{n} gói/s":
+    "{n} packets/s",
+  "Pin drone":
+    "Drone battery",
+  "Receiver nRF24":
+    "nRF24 receiver",
+  "Module nRF24L01+ của tay phát DIY, trên bus SPI thứ hai (chân riêng, không chung với IMU). Chỉ dùng khi giao thức receiver là NRF24.":
+    "The DIY transmitter's nRF24L01+ module, on the second SPI bus (pins of its own, not shared with the IMU). Used only when the receiver protocol is NRF24.",
+  "Bind nRF24":
+    "Bind nRF24",
+  "Đang nghe bind 30 giây: bấm \"Bind với drone\" ở tab Radio của tay phát.":
+    "Listening for a bind for 30 s: press \"Bind with drone\" in the transmitter's Radio tab.",
+  "Trạng thái: ":
+    "State: ",
+  "Gói nhận được: ":
+    "Packets received: ",
+  "Ba giá trị trên do việc bind (và tab Radio của tay phát) đặt. Mạch chưa bind lần nào tự nghe bind trong 60 giây sau khi bật.":
+    "The three values above are set by the bind (and the transmitter's Radio tab). A board never bound listens for a bind for 60 s after power-up.",
+  "nRF24: module nRF24L01+ nối vào bus SPI thứ hai (chân ở tab Chân và cổng, nhóm Receiver nRF24), cấp 3,3 V và thêm tụ 10 µF sát chân nguồn của module. Dùng với tay phát DIY Windburst; bind ở khung nRF24 bên dưới. Không dùng cùng lúc được với thẻ SD kiểu SPI, cảm biến PMW3901 hay dải LED.":
+    "nRF24: an nRF24L01+ module on the second SPI bus (pins in the Pins and ports tab, group nRF24 receiver), 3.3 V supply with a 10 µF capacitor right at the module's power pins. For the Windburst DIY transmitter; bind in the nRF24 box below. Cannot be used together with an SD card on SPI, a PMW3901 sensor or an LED strip.",
+  "Ga đang ở chế độ ALT / POS (cần ở giữa = 1500) mà drone đang bay {mode}: buông cần là ga 50 %. Chuyển ga sang Thủ công ở tab Joystick, hoặc bật ALT HOLD / POS HOLD trên drone.":
+    "The throttle is in ALT / POS mode (stick centre = 1500) but the drone flies {mode}: letting go of the stick means 50 % throttle. Set the throttle to Manual in the Joystick tab, or switch ALT HOLD / POS HOLD on in the drone.",
+  "Ga đang ở chế độ Thủ công mà drone đang ở {mode}: cần ga không còn nghĩa \"giữa = giữ độ cao\". Chuyển ga sang ALT / POS ở tab Joystick.":
+    "The throttle is in Manual mode but the drone is in {mode}: the stick no longer means \"centre = hold the height\". Set the throttle to ALT / POS in the Joystick tab.",
+  "Tay phát DIY: vị trí cần, các kênh đang gửi, sóng tới drone và những gì drone báo về.":
+    "DIY transmitter: the sticks, the channels it sends, the link to the drone and what the drone reports.",
+  "đã nối · {ack} % gói được nhận · {pps} gói/s":
+    "linked · {ack} % of packets acknowledged · {pps} packets/s",
+  "chưa nối với drone ({state})":
+    "no link to a drone ({state})",
+  "chưa arm":
+    "disarmed",
+  "Chế độ bay":
+    "Flight mode",
+  "Sóng phía drone":
+    "Link at the drone",
+  "Chưa nghe thấy drone. Drone phải bật, dùng receiver nRF24 và đã bind với tay này (tab Radio).":
+    "No drone heard yet. The drone must be on, use the nRF24 receiver and be bound to this transmitter (Radio tab).",
+  "Trái: yaw và ga":
+    "Left: yaw and throttle",
+  "Phải: roll và pitch":
+    "Right: roll and pitch",
+  "Kênh đang gửi":
+    "Channels sent",
+  "Kênh 5 đến 8 là 1000 cho tới khi tay có công tắc.":
+    "Channels 5 to 8 stay at 1000 until the transmitter has switches.",
+  "Sóng tới drone":
+    "Link to the drone",
+  "Drone báo về":
+    "From the drone",
+  "Arm bằng cần (bật \"Arm bằng cần\" ở tab Mode của drone): kéo ga và pitch xuống hết, yaw và roll về hai phía ngược nhau, giữ 1 giây.":
+    "Arm with the sticks (switch \"Arm with the sticks\" on in the drone's Mode tab): throttle and pitch fully down, yaw and roll to opposite sides, hold 1 second.",
+  "Ghép tay với drone và cài đặt sóng nRF24.":
+    "Pair the transmitter with a drone, and the nRF24 radio settings.",
+  "chưa bind":
+    "not bound",
+  "Bind với drone":
+    "Bind with drone",
+  "Đang bind: đặt tay sát drone. Drone chưa bind lần nào tự nghe trong 60 giây sau khi bật; nếu không, bấm \"Bind nRF24\" ở tab Receiver của drone.":
+    "Binding: hold the transmitter next to the drone. A drone never bound listens for 60 s after power-up; otherwise press \"Bind nRF24\" in the drone's Receiver tab.",
+  "Dừng bind":
+    "Stop binding",
+  "Ghép với drone":
+    "Pair with a drone",
+  "Địa chỉ cặp: ":
+    "Pair address: ",
+  "Mỗi lần bind, tay tạo một địa chỉ ngẫu nhiên mới: hai bộ tay và drone bật cạnh nhau không lái nhầm nhau. Bind chạy ở công suất thấp nhất, tối đa 30 giây; xong thì cả hai tự lưu.":
+    "Every bind makes a new random address: two transmitter-drone pairs switched on side by side never fly each other's drone. Binding runs at the lowest power for at most 30 s; when done, both keep it by themselves.",
+  "Kênh tần số, tốc độ và số gói mỗi giây: tay gửi cài đặt mới cho drone trên cài đặt cũ, rồi cả hai cùng đổi. Chỉ đổi khi drone đang bật và chưa arm; drone không theo được trong 1 giây thì cả hai quay về cài đặt cũ. Công suất là của riêng tay: đổi ngay.":
+    "RF channel, data rate and packets per second: the transmitter sends the new settings to the drone on the old ones, then both change. Change them only with the drone on and disarmed; if the drone does not follow within 1 s, both go back to the old settings. The power is the transmitter's own: it changes at once.",
+  "Chân nRF24 trên tay phát":
+    "nRF24 pins on the transmitter",
+  "ESP32-C5: module nRF24 cấp 3,3 V, thêm tụ 10 µF sát chân nguồn của module. Đổi chân có hiệu lực sau khi lưu và khởi động lại.":
+    "ESP32-C5: the nRF24 module on 3.3 V, with a 10 µF capacitor right at its power pins. New pins take effect after saving and restarting.",
+  "Hiệu chỉnh cần, gán trục cho từng kênh và chọn cách cần ga hoạt động.":
+    "Calibrate the sticks, give each channel its axis and choose how the throttle stick works.",
+  "Bắt đầu hiệu chỉnh":
+    "Start calibration",
+  "Xong":
+    "Done",
+  "Đã hiệu chỉnh {n} trục (đã lưu vào flash của tay).":
+    "{n} axes calibrated (saved in the transmitter's flash).",
+  "Không trục nào đổi: đẩy từng cần ra hết hai đầu rồi thả về giữa, sau đó bấm Xong.":
+    "No axis changed: push every stick to both ends, let it return to the centre, then press Done.",
+  "Huỷ":
+    "Cancel",
+  "đang hiệu chỉnh: đẩy mọi cần ra hết hai đầu, rồi thả về giữa":
+    "calibrating: push every stick to both ends, then let it return to the centre",
+  "Đầu thấp":
+    "Low end",
+  "Giữa":
+    "Centre",
+  "Đầu cao":
+    "High end",
+  "Joystick tự về giữa: ALT / POS khi bay ALT HOLD hoặc POS HOLD (cần ở giữa = giữ độ cao). Thủ công khi bay ANGLE / ACRO: đẩy lên thì ga tăng dần, buông ra thì ga đứng yên, và ga luôn về thấp nhất khi drone chưa arm.":
+    "Self-centring sticks: ALT / POS when flying ALT HOLD or POS HOLD (stick centre = hold the height). Manual when flying ANGLE / ACRO: push up and the throttle rises, let go and it stays, and it is always at the lowest while the drone is disarmed.",
+  "Hiệu chỉnh":
+    "Calibration",
+  "Bấm Bắt đầu, đẩy từng cần ra hết bốn phía, thả cho cần về giữa rồi bấm Xong. Trục nào không được đẩy đủ xa thì giữ hiệu chỉnh cũ.":
+    "Press Start, push each stick to all four sides, let them return to the centre, then press Done. An axis not pushed far enough keeps its old calibration.",
+  "Gán trục cho kênh":
+    "Axis of each channel",
+  "0 = joy1 X, 1 = joy1 Y, 2 = joy2 X, 3 = joy2 Y. Mỗi kênh một trục khác nhau.":
+    "0 = joy1 X, 1 = joy1 Y, 2 = joy2 X, 3 = joy2 Y. Each channel a different axis.",
+  "Cảm giác cần":
+    "Stick feel",
+  "Giá trị đọc được":
+    "Readings",
+  "Phiên bản firmware của tay phát, báo cáo khởi động, về mặc định.":
+    "The transmitter's firmware version, boot report, defaults.",
+  "Đưa mọi cài đặt của tay phát về mặc định (kể cả hiệu chỉnh cần và địa chỉ bind)? Thay đổi nằm trong RAM cho tới khi bạn bấm \"Lưu\".":
+    "Put every setting of the transmitter back to its default (stick calibration and bind address included)? The change stays in RAM until you press \"Save\".",
+  "Khởi động lại tay phát":
+    "Restart the transmitter",
+  "Tay phát đã khởi động lại.":
+    "The transmitter restarted.",
+  "Báo cáo khởi động":
+    "Boot report",
+  "Kênh tần số nRF24":
+    "nRF24 RF channel",
+  "Tốc độ sóng nRF24":
+    "nRF24 data rate",
+  "Số gói mỗi giây của tay phát":
+    "Transmitter packets per second",
+  "Kênh tần số":
+    "RF channel",
+  "2400 + số này MHz. Dải 2,4 GHz được phép chỉ tới 2483,5 MHz: dùng kênh 0 đến 83. Mỗi lần bind tay tự chọn một kênh từ 74 đến 82 (giữa WiFi kênh 11 và mép trên của dải).":
+    "2400 + this number MHz. The 2.4 GHz band you may use ends at 2483.5 MHz: use channels 0 to 83. Every bind picks a channel from 74 to 82 (between WiFi channel 11 and the band edge).",
+  "Tốc độ sóng":
+    "Data rate",
+  "250 kbps đi xa nhất; 1 và 2 Mbps cho phép nhiều gói hơn nhưng tầm ngắn hơn.":
+    "250 kbps reaches furthest; 1 and 2 Mbps allow more packets with less range.",
+  "Công suất phát":
+    "Transmit power",
+  "Số gói mỗi giây":
+    "Packets per second",
+  "Chế độ cần ga":
+    "Throttle stick mode",
+  "Tốc độ ga khi Thủ công":
+    "Manual throttle speed",
+  "Đẩy cần ga hết cỡ thì ga tăng (giảm) chừng này phần trăm mỗi giây.":
+    "With the throttle stick fully pushed the throttle rises (falls) by this many percent per second.",
+  "Vùng chết quanh giữa":
+    "Dead band around the centre",
+  "Expo (roll, pitch, yaw)":
+    "Expo (roll, pitch, yaw)",
+  "nRF24 (tay phát DIY Windburst)":
+    "nRF24 (Windburst DIY transmitter)",
+  "đang nghe bind":
+    "listening for a bind",
+  "đang bind":
+    "binding",
+  "đã bind":
+    "bound",
+  "bind không được":
+    "bind failed",
+  "thấp nhất (-18 dBm)":
+    "lowest (-18 dBm)",
+  "thấp (-12 dBm)":
+    "low (-12 dBm)",
+  "cao (-6 dBm)":
+    "high (-6 dBm)",
+  "cao nhất (0 dBm)":
+    "highest (0 dBm)",
+  "50 gói/s":
+    "50 packets/s",
+  "100 gói/s":
+    "100 packets/s",
+  "150 gói/s":
+    "150 packets/s",
+  "ALT / POS (cần ở giữa = giữ độ cao)":
+    "ALT / POS (stick centre = hold the height)",
+  "Thủ công (đẩy lên tăng, buông giữ nguyên)":
+    "Manual (push up to raise, let go to keep)",
 };
 
 // Strings that read the same in both languages (units, protocol names, terms pilots use in English).
@@ -3349,10 +3514,10 @@ export const SAME = [
   "EKF",
   "gyro {gyro} Hz, PID {pid} Hz",
   "IMU 2",
-  "WiFi",
   "1 Mbit/s", "125 kbit/s", "250 kbit/s", "500 kbit/s", "CAN bus", "CAN bus (DroneCAN)", "DroneCAN", "Node {id}",
   "rpm", "ms",
   "MAVLink 2", "System ID", "Telemetry (MAVLink)", "Telemetry RX", "Telemetry TX",
   "Motor wizard",
   "MSP DisplayPort (DJI, Walksnail, HDZero)", "HD 53 x 20 (DJI, Walksnail)", "HDZero 50 x 18", "SD 30 x 16", "OSD",
+  "SCK", "MISO", "MOSI", "CSN", "CE", "% / s", "Acro", "Alt hold", "Pos hold", "Rescue", "Loiter", "250 kbps", "1 Mbps", "2 Mbps", "Chip", "(ADC 0..4095)",
 ];

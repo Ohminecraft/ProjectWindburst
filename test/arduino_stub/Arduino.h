@@ -22,6 +22,7 @@
 #define OUTPUT 1
 #define INPUT 0
 #define MSBFIRST 1
+#define SPI_MODE0 0
 #define SPI_MODE3 3
 // Simulated clock. Default: frozen at 0 (the unit tests pass their own time stamps). The firmware-in-the-loop tests advance it and
 // set g_stub_delay_advances so that delay() really takes time, exactly like on the board.

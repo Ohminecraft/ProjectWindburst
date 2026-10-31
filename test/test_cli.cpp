@@ -43,10 +43,10 @@ static void t_table() {
     for (const FieldInfo& f : kFields) { const int sz = f.type == FT_U16 || f.type == FT_I16 ? 2 : f.type == FT_U32 || f.type == FT_I32 || f.type == FT_F32 ? 4 : 1; if (f.offset != total[f.section]) ok = false; total[f.section] += sz * f.count; }
     for (const SectionInfo& si : kSections) if (total[si.id] != si.size) { ok = false; printf("    %s: %d of %u bytes\n", si.name, total[si.id], si.size); }
     CHECK(ok, "the fields of each section follow each other and add up to its size (%d fields)", kFieldCount);
-    { const FieldInfo* p = nullptr; const FieldInfo* idle = nullptr; const FieldInfo* pass = nullptr;
-      for (const FieldInfo& f : kFields) { if (f.section == SEC_PID && !strcmp(f.name, "p")) p = &f; if (f.section == SEC_MOTORS && !strcmp(f.name, "idle_x10")) idle = &f; if (f.section == SEC_WIFI && !strcmp(f.name, "pass")) pass = &f; }
-      CHECK(p && idle && pass && p->offset == offsetof(S_pid, p) && p->count == 3 && idle->offset == offsetof(S_motors, idle_x10) && pass->offset == offsetof(S_wifi, pass) && (pass->flags & FF_SECRET) && (pass->flags & FF_TEXT),
-            "offsets as the structs have them (pid.p, motors.idle_x10, wifi.pass - text and secret)"); }
+    { const FieldInfo* p = nullptr; const FieldInfo* idle = nullptr; const FieldInfo* name = nullptr;
+      for (const FieldInfo& f : kFields) { if (f.section == SEC_PID && !strcmp(f.name, "p")) p = &f; if (f.section == SEC_MOTORS && !strcmp(f.name, "idle_x10")) idle = &f; if (f.section == SEC_GENERAL && !strcmp(f.name, "usb_name")) name = &f; }
+      CHECK(p && idle && name && p->offset == offsetof(S_pid, p) && p->count == 3 && idle->offset == offsetof(S_motors, idle_x10) && name->offset == offsetof(S_general, usb_name) && (name->flags & FF_TEXT),
+            "offsets as the structs have them (pid.p, motors.idle_x10, general.usb_name - a text)"); }
 }
 
 static void t_cli() {
@@ -74,14 +74,13 @@ static void t_cli() {
       r.run("set pins.motor[9] = 1"); CHECK(r.has("Index out of range"), "an index past the end");
       r.run("set beeper.conditions = GYRO_CALIBRATED,RX_LOST"); CHECK(r.s.beeper.conditions == ((1u << BEEPER_COND_GYRO_CALIBRATED) | (1u << BEEPER_COND_RX_LOST)) && r.has("GYRO_CALIBRATED") , "a bit set by names: %s", r.out.c_str());
       r.run("set beeper.conditions = none"); CHECK(r.s.beeper.conditions == 0 && r.has("= NONE"), "none");
-      r.run("set wifi.ssid = \"Nhà Nagumo\""); CHECK(!strcmp((const char*)r.s.wifi.ssid, "Nhà Nagumo") && r.has("wifi.ssid = \"Nhà Nagumo\""), "a text, quoted (UTF-8)");
-      r.run("set wifi.pass = hunter22"); CHECK(!strcmp((const char*)r.s.wifi.pass, "hunter22") && r.has("wifi.pass = <hidden>") && !r.has("hunter22"), "a secret: set, never printed back");
-      r.run("set wifi.ssid = 0123456789012345678901234567890123"); CHECK(r.has("Too long"), "a text longer than its field: refused");
+      r.run("set general.usb_name = \"Nhà Nagumo\""); CHECK(!strcmp((const char*)r.s.general.usb_name, "Nhà Nagumo") && r.has("general.usb_name = \"Nhà Nagumo\""), "a text, quoted (UTF-8)");
+      r.run("set general.usb_name = 0123456789012345678901234567890123"); CHECK(r.has("Too long"), "a text longer than its field: refused");
       r.run("set nothing.here = 1"); CHECK(r.has("No such setting"), "an unknown name");
       r.run("set general.loop_hz 8000"); CHECK(r.has("Usage"), "no '=': usage");
       r.run("frobnicate"); CHECK(r.has("Unknown command"), "an unknown command"); }
-    { Rig r; r.run("set rates.max_rate = 800,750,500"); r.run("set wifi.pass = topsecret"); r.run("set general.board_trim_roll = 1.5");
-      r.run("diff"); CHECK(r.has("set rates.max_rate = 800,750,500") && r.has("set general.board_trim_roll = 1.5") && r.has("set wifi.pass = <hidden>") && !r.has("set general.loop_hz"), "diff: only what differs, as set lines:\n%s", r.out.c_str());
+    { Rig r; r.run("set rates.max_rate = 800,750,500"); r.run("set general.board_trim_roll = 1.5");
+      r.run("diff"); CHECK(r.has("set rates.max_rate = 800,750,500") && r.has("set general.board_trim_roll = 1.5") && !r.has("set general.loop_hz"), "diff: only what differs, as set lines:\n%s", r.out.c_str());
       const std::string diff = r.out;
       Rig b; size_t at = 0; int lines = 0;
       while (at < diff.size()) { const size_t e = diff.find('\n', at); std::string l = diff.substr(at, e == std::string::npos ? std::string::npos : e - at); at = e == std::string::npos ? diff.size() : e + 1; while (!l.empty() && (l.back() == '\r')) l.pop_back(); if (l.rfind("set ", 0) == 0 && l.find("<hidden>") == std::string::npos) { b.run(l.c_str()); lines++; } }
@@ -91,9 +90,14 @@ static void t_cli() {
     { Rig r; r.host.is_armed = true;
       r.run("set general.loop_hz = 2000"); CHECK(r.has("Not while armed") && r.s.general.loop_hz == 4000, "armed: nothing is set");
       r.run("save"); CHECK(r.has("Not while armed"), "nor saved"); r.run("defaults"); CHECK(r.has("Not while armed"), "nor reset"); }
+    { // 0.38: the transmitter's settings are not the flight controller's: not listed, not settable, not reset here
+      Rig r; r.run("get tx_sticks"); CHECK(r.has("Nothing matches"), "get: no transmitter fields on the flight controller");
+      r.run("dump"); CHECK(!r.has("tx_sticks") && !r.has("tx_radio") && r.has("receiver.nrf_channel"), "dump: its own sections only (the nRF24 receiver fields are there)");
+      r.run("set tx_sticks.deadband = 9"); CHECK(r.s.tx_sticks.deadband == 3, "set: a transmitter field is unknown here");
+      r.s.tx_sticks.deadband = 7; r.run("defaults"); CHECK(r.s.tx_sticks.deadband == 7 && r.s.rates.max_rate[0] != 0, "defaults: the transmitter's section is not touched"); }
     { Rig r; r.run("set rates.max_rate = 800,800,500");
       CHECK(r.host.applied.size() == 1 && r.host.applied[0] == SEC_RATES && !(r.srv.flags() & SF_REBOOT_REQUIRED), "a live section: applied at once, no reboot needed");
-      r.run("save"); CHECK(r.has("Saved") && !(r.srv.flags() & SF_DIRTY) && r.mem.kv.size() == (size_t)kSectionCount, "save: flash written, nothing unsaved");
+      r.run("save"); CHECK(r.has("Saved") && !(r.srv.flags() & SF_DIRTY) && r.mem.kv.size() == (size_t)kSectionCount - 2, "save: flash written (the flight controller's sections), nothing unsaved");
       Settings back; SettingsStore st(r.mem); st.load(back); CHECK(back.rates.max_rate[0] == 800 && back.rates.max_rate[2] == 500, "and it is what loads at the next boot");
       r.run("defaults rates"); CHECK(r.s.rates.max_rate[0] == 670 && (r.srv.flags() & SF_DIRTY) && r.has("Defaults loaded"), "defaults <section>: in RAM, unsaved");
       r.run("defaults nope"); CHECK(r.has("No such section"), "an unknown section");

@@ -22,7 +22,7 @@ namespace app {
 // the app shows (the schema's scale applied), enums and bit sets by name:
 //     get [part of a name]       set <section.field> = <value>      diff [section]      dump
 //     defaults [section]         save      reboot      status      version      help      exit
-// `diff` / `dump` print `set` lines that can be pasted back. A field marked secret (wifi.pass) is printed as <hidden>.
+// `diff` / `dump` print `set` lines that can be pasted back.
 // Changes go through the same steps as the app's (wbp::Server: clamp, derived values, live apply or "reboot required");
 // nothing is changed while armed. Runs in the link task, as the server; out() writes raw text to the port.
 // ============================================================================
@@ -72,6 +72,8 @@ private:
     void prompt() { say("# "); }
     static void trim(char* s) { size_t n = strlen(s); while (n && (s[n - 1] == ' ' || s[n - 1] == '\t')) s[--n] = 0; size_t i = 0; while (s[i] == ' ' || s[i] == '\t') i++; if (i) memmove(s, s + i, n - i + 1); }
     static const char* section_name(uint8_t id) { const wbp::SectionInfo* si = wbp::find_section(id); return si ? si->name : "?"; }
+    // a section of this device (the server's role): the other device's settings are not listed, set or reset here
+    bool mine(uint8_t id) const { const wbp::SectionInfo* si = wbp::find_section(id); return si && si->role == srv_.role(); }
     static int tsize(uint8_t t) { switch (t) { case wbp::FT_U16: case wbp::FT_I16: return 2; case wbp::FT_U32: case wbp::FT_I32: case wbp::FT_F32: return 4; default: return 1; } }
     uint8_t* addr(const wbp::FieldInfo& f, int i) const { return wbp::section_ptr(s_, f.section) + f.offset + i * tsize(f.type); }
     double raw(const wbp::FieldInfo& f, int i) const {
@@ -92,7 +94,7 @@ private:
     }
     static int decimals(float scale) { int d = 0; float s = scale; while (d < 6 && fabsf(s - roundf(s)) > 1e-6f) { s *= 10.0f; d++; } return d; }
     // one value as text (the way `set` takes it back)
-    void value_text(const wbp::FieldInfo& f, int i, char* b, size_t cap, bool reveal) const {
+    void value_text(const wbp::FieldInfo& f, int i, char* b, size_t cap) const {
         const double v = raw(f, i);
         if (f.type == wbp::FT_BOOL) { snprintf(b, cap, "%s", v ? "ON" : "OFF"); return; }
         if (f.flags & wbp::FF_BITS) {
@@ -104,26 +106,25 @@ private:
         if (f.names) { const int k = (int)v; if ((f.flags & wbp::FF_OPTIONAL) && k == 255) snprintf(b, cap, "NONE"); else if (k >= 0 && k < f.n_names) snprintf(b, cap, "%s", f.names[k]); else snprintf(b, cap, "%d", k); return; }
         if (f.type == wbp::FT_F32) { snprintf(b, cap, "%.6g", v); return; }
         if (f.scale != 1.0f) { snprintf(b, cap, "%.*f", decimals(f.scale), v * f.scale); return; }
-        (void)reveal; snprintf(b, cap, "%.0f", v);
+        snprintf(b, cap, "%.0f", v);
     }
-    void field_text(const wbp::FieldInfo& f, char* b, size_t cap, bool reveal) const {
+    void field_text(const wbp::FieldInfo& f, char* b, size_t cap) const {
         if (f.flags & wbp::FF_TEXT) {
-            if ((f.flags & wbp::FF_SECRET) && !reveal) { const uint8_t* p = addr(f, 0); snprintf(b, cap, p[0] ? "<hidden>" : "\"\""); return; }
             const uint8_t* p = addr(f, 0); size_t n = 0; b[n++] = '"';
             for (int i = 0; i < f.count && p[i] && n + 2 < cap; i++) b[n++] = (char)p[i];
             b[n++] = '"'; b[n] = 0; return;
         }
         size_t n = 0; b[0] = 0;
-        for (int i = 0; i < f.count && n + 1 < cap; i++) { if (i) b[n++] = ','; value_text(f, i, b + n, cap - n, reveal); n += strlen(b + n); }
+        for (int i = 0; i < f.count && n + 1 < cap; i++) { if (i) b[n++] = ','; value_text(f, i, b + n, cap - n); n += strlen(b + n); }
     }
     void line_of(const wbp::FieldInfo& f, char* b, size_t cap, bool as_set) const {
-        char v[200]; field_text(f, v, sizeof(v), false);
+        char v[200]; field_text(f, v, sizeof(v));
         snprintf(b, cap, as_set ? "set %s.%s = %s\r\n" : "%s.%s = %s\r\n", section_name(f.section), f.name, v);
     }
     // ---- commands
     void help() {
         say("get [name]            settings whose name contains it (all without one)\r\n"
-            "set <name> = <value>  e.g. set general.loop_hz = 8000 | set pins.motor = 4,5,6,7 | set pins.motor[2] = 6 | set wifi.ssid = \"My net\"\r\n"
+            "set <name> = <value>  e.g. set general.loop_hz = 8000 | set pins.motor = 4,5,6,7 | set pins.motor[2] = 6 | set general.usb_name = \"My quad\"\r\n"
             "diff [section]        set lines of what differs from the defaults\r\n"
             "dump                  every setting as set lines\r\n"
             "defaults [section]    back to the defaults (in RAM: save to keep)\r\n"
@@ -133,6 +134,7 @@ private:
     void get(const char* part) {
         char b[260]; int n = 0;
         for (const wbp::FieldInfo& f : wbp::kFields) {
+            if (!mine(f.section)) continue;
             char full[64]; snprintf(full, sizeof(full), "%s.%s", section_name(f.section), f.name);
             if (*part && !strstr(full, part)) continue;
             line_of(f, b, sizeof(b), false); say(b); n++;
@@ -144,7 +146,7 @@ private:
         if (!n) say("Nothing matches\r\n");
     }
     const wbp::FieldInfo* find(const char* name) const {
-        for (const wbp::FieldInfo& f : wbp::kFields) { char full[64]; snprintf(full, sizeof(full), "%s.%s", section_name(f.section), f.name); if (!strcmp(full, name)) return &f; }
+        for (const wbp::FieldInfo& f : wbp::kFields) { if (!mine(f.section)) continue; char full[64]; snprintf(full, sizeof(full), "%s.%s", section_name(f.section), f.name); if (!strcmp(full, name)) return &f; }
         return nullptr;
     }
     // a decimal number: [-+]digits[.digits][e[-+]digits] (not strtod: on the STM32 it pulls the C library's whole stdio in)
@@ -223,7 +225,7 @@ private:
         char b[260]; uint8_t last = 0;
         say("# Windburst "); { char v[24]; snprintf(v, sizeof(v), "%d.%d.%d", WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH); say(v); } say(only_changed ? " diff\r\n" : " dump\r\n");
         for (const wbp::FieldInfo& f : wbp::kFields) {
-            if (*section && strcmp(section_name(f.section), section)) continue;
+            if (!mine(f.section) || (*section && strcmp(section_name(f.section), section))) continue;
             if (only_changed) { const size_t n = (size_t)tsize(f.type) * f.count; if (!memcmp(addr(f, 0), wbp::section_ptr(d, f.section) + f.offset, n)) continue; }
             if (f.section != last) { last = f.section; say("\r\n# "); say(section_name(f.section)); say("\r\n"); }
             line_of(f, b, sizeof(b), true); say(b);
@@ -233,7 +235,7 @@ private:
     void defaults(const char* section) {
         if (srv_.armed()) { say("Not while armed\r\n"); return; }
         int n = 0;
-        for (const wbp::SectionInfo& si : wbp::kSections) if (!*section || !strcmp(section, si.name)) { wbp::defaults_section(s_, si.id); srv_.commit_section(si.id); n++; }
+        for (const wbp::SectionInfo& si : wbp::kSections) if (mine(si.id) && (!*section || !strcmp(section, si.name))) { wbp::defaults_section(s_, si.id); srv_.commit_section(si.id); n++; }
         say(n ? "Defaults loaded (in RAM: 'save' to keep them)\r\n" : "No such section\r\n");
     }
     void save() {

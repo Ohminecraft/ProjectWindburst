@@ -5,6 +5,7 @@
 #include <string.h>
 #include "../src/core/nav/alt_control.h"
 #include "../src/core/nav/pos_hold.h"
+#include "../src/core/nav/loiter.h"
 using namespace fc;
 using namespace fc::nav;
 
@@ -174,9 +175,56 @@ static void t_pos_hold() {
       CHECK(r == 7.0f && p == 0.0f && m.state(0) == PhAxis::PILOT, "on the ground: the sticks pass through, nothing is held"); }
 }
 
+// 0.41: Loiter (ArduCopter AC_Loiter): the stick asks for an acceleration, the craft is always under the position controller
+struct LtRig {
+    LoiterMode m; Plant2D p; float off_n = 0, off_e = 0; uint8_t resets = 0; float sn = 0, se = 0; bool airborne = true;
+    LtRig() { m.init(input(0, 0)); }
+    LoiterInput input(float sr, float sp) {
+        LoiterInput in; in.airborne = airborne; in.yaw_deg = p.yaw; in.pos_n = p.pn + off_n; in.pos_e = p.pe + off_e; in.vel_n = p.vn; in.vel_e = p.ve;
+        in.stick_roll = sr; in.stick_pitch = sp; in.reset_count = resets; in.reset_step_n = sn; in.reset_step_e = se; in.roll_deg = p.roll; in.pitch_deg = p.pitch; return in;
+    }
+    void run(float seconds, float sr = 0, float sp = 0, float dt = 0.005f) {
+        for (int i = 0; i < (int)(seconds / dt + 0.5f); i++) { float r, q; m.update(input(sr, sp), dt, r, q); p.step(r, q, dt); }
+    }
+    float dist(float n, float e) const { return hypotf(p.pn - n, p.pe - e); }
+    float speed() const { return hypotf(p.vn, p.ve); }
+};
+
+static void t_loiter() {
+    printf("[loiter] the stick asks for an acceleration, drag and the brake as AC_Loiter, wind, resets, the fence\n");
+    { LtRig r; r.run(4.0f); CHECK(r.dist(0, 0) < 0.05f, "let alone: holds the spot (%.3f m)", r.dist(0, 0)); }
+    { LtRig r; r.p.drag = 0.05f; r.run(10.0f, 0, 1.0f); const float v = r.p.vn;
+      CHECK(v > 10.5f && v < 12.6f && fabsf(r.p.ve) < 0.2f, "full stick forward for 10 s: up to the speed limit (12.5 m/s): %.1f m/s north", v);
+      LtRig h; h.p.drag = 0.05f; h.run(12.0f, 0, 0.5f);
+      CHECK(fabsf(h.p.vn - 6.25f) < 0.9f, "half stick: half the speed (%.2f m/s; drag = what the stick gives at that speed)", h.p.vn);
+      LtRig s; s.m.cfg.speed_max_mps = 3.0f; s.run(8.0f, 1.0f, 0); CHECK(fabsf(s.p.ve - 3.0f) < 0.4f, "loiter_speed 3 m/s, full roll stick: %.2f m/s east", s.p.ve); }
+    { LtRig r; r.run(2.0f, 0, 0.6f); const float v0 = r.speed(), n0 = r.p.pn; float vmax_after = 0, back = 0; float t_stop = -1;
+      for (int i = 0; i < 2400; i++) { r.run(0.005f); back = fmaxf(back, -r.p.pitch); if (t_stop < 0 && r.speed() < 0.1f) t_stop = 0.005f * i; vmax_after = fmaxf(vmax_after, r.speed()); }
+      const float stop_n = r.p.pn; r.run(4.0f);
+      CHECK(t_stop > 1.0f && t_stop < 7.0f && vmax_after <= v0 + 0.1f, "let go at %.1f m/s: drag first, the brake after 1 s; stopped after %.1f s, %.1f m on", v0, t_stop, stop_n - n0);
+      CHECK(fabsf(r.p.pn - stop_n) < 0.5f && r.speed() < 0.05f, "then holds where it stopped (%.2f m from it)", fabsf(r.p.pn - stop_n));
+      CHECK(back > 2.0f && back < 25.0f, "braking leans back %.1f deg at most", back); }
+    { LtRig r; r.run(4.0f); r.p.wind_e = 5.0f; float far = 0; for (int i = 0; i < 2500; i++) { r.run(0.01f); far = fmaxf(far, r.dist(0, 0)); }
+      CHECK(far < 2.0f && r.dist(0, 0) < 0.3f, "5 m/s of wind from the west: blown %.2f m at most, back within %.2f m", far, r.dist(0, 0)); }
+    { LtRig r; r.run(4.0f); r.off_n = 12.0f; r.off_e = -4.0f; r.sn = 12.0f; r.se = -4.0f; r.resets++; float far = 0;
+      for (int i = 0; i < 300; i++) { r.run(0.01f); far = fmaxf(far, r.dist(0, 0)); }
+      CHECK(far < 0.1f, "the estimator resets its position by 12 m north, 4 m west: the target moves with it (%.3f m)", far); }
+    { LtRig r; r.p.vn = 6.0f; r.p.pitch = 10.0f; r.m.init(r.input(0, 0)); float jump = 0, prev = r.p.pitch; float rq = 0, qq = 0;
+      for (int i = 0; i < 2000; i++) { r.m.update(r.input(0, 0), 0.005f, rq, qq); jump = fmaxf(jump, fabsf(qq - prev)); prev = qq; r.p.step(rq, qq, 0.005f); }
+      CHECK(r.speed() < 0.1f && jump < 1.5f, "taken over at 6 m/s with the sticks centred: slows down and stops (%.2f m/s), the lean never jumps (%.2f deg per 5 ms)", r.speed(), jump); }
+    { LtRig r; r.m.cfg.fence_radius_m = 20.0f; r.p.drag = 0.05f; r.run(2.0f); float far = 0; bool breached = false;
+      for (int i = 0; i < 1500; i++) { r.run(0.01f, 0, 1.0f); far = fmaxf(far, r.dist(0, 0)); breached |= r.m.fence_breached(); }
+      CHECK(breached && far < 20.0f && r.dist(0, 0) < 20.0f, "fence 20 m, full stick forwards for 15 s: stopped before it (AC_Avoid), held at %.1f m (%.1f at most)", r.dist(0, 0), far);
+      for (int i = 0; i < 500; i++) r.run(0.01f, 0, -1.0f);
+      CHECK(r.p.pn < 15.0f, "stick back towards home: it flies back (%.1f m)", r.p.pn); }
+    { LtRig r; r.airborne = false; float roll, pitch; r.m.update(r.input(0.5f, 0), 0.01f, roll, pitch);
+      CHECK(fabsf(roll - 0.5f * r.m.angle_max()) < 1e-3f && pitch == 0.0f && fabsf(r.m.angle_max() - 20.0f) < 1e-3f, "on the ground: the sticks give the lean (2/3 of 30 deg = 20 at full stick), nothing is held (%.1f deg)", roll);
+      float a, b; r.m.update(r.input(0, 0), -1.0f, a, b); CHECK(a == roll && b == pitch, "a bad dt: the last lean again"); }
+}
+
 int main() {
     t_alt_setpoint(); t_alt_takeoff_hold_land(); t_alt_auto_takeoff(); t_alt_edges();
-    t_nav_math(); t_pos_hold();
+    t_nav_math(); t_pos_hold(); t_loiter();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

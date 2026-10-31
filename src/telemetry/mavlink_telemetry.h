@@ -9,7 +9,7 @@
 // ============================================================================
 // MAVLink telemetry: what the craft is doing, as a ground station (Mission Planner, QGroundControl, a radio with an ELRS backpack)
 // wants it. Send only. The sensor thread fills a State from app::Telemetry (FlightApp::mav_in) and calls poll() about once a
-// millisecond; poll() appends the frames that are due and fit to a buffer, the caller writes it to the UART / the WiFi ring.
+// millisecond; poll() appends the frames that are due and fit to a buffer, the caller writes it to the UART.
 //
 //   HEARTBEAT            1 Hz always
 //   ATTITUDE             rates.attitude
@@ -18,8 +18,18 @@
 //   SYS_STATUS           rates.status     (BATTERY_STATUS as well, when a battery is measured)
 //   RC_CHANNELS          rates.rc
 //   STATUSTEXT           queued texts (boot report, why the craft cannot arm), at most one chunk every 100 ms
+//   HOME_POSITION        when the home point is set or moves, then every 10 s (GPS_GLOBAL_ORIGIN with it)
+//   MISSION_CURRENT      1 Hz: the command the mission is at, of how many, its state
+//   replies              reply(): COMMAND_ACK, the mission protocol's frames (mavlink_gcs.h) - before everything else, in order
 // A rate of 0 switches that group off. A frame that does not fit in the room the UART has left waits for the next call: nothing
 // is cut, nothing ever blocks the sensor thread.
+//
+// Flow control (a radio that says how full it is: an ExpressLRS receiver in MAVLink mode sends RADIO_STATUS every 10 ms, txbuf = % of
+// its 1 kB buffer still free; a full buffer loses bytes). radio_status() takes each one, and from the first one on:
+//   * ArduPilot's stream slowdown (GCS_MAVLINK::handle_radio_status): txbuf < 20 -> 60 ms more, < 50 -> 20 ms more (up to 2 s),
+//     > 95 -> 40 ms less (above 200 ms), > 90 -> 20 ms less; added to the period of every group. Not to HEARTBEAT and the texts:
+//     ArduPilot sends those outside its streams (a ground station takes a late HEARTBEAT for a lost link);
+//   * Betaflight's gate (shouldSendMavlinkTelemetry, mavlink_min_txbuff = 35): nothing at all while txbuf <= 35.
 // Portable.
 // ============================================================================
 namespace mav {
@@ -32,7 +42,7 @@ struct State {
     // HEARTBEAT
     uint8_t vehicle_type = MAV_TYPE_QUADROTOR;
     bool armed = false, failsafe = false, calibrating = false;
-    bool angle = false, stabilize = false, althold = false, poshold = false, rescue = false, mission = false;      // mission: it flies the waypoint mission
+    bool angle = false, stabilize = false, althold = false, poshold = false, rescue = false, mission = false, loiter = false;      // mission: it flies the waypoint mission
     // attitude, rad and rad/s
     float roll = 0, pitch = 0, yaw = 0, p = 0, q = 0, r = 0;
     // position
@@ -48,6 +58,10 @@ struct State {
     uint16_t rc_errors = 0;                                           // receiver frames lost / damaged in the last second
     // RC_CHANNELS
     bool rc_link = false; uint16_t rc[16] = {}; uint8_t rssi_pct = 0;
+    // 0.40: what the rescue flies (wbp rescue_mode: 0 RTL, 1 SMART_RTL, 2 LAND), the home point, the mission
+    uint8_t rescue_kind = 0;
+    bool have_home = false; int32_t home_lat = 0, home_lon = 0, home_alt_mm = 0;      // degE7, mm MSL
+    uint16_t mission_seq = 0, mission_total = 0; uint8_t mission_state = MISSION_STATE_NO_MISSION, mission_mode = 2;     // MISSION_CURRENT (mode 1 = flying it, 2 = not)
 };
 
 // HEARTBEAT fields for a state (ArduCopter mode numbers, like Betaflight's MAVLink telemetry)
@@ -55,8 +69,9 @@ inline Heartbeat heartbeat_of(const State& s) {
     Heartbeat h; h.type = s.vehicle_type; h.autopilot = MAV_AUTOPILOT_GENERIC;
     h.base_mode = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | MAV_MODE_FLAG_MANUAL_INPUT_ENABLED;
     if (s.armed) h.base_mode |= MAV_MODE_FLAG_SAFETY_ARMED;
-    if (s.angle || s.stabilize || s.althold || s.poshold || s.rescue || s.mission) h.base_mode |= MAV_MODE_FLAG_STABILIZE_ENABLED;
-    h.custom_mode = s.failsafe ? (s.rescue ? COPTER_RTL : COPTER_LAND) : s.rescue ? COPTER_RTL : s.mission ? COPTER_AUTO : s.poshold ? COPTER_POSHOLD : s.althold ? COPTER_ALT_HOLD
+    if (s.angle || s.stabilize || s.althold || s.poshold || s.rescue || s.mission || s.loiter) h.base_mode |= MAV_MODE_FLAG_STABILIZE_ENABLED;
+    const uint32_t rescue = s.rescue_kind == 1 ? COPTER_SMART_RTL : s.rescue_kind == 2 ? COPTER_LAND : COPTER_RTL;
+    h.custom_mode = s.failsafe ? (s.rescue ? rescue : COPTER_LAND) : s.rescue ? rescue : s.mission ? COPTER_AUTO : s.loiter ? COPTER_LOITER : s.poshold ? COPTER_POSHOLD : s.althold ? COPTER_ALT_HOLD
                   : (s.angle || s.stabilize) ? COPTER_STABILIZE : COPTER_ACRO;
     h.system_status = s.failsafe ? MAV_STATE_CRITICAL : s.calibrating && !s.armed ? MAV_STATE_CALIBRATING : s.armed ? MAV_STATE_ACTIVE : MAV_STATE_STANDBY;
     return h;
@@ -74,10 +89,35 @@ public:
     static constexpr int kTexts = 6;                  // queued texts (a full queue drops the oldest)
     static constexpr size_t kTextLen = 150;           // longer texts are cut (3 STATUSTEXT chunks)
     static constexpr uint32_t kTextGapMs = 100;
+    static constexpr uint8_t kMinTxbuf = 35;          // Betaflight's mavlink_min_txbuff
+    static constexpr uint16_t kMaxSlowdownMs = 2000;  // ArduPilot's limit (one step can pass it)
+    static constexpr int kReplies = 12;               // replies waiting (AVAILABLE_MODES: 8 + the ACK; a full queue refuses: the ground station asks again)
+    static constexpr uint32_t kHomeMs = 10000;        // HOME_POSITION again after this long
 
     void configure(const Rates& r, uint8_t sysid) { rates_ = r; enc_.sysid = sysid ? sysid : 1; reset(); }
-    void reset() { for (uint32_t& t : next_) t = 0; started_ = false; }
+    void reset() { for (uint32_t& t : next_) t = 0; started_ = false; flow_ = false; slowdown_ms_ = 0; txbuf_ = 100; n_reply_ = 0; home_sent_ = false; }
+
+    // a reply (mavlink_gcs.h): sent before the periodic frames, in the order given; false = the queue is full
+    bool reply(uint32_t msgid, const Payload& p) {
+        if (n_reply_ == kReplies || p.n > sizeof(Reply::b)) { dropped_replies_++; return false; }
+        Reply& r = replies_[(r_head_ + n_reply_) % kReplies]; r.id = msgid; r.n = p.n; memcpy(r.b, p.b, p.n); n_reply_++;
+        return true;
+    }
+    template <class M> bool reply(const M& m) { return reply(M::kId, payload_of(m)); }
+    int queued_replies() const { return n_reply_; }
+    uint32_t dropped_replies() const { return dropped_replies_; }
     Encoder& encoder() { return enc_; }
+
+    // one RADIO_STATUS.txbuf (see above)
+    void radio_status(uint8_t txbuf) {
+        flow_ = true; txbuf_ = txbuf;
+        if (txbuf < 20 && slowdown_ms_ < kMaxSlowdownMs) slowdown_ms_ += 60;
+        else if (txbuf < 50 && slowdown_ms_ < kMaxSlowdownMs) slowdown_ms_ += 20;
+        else if (txbuf > 95 && slowdown_ms_ > 200) slowdown_ms_ -= 40;
+        else if (txbuf > 90 && slowdown_ms_ != 0) slowdown_ms_ = slowdown_ms_ > 20 ? slowdown_ms_ - 20 : 0;
+    }
+    bool flow_control() const { return flow_; }
+    uint16_t slowdown_ms() const { return slowdown_ms_; }
 
     // queues a text (STATUSTEXT, several chunks when longer than 50 characters)
     void text(uint8_t severity, const char* s) {
@@ -94,10 +134,22 @@ public:
     // Appends the frames due at now_ms that fit into cap bytes; returns how many bytes it wrote.
     size_t poll(uint32_t now_ms, const State& s, uint8_t* out, size_t cap) {
         if (!started_) { for (uint32_t& t : next_) t = now_ms; started_ = true; }
+        if (flow_ && txbuf_ <= kMinTxbuf) return 0;                             // (the radio is too full: what is due waits)
         size_t n = 0; uint8_t f[kMaxFrame];
+        while (n_reply_) {                                                      // the replies first, whole and in order
+            const Reply& r = replies_[r_head_]; Payload p; p.raw(r.b, r.n);
+            const size_t l = enc_.frame(r.id, p, f);
+            if (n + l > cap) { enc_.set_seq((uint8_t)(enc_.seq() - 1)); break; }
+            memcpy(out + n, f, l); n += l; r_head_ = (r_head_ + 1) % kReplies; n_reply_--;
+        }
+        // a new home point (or the first): HOME_POSITION and GPS_GLOBAL_ORIGIN now
+        if (s.have_home && (!home_sent_ || s.home_lat != home_[0] || s.home_lon != home_[1] || s.home_alt_mm != home_[2])) {
+            home_sent_ = true; home_[0] = s.home_lat; home_[1] = s.home_lon; home_[2] = s.home_alt_mm; next_[K_HOME] = next_[K_ORIGIN] = now_ms;
+        }
         auto emit = [&](int k, uint32_t period_ms, size_t len) {                 // the frame in f is sent when it fits; then the next is due
             if (n + len > cap) return false;
             memcpy(out + n, f, len); n += len;
+            if (k != K_HEARTBEAT) period_ms += slowdown_ms_;
             next_[k] = (uint32_t)(now_ms - next_[k]) < period_ms ? next_[k] + period_ms : now_ms + period_ms;     // (fell far behind: no burst)
             return true;
         };
@@ -146,6 +198,18 @@ public:
             for (int i = 0; i < 18; i++) c.chan[i] = i < 16 && s.rc_link ? s.rc[i] : 0xFFFF;
             const size_t l = pack(enc_, c, f); undo(l); emit(K_RC, 1000u / rates_.rc, l);
         }
+        if (s.have_home && due(K_HOME, 1)) {
+            HomePosition h; h.latitude = s.home_lat; h.longitude = s.home_lon; h.altitude = s.home_alt_mm;
+            const size_t l = pack(enc_, h, f); undo(l); emit(K_HOME, kHomeMs, l);
+        }
+        if (s.have_home && due(K_ORIGIN, 1)) {
+            GpsGlobalOrigin g; g.latitude = s.home_lat; g.longitude = s.home_lon; g.altitude = s.home_alt_mm;
+            const size_t l = pack(enc_, g, f); undo(l); emit(K_ORIGIN, kHomeMs, l);
+        }
+        if (due(K_MCUR, 1)) {
+            MissionCurrent c; c.seq = s.mission_seq; c.total = s.mission_total; c.mission_state = s.mission_state; c.mission_mode = s.mission_mode;
+            const size_t l = pack(enc_, c, f); undo(l); emit(K_MCUR, 1000, l);
+        }
         if (n_text_ && (int32_t)(now_ms - next_[K_TEXT]) >= 0) {
             Text& t = texts_[head_];
             StatusText m; m.severity = t.severity; m.id = t.id; m.chunk_seq = t.chunk;
@@ -162,11 +226,15 @@ public:
     }
 
 private:
-    enum { K_HEARTBEAT, K_ATTITUDE, K_POSITION, K_GPS, K_HUD, K_STATUS, K_BATTERY, K_RC, K_TEXT, K_COUNT };
+    enum { K_HEARTBEAT, K_ATTITUDE, K_POSITION, K_GPS, K_HUD, K_STATUS, K_BATTERY, K_RC, K_HOME, K_ORIGIN, K_MCUR, K_TEXT, K_COUNT };
+    struct Reply { uint32_t id = 0; uint8_t n = 0; uint8_t b[80] = {}; };       // (AUTOPILOT_VERSION, 78 bytes, is the longest)
     struct Text { char s[kTextLen + 1] = {}; uint16_t len = 0, id = 0; uint8_t severity = 0, chunk = 0; };
     uint16_t next_id() { if (++text_id_ == 0) text_id_ = 1; return text_id_; }
     Encoder enc_; Rates rates_;
     uint32_t next_[K_COUNT] = {}; bool started_ = false;
+    bool flow_ = false; uint16_t slowdown_ms_ = 0; uint8_t txbuf_ = 100;
+    Reply replies_[kReplies]; int r_head_ = 0, n_reply_ = 0; uint32_t dropped_replies_ = 0;
+    bool home_sent_ = false; int32_t home_[3] = {};
     Text texts_[kTexts]; int head_ = 0, n_text_ = 0; uint16_t text_id_ = 0; uint32_t dropped_texts_ = 0;
 };
 

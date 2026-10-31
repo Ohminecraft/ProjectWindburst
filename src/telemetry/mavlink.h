@@ -7,11 +7,12 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
-#include <atomic>
 
 // ============================================================================
-// MAVLink 2, the few messages a ground station needs to show the craft (send only): HEARTBEAT, SYS_STATUS, GPS_RAW_INT, ATTITUDE,
-// GLOBAL_POSITION_INT, RC_CHANNELS, VFR_HUD, BATTERY_STATUS, STATUSTEXT (common.xml).
+// MAVLink 2, the few messages a ground station needs to show the craft (sent): HEARTBEAT, SYS_STATUS, GPS_RAW_INT, ATTITUDE,
+// GLOBAL_POSITION_INT, RC_CHANNELS, VFR_HUD, BATTERY_STATUS, STATUSTEXT (common.xml); and the two an ExpressLRS receiver in MAVLink
+// mode sends (read, hal/rx/rx_mavlink.h): RC_CHANNELS_OVERRIDE (the sticks), RADIO_STATUS (its buffer: flow control). From 0.40 the
+// ground station's commands and the mission protocol, both ways (below; telemetry/mavlink_gcs.h).
 //
 //   frame:  0xFD len incompat compat seq sysid compid msgid(3, LE) payload(len) crc(2, LE)
 //   crc:    CRC-16/MCRF4XX ("X.25" in MAVLink's words) over everything after 0xFD, then the message's CRC_EXTRA byte
@@ -28,14 +29,26 @@ constexpr size_t kHeaderLen = 10, kMaxPayload = 255, kMaxFrame = kHeaderLen + kM
 
 enum : uint32_t {
     MSG_HEARTBEAT = 0, MSG_SYS_STATUS = 1, MSG_GPS_RAW_INT = 24, MSG_ATTITUDE = 30, MSG_GLOBAL_POSITION_INT = 33,
-    MSG_RC_CHANNELS = 65, MSG_VFR_HUD = 74, MSG_BATTERY_STATUS = 147, MSG_STATUSTEXT = 253,
+    MSG_RC_CHANNELS = 65, MSG_RC_CHANNELS_OVERRIDE = 70, MSG_VFR_HUD = 74, MSG_RADIO_STATUS = 109, MSG_BATTERY_STATUS = 147, MSG_STATUSTEXT = 253,
+    // 0.40: the ground station's commands and the mission protocol (mavlink_gcs.h)
+    MSG_MISSION_SET_CURRENT = 41, MSG_MISSION_CURRENT = 42, MSG_MISSION_REQUEST_LIST = 43, MSG_MISSION_COUNT = 44, MSG_MISSION_CLEAR_ALL = 45,
+    MSG_MISSION_ITEM_REACHED = 46, MSG_MISSION_ACK = 47, MSG_GPS_GLOBAL_ORIGIN = 49, MSG_MISSION_REQUEST_INT = 51, MSG_MISSION_ITEM_INT = 73,
+    MSG_COMMAND_INT = 75, MSG_COMMAND_LONG = 76, MSG_COMMAND_ACK = 77, MSG_TIMESYNC = 111, MSG_AUTOPILOT_VERSION = 148, MSG_HOME_POSITION = 242,
+    MSG_AVAILABLE_MODES = 435, MSG_AVAILABLE_MODES_MONITOR = 437,
+    MSG_MISSION_ITEM = 39, MSG_MISSION_REQUEST = 40,          // (0.40.1: the float forms Mission Planner falls back to)
 };
 // CRC_EXTRA of each message (from its definition; pymavlink: MAVLink_<name>_message.crc_extra)
 inline uint8_t crc_extra(uint32_t id) {
     switch (id) {
     case MSG_HEARTBEAT: return 50; case MSG_SYS_STATUS: return 124; case MSG_GPS_RAW_INT: return 24; case MSG_ATTITUDE: return 39;
     case MSG_GLOBAL_POSITION_INT: return 104; case MSG_RC_CHANNELS: return 118; case MSG_VFR_HUD: return 20; case MSG_BATTERY_STATUS: return 154;
-    case MSG_STATUSTEXT: return 83; default: return 0;
+    case MSG_STATUSTEXT: return 83; case MSG_RC_CHANNELS_OVERRIDE: return 124; case MSG_RADIO_STATUS: return 185;
+    case MSG_MISSION_SET_CURRENT: return 28; case MSG_MISSION_CURRENT: return 28; case MSG_MISSION_REQUEST_LIST: return 132; case MSG_MISSION_COUNT: return 221;
+    case MSG_MISSION_CLEAR_ALL: return 232; case MSG_MISSION_ITEM_REACHED: return 11; case MSG_MISSION_ACK: return 153; case MSG_GPS_GLOBAL_ORIGIN: return 39;
+    case MSG_MISSION_REQUEST_INT: return 196; case MSG_MISSION_ITEM_INT: return 38; case MSG_COMMAND_INT: return 158; case MSG_COMMAND_LONG: return 152;
+    case MSG_COMMAND_ACK: return 143; case MSG_TIMESYNC: return 34; case MSG_AUTOPILOT_VERSION: return 178; case MSG_HOME_POSITION: return 104;
+    case MSG_AVAILABLE_MODES: return 134; case MSG_AVAILABLE_MODES_MONITOR: return 30; case MSG_MISSION_ITEM: return 254; case MSG_MISSION_REQUEST: return 230;
+    default: return 0;
     }
 }
 
@@ -52,7 +65,7 @@ enum : uint32_t {                                   // MAV_SYS_STATUS_SENSOR
 };
 enum : uint8_t { GPS_FIX_NO_GPS = 0, GPS_FIX_NONE = 1, GPS_FIX_2D = 2, GPS_FIX_3D = 3 };
 // ArduCopter's flight mode numbers in HEARTBEAT.custom_mode (what Betaflight sends as well): ground stations name them
-enum : uint32_t { COPTER_STABILIZE = 0, COPTER_ACRO = 1, COPTER_ALT_HOLD = 2, COPTER_AUTO = 3, COPTER_RTL = 6, COPTER_LAND = 9, COPTER_POSHOLD = 16 };
+enum : uint32_t { COPTER_STABILIZE = 0, COPTER_ACRO = 1, COPTER_ALT_HOLD = 2, COPTER_AUTO = 3, COPTER_RTL = 6, COPTER_LOITER = 5, COPTER_LAND = 9, COPTER_POSHOLD = 16, COPTER_SMART_RTL = 21 };
 
 // CRC-16/MCRF4XX step (MAVLink's crc_accumulate)
 inline uint16_t crc_add(uint16_t crc, uint8_t b) {
@@ -125,6 +138,8 @@ struct BatteryStatus {
     BatteryStatus() { for (uint16_t& v : voltages) v = 0xFFFF; }
 };
 struct StatusText { uint8_t severity = MAV_SEVERITY_INFO; char text[50] = {}; uint16_t id = 0; uint8_t chunk_seq = 0; };
+struct RcChannelsOverride { uint8_t target_system = 0, target_component = 0; uint16_t chan[18] = {}; };          // us; 0 or UINT16_MAX = leave the channel as it is
+struct RadioStatus { uint16_t rxerrors = 0, fixed = 0; uint8_t rssi = 0, remrssi = 0, txbuf = 100, noise = 0, remnoise = 0; };   // txbuf: % of the radio's buffer free
 
 inline size_t pack(Encoder& e, const Heartbeat& m, uint8_t* out) {
     Payload p; p.u32(m.custom_mode); p.u8(m.type); p.u8(m.autopilot); p.u8(m.base_mode); p.u8(m.system_status); p.u8(m.mavlink_version);
@@ -168,9 +183,19 @@ inline size_t pack(Encoder& e, const StatusText& m, uint8_t* out) {
     Payload p; p.u8(m.severity); p.raw(m.text, sizeof(m.text)); p.u16(m.id); p.u8(m.chunk_seq);
     return e.frame(MSG_STATUSTEXT, p, out);
 }
+inline size_t pack(Encoder& e, const RcChannelsOverride& m, uint8_t* out) {
+    Payload p; for (int i = 0; i < 8; i++) p.u16(m.chan[i]);
+    p.u8(m.target_system); p.u8(m.target_component); for (int i = 8; i < 18; i++) p.u16(m.chan[i]);     // (chan9 .. chan18: extension fields)
+    return e.frame(MSG_RC_CHANNELS_OVERRIDE, p, out);
+}
+inline size_t pack(Encoder& e, const RadioStatus& m, uint8_t* out) {
+    Payload p; p.u16(m.rxerrors); p.u16(m.fixed); p.u8(m.rssi); p.u8(m.remrssi); p.u8(m.txbuf); p.u8(m.noise); p.u8(m.remnoise);
+    return e.frame(MSG_RADIO_STATUS, p, out);
+}
 
-// ---- receiving: whole frames out of a byte stream (CRC checked, payload zero-filled to its full size again). Used by the tests
-// and the simulator to read what the firmware sends; ready for a later "receive" side.
+// ---- receiving: whole frames out of a byte stream (CRC checked, payload zero-filled to its full size again). The MAVLink receiver
+// (hal/rx/rx_mavlink.h) reads with it, the tests and the simulator read what the firmware sends. Like MAVLink's own mavlink_parse_char
+// it does not search a broken frame for another start byte: it waits for the next one.
 class Parser {
 public:
     struct Frame { uint32_t msgid = 0; uint8_t seq = 0, sysid = 0, compid = 0, len = 0; uint8_t payload[kMaxPayload] = {}; };
@@ -206,40 +231,148 @@ private:
     uint8_t buf_[kMaxFrame] = {}; size_t n_ = 0; Frame f_; uint32_t good_ = 0, bad_ = 0, unknown_ = 0;
 };
 
-// ---- frames from the sensor thread to the WiFi side (link task, UDP): single producer, single consumer, whole frames only
-class Ring {
-public:
-    static constexpr size_t kSize = 2048;
-    // false: no room for the whole frame (it is dropped and counted: the radio is slower than the telemetry)
-    bool push(const uint8_t* d, size_t n) {
-        if (n == 0 || n > kMaxFrame) return false;
-        const size_t h = head_.load(std::memory_order_relaxed), t = tail_.load(std::memory_order_acquire);
-        if (kSize - (h - t) < n + 2) { dropped_++; return false; }
-        put(h, (uint8_t)(n & 0xFF)); put(h + 1, (uint8_t)(n >> 8));
-        for (size_t i = 0; i < n; i++) put(h + 2 + i, d[i]);
-        head_.store(h + 2 + n, std::memory_order_release);
-        return true;
-    }
-    // as many whole frames as fit into cap bytes (one UDP datagram); 0 = nothing waiting
-    size_t pop(uint8_t* out, size_t cap) {
-        size_t t = tail_.load(std::memory_order_relaxed), got = 0;
-        const size_t h = head_.load(std::memory_order_acquire);
-        while (h - t >= 2) {
-            const size_t n = (size_t)at(t) | ((size_t)at(t + 1) << 8);
-            if (got + n > cap) break;
-            for (size_t i = 0; i < n; i++) out[got + i] = at(t + 2 + i);
-            got += n; t += 2 + n;
-        }
-        tail_.store(t, std::memory_order_release);
-        return got;
-    }
-    uint32_t dropped() const { return dropped_; }
-private:
-    void put(size_t i, uint8_t v) { buf_[i % kSize] = v; }
-    uint8_t at(size_t i) const { return buf_[i % kSize]; }
-    uint8_t buf_[kSize] = {};
-    std::atomic<size_t> head_{0}, tail_{0};
-    uint32_t dropped_ = 0;
+// the two messages read, out of a parsed frame (false: the frame is another message)
+inline bool unpack(const Parser::Frame& f, RcChannelsOverride& m) {
+    if (f.msgid != MSG_RC_CHANNELS_OVERRIDE) return false;
+    for (int i = 0; i < 8; i++) m.chan[i] = Parser::get<uint16_t>(f, 2 * i);
+    m.target_system = f.payload[16]; m.target_component = f.payload[17];
+    for (int i = 8; i < 18; i++) m.chan[i] = Parser::get<uint16_t>(f, 18 + 2 * (i - 8));
+    return true;
+}
+inline bool unpack(const Parser::Frame& f, RadioStatus& m) {
+    if (f.msgid != MSG_RADIO_STATUS) return false;
+    m.rxerrors = Parser::get<uint16_t>(f, 0); m.fixed = Parser::get<uint16_t>(f, 2);
+    m.rssi = f.payload[4]; m.remrssi = f.payload[5]; m.txbuf = f.payload[6]; m.noise = f.payload[7]; m.remnoise = f.payload[8];
+    return true;
+}
+
+// ---- 0.40: the messages of the ground station's commands and of the mission protocol. Each lists its fields once, in wire order
+// (wire()): payload_of() writes them, unpack() reads them back - one list, so the two cannot disagree. Field names as common.xml.
+struct PutField { Payload& p; template <class T> void operator()(T& v) { p.raw(&v, sizeof(v)); } };
+struct GetField { const uint8_t* b; size_t o; template <class T> void operator()(T& v) { memcpy(&v, b + o, sizeof(v)); o += sizeof(v); } };
+template <class M> Payload payload_of(const M& m) { M c = m; Payload p; PutField w{p}; c.wire(w); return p; }
+template <class M> size_t pack(Encoder& e, const M& m, uint8_t* out) { return e.frame(M::kId, payload_of(m), out); }
+template <class M> bool unpack(const Parser::Frame& f, M& m) { if (f.msgid != M::kId) return false; GetField r{f.payload, 0}; m.wire(r); return true; }
+
+// MAV_CMD, MAV_RESULT, MAV_MISSION_RESULT, MAV_FRAME, MISSION_STATE, ... (common.xml) as far as they are used
+enum : uint16_t { CMD_NAV_WAYPOINT = 16, CMD_NAV_LOITER_TIME = 19, CMD_NAV_RETURN_TO_LAUNCH = 20, CMD_NAV_LAND = 21, CMD_NAV_TAKEOFF = 22, CMD_NAV_DELAY = 93,
+                  CMD_DO_SET_MODE = 176, CMD_DO_CHANGE_SPEED = 178, CMD_DO_SET_HOME = 179, CMD_DO_SET_SERVO = 183, CMD_PREFLIGHT_REBOOT_SHUTDOWN = 246,
+                  CMD_MISSION_START = 300, CMD_COMPONENT_ARM_DISARM = 400, CMD_REQUEST_MESSAGE = 512, CMD_REQUEST_AUTOPILOT_CAPABILITIES = 520 };
+constexpr uint8_t RESULT_ACCEPTED = 0, RESULT_TEMPORARILY_REJECTED = 1, RESULT_DENIED = 2, RESULT_UNSUPPORTED = 3, RESULT_FAILED = 4, RESULT_IN_PROGRESS = 5;   // MAV_RESULT
+enum : uint8_t { MISSION_ACCEPTED = 0, MISSION_ERROR = 1, MISSION_UNSUPPORTED_FRAME = 2, MISSION_UNSUPPORTED = 3, MISSION_NO_SPACE = 4, MISSION_INVALID = 5,
+                 MISSION_INVALID_PARAM1 = 6, MISSION_INVALID_PARAM2 = 7, MISSION_INVALID_PARAM5_X = 10, MISSION_INVALID_PARAM6_Y = 11, MISSION_INVALID_PARAM7 = 12,
+                 MISSION_INVALID_SEQUENCE = 13, MISSION_DENIED = 14, MISSION_OPERATION_CANCELLED = 15 };
+enum : uint8_t { MISSION_TYPE_MISSION = 0, MISSION_TYPE_FENCE = 1, MISSION_TYPE_RALLY = 2, MISSION_TYPE_ALL = 255 };
+enum : uint8_t { FRAME_GLOBAL = 0, FRAME_MISSION = 2, FRAME_GLOBAL_RELATIVE_ALT = 3, FRAME_GLOBAL_INT = 5, FRAME_GLOBAL_RELATIVE_ALT_INT = 6 };
+enum : uint8_t { MISSION_STATE_NO_MISSION = 1, MISSION_STATE_NOT_STARTED = 2, MISSION_STATE_ACTIVE = 3, MISSION_STATE_PAUSED = 4, MISSION_STATE_COMPLETE = 5 };
+enum : uint8_t { STANDARD_MODE_NON_STANDARD = 0, STANDARD_MODE_POSITION_HOLD = 1, STANDARD_MODE_ALTITUDE_HOLD = 4, STANDARD_MODE_SAFE_RECOVERY = 5,
+                 STANDARD_MODE_MISSION = 6, STANDARD_MODE_LAND = 7 };
+enum : uint32_t { MODE_PROPERTY_NOT_USER_SELECTABLE = 2 };
+enum : uint64_t { CAP_MISSION_INT = 4, CAP_COMMAND_INT = 8, CAP_MAVLINK2 = 8192 };
+
+struct CommandLong {
+    static constexpr uint32_t kId = MSG_COMMAND_LONG;
+    float param[7] = {}; uint16_t command = 0; uint8_t target_system = 0, target_component = 0, confirmation = 0;
+    template <class V> void wire(V& v) { v(param); v(command); v(target_system); v(target_component); v(confirmation); }
+};
+struct CommandInt {
+    static constexpr uint32_t kId = MSG_COMMAND_INT;
+    float param[4] = {}; int32_t x = 0, y = 0; float z = 0; uint16_t command = 0; uint8_t target_system = 0, target_component = 0, frame = 0, current = 0, autocontinue = 0;
+    template <class V> void wire(V& v) { v(param); v(x); v(y); v(z); v(command); v(target_system); v(target_component); v(frame); v(current); v(autocontinue); }
+};
+struct CommandAck {
+    static constexpr uint32_t kId = MSG_COMMAND_ACK;
+    uint16_t command = 0; uint8_t result = 0, progress = 0; int32_t result_param2 = 0; uint8_t target_system = 0, target_component = 0;
+    template <class V> void wire(V& v) { v(command); v(result); v(progress); v(result_param2); v(target_system); v(target_component); }
+};
+struct AutopilotVersion {
+    static constexpr uint32_t kId = MSG_AUTOPILOT_VERSION;
+    uint64_t capabilities = 0, uid = 0; uint32_t flight_sw_version = 0, middleware_sw_version = 0, os_sw_version = 0, board_version = 0;
+    uint16_t vendor_id = 0, product_id = 0; uint8_t flight_custom_version[8] = {}, middleware_custom_version[8] = {}, os_custom_version[8] = {}, uid2[18] = {};
+    template <class V> void wire(V& v) { v(capabilities); v(uid); v(flight_sw_version); v(middleware_sw_version); v(os_sw_version); v(board_version); v(vendor_id); v(product_id);
+                                         v(flight_custom_version); v(middleware_custom_version); v(os_custom_version); v(uid2); }
+};
+struct HomePosition {                                   // degE7, mm MSL; the local frame fields stay 0 (q = no rotation)
+    static constexpr uint32_t kId = MSG_HOME_POSITION;
+    int32_t latitude = 0, longitude = 0, altitude = 0; float x = 0, y = 0, z = 0, q[4] = {1, 0, 0, 0}, approach_x = 0, approach_y = 0, approach_z = 0; uint64_t time_usec = 0;
+    template <class V> void wire(V& v) { v(latitude); v(longitude); v(altitude); v(x); v(y); v(z); v(q); v(approach_x); v(approach_y); v(approach_z); v(time_usec); }
+};
+struct GpsGlobalOrigin {
+    static constexpr uint32_t kId = MSG_GPS_GLOBAL_ORIGIN;
+    int32_t latitude = 0, longitude = 0, altitude = 0; uint64_t time_usec = 0;
+    template <class V> void wire(V& v) { v(latitude); v(longitude); v(altitude); v(time_usec); }
+};
+struct AvailableModes {                                 // (development.xml in pymavlink 2.4.50; common.xml in newer MAVLink)
+    static constexpr uint32_t kId = MSG_AVAILABLE_MODES;
+    uint32_t custom_mode = 0, properties = 0; uint8_t number_modes = 0, mode_index = 0, standard_mode = 0; char mode_name[35] = {};
+    template <class V> void wire(V& v) { v(custom_mode); v(properties); v(number_modes); v(mode_index); v(standard_mode); v(mode_name); }
+};
+struct AvailableModesMonitor {
+    static constexpr uint32_t kId = MSG_AVAILABLE_MODES_MONITOR;
+    uint8_t seq = 0;
+    template <class V> void wire(V& v) { v(seq); }
+};
+struct MissionRequestList {
+    static constexpr uint32_t kId = MSG_MISSION_REQUEST_LIST;
+    uint8_t target_system = 0, target_component = 0, mission_type = 0;
+    template <class V> void wire(V& v) { v(target_system); v(target_component); v(mission_type); }
+};
+struct MissionCount {
+    static constexpr uint32_t kId = MSG_MISSION_COUNT;
+    uint16_t count = 0; uint8_t target_system = 0, target_component = 0, mission_type = 0;
+    template <class V> void wire(V& v) { v(count); v(target_system); v(target_component); v(mission_type); }
+};
+struct MissionRequestInt {
+    static constexpr uint32_t kId = MSG_MISSION_REQUEST_INT;
+    uint16_t seq = 0; uint8_t target_system = 0, target_component = 0, mission_type = 0;
+    template <class V> void wire(V& v) { v(seq); v(target_system); v(target_component); v(mission_type); }
+};
+struct MissionItemInt {                                 // x, y: degE7; z: m in the frame's sense
+    static constexpr uint32_t kId = MSG_MISSION_ITEM_INT;
+    float param[4] = {}; int32_t x = 0, y = 0; float z = 0; uint16_t seq = 0, command = 0;
+    uint8_t target_system = 0, target_component = 0, frame = 0, current = 0, autocontinue = 1, mission_type = 0;
+    template <class V> void wire(V& v) { v(param); v(x); v(y); v(z); v(seq); v(command); v(target_system); v(target_component); v(frame); v(current); v(autocontinue); v(mission_type); }
+};
+struct MissionItem {                                    // the float form: x, y in degrees (deprecated, still what a ground station sends to a craft
+    static constexpr uint32_t kId = MSG_MISSION_ITEM;    // that has not said MAV_PROTOCOL_CAPABILITY_MISSION_INT)
+    float param[4] = {}; float x = 0, y = 0, z = 0; uint16_t seq = 0, command = 0;
+    uint8_t target_system = 0, target_component = 0, frame = 0, current = 0, autocontinue = 1, mission_type = 0;
+    template <class V> void wire(V& v) { v(param); v(x); v(y); v(z); v(seq); v(command); v(target_system); v(target_component); v(frame); v(current); v(autocontinue); v(mission_type); }
+};
+struct MissionRequest {
+    static constexpr uint32_t kId = MSG_MISSION_REQUEST;
+    uint16_t seq = 0; uint8_t target_system = 0, target_component = 0, mission_type = 0;
+    template <class V> void wire(V& v) { v(seq); v(target_system); v(target_component); v(mission_type); }
+};
+struct MissionAck {
+    static constexpr uint32_t kId = MSG_MISSION_ACK;
+    uint8_t target_system = 0, target_component = 0, type = 0, mission_type = 0;
+    template <class V> void wire(V& v) { v(target_system); v(target_component); v(type); v(mission_type); }
+};
+struct MissionClearAll {
+    static constexpr uint32_t kId = MSG_MISSION_CLEAR_ALL;
+    uint8_t target_system = 0, target_component = 0, mission_type = 0;
+    template <class V> void wire(V& v) { v(target_system); v(target_component); v(mission_type); }
+};
+struct MissionSetCurrent {
+    static constexpr uint32_t kId = MSG_MISSION_SET_CURRENT;
+    uint16_t seq = 0; uint8_t target_system = 0, target_component = 0;
+    template <class V> void wire(V& v) { v(seq); v(target_system); v(target_component); }
+};
+struct MissionCurrent {
+    static constexpr uint32_t kId = MSG_MISSION_CURRENT;
+    uint16_t seq = 0, total = 0; uint8_t mission_state = 0, mission_mode = 0;
+    template <class V> void wire(V& v) { v(seq); v(total); v(mission_state); v(mission_mode); }
+};
+struct MissionItemReached {
+    static constexpr uint32_t kId = MSG_MISSION_ITEM_REACHED;
+    uint16_t seq = 0;
+    template <class V> void wire(V& v) { v(seq); }
+};
+struct Timesync {                                       // ns
+    static constexpr uint32_t kId = MSG_TIMESYNC;
+    int64_t tc1 = 0, ts1 = 0;
+    template <class V> void wire(V& v) { v(tc1); v(ts1); }
 };
 
 } // namespace mav

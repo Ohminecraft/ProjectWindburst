@@ -132,6 +132,7 @@ WB_FAST inline uint32_t gcr_decode(uint32_t v20) {
     #define iv 0xFFFFFFFF
     static const uint32_t dec[32] = {iv, iv, iv, iv, iv, iv, iv, iv, iv, 9, 10, 11, iv, 13, 14, 15,
                                     iv, iv, 2, 3, iv, 5, 6, 7, iv, 0, 8, 1, iv, 4, 12, iv};
+    #undef iv
     v20 &= 0xFFFFF;
     uint32_t out = dec[v20 & 0x1F];
     out |= dec[(v20 >> 5) & 0x1F] << 4;

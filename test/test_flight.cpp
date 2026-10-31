@@ -1196,8 +1196,65 @@ static void t_mission() {
       CHECK(flying && r.out.mission_state == (int)MissionState::IDLE && r.out.althold_active && r.out.armed, "the app's start flies it without a switch; its stop gives the craft back (Altitude Hold, the pilot's switch)"); }
 }
 
+// 0.40: a ground station (MAVLink, telemetry/mavlink_gcs.h) picks a flight mode, arms and disarms
+static void t_ground_station() {
+    printf("[ground station] a flight mode until the pilot moves a mode switch; arming / disarming from it\n");
+    const uint32_t ANG = 1u << M_ANGLE, AH = 1u << M_ALTHOLD, PH = 1u << M_POSHOLD, RS = 1u << M_RESCUE;
+    {   Rig r; r.baro = true; Pilot p; p.mode = 1; r.run(0.5f, p);                 // Angle on the switch, disarmed
+        r.core.set_mode_override(ANG | AH); r.run(0.05f, p);
+        CHECK(r.out.mode_override && (r.out.modes & AH) && (r.out.modes & ANG), "Altitude Hold from the ground station while the switch says Angle (modes 0x%x)", r.out.modes);
+        p.arm = true; r.run(0.3f, p); r.run(1.0f, p);
+        CHECK(r.out.armed && r.out.mode_override && (r.out.modes & AH), "arming on the ARM switch keeps it (only the flight-mode switches count)");
+        p.mode = 0; r.run(0.1f, p);
+        CHECK(!r.out.mode_override && !(r.out.modes & (AH | ANG)), "the pilot moves the mode switch (to Acro): his switches fly again (modes 0x%x)", r.out.modes);
+        r.core.set_mode_override(0); r.run(0.05f, p); p.mode = 1; r.run(0.1f, p);
+        CHECK(!r.out.mode_override && (r.out.modes & ANG), "Acro from the ground station, then the pilot picks Angle: Angle");
+        r.core.set_mode_override(ANG | AH | PH); r.run(0.05f, p); CHECK(r.out.mode_override && (r.out.modes & PH), "Position Hold from the ground station");
+        r.core.clear_mode_override(); r.run(0.05f, p); CHECK(!r.out.mode_override && !(r.out.modes & PH) && (r.out.modes & ANG), "cleared: the switches again");
+        p.arm = false; r.run(0.1f, p); CHECK(!r.out.armed, "the ARM switch off disarms whatever the ground station set");
+        r.core.set_mode_override(ANG | AH | RS | (1u << M_ARM)); r.run(0.05f, p);
+        CHECK((r.out.modes & RS) && !(r.out.modes & (1u << M_ARM)) && !r.out.armed, "bits outside the flight modes are not taken: ARM stays the switch's (modes 0x%x)", r.out.modes); }
+    {   Rig r; Pilot p; r.run(0.5f, p);                                            // disarmed, ARM switch off, Acro
+        r.core.remote_arm(true, false, 1); r.run(0.01f, p);
+        CHECK(r.out.armed && r.out.remote_seq == 1 && r.out.remote_result == 0, "armed from the ground station (answer %u to request %u)", r.out.remote_result, r.out.remote_seq);
+        r.run(1.0f, p); CHECK(r.out.armed, "the ARM switch, off, does not disarm it");
+        p.thr = 0.6f; r.run(1.5f, p); const bool up = r.out.airborne;
+        r.core.remote_arm(false, false, 2); r.run(0.01f, p);
+        CHECK(up && r.out.armed && r.out.remote_seq == 2 && r.out.remote_result == 1, "in the air: a disarm without force is refused (answer %u)", r.out.remote_result);
+        r.core.remote_arm(false, true, 3); r.run(0.01f, p);
+        CHECK(!r.out.armed && r.out.remote_seq == 3 && r.out.remote_result == 0, "with force (21196): disarmed"); }
+    {   Rig r; Pilot p; r.run(0.5f, p); p.thr = 0.5f; r.run(0.1f, p);
+        r.core.remote_arm(true, false, 7); r.run(0.01f, p);
+        CHECK(!r.out.armed && r.out.remote_seq == 7 && r.out.remote_result == 1 && (r.out.arm_blockers & AB_THROTTLE_HIGH), "the throttle up: refused, as the switch would be");
+        p.thr = 0; r.run(0.1f, p); r.core.remote_arm(false, false, 8); r.run(0.01f, p); CHECK(r.out.remote_seq == 8 && r.out.remote_result == 0, "a disarm of a disarmed craft: fine"); }
+}
+
+// 0.41: Loiter (nav/loiter.h, ArduCopter's) in the closed loop
+static void t_loiter_flight() {
+    printf("[loiter] GPS + compass in the closed loop: holds, the stick asks for a velocity, it stops by itself, the wind; Altitude Hold with it\n");
+    {   Rig r(0, true); r.core.rc.modes.add(M_LOITER, 7, 1300, 1700); Pilot p; r.baro = true; r.h.baro_ok = true; p.mode = 1; p.aux7 = 1500; r.run(1.0f, p);
+        p.arm = true; r.run(0.3f, p);
+        CHECK(!r.out.armed && (r.out.arm_blockers & AB_POSHOLD_NO_GPS), "the LOITER switch on without a position (no GPS): arming refused (POSHOLD_NO_GPS), as Position Hold");
+        CHECK((r.out.modes & (1u << M_ALTHOLD)) && (r.out.modes & (1u << M_ANGLE)), "LOITER brings Angle and Altitude Hold with it (ArduCopter's Loiter holds the height too)"); }
+    Rig r(0, true); r.ngps = true; r.gps_wander = 0.3f; r.h.gps_ok = true; r.core.rc.modes.add(M_LOITER, 7, 1300, 1700); Pilot p; nav_takeoff(r, p, 3.0f);
+    p.aux7 = 1500; r.run(0.05f, p); const bool on = r.out.loiter_active && !r.out.poshold_active && r.out.nav_lean; r.run(4.0f, p);
+    CHECK(on && r.out.althold_active && hypotf(r.pl.vn, r.pl.ve) < 0.4f, "Loiter switched on in a hover: the controller flies at once, holding after 4 s (%.2f m/s)", hypotf(r.pl.vn, r.pl.ve));
+    { const float n0 = r.pl.pn, e0 = r.pl.pe; float far = 0; for (int i = 0; i < 200; i++) { r.run(0.1f, p); far = fmaxf(far, nav_dist(r, n0, e0)); }
+      CHECK(far < 1.5f, "20 s: it stays within %.2f m (the GPS wanders 0.3 m)", far); }
+    p.pitch = 0.5f; r.run(14.0f, p); const float v = r.pl.vn, want_v = 12.5f * angle_cmd(r, PITCH, 0.5f) / r.core.cfg.angle.limit_deg;      // (the stick through the rate curve, as Angle reads it)
+    CHECK(fabsf(v - want_v) < 0.15f * want_v && fabsf(r.pl.ve) < 0.6f, "half stick forward: the share of loiter_speed the stick gives in Angle (%.2f m/s wanted): %.2f m/s north", want_v, v);
+    p.pitch = 0; const float n_rel = r.pl.pn; float t_stop = -1, back = 0; for (int i = 0; i < 200; i++) { r.run(0.1f, p); back = fmaxf(back, r.pl.pn); if (t_stop < 0 && hypotf(r.pl.vn, r.pl.ve) < 0.3f) t_stop = 0.1f * (i + 1); }
+    const float stop = r.pl.pn - n_rel; r.run(3.0f, p);
+    CHECK(t_stop > 1.0f && t_stop < 12.0f && stop > 2.0f && stop < 35.0f && back - r.pl.pn < 1.5f && hypotf(r.pl.vn, r.pl.ve) < 0.3f,
+          "let go at %.1f m/s: slows down by itself, stopped %.1f m on after %.1f s, does not come back more than %.1f m", v, stop, t_stop, back - r.pl.pn);
+    { const float n0 = r.pl.pn, e0 = r.pl.pe; r.pl.wind_e = 5.0f; float far = 0; for (int i = 0; i < 250; i++) { r.run(0.1f, p); far = fmaxf(far, nav_dist(r, n0, e0)); }
+      CHECK(far < 3.0f && nav_dist(r, n0, e0) < 1.0f && r.pl.right_down_deg() < -5.0f, "a wind of 5 m/s from the west: blown %.1f m at most, %.2f m after 25 s, leaning %.1f deg into it", far, nav_dist(r, n0, e0), -r.pl.right_down_deg()); }
+    p.aux7 = 1000; p.poshold = true; r.run(0.2f, p); CHECK(!r.out.loiter_active && r.out.poshold_active, "LOITER off, POSHOLD on: Position Hold flies");
+    p.aux7 = 1500; r.run(0.2f, p); CHECK(r.out.loiter_active && !r.out.poshold_active, "both switches on: Loiter");
+}
+
 int main() {
     t_arming(); t_attitude_modes(); t_rate_loop(); t_filters_in_the_loop(); t_throttle_boost(); t_level_modes(); t_mode_details(); t_airmode(); t_compass(); t_althold(); t_failsafe(); t_uneven_cycles(); t_pid_denom(); t_stall(); t_runaway(); t_motor_layer(); t_estimator_in_flight();
-    t_position_hold(); t_nav_fence(); t_nav_request(); t_gps_rescue(); t_switch_modes(); t_stick_arm(); t_mission();
+    t_position_hold(); t_nav_fence(); t_nav_request(); t_gps_rescue(); t_switch_modes(); t_stick_arm(); t_mission(); t_ground_station(); t_loiter_flight();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

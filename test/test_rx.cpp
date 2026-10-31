@@ -8,7 +8,11 @@
 #include <random>
 #include "../src/hal/rx/rx_proto.h"
 #include "../src/hal/rx/rx_pulse.h"
-#include "../src/hal/rx/crsf_telemetry.h"
+#include "../src/telemetry/crsf_telemetry.h"
+#include "sim_nrf24.h"
+#include "../src/hal/rx/rx_nrf24.h"
+#include "../src/hal/rx/rx_mavlink.h"
+#include "mavlink_vectors.h"
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(cond, ...) do { if (cond) g_pass++; else { g_fail++; printf("  FAIL line %d: %s   ", __LINE__, #cond); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -253,6 +257,7 @@ static void t_crsf_telemetry() {
     m = crsf::TelemetryIn(); m.armed = true; m.angle = true; CHECK(mode(m) == "ANGL", "armed, ANGLE");
     m.althold = true; CHECK(mode(m) == "ALTH", "Altitude Hold (ANGLE comes with it)");
     m.poshold = true; CHECK(mode(m) == "POSH", "Position Hold");
+    { crsf::TelemetryIn l = m; l.loiter = true; CHECK(mode(l) == "LOIT", "Loiter (0.41), before Position Hold"); }
     m.rescue = true; CHECK(mode(m) == "RTH", "GPS Rescue");
     m.failsafe = true; CHECK(mode(m) == "!FS!", "failsafe wins over everything");
     m = crsf::TelemetryIn(); m.armed = true; m.stabilize = true; CHECK(mode(m) == "STAB", "Stabilize");
@@ -274,8 +279,144 @@ static void t_crsf_telemetry() {
       CHECK(total == 30 && cnt[0x02] == 0 && cnt[0x07] == 0, "no GPS, no altitude: attitude, battery and mode only, still ten rounds a second (%d in 1 s)", total); }
 }
 
+// ---- nRF24 (0.38): the flight controller's side of the Windburst link, against a scripted transmitter
+struct RxBench {
+    uint32_t clock = 0, ms = 0; Air air; SimNrf24 tx_chip, rx_chip; SimBus tx_bus{&tx_chip, &clock}, rx_bus{&rx_chip, &clock}; nrf::Radio tx; rx::Nrf24Rx rx;
+    nrf::Config pair; uint8_t seq = 0; uint8_t last_ack[32] = {}; uint8_t last_ack_n = 0;
+    RxBench(bool bound) {
+        const uint8_t a[5] = {0xA7, 1, 2, 3, 4}; memcpy(pair.addr, a, 5); pair.rf_channel = 90;
+        air.attach(&tx_chip); air.attach(&rx_chip); tx.begin(tx_bus, true, bound ? pair : bind_cfg()); rx.begin(rx_bus, pair, bound, ms);
+    }
+    static nrf::Config bind_cfg() { nrf::Config b; memcpy(b.addr, wbr::kBindAddr, 5); b.rf_channel = wbr::kBindChannel; b.power = wbp::NRF_POWER_MIN; return b; }
+    // the transmitter sends p, the air carries it, the receiver reads it: 10 ms later
+    bool send(const uint8_t* p, uint8_t n) {
+        tx.send(p, n); air.step(clock); last_ack_n = 0; const bool ok = tx.poll_tx(last_ack, last_ack_n) == nrf::Radio::ACKED;
+        clock += 10000; ms += 10; rx.update(clock, ms); return ok;
+    }
+    bool control(uint16_t roll) { uint16_t ch[8] = {roll, 1500, 1000, 1500, 1000, 1000, 1000, 1000}; uint8_t b[32]; return send(b, wbr::encode_control(seq++, ch, b)); }
+};
+
+static void t_nrf24() {
+    printf("[nRF24 receiver]\n");
+    { RxBench b(true);
+      CHECK(b.rx.present() && b.rx.bind_state() == wbp::BIND_STATE_BOUND && b.rx_chip.reg[nrf::RF_CH] == 90 && b.rx_chip.rx_addr[1][0] == 0xA7, "bound: listening on its address and RF channel");
+      b.control(1700); const uint16_t* c = b.rx.channels();
+      CHECK(b.rx.packets() == 1 && c[0] == 1700 && c[1] == 1500 && c[2] == 1000 && c[8] == 1000 && c[15] == 1000, "a control packet: 8 channels, the other 8 at 1000 (%u)", c[0]);
+      const uint8_t bad[13] = {wbr::T_CONTROL, 9, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0x55}; b.rx_chip.inject_rx(bad, 13); b.ms += 10; b.rx.update(b.clock, b.ms);
+      CHECK(b.rx.bad() == 1 && b.rx.channels()[0] == 1700 && b.rx.packets() == 1, "a packet the radio passed but whose CRC8 is wrong: dropped, counted, channels kept");
+      uint16_t ch[8] = {1200, 1500, 1000, 1500, 1000, 1000, 1000, 1000}; uint8_t p[32]; const uint8_t n = wbr::encode_control((uint8_t)(b.seq - 1), ch, p); b.rx_chip.inject_rx(p, n); b.ms += 10; b.rx.update(b.clock, b.ms);
+      CHECK(b.rx.channels()[0] == 1700 && b.rx.packets() == 1, "an old sequence number (a replay): dropped");
+      wbr::Telemetry t; t.armed = true; t.mode = wbp::FLY_MODE_POSHOLD; t.batt_cv = 1490; b.rx.set_telemetry(t);
+      b.control(1500); b.control(1500); wbr::Telemetry got;
+      CHECK(wbr::decode_telemetry(b.last_ack, b.last_ack_n, got) && got.armed && got.mode == wbp::FLY_MODE_POSHOLD && got.batt_cv == 1490, "set_telemetry rides on the ACKs");
+      for (int i = 0; i < 120; i++) b.control(1500);
+      CHECK(b.rx.lq() >= 98, "100 packets a second of the 100 expected: link quality %u %%", b.rx.lq());
+      CHECK(wbr::decode_telemetry(b.last_ack, b.last_ack_n, got) && got.lq >= 98, "and the transmitter is told (%u %%)", got.lq);
+      b.air.loss = 0.6; for (int i = 0; i < 200; i++) b.control(1500);
+      CHECK(b.rx.lq() > 60 && b.rx.lq() < 95, "60 %% of the attempts lost (3 retransmissions): link quality %u %%", b.rx.lq()); }
+    { // never bound: listening for a bind for 60 s
+      RxBench b(false); CHECK(b.rx.bind_state() == wbp::BIND_STATE_LISTEN && b.rx_chip.reg[nrf::RF_CH] == wbr::kBindChannel && !memcmp(b.rx_chip.rx_addr[1], wbr::kBindAddr, 5), "never bound: LISTEN on the bind address / channel");
+      wbr::BindOffer o; const uint8_t na[5] = {0x6E, 5, 6, 7, 8}; memcpy(o.addr, na, 5); o.rf_channel = 70; uint8_t p[32]; const uint8_t n = wbr::encode_bind(o, p);
+      b.send(p, n); uint8_t echo[5];
+      CHECK(b.rx_chip.reg[nrf::RF_CH] == wbr::kBindChannel, "the first offer: still on the bind channel (its echo goes out with the next ACK)");
+      const bool acked = b.send(p, n);
+      CHECK(acked && wbr::decode_bind_ack(b.last_ack, b.last_ack_n, echo) && !memcmp(echo, na, 5), "the second offer is ACKed with the address echoed");
+      CHECK(b.rx_chip.reg[nrf::RF_CH] == 70 && b.rx_chip.rx_addr[1][0] == 0x6E && b.rx.bind_state() == wbp::BIND_STATE_BINDING, "then it moves to the new address / channel, not yet BOUND");
+      nrf::Config now; CHECK(!b.rx.take_bound(now), "nothing to store before a control packet arrived there");
+      nrf::Config moved = b.pair; memcpy(moved.addr, na, 5); moved.rf_channel = 70; b.tx.configure(moved); b.control(1600);
+      CHECK(b.rx.bind_state() == wbp::BIND_STATE_BOUND && b.rx.take_bound(now) && now.addr[0] == 0x6E && now.rf_channel == 70 && b.rx.channels()[0] == 1600, "the first control packet there: BOUND, the new settings to store"); }
+    { RxBench b(false); wbr::BindOffer o; const uint8_t na[5] = {0x6F, 5, 6, 7, 8}; memcpy(o.addr, na, 5); o.rf_channel = 70; uint8_t p[32]; const uint8_t n = wbr::encode_bind(o, p);
+      b.send(p, n); b.send(p, n); for (int i = 0; i < 250; i++) { b.clock += 10000; b.ms += 10; b.rx.update(b.clock, b.ms); }
+      CHECK(b.rx.bind_state() == wbp::BIND_STATE_LISTEN && b.rx_chip.reg[nrf::RF_CH] == wbr::kBindChannel, "moved, but no control packet within 2 s (the transmitter missed the echo): back to listening for the bind"); }
+    { RxBench b(false); b.ms = 60001; b.clock = 60001000; b.rx.update(b.clock, b.ms);
+      wbr::BindOffer o; o.addr[0] = 0x70; uint8_t p[32]; const uint8_t n = wbr::encode_bind(o, p); b.send(p, n); b.send(p, n);
+      CHECK(b.rx.bind_state() == wbp::BIND_STATE_IDLE && b.rx_chip.reg[nrf::RF_CH] == 90, "60 s after power-up the bind window closes: IDLE, offers ignored"); }
+    { RxBench b(true); CHECK(!b.rx.start_bind(1000, 30000, true), "BIND refused while armed");
+      CHECK(b.rx.start_bind(1000, 30000, false) && b.rx.bind_state() == wbp::BIND_STATE_LISTEN, "BIND from the app: LISTEN"); b.rx.stop_bind();
+      CHECK(b.rx.bind_state() == wbp::BIND_STATE_BOUND && b.rx_chip.reg[nrf::RF_CH] == 90, "stopped: back on its own address, BOUND"); }
+    { // radio settings over the air: move at once, back after 1 s without a control packet there
+      RxBench b(true); b.control(1500);
+      wbr::RadioCfg rc; rc.rf_channel = 50; uint8_t p[32]; const uint8_t n = wbr::encode_config(rc, p); b.send(p, n);
+      CHECK(b.rx_chip.reg[nrf::RF_CH] == 50, "config packet: on RF channel 50 at once (its ACK went out when it arrived)");
+      nrf::Config c50 = b.pair; c50.rf_channel = 50; b.tx.configure(c50); b.control(1650);
+      CHECK(b.rx.channels()[0] == 1650 && b.rx.config().rf_channel == 50, "control packets there: it stays");
+      nrf::Config ch50; CHECK(b.rx.take_changed(ch50) && ch50.rf_channel == 50 && !b.rx.take_changed(ch50), "confirmed there: the new settings to store (once)");
+      wbr::RadioCfg r2; r2.rf_channel = 30; const uint8_t n2 = wbr::encode_config(r2, p); b.send(p, n2);
+      for (int i = 0; i < 120; i++) { b.clock += 10000; b.ms += 10; b.rx.update(b.clock, b.ms); }
+      CHECK(b.rx_chip.reg[nrf::RF_CH] == 50 && b.rx.config().rf_channel == 50, "moved to 30 but nobody came within 1 s: back on 50"); }
+}
+
+// ---- final review (0.38.0): findings C2, I4, I5
+static void t_nrf24_review() {
+    printf("[nRF24 receiver: review findings]\n");
+    { RxBench b(false); b.ms = 60001; b.clock = 60001000; b.rx.update(b.clock, b.ms); b.tx.configure(b.pair);
+      b.control(1800); CHECK(b.rx.bind_state() == wbp::BIND_STATE_IDLE && b.rx.packets() == 0 && b.rx.channels()[0] == 1500, "never bound: control packets on its (default) address are not taken"); }
+    { RxBench b(true); b.control(1500); wbr::Telemetry t; t.armed = true; b.rx.set_telemetry(t);
+      wbr::RadioCfg rc; rc.rf_channel = 40; uint8_t p[32]; const uint8_t n = wbr::encode_config(rc, p); b.send(p, n);
+      CHECK(b.rx_chip.reg[nrf::RF_CH] == 90 && b.rx.config().rf_channel == 90, "armed: a radio-settings packet is ignored (%u)", b.rx_chip.reg[nrf::RF_CH]); }
+    { RxBench b(true); b.control(1500); b.rx_chip = SimNrf24();
+      for (int i = 0; i < 30; i++) b.control(1600);
+      CHECK(b.rx.channels()[0] == 1600 && b.rx_chip.reg[nrf::RF_CH] == 90 && b.rx.reinits() >= 1, "the chip lost its registers: set up again, packets flow (%u re-inits)", b.rx.reinits()); }
+}
+
+static void t_nrf24_minor() {
+    printf("[nRF24 receiver: review minors]\n");
+    { RxBench b(false); wbr::BindOffer o; const uint8_t na[5] = {0x71, 5, 6, 7, 8}; memcpy(o.addr, na, 5); o.rf_channel = 75; uint8_t p[32]; const uint8_t n = wbr::encode_bind(o, p);
+      b.send(p, n); b.send(p, n); const bool binding = b.rx.bind_state() == wbp::BIND_STATE_BINDING; b.rx.stop_bind();
+      CHECK(binding && b.rx.config().addr[0] == 0xA7 && b.rx_chip.rx_addr[1][0] == 0xA7, "M1: stopped while confirming a bind: back on its own address, the offered one forgotten (0x%02X)", b.rx.config().addr[0]); }
+    { RxBench b(false); b.tx_chip.distant = true; wbr::BindOffer o; o.addr[0] = 0x72; uint8_t p[32]; const uint8_t n = wbr::encode_bind(o, p);
+      b.send(p, n); b.send(p, n); b.send(p, n);
+      CHECK(b.rx.bind_state() == wbp::BIND_STATE_LISTEN && b.rx_chip.reg[nrf::RF_CH] == wbr::kBindChannel, "M2: an offer from far away (RPD 0, someone else's bind) is not taken"); }
+}
+
+// MAVLink frames: the pymavlink ones (test/mavlink_vectors.h) and ones made by mav::pack (checked against pymavlink in test_mavlink)
+static Bytes vec_bytes(const char* name) { for (const MavVector& v : kMavVectors) if (!strcmp(v.name, name)) return Bytes(v.bytes, v.bytes + v.n); printf("no vector %s\n", name); return Bytes(); }
+static Bytes mav_override(const uint16_t chan[18], uint8_t seq = 0) {
+    mav::RcChannelsOverride o; o.target_system = 1; for (int i = 0; i < 18; i++) o.chan[i] = chan[i];
+    mav::Encoder e; e.sysid = 255; e.compid = 68; e.set_seq(seq); uint8_t f[mav::kMaxFrame]; const size_t n = mav::pack(e, o, f); return Bytes(f, f + n);
+}
+static Bytes mav_status(uint8_t rssi, uint8_t remrssi, uint8_t txbuf) {
+    mav::RadioStatus r; r.rssi = rssi; r.remrssi = remrssi; r.txbuf = txbuf;
+    mav::Encoder e; e.sysid = 255; e.compid = 68; uint8_t f[mav::kMaxFrame]; const size_t n = mav::pack(e, r, f); return Bytes(f, f + n);
+}
+
+static void t_mavlink() {
+    printf("[MAVLink receiver (ExpressLRS in MAVLink mode)]\n");
+    rx::MavlinkDecoder d; rx::Frame f;
+    CHECK(!strcmp(d.name(), "MAVLINK") && d.baud() == 460800 && !d.inverted() && !d.even_parity_2stop(), "460800 8N1, not inverted (what ExpressLRS uses)");
+    CHECK(!d.radio_status_seen() && d.link_quality() == 0 && d.radio_status_count() == 0, "nothing heard yet: no RADIO_STATUS, link quality 0");
+    { const uint16_t v[16] = {1500, 1250, 988, 1750, 2012, 1000, 1500, 2000, 1100, 1200, 1300, 1400, 1600, 1700, 1800, 1900};
+      CHECK(feed(d, vec_bytes("rc_channels_override"), f) == 1, "pymavlink's RC_CHANNELS_OVERRIDE: one RC frame");
+      bool all = true; for (int i = 0; i < 16; i++) if (f.ch[i] != v[i]) all = false;
+      CHECK(all && !f.failsafe && !f.frame_lost, "the 16 channels in microseconds as sent (ch 3 %u, ch 9 %u, ch 16 %u)", f.ch[2], f.ch[8], f.ch[15]); }
+    { uint16_t c[18] = {}; for (int i = 0; i < 16; i++) c[i] = 1600; c[0] = 3000; c[3] = 500; c[1] = 0; c[2] = 65535;
+      CHECK(feed(d, mav_override(c, 1), f) == 1 && f.ch[0] == 2115 && f.ch[3] == 885 && f.ch[4] == 1600, "out of range: clamped to 885 .. 2115 (%u, %u)", f.ch[0], f.ch[3]);
+      CHECK(f.ch[1] == 1250 && f.ch[2] == 988, "0 and 65535 = no change (MAVLink): channels 2 and 3 keep 1250 and 988 (%u, %u)", f.ch[1], f.ch[2]); }
+    { const uint32_t errs = d.errors();
+      CHECK(feed(d, vec_bytes("radio_status"), f) == 0 && d.radio_status_seen() && d.radio_status_count() == 1 && d.txbuf() == 87, "RADIO_STATUS: not an RC frame; 87 %% of the radio's buffer free");
+      CHECK(d.link_quality() == 80 && d.rssi_dbm() == -70 && d.errors() == errs, "rssi 204 = link quality 80 %% (ExpressLRS sends LQ x 2.55), remote rssi 70 = -70 dBm (%u %%, %d dBm)", d.link_quality(), d.rssi_dbm());
+      feed(d, mav_status(255, 50, 12), f); CHECK(d.txbuf() == 12 && d.link_quality() == 100 && d.radio_status_count() == 2, "the next one: 12 %% free, 100 %%"); }
+    { const uint32_t errs = d.errors(); Bytes b = vec_bytes("heartbeat"); const Bytes s = vec_bytes("statustext"); b.insert(b.end(), s.begin(), s.end());
+      CHECK(feed(d, b, f) == 0 && d.errors() == errs, "a ground station's HEARTBEAT and STATUSTEXT: ignored, not errors"); }
+    { uint16_t c[18] = {}; for (int i = 0; i < 16; i++) c[i] = 1400; Bytes b = mav_override(c, 2); b[14] ^= 0x10; const uint32_t errs = d.errors();
+      Bytes good = mav_override(c, 3); Bytes all = {0x00, 0x13, 0xFE}; all.insert(all.end(), b.begin(), b.end()); all.insert(all.end(), good.begin(), good.end());
+      CHECK(feed(d, all, f) == 1 && d.errors() == errs + 1 && f.ch[0] == 1400, "a damaged frame: dropped and counted (%u), the next one read", d.errors() - errs); }
+    {   // 0.40: what the ground station sends through the link waits in a small queue for mav::Gcs (FlightApp drains it)
+        rx::MavlinkDecoder q; Bytes b = vec_bytes("command_long"); const Bytes c2 = vec_bytes("mission_count"), rs = vec_bytes("radio_status"), ov = vec_bytes("rc_channels_override"), hb = vec_bytes("heartbeat");
+        for (const Bytes* x : {&rs, &ov, &c2, &hb}) b.insert(b.end(), x->begin(), x->end());
+        feed(q, b, f); mav::Parser::Frame g1, g2, g3, g4;
+        CHECK(q.take_gcs(g1) && g1.msgid == mav::MSG_COMMAND_LONG && q.take_gcs(g2) && g2.msgid == mav::MSG_MISSION_COUNT && q.take_gcs(g3) && g3.msgid == mav::MSG_HEARTBEAT && !q.take_gcs(g4),
+              "COMMAND_LONG, MISSION_COUNT, HEARTBEAT queued in order; RC_CHANNELS_OVERRIDE and RADIO_STATUS are the decoder's own");
+        Bytes many; for (int i = 0; i < rx::MavlinkDecoder::kGcsQueue + 2; i++) many.insert(many.end(), c2.begin(), c2.end());
+        feed(q, many, f); int n = 0; while (q.take_gcs(g1)) n++;
+        CHECK(n == rx::MavlinkDecoder::kGcsQueue && q.gcs_dropped() == 2, "a full queue (%d) drops what comes after, and counts it (%u)", rx::MavlinkDecoder::kGcsQueue, q.gcs_dropped());
+        feed(q, c2, f); q.reset(); CHECK(!q.take_gcs(g1), "reset() empties it"); }
+    { d.reset(); uint16_t c[18] = {}; c[5] = 1234;
+      CHECK(!d.radio_status_seen() && d.link_quality() == 0 && feed(d, mav_override(c), f) == 1 && f.ch[0] == 1500 && f.ch[5] == 1234, "reset(): channels back to 1500, no RADIO_STATUS"); }
+}
+
 int main() {
-    t_crsf(); t_sbus(); t_ibus(); t_spektrum(); t_ppm(); t_pwm(); t_edge_ring(); t_crsf_telemetry(); t_link();
+    t_crsf(); t_sbus(); t_ibus(); t_spektrum(); t_ppm(); t_pwm(); t_edge_ring(); t_crsf_telemetry(); t_link(); t_nrf24(); t_nrf24_review(); t_nrf24_minor(); t_mavlink();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

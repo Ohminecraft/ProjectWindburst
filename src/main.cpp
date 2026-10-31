@@ -8,9 +8,9 @@
  *                             (its own task since 0.8.8: Arduino's loop task is deleted at the end of setup(), loop() never runs)
  *       core 0  "wb_link"   : app link (WBP protocol over USB / UART0) + blackbox (log memory, stream)     [LinkTask + wbp::Server + bb::Service]
  *       core 0  "wb_sd"     : writes the flight log to the SD card, when the settings select the card      [SdCardTask + bb::CardLog]
- *   TX build (-D_WINDBURST_TX, ESP32-C5): not written yet - placeholder that only identifies itself.
+ *   TX build (-D_WINDBURST_TX, ESP32-C5): the DIY transmitter - src/main_tx.cpp, not this file.
  */
-#if defined(ARDUINO_ARCH_ESP32)                   // (the STM32 build: main_stm32.cpp)
+#if defined(ARDUINO_ARCH_ESP32) && !defined(_WINDBURST_TX)      // (the STM32 build: main_stm32.cpp; the transmitter: main_tx.cpp)
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
@@ -20,17 +20,9 @@
 #endif
 #include "config/version.h"
 
-#if defined(_WINDBURST_TX)
-
-void setup() { Serial.begin(WB_LINK_BAUD); }
-void loop() { Serial.println("Windburst TX: firmware not implemented yet"); delay(2000); }
-
-#else
-
 #include "app/flight_app.h"
 #include "app/flight_task.h"
 #include "app/link_arduino.h"
-#include "app/wifi_link.h"
 #include "hal/can/twai_bus.h"
 #include "blackbox/bb_store_esp.h"
 #include "blackbox/bb_card_esp.h"
@@ -53,7 +45,7 @@ static USBCDC usb_cdc;                               // (the core defines USBSer
 static wbp::Settings settings;
 #if defined(CONFIG_IDF_TARGET_ESP32)
 // The plain ESP32: the Arduino core reserves the start of its data RAM for the Bluetooth controller, and the static data no longer
-// fits beside WiFi. The flight app (~75 kB) lives in the internal heap instead (asked for explicitly: never PSRAM), made before
+// fits. The flight app (~75 kB) lives in the internal heap instead (asked for explicitly: never PSRAM), made before
 // everything below that uses it.
 #include <new>
 #include "esp_heap_caps.h"
@@ -64,8 +56,7 @@ static FlightApp flight;
 static FlightTask flight_task;
 static NvsStorage nvs;
 static wbp::SettingsStore store(nvs);
-// the app link: the serial port (USB / UART0) and, when the settings switch it on, WiFi (app/wifi_link.h); one server, its frames go
-// to the wire the app last spoke on (app/link_mux.h)
+// the app link: the serial port (USB / UART0)
 #if WB_HAS_TWAI
 static TwaiBus can_bus;                                  // the CAN controller (section can: DroneCAN)
 #endif
@@ -74,18 +65,10 @@ static TinyUsbPort usb_port;
 #else
 static StreamPort usb_port(Serial);
 #endif
-#if WB_HAS_WIFI
-static WifiLink wifi;
-static app::LinkMux link_mux(usb_port, &wifi);
-#define WB_FEAT_WIFI wbp::FEAT_WIFI
-#else
-static app::LinkMux link_mux(usb_port, nullptr);
-#define WB_FEAT_WIFI 0u
-#endif
-static app::QueuedTransport transport(link_mux, WB_LINK_BYTES_PER_S, &LinkTask::wait_1ms, nullptr);
+static app::QueuedTransport transport(usb_port, WB_LINK_BYTES_PER_S, &LinkTask::wait_1ms, nullptr);
 static app::LinkHost host(flight.link, &LinkTask::wait_1ms, nullptr, &LinkTask::now_ms);
 static wbp::Server server(settings, &store, host, transport, wbp::ROLE_RX, WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH, "Windburst RX",
-                          wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | WB_FEAT_WIFI | WB_FEAT_USB);
+                          wbp::FEAT_STREAMS | wbp::FEAT_CALIBRATION | wbp::FEAT_MOTOR_TEST | wbp::FEAT_GPS | wbp::FEAT_BLACKBOX | wbp::FEAT_BATTERY | wbp::FEAT_BEEPER | WB_FEAT_USB);
 static LinkTask link_task(server, WB_LINK, transport);
 static app::MspLink msp_link(host, transport, &settings);           // ESC tools on the same port (ESC passthrough)
 static app::Cli term_cli(settings, server, [](const char* t, void*) { transport.write((const uint8_t*)t, strlen(t)); }, nullptr);     // '#' on the serial port: the command line (app/cli.h)
@@ -214,19 +197,6 @@ void setup() {
         }
         g_4way_trace.clear();
     }
-#if WB_HAS_WIFI
-    if (settings.wifi.mode != wbp::WIFI_MODE_OFF) {          // the radio (its driver takes ~50 kB of RAM and runs on core 0, beside the link)
-        wifi.begin(settings.wifi, line, sizeof(line)); flight.add_report(line);
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
-        // ADC2 (GPIO11 .. GPIO20 on the S3) belongs to the radio while it runs: a voltage / current sensor there reads nothing
-        auto adc2 = [](uint8_t p) { return p >= 11 && p <= 20; };
-        if (adc2(settings.pins.batt_adc) || adc2(settings.pins.curr_adc)) flight.add_report("wifi: WARNING - battery / current ADC on an ADC2 pin (GPIO11 .. GPIO20): unusable while WiFi is on, take GPIO1 .. GPIO10");
-#endif
-        link_task.set_net(&wifi, &link_mux);
-        link_task.set_mav(&flight.mav_net);                  // MAVLink telemetry as UDP broadcasts (filled only when telemetry.wifi is on)
-    }
-    host.set_net([](app::LinkHost::NetInfo& n) { n.wifi = wifi.state(); n.ip = wifi.ip(); n.rssi = wifi.rssi(); n.clients = wifi.clients(); n.via = (uint8_t)link_mux.active(); });
-#endif
     if (WB_LINK_BYTES_PER_S) snprintf(line, sizeof(line), "link: %s, %lu bytes/s (the live log is slowed down to fit)", WB_LINK_KIND, (unsigned long)WB_LINK_BYTES_PER_S);
     else snprintf(line, sizeof(line), "link: %s", WB_LINK_KIND);
     flight.add_report(line);
@@ -255,6 +225,4 @@ void setup() {
 
 void loop() { sensor_entry(nullptr); }                       // only if the sensor task could not be created
 
-#endif
-
-#endif  // ARDUINO_ARCH_ESP32
+#endif  // ARDUINO_ARCH_ESP32, not the transmitter

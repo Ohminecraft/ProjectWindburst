@@ -164,6 +164,15 @@ class Schema:
         canon = json.dumps(_strip(self.raw), sort_keys=True, separators=(",", ":")).encode()
         return zlib.crc32(canon) & 0xFFFFFFFF
 
+    def sections_of(self, role):
+        """Names of the sections a device of this role ("RX" the flight controller, "TX" the transmitter) has, in schema order."""
+        want = "tx" if str(role).upper() == "TX" else "rx"
+        return [s["name"] for s in self.raw["sections"] if s.get("role", "rx") == want]
+
+    def streams_of(self, role):
+        want = "tx" if str(role).upper() == "TX" else "rx"
+        return [s["name"] for s in self.raw["streams"] if s.get("role", "rx") == want]
+
     def section(self, name):
         if name not in self.sections:
             raise KeyError("no settings section %r (have: %s)" % (name, ", ".join(self.sections)))
