@@ -47,6 +47,8 @@ Mã lỗi (`errors` trong json): `OK, UNKNOWN, BAD_ARG, ARMED, BUSY, NOT_SUPPORT
 
 ## 2. Settings
 
+**0.42.1: optical flow.** Enum `flow_reject` thêm `RATE` ở cuối. Enum mới `flow_cal_result`. Lệnh mới `FLOW_CAL` (26): `step` 1 = bắt đầu, 2 = xong, 0 = huỷ. Kết quả gồm `reason`, `scale` (%), `scale_x`, `scale_y` (% có dấu). OK thì ghi `nav.flow_scale` (RAM, Lưu để giữ). Schema hash đổi, section không đổi.
+
 **0.42.0: Crash flip.** Enum `mode` và `fly_mode` thêm `CRASHFLIP` ở cuối. Bits `arm_blocker` thêm `CRASHFLIP` (bit 19), `nav_flags` thêm `CRASHFLIP` (bit 7). Section `motors` thêm `crashflip_rate`, `crashflip_motor_pct`, `crashflip_auto_rearm` ở cuối (44 → 47 byte). `compat` của `motors` nay là 44, 37, 36, 35: bản ghi 34 byte (firmware 0.5) không còn được đọc, khi đó section `motors` về mặc định. Schema hash đổi.
 
 **0.41.0: Loiter.** Enum `mode` và `fly_mode` thêm `LOITER` ở cuối. Section `nav` thêm `loiter_speed` ở cuối (43 → 44 byte). `compat` của `nav` nay là 43, 38, 34, 31: bản ghi 30 byte (firmware khoảng 0.30 trở về trước) không còn được đọc, vì `compat` giữ tối đa 4 kích thước; khi đó section `nav` về mặc định. Schema hash đổi.

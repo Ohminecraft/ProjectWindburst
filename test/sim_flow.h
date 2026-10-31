@@ -13,6 +13,8 @@
 
 // The picture's angular rate about the sensor's X / Y axis (rad/s; a right-handed rotation of the sensor reads positive):
 //   x = roll rate - v_right / range        y = pitch rate (nose up +) + v_forward / range        range = height / cos(tilt)
+// v_forward / v_right: the velocity over the ground in the BOARD's axes (FRD x / y) - a tilted craft that climbs sees part of its
+// climb there (ArduPilot EKF3 / PX4 EKF2 predict the flow from the full 3-D velocity turned into the sensor's axes)
 // How the sensor sits on the craft: its X axis points `mount_cw_deg` to the right of the nose (0 = the normal direction); a
 // mirrored picture (a sensor that looks through a mirror, or one whose maker counts the other way) reads X with the other sign.
 struct FlowTruth {

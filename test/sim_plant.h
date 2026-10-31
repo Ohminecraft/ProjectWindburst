@@ -30,6 +30,7 @@ struct Plant {
     // goes to hold_vn / hold_ve within about a third of a second. The motors move nothing; the accelerometer reads gravity and
     // the hand's acceleration.
     bool held = false; float hold_vn = 0, hold_ve = 0, hold_an = 0, hold_ae = 0;
+    float hold_vz = 0;                                            // ... and lifts it at this rate (m/s, up +)
     float total_thrust = 0;
     explicit Plant(int layout = 0) {                                // 0 quad X (BF numbering), 1 quad +, 2 hex X
         // a quad built the Betaflight way ("props in"): rear-right CW, front-right CCW, rear-left CCW, front-left CW
@@ -71,7 +72,7 @@ struct Plant {
         const float nn = 1 / sqrtf(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3); q0 *= nn; q1 *= nn; q2 *= nn; q3 *= nn;
         if (held) {
             hold_an = (hold_vn - vn) / 0.3f; hold_ae = (hold_ve - ve) / 0.3f; vn += hold_an * dt; ve += hold_ae * dt; pn += vn * dt; pe += ve * dt;
-            vz = 0; ground = false; drag_n = drag_e = 0; return;
+            vz = hold_vz; z += hold_vz * dt; ground = false; drag_n = drag_e = 0; return;
         }
         // vertical: thrust along body -z, gravity down
         const float a_up = (total_thrust * R22()) / mass - fc::kG0;
@@ -92,6 +93,9 @@ struct Plant {
     // velocity over the ground in body axes (forward, right)
     float v_forward() const { const float y = yaw_deg() * fc::kDeg2Rad; return vn * cosf(y) + ve * sinf(y); }
     float v_right() const { const float y = yaw_deg() * fc::kDeg2Rad; return -vn * sinf(y) + ve * cosf(y); }
+    // velocity over the ground in the board's own axes (FRD, x / y): what an optical flow sensor sees - the tilt and the climb rate included
+    float v_board_x() const { const double v[3] = {vn, ve, -vz}; double b[3]; body_from_world(v, b); return (float)b[0]; }
+    float v_board_y() const { const double v[3] = {vn, ve, -vz}; double b[3]; body_from_world(v, b); return (float)b[1]; }
     float R20() const { return 2 * (q1 * q3 - q0 * q2); }
     float R21() const { return 2 * (q2 * q3 + q0 * q1); }
     float R22() const { return 1 - 2 * (q1 * q1 + q2 * q2); }

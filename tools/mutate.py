@@ -2546,6 +2546,25 @@ m('crashflip: crashflip_auto_rearm not applied', SA, "c.crashflip.auto_rearm = s
 m('crashflip: CRSF does not say FLIP', CRT, "    if (t.crashflip) return \"FLIP\";\n", "", 'test_rx')
 m('crashflip: the OSD does not say FLIP', 'src/osd/osd.h', "    return s.mode <= MODE_FLIP ? n[s.mode] : \"ACRO\";", "    return s.mode < MODE_FLIP ? n[s.mode] : \"ACRO\";", 'test_osd')
 m('crashflip: the DIY transmitter refuses CRASHFLIP', 'src/radio/wb_radio.h', "p[2] > wbp::FLY_MODE_CRASHFLIP ||", "p[2] > wbp::FLY_MODE_LOITER ||", 'test_radio')
+# 0.42.1: optical flow against ArduPilot / PX4 (core/flow.h, hal/flow/pmw3901.h); run: python tools/mutate.py flowfix:
+FL = 'src/core/flow.h'; PMW = 'src/hal/flow/pmw3901.h'
+m('flowfix: turned by the heading alone again', FL, "    const float bz = (vd - R[2][0] * fwd - R[2][1] * right) / maxf(R[2][2], 0.1f);", "    const float bz = 0.0f; (void)vd;", 'test_nav test_flight')
+m('flowfix: the climb rate left out', FCO, "flow_to_earth(R, fv.forward, fv.right, alt_est_.vel_d(), vn, ve);", "flow_to_earth(R, fv.forward, fv.right, 0.0f, vn, ve);", 'test_flight')
+m('flowfix: no rate limit', FL, "    if (s.x * s.x + s.y * s.y > c.max_rate_rad * c.max_rate_rad) { o.reject = FLOW_RATE; return o; }\n", "", 'test_nav')
+m('flowfix: the old noise', FL, "    float noise_rad = 0.15f;", "    float noise_rad = 0.10f;", 'test_nav')
+m('flowfix: deltas without the motion bit', PMW, "        const bool moved = (b[0] & 0x80) != 0;", "        const bool moved = true;", 'test_flowsensor')
+m('flowfix: garbage deltas used', PMW, "        if (dx > lim || dx < -lim || dy > lim || dy < -lim) { garbage_bursts_++; sum_.reset(); return false; }", "", 'test_flowsensor')
+m('flowfix: a late poll counts as garbage', PMW, "(int32_t)(240u * (dt_us > kPollUs ? dt_us : kPollUs) / kPollUs);", "(int32_t)240;", 'test_flowsensor')
+m('flowfix: calibration without the turn threshold', FL, "        if (fabsf(gx) >= kMinRate) {", "        if (true) {", 'test_nav')
+m('flowfix: calibration takes too few', FL, "n_[0] < kMinSamples || n_[1] < kMinSamples ||", "", 'test_nav test_fw')
+m('flowfix: a backwards axis calibrated away', FL, "        if (r.scale_x <= 0.0f) r.reason = FCAL_SIGN_X;", "        if (false) r.reason = FCAL_SIGN_X;", 'test_nav test_fw')
+m('flowfix: the axes may differ', FL, "        else if (maxf(r.scale_x, r.scale_y) > kMaxRatio * minf(r.scale_x, r.scale_y)) r.reason = FCAL_AXES_DIFFER;", "", 'test_nav')
+m('flowfix: a failed finish ends it', FL, "        else { r.reason = FCAL_OK; active_ = false; }\n        return r;", "        else { r.reason = FCAL_OK; }\n        active_ = false;\n        return r;", 'test_nav test_fw')
+m('flowfix: calibration not fed', FCO, "flow_craft_axes(cfg.flow, flow_, fx, fy); fcal_.feed(fx, fy, gx, gy); }", "flow_craft_axes(cfg.flow, flow_, fx, fy); (void)gx; (void)gy; }", 'test_fw')
+m('flowfix: calibration fed with the scaled flow', FCO, "flow_craft_axes(cfg.flow, flow_, fx, fy); fcal_.feed(fx, fy, gx, gy); }", "flow_craft_axes(cfg.flow, flow_, fx, fy); fcal_.feed(fx * cfg.flow.scale, fy * cfg.flow.scale, gx, gy); }", 'test_fw')
+m('flowfix: the result not written', FA, "            if (c.reason == fc::FCAL_OK) { s.nav.flow_scale = (uint16_t)sc; apply_live(wbp::SEC_NAV); }\n", "", 'test_fw')
+m('flowfix: finish without a start', FA, "            if (!core.flow_cal_active()) return wbp::ERR_BAD_STATE;\n", "", 'test_fw')
+m('flowfix: started without a sensor', FA, "if (!status.flow) return wbp::ERR_NO_SENSOR; core.flow_cal_start();", "core.flow_cal_start();", 'test_fw')
 flt = sys.argv[1] if len(sys.argv) > 1 else ''
 shard, nshard = (int(x) for x in os.environ.get('WB_SHARD', '0/1').split('/'))
 only = None                                          # WB_LABELS=file: run exactly the mutants whose labels are listed there, one per line

@@ -53,7 +53,43 @@ static void t_flow() {
       const float lim = 200 * kDeg2Rad; const FlowVelocity g1 = flow_velocity(c, s, lim * 1.01f, 0, 1.0f, 1.0f), g2 = flow_velocity(c, s, 0, -lim * 1.01f, 1.0f, 1.0f), g3 = flow_velocity(c, s, lim * 0.99f, lim * 0.99f, 1.0f, 1.0f);
       CHECK(!g1.valid && g1.reject == FLOW_TURNING && !g2.valid && g2.reject == FLOW_TURNING && g3.valid, "turning faster than 200 deg/s about roll or pitch: not used"); }
     { FlowSample s; s.y = 1.0f; s.quality = 100; const float a = flow_velocity(c, s, 0, 0, 0.5f, 1.0f).sigma, b = flow_velocity(c, s, 0, 0, 3.0f, 1.0f).sigma; s.quality = 47; const float d = flow_velocity(c, s, 0, 0, 3.0f, 1.0f).sigma;
-      CHECK(fabsf(a - 0.10f) < 1e-4f && fabsf(b - 0.30f) < 1e-4f && fabsf(d - 0.30f / sqrtf(17.0f / 70.0f)) < 1e-3f, "how sure: 0.1 rad/s of noise x the distance, at least 0.10 m/s (%.2f at 0.5 m, %.2f at 3 m), less sure on a poor surface (%.2f at quality 47)", a, b, d); }
+      CHECK(fabsf(a - 0.10f) < 1e-4f && fabsf(b - 0.45f) < 1e-4f && fabsf(d - 0.45f / sqrtf(17.0f / 70.0f)) < 1e-3f, "how sure: 0.15 rad/s of noise x the distance (PX4 EKF2_OF_N_MIN), at least 0.10 m/s (%.2f at 0.5 m, %.2f at 3 m), less sure on a poor surface (%.2f at quality 47)", a, b, d); }
+    // 0.42.1: the sensor's own limit - beyond it the picture smears and the rate reads too low (ArduPilot EKF3: 4.2 rad/s)
+    { FlowSample s; s.quality = 90; s.x = 3.0f; s.y = -2.9f; const FlowVelocity v = flow_velocity(c, s, 0, 0, 0.5f, 1.0f); s.y = -2.95f; const FlowVelocity w = flow_velocity(c, s, 0, 0, 0.5f, 1.0f);
+      CHECK(v.valid && !w.valid && w.reject == FLOW_RATE, "a flow of %.2f rad/s: used; %.2f rad/s (more than 4.2): not used (RATE)", hypotf(3.0f, 2.9f), hypotf(3.0f, 2.95f)); }
+    // 0.42.1: the velocity in the board's plane -> north / east with the whole attitude and the climb rate. ArduPilot EKF3 and PX4
+    // EKF2 predict the flow from the 3-D velocity turned into the sensor's axes; turned by the heading alone, a tilted craft that
+    // climbs would read part of its climb as a speed over the ground.
+    {   auto rot = [](float roll, float pitch, float yaw, float R[3][3]) {          // board -> NED, aero angles (pitch nose up +)
+            const float r = roll * kDeg2Rad, p = pitch * kDeg2Rad, y = yaw * kDeg2Rad, cr = cosf(r), sr = sinf(r), cp = cosf(p), sp = sinf(p), cy = cosf(y), sy = sinf(y);
+            R[0][0] = cp * cy; R[0][1] = sr * sp * cy - cr * sy; R[0][2] = cr * sp * cy + sr * sy;
+            R[1][0] = cp * sy; R[1][1] = sr * sp * sy + cr * cy; R[1][2] = cr * sp * sy - sr * cy;
+            R[2][0] = -sp; R[2][1] = sr * cp; R[2][2] = cr * cp; };
+        auto back = [&](float roll, float pitch, float yaw, float vn, float ve, float vd, float& n, float& e) {
+            float R[3][3]; rot(roll, pitch, yaw, R);
+            const float bx = R[0][0] * vn + R[1][0] * ve + R[2][0] * vd, by = R[0][1] * vn + R[1][1] * ve + R[2][1] * vd;      // what the flow sees
+            flow_to_earth(R, bx, by, vd, n, e); };
+        float n, e;
+        back(0, -20, 0, 0, 0, -1.0f, n, e); CHECK(fabsf(n) < 1e-4f && fabsf(e) < 1e-4f, "nose 20 deg down, climbing at 1 m/s, still over the ground: 0 / 0 (%.3f / %.3f; turned by the heading alone: %.2f m/s)", n, e, sinf(20 * kDeg2Rad));
+        back(25, 0, 0, 0, 2.0f, 0, n, e); CHECK(fabsf(n) < 1e-4f && fabsf(e - 2.0f) < 1e-4f, "rolled 25 deg, 2 m/s east: the full 2 m/s (%.3f), not 2 x cos 25 = %.2f", e, 2.0f * cosf(25 * kDeg2Rad));
+        back(12, -15, 70, 1.5f, -0.8f, 0.6f, n, e); CHECK(fabsf(n - 1.5f) < 1e-4f && fabsf(e + 0.8f) < 1e-4f, "any attitude, heading and climb: the velocity comes back (%.3f / %.3f)", n, e);
+        back(0, 0, 90, 1.0f, 0, 0.7f, n, e); CHECK(fabsf(n - 1.0f) < 1e-4f && fabsf(e) < 1e-4f, "level, nose east: north stays north (a climb does not show at all)"); }
+    // 0.42.1: the scale calibration (INAV's opflow calibration, ArduPilot's AP_OpticalFlow_Calibrator): tilted to and fro on the spot,
+    // the picture moves only because the sensor turns - the flow, corrected, equals the gyro. Per axis: sum(flow x gyro) / sum(flow^2)
+    {   FlowScaleCal cal; FlowCalResult r;
+        auto wave = [&](float kx, float ky, int n, float ax = 1.5f, float ay = 1.0f) { for (int i = 0; i < n; i++) { const float g = ax * sinf(i * 0.2f), h = ay * cosf(i * 0.3f); cal.feed(kx * g, ky * h, g, h); } };
+        CHECK(!cal.active() && cal.finish().reason == FCAL_TOO_FEW, "not started: nothing to fit");
+        cal.start(); wave(0.8f, 0.8f, 200); r = cal.finish();
+        CHECK(cal.active() == false && r.reason == FCAL_OK && fabsf(r.scale_x - 1.25f) < 1e-3f && fabsf(r.scale_y - 1.25f) < 1e-3f && fabsf(r.scale - 1.25f) < 1e-3f && r.samples_x > 100 && r.samples_y > 100,
+              "the sensor reads 80 %% of the turn: scale 1.25 on both axes (%.3f / %.3f, %u / %u samples)", r.scale_x, r.scale_y, r.samples_x, r.samples_y);
+        cal.start(); wave(0.8f, 0.8f, 10); r = cal.finish(); CHECK(r.reason == FCAL_TOO_FEW && cal.active(), "half a second of tilting: too few samples, it keeps collecting");
+        cal.cancel(); CHECK(!cal.active(), "cancelled");
+        cal.start(); wave(0.8f, 0.8f, 200, 1.5f, 0.1f); r = cal.finish(); CHECK(r.reason == FCAL_TOO_FEW && r.samples_y < 20, "rolled only (pitch below 0.3 rad/s): the pitch axis has too few (%u)", r.samples_y);
+        cal.start(); wave(-0.8f, 0.8f, 200); r = cal.finish(); CHECK(r.reason == FCAL_SIGN_X && r.scale_x < 0 && cal.active(), "X reads backwards: SIGN_X (the mounting: flow_align / flow_flip); it keeps collecting");
+        cal.start(); wave(0.8f, -0.8f, 200); r = cal.finish(); CHECK(r.reason == FCAL_SIGN_Y, "Y reads backwards: SIGN_Y");
+        cal.start(); wave(0.6f, 1.0f, 200); r = cal.finish(); CHECK(r.reason == FCAL_AXES_DIFFER && fabsf(r.scale_x - 1.667f) < 0.01f && fabsf(r.scale_y - 1.0f) < 0.01f, "the axes 1.67 and 1.00 apart: AXES_DIFFER (a lens does not do that; the craft moved instead of turning)");
+        cal.start(); wave(0.8f, 0.8f, 200); for (int i = 0; i < 500; i++) cal.feed(5.0f, -5.0f, 0.1f, -0.2f); r = cal.finish();
+        CHECK(r.reason == FCAL_OK && fabsf(r.scale - 1.25f) < 1e-3f, "samples turning slower than 0.3 rad/s (the craft carried about, not turned) are left out (%.3f)", r.scale); }
     // the gyro of the same stretch of time
     { GyroHistory h; h.configure(0.002f); float gx = 9, gy = 9;
       CHECK(!h.average(0, 0.02f, gx, gy) && h.span_s() == 0, "no history yet: no answer");

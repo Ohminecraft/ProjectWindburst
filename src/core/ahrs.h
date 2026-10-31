@@ -126,6 +126,11 @@ public:
         return e;
     }
     WB_FAST EulerDeg euler_user() const { EulerDeg e = euler_aero(); e.pitch = -e.pitch; return e; }     // THE place the pilot convention is applied
+    WB_FAST void rotation(float R[3][3]) const {                                                       // board -> NED (world_accel's matrix)
+        R[0][0] = 1 - 2 * (q2 * q2 + q3 * q3); R[0][1] = 2 * (q1 * q2 - q0 * q3); R[0][2] = 2 * (q1 * q3 + q0 * q2);
+        R[1][0] = 2 * (q1 * q2 + q0 * q3); R[1][1] = 1 - 2 * (q1 * q1 + q3 * q3); R[1][2] = 2 * (q2 * q3 - q0 * q1);
+        R[2][0] = 2 * (q1 * q3 - q0 * q2); R[2][1] = 2 * (q2 * q3 + q0 * q1); R[2][2] = 1 - 2 * (q1 * q1 + q2 * q2);
+    }
     WB_FAST float up_cos() const { return 1 - 2 * (q1 * q1 + q2 * q2); }                                 // cos(tilt from vertical) = R[2][2]
     WB_FAST float tilt_deg() const { return acos_approx(up_cos()) * kRad2Deg; }
     // World-frame acceleration without gravity, m/s^2. up positive; north/east from the body specific force (g) and the attitude.

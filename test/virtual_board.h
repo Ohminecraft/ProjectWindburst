@@ -395,7 +395,7 @@ private:
         gps.truth.lat = kLat0 + plant.pn / 111319.5; gps.truth.lon = kLon0 + plant.pe / (111319.5 * cos(kLat0 * M_PI / 180.0));
         gps.truth.vn = plant.vn; gps.truth.ve = plant.ve;
         // the camera under the craft (rates in rad/s about the board's X / Y; the lidar next to it sees the same ground)
-        flow_truth.push(plant.w[0], plant.w[1], plant.v_forward(), plant.v_right(), plant.z, plant.R22());
+        flow_truth.push(plant.w[0], plant.w[1], plant.v_board_x(), plant.v_board_y(), plant.z, plant.R22());
         { float fx, fy; flow_truth.mean(0, 1, fx, fy); pmw.integrate(fx, fy, 0.001f); }
         mtf.tick(now_ms, flow_truth);
         gps.tick(now_ms);

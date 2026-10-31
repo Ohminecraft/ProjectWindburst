@@ -458,7 +458,7 @@ export const ENUM_LABELS = {
   mission_rc_lost: { CONTINUE: 'Bay tiếp nhiệm vụ', RTL: 'Failsafe như thường' },
   flow_type: { NONE: 'Không dùng', PMW3901: 'PMW3901 (SPI)', MSP: 'MSP qua UART (MicoAir MTF, Matek)' },
   flow_align: { CW0: '0°', CW90: '90°', CW180: '180°', CW270: '270°' },
-  flow_reject: { OK: 'đang dùng', QUALITY: 'bỏ qua: bề mặt quá mờ hoặc quá tối', HEIGHT: 'bỏ qua: quá gần sàn, quá cao, hoặc lidar không có số đo', TILT: 'bỏ qua: máy nghiêng quá 45°', TURNING: 'bỏ qua: máy đang quay quá nhanh', NO_GYRO: 'bỏ qua: chưa đủ dữ liệu gyro', NO_SAMPLE: 'cảm biến không gửi mẫu nào' },
+  flow_reject: { OK: 'đang dùng', QUALITY: 'bỏ qua: bề mặt quá mờ hoặc quá tối', HEIGHT: 'bỏ qua: quá gần sàn, quá cao, hoặc lidar không có số đo', TILT: 'bỏ qua: máy nghiêng quá 45°', TURNING: 'bỏ qua: máy đang quay quá nhanh', NO_GYRO: 'bỏ qua: chưa đủ dữ liệu gyro', NO_SAMPLE: 'cảm biến không gửi mẫu nào', RATE: 'bỏ qua: hình trôi quá nhanh (quá 4,2 rad/s: bay quá thấp hoặc quá nhanh)' },
   ph_axis: { PILOT: 'phi công điều khiển', BRAKE: 'đang phanh', BRAKE_READY: 'phanh xong, chờ trục kia', TO_LOITER: 'đang chuyển sang giữ vị trí', LOITER: 'đang giữ vị trí', TO_PILOT: 'đang trả lại cho phi công' },
   rescue_phase: { IDLE: 'không chạy', CLIMB: 'đang leo lên độ cao bay về', ROTATE: 'đang quay mũi về home', FLY_HOME: 'đang bay về', DESCENT: 'đang hạ xuống trên home', LANDING: 'đang hạ cánh', FAILED: 'bỏ cuộc', LOITER: 'đang chờ trên home' },
   rescue_fail: { NONE: 'không', NO_POSITION: 'không có vị trí từ GPS', NO_HEADING: 'không có hướng la bàn', NO_ALTITUDE: 'không có ước lượng độ cao', GPS_LOST: 'mất GPS', LOW_SATS: 'quá ít vệ tinh', STALLED: 'không tiến được về phía home', FLYAWAY: 'máy đang bay ra xa home' },
@@ -472,6 +472,7 @@ export const ENUM_LABELS = {
   mag_model: { MSP: 'MSP (module trên cổng MSP)' },
   baro_primary: { FIRST: 'Cái thứ nhất', SECOND: 'Cái thứ hai' },
   buzzer_type: { ACTIVE: 'Chủ động (tự kêu khi cấp điện)', PASSIVE: 'Thụ động (cần xung PWM)' },
+  flow_cal_result: { OK: 'xong', TOO_FEW: 'quá ít mẫu: nghiêng thêm theo cả roll lẫn pitch', SIGN_X: 'trục X (roll) đọc ngược chiều: chỉnh hướng lắp hoặc lật ảnh', SIGN_Y: 'trục Y (pitch) đọc ngược chiều: chỉnh hướng lắp', AXES_DIFFER: 'hai trục lệch nhau quá 30 %: máy bị đưa đi chứ không chỉ xoay, thử lại' },
   mag_cal_result: {
     OK: 'thành công', TOO_FEW_SAMPLES: 'quá ít mẫu, xoay máy lâu hơn', POOR_COVERAGE: 'chưa xoay đủ mọi hướng', SINGULAR: 'dữ liệu không đủ để tính',
     NOT_ELLIPSOID: 'dữ liệu không ra hình ellipsoid (có nhiễu từ mạnh?)', TOO_DISTORTED: 'từ trường bị méo quá nhiều (để xa kim loại, dây nguồn)',

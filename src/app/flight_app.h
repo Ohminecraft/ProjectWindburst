@@ -775,6 +775,20 @@ public:
             return set_level_from_attitude(e.roll, e.pitch) ? wbp::ERR_OK : wbp::ERR_FAILED;                 // more than 20 degrees: that is a board alignment, not a trim
         }
 
+        case wbp::CMD_FLOW_CAL: {                            // (disarmed: check_request)
+            const uint8_t step = r.args[0];
+            if (step == 0) { core.flow_cal_cancel(); return wbp::ERR_OK; }
+            if (step == 1) { if (!status.flow) return wbp::ERR_NO_SENSOR; core.flow_cal_start(); return wbp::ERR_OK; }
+            if (step != 2) return wbp::ERR_BAD_ARG;
+            if (!core.flow_cal_active()) return wbp::ERR_BAD_STATE;
+            const fc::FlowCalResult c = core.flow_cal_finish();
+            const auto pct = [](float k) { const float v = k * 100.0f; return (int16_t)(v > 30000.0f ? 30000 : v < -30000.0f ? -30000 : lroundf(v)); };
+            int16_t sc = pct(c.scale); if (sc < 20) sc = 20; else if (sc > 500) sc = 500;
+            if (c.reason == fc::FCAL_OK) { s.nav.flow_scale = (uint16_t)sc; apply_live(wbp::SEC_NAV); }
+            app::Reply rp(c.reason == fc::FCAL_OK ? wbp::ERR_OK : wbp::ERR_FAILED); rp.n = 7;
+            const int16_t sx = pct(c.scale_x), sy = pct(c.scale_y); const uint16_t su = (uint16_t)sc;
+            rp.data[0] = c.reason; memcpy(rp.data + 1, &su, 2); memcpy(rp.data + 3, &sx, 2); memcpy(rp.data + 5, &sy, 2);
+            return rp; }
         case wbp::CMD_MAG_AUTOCAL:
             return start_mag_autocal(now_ms) ? wbp::ERR_OK : (status.mag ? wbp::ERR_BUSY : wbp::ERR_NO_SENSOR);
         case wbp::CMD_MAG_CAL_START:

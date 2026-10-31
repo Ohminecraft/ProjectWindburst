@@ -72,7 +72,12 @@ public:
         bool dead = true; for (int i = 0; i < 12; i++) if (b[i] != 0xFF) { dead = false; break; }
         if (dead) { dead_bursts_++; sum_.reset(); return false; }
         if (first || dt_us == 0 || dt_us > 200000) { sum_.reset(); return false; }      // (after a pause the counts cover an unknown stretch of time)
-        const int16_t dx = (int16_t)((uint16_t)b[2] | ((uint16_t)b[3] << 8)), dy = (int16_t)((uint16_t)b[4] | ((uint16_t)b[5] << 8));
+        // the deltas count only with the motion bit set (ArduPilot AP_OpticalFlow_Pixart); more than 240 counts per 10 ms is no picture
+        // at all - the chip's limit (7.4 rad/s) is 60 - but a garbled burst (PX4's PMW3901 driver): that reading is dropped
+        const bool moved = (b[0] & 0x80) != 0;
+        const int16_t dx = moved ? (int16_t)((uint16_t)b[2] | ((uint16_t)b[3] << 8)) : (int16_t)0, dy = moved ? (int16_t)((uint16_t)b[4] | ((uint16_t)b[5] << 8)) : (int16_t)0;
+        const int32_t lim = (int32_t)(240u * (dt_us > kPollUs ? dt_us : kPollUs) / kPollUs);
+        if (dx > lim || dx < -lim || dy > lim || dy < -lim) { garbage_bursts_++; sum_.reset(); return false; }
         squal_ = b[6]; shutter_upper_ = b[10]; polls_++;
         sum_.add((float)dx * kRadPerCount, (float)dy * kRadPerCount, dt_us, shutter_upper_ == 0x1F ? (uint8_t)0 : (squal_ > 100 ? (uint8_t)100 : squal_));
         if (!sum_.ready()) return false;
@@ -82,6 +87,7 @@ public:
     uint8_t chip_id() const { return id_; }
     uint8_t squal() const { return squal_; }
     uint32_t dead_bursts() const { return dead_bursts_; }      // polls that read nothing but ones
+    uint32_t garbage_bursts() const { return garbage_bursts_; }   // polls with an impossible delta (dropped)
 
 private:
     struct Reg { uint8_t reg, val; };
@@ -115,7 +121,7 @@ private:
 
     PixartPort& port_;
     bool ok_ = false, have_prev_ = false; uint32_t prev_us_ = 0;
-    uint8_t id_ = 0, id_inv_ = 0, squal_ = 0, shutter_upper_ = 0; uint32_t dead_bursts_ = 0, polls_ = 0; Accumulator sum_;
+    uint8_t id_ = 0, id_inv_ = 0, squal_ = 0, shutter_upper_ = 0; uint32_t dead_bursts_ = 0, garbage_bursts_ = 0, polls_ = 0; Accumulator sum_;
 };
 
 } // namespace flow

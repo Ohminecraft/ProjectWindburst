@@ -196,7 +196,15 @@ static void t_pmw() {
         chip.present = true; const int four2 = polls(4, 0.5f, 0), fifth2 = polls(1, 0.5f, 0);
         CHECK(four2 == 0 && fifth2 == 1 && fabsf(r.x - 0.5f) < 0.03f, "it answers again: readings again, and nothing from before the silence is in them (%.3f)", r.x); }
       { chip.motion_reg = 0xFF; const int got = polls(5, 0.7f, 0); chip.motion_reg = -1;
-        CHECK(got == 1 && fabsf(r.x - 0.7f) < 0.03f, "a motion register that happens to read 0xFF in an otherwise good burst is not a dead line (%.3f)", r.x); } }
+        CHECK(got == 1 && fabsf(r.x - 0.7f) < 0.03f, "a motion register that happens to read 0xFF in an otherwise good burst is not a dead line (%.3f)", r.x); }
+      // 0.42.1: the deltas count only with the motion bit set (ArduPilot AP_OpticalFlow_Pixart); a delta no picture can make is a
+      // garbled burst (PX4 PMW3901: more than 240 counts) - that reading is dropped
+      { chip.motion_reg = 0x00; const int got = polls(5, 0.7f, 0); chip.motion_reg = -1;
+        CHECK(got == 1 && r.x == 0.0f && r.y == 0.0f, "the motion bit clear: whatever the delta registers hold is not motion (%.3f)", r.x); }
+      { const uint32_t g0 = d.garbage_bursts(); const int got = polls(5, 100.0f, 0), clean = polls(5, 0.5f, 0);
+        CHECK(got == 0 && d.garbage_bursts() == g0 + 5 && clean == 1 && fabsf(r.x - 0.5f) < 0.03f, "800 counts in 10 ms (100 rad/s, far past the chip's 7.4): garbage, no reading; the next five polls are clean (%.3f)", r.x); }
+      { const int two = polls(2, 0.5f, 0), late = polls(1, 20.0f, 0, 30000);
+        CHECK(two == 0 && late == 1, "a poll 30 ms late: three times the counts are allowed (20 rad/s over 30 ms = 476 counts is not garbage)"); } }
     { Pmw3901Sim chip; ChipPort port; port.chip = &chip; flow::Pmw3901 d(port); flow::Reading r; d.init();
       chip.integrate(1.0f, 0, 0.15f); const bool got = d.update(150000, r);
       CHECK(!got && d.samples() == 0, "started early after power-up (first poll at 150 ms): the first poll only starts the timing, its counts are not divided by the time since power-up"); }

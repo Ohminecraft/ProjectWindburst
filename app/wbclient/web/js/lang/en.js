@@ -2785,6 +2785,32 @@ export const EN = {
     "Crash flip (turning over after a crash)",
   "Gán công tắc CRASHFLIP ở tab Chế độ. Chỉ chạy với ESC DShot (lệnh 21 đảo chiều quay, không lưu vào ESC; lệnh 20 trả lại). Có hiệu lực sau khi lưu và khởi động lại.":
     "Assign a CRASHFLIP switch in the Modes tab. DShot ESCs only (command 21 reverses the spin, not stored in the ESC; command 20 sets it back). Takes effect after saving and a restart.",
+  "đang thu: nghiêng máy qua lại quanh cảm biến, rồi bấm Xong":
+    "collecting: tilt the craft to and fro about the sensor, then press Done",
+  "Không có cảm biến optical flow.":
+    "No optical flow sensor.",
+  "Chưa bắt đầu: bấm Bắt đầu, nghiêng máy rồi bấm Xong.":
+    "Not started: press Start, tilt the craft, then press Done.",
+  "Xong: hệ số {s} % (roll {x} %, pitch {y} %), đang dùng. Bấm \"Lưu\" để giữ lại.":
+    "Done: scale {s} % (roll {x} %, pitch {y} %), in use. Press \"Save\" to keep it.",
+  "Đã hiệu chuẩn optical flow: {s} %":
+    "Optical flow calibrated: {s} %",
+  "Chưa được ({why}); vẫn đang thu, nghiêng thêm rồi bấm Xong lại.":
+    "Not yet ({why}); still collecting: tilt more, then press Done again.",
+  "Hiệu chuẩn hệ số optical flow":
+    "Optical flow scale calibration",
+  "Cầm máy cách sàn 0,3 đến 1 m (sàn có hoa văn, đủ sáng), bấm Bắt đầu, rồi nghiêng máy qua lại theo cả roll lẫn pitch khoảng 10 giây, giữ cho cảm biến đứng yên một chỗ (xoay quanh cảm biến, không đưa máy đi). Khi máy chỉ xoay, hình chỉ chạy vì cảm biến xoay, nên flow phải bằng gyro: firmware so hai thứ đó theo từng trục (như INAV và ArduPilot) và đặt \"hệ số tốc độ\". Một trục ra số âm là cảm biến lắp sai hướng: sửa hướng lắp / lật ảnh trước.":
+    "Hold the craft 0.3 to 1 m above the floor (a patterned floor, enough light), press Start, then tilt the craft to and fro in both roll and pitch for about 10 seconds, keeping the sensor in its place (turn about the sensor, do not carry the craft along). Only turning, the picture moves only because the sensor turns, so the flow must equal the gyro: the firmware compares the two per axis (as INAV and ArduPilot do) and sets the \"speed scale\". An axis that comes out negative means the sensor is mounted the wrong way: fix the mounting / mirror first.",
+  "bỏ qua: hình trôi quá nhanh (quá 4,2 rad/s: bay quá thấp hoặc quá nhanh)":
+    "skipped: the picture moves too fast (over 4.2 rad/s: too low or too fast)",
+  "quá ít mẫu: nghiêng thêm theo cả roll lẫn pitch":
+    "too few samples: tilt more, in both roll and pitch",
+  "trục X (roll) đọc ngược chiều: chỉnh hướng lắp hoặc lật ảnh":
+    "the X axis (roll) reads backwards: change the mounting or the mirror",
+  "trục Y (pitch) đọc ngược chiều: chỉnh hướng lắp":
+    "the Y axis (pitch) reads backwards: change the mounting",
+  "hai trục lệch nhau quá 30 %: máy bị đưa đi chứ không chỉ xoay, thử lại":
+    "the two axes differ by more than 30 %: the craft was carried, not only turned; try again",
   "MSP (MSP_SET_RAW_RC trên cổng MSP)":
     "MSP (MSP_SET_RAW_RC on the MSP port)",
   "Cổng MSP (flow, GPS, la bàn, khí áp kế, receiver)":

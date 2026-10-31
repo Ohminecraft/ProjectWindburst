@@ -243,6 +243,11 @@ public:
     void set_nav_request(const nav::NavRequest& r, uint32_t now_ms) { req_ = r; req_ms_ = now_ms; have_req_ = true; }
     void clear_nav_request() { have_req_ = false; }
     bool ekf_used() const { return ekf_in_use_; }      // the last navigation step took the EKF's numbers
+    // The flow scale calibration (FlowScaleCal, flow.h; the app's FLOW_CAL): fed with every flow sample while it runs.
+    void flow_cal_start() { fcal_.start(); }
+    void flow_cal_cancel() { fcal_.cancel(); }
+    bool flow_cal_active() const { return fcal_.active(); }
+    FlowCalResult flow_cal_finish() { return fcal_.finish(); }
     void on_flow(const FlowSample& f, uint32_t now_ms) { flow_ = f; flow_ms_ = now_ms; flow_new_ = true; flow_seen_ = true; }
     // Re-zero the horizontal position (e.g. when the home point is set at arming).
     void reset_position() { pos_est_.reset(); tilt_aid_.restart(); alt_est_.restart_gps_ref(); have_gps_ = false; have_gps_xy_ = false; }
@@ -371,7 +376,7 @@ private:
         bool flip_ended = false;
         if (armed_ && !was_armed) { flip_ = flip_sw && cfg.crashflip.available; if (flip_) cf_.start(); }
         if (!armed_) flip_ = false;
-        else if (false) {
+        else if (flip_ && !flip_sw && in.rc_link) {
             flip_ = false;
             if (!cfg.crashflip.auto_rearm) { arming_.force_disarm(AB_CRASHFLIP); armed_ = false; flip_ended = true; }
         }
@@ -755,6 +760,10 @@ private:
             gps_new_ = false;
         }
         if (!flow_seen_ || age_ms(now, flow_ms_) > (uint32_t)cfg.flow_stale_ms) est_.flow_reject = FLOW_NO_SAMPLE;      // no sensor, or it went silent
+        if (flow_new_ && fcal_.active()) {                     // (no height needed: a turn moves the picture by the turn alone)
+            float gx, gy, fx, fy;
+            if (flow_.quality >= cfg.flow.quality_min && gyro_hist_.average(flow_.age_s, flow_.dt, gx, gy)) { flow_craft_axes(cfg.flow, flow_, fx, fy); fcal_.feed(fx, fy, gx, gy); }
+        }
         if (flow_new_) {
             flow_new_ = false;
             FlowVelocity fv; float gx = 0, gy = 0;
@@ -763,8 +772,9 @@ private:
             else fv = flow_velocity(cfg.flow, flow_, gx, gy, range_h_, ahrs_.up_cos());
             est_.flow_reject = fv.reject; if (fv.valid) { est_.flow_forward = fv.forward; est_.flow_right = fv.right; }
             if (fv.valid) {
-                const float yaw = ahrs_.euler_aero().yaw * kDeg2Rad, cy = cosf(yaw), sy = sinf(yaw);
-                const float vn = fv.forward * cy - fv.right * sy, ve = fv.forward * sy + fv.right * cy, age = flow_.age_s + 0.5f * flow_.dt;
+                float R[3][3], vn, ve; ahrs_.rotation(R);
+                flow_to_earth(R, fv.forward, fv.right, alt_est_.vel_d(), vn, ve);      // (the whole attitude and the climb: flow.h)
+                const float age = flow_.age_s + 0.5f * flow_.dt;
                 pos_est_.fuse_velocity(vn, ve, fv.sigma, age);
                 tilt_aid_.on_velocity(vn, ve, age);
                 flow_ok_ms_ = now; have_flow_ = true;
@@ -813,7 +823,8 @@ private:
     // Loiter's controller: the position controller's settings, Position Hold's lean limit and fence
     void apply_loiter() { lt_.cfg = cfg.loiter; lt_.cfg.fence_radius_m = cfg.poshold.fence_radius_m; lt_.ctl.cfg = cfg.pos; lt_.ctl.cfg.angle_max_deg = cfg.poshold.angle_max_deg; }
     nav::LoiterMode lt_; bool was_loiter_ = false;
-    CrashFlip cf_; bool flip_ = false;                 // armed into crash flip (crash_flip.h)
+    CrashFlip cf_; bool flip_ = false;
+    FlowScaleCal fcal_;                 // armed into crash flip (crash_flip.h)
     nav::PosHoldMode ph_; nav::PosController rctl_; Rescue rescue_; RescueOutput rescue_out_; bool was_poshold_ = false, nav_lean_ = false, ph_unavail_ = false, ph_slow_gps_ = false, rescue_ok_ = false; float nav_tgt_[2] = {0, 0};
     EkfNav ekf_; uint32_t ekf_ms_ = 0; bool ekf_in_use_ = false;
     nav::NavRequest req_; uint32_t req_ms_ = 0; bool have_req_ = false, was_req_ = false, req_climb_on_ = false; float req_climb_ = 0.0f;

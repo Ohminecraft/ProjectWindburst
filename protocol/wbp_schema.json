@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0x622BBE0D",
+ "hash": "0x8FE0C8EE",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -325,7 +325,8 @@
    "TILT",
    "TURNING",
    "NO_GYRO",
-   "NO_SAMPLE"
+   "NO_SAMPLE",
+   "RATE"
   ],
   "ph_axis": [
    "PILOT",
@@ -559,6 +560,13 @@
    "MISSION",
    "LOITER",
    "CRASHFLIP"
+  ],
+  "flow_cal_result": [
+   "OK",
+   "TOO_FEW",
+   "SIGN_X",
+   "SIGN_Y",
+   "AXES_DIFFER"
   ],
   "tx_throttle": [
    "ALTPOS",
@@ -5537,6 +5545,40 @@
      "n": "axes",
      "t": "u8",
      "desc": "axes calibrated (an axis not moved far enough keeps its old calibration)"
+    }
+   ]
+  },
+  {
+   "id": 26,
+   "name": "FLOW_CAL",
+   "args": [
+    {
+     "n": "step",
+     "t": "u8"
+    }
+   ],
+   "writes": "nav",
+   "desc": "optical flow scale calibration (INAV / ArduPilot style): 1 = start, then tilt the craft to and fro by hand over a patterned floor, the sensor kept in its place; 2 = finish: per axis sum(flow x gyro) / sum(flow^2); OK -> nav.flow_scale in use (RAM - save to keep); FAILED -> `reason` says why and it keeps collecting; 0 = cancel",
+   "result": [
+    {
+     "n": "reason",
+     "t": "u8",
+     "enum": "flow_cal_result"
+    },
+    {
+     "n": "scale",
+     "t": "u16",
+     "desc": "% - the new nav.flow_scale (the mean of the two axes)"
+    },
+    {
+     "n": "scale_x",
+     "t": "i16",
+     "desc": "% - roll axis alone (negative: it reads the wrong way)"
+    },
+    {
+     "n": "scale_y",
+     "t": "i16",
+     "desc": "% - pitch axis alone"
     }
    ]
   }

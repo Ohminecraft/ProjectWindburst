@@ -1,7 +1,7 @@
 // Position: the optical flow sensor (what it measures right now, how it sits on the craft), the position estimate,
 // Position Hold and GPS Rescue. Everything in the "nav" section is live; the sensor type (section "flow") is read at power-up.
-import { store } from '../store.js';
-import { h, block, fields, kv, readout, listen, note, canvas, token } from '../ui.js';
+import { store, reloadSection } from '../store.js';
+import { h, block, fields, kv, readout, listen, note, canvas, token, cmdButton, toast } from '../ui.js';
 import { ENUM_LABELS } from '../labels.js';
 import { tr } from '../i18n.js';
 
@@ -40,6 +40,27 @@ function flowDial() {
   cv.setAttribute('aria-label', tr('Tốc độ optical flow đang đo: mũi tên chỉ hướng máy đang đi, mũi máy ở phía trên'));
   listen('stream:nav', () => cv.paint());
   return cv;
+}
+
+// 0.42.1: the scale calibration (FLOW_CAL): tilted to and fro by hand, the flow must equal the gyro
+function flowCal() {
+  const state = h('span', { id: 'flow-cal-state' }, tr('không chạy'));
+  const say = (t) => { state.textContent = t; };
+  const why = (e) => (e.code === 'NO_SENSOR' ? tr('Không có cảm biến optical flow.') : e.code === 'BAD_STATE' ? tr('Chưa bắt đầu: bấm Bắt đầu, nghiêng máy rồi bấm Xong.') : e.message);
+  const start = cmdButton(tr('Bắt đầu'), 'FLOW_CAL', { step: 1 }, { done: () => say(tr('đang thu: nghiêng máy qua lại quanh cảm biến, rồi bấm Xong')), fail: (e) => say(why(e)) });
+  const finish = cmdButton(tr('Xong'), 'FLOW_CAL', { step: 2 }, {
+    class: 'primary',
+    done: async (res) => { await reloadSection('nav'); say(tr('Xong: hệ số {s} % (roll {x} %, pitch {y} %), đang dùng. Bấm "Lưu" để giữ lại.', { s: res.scale, x: res.scale_x, y: res.scale_y })); toast(tr('Đã hiệu chuẩn optical flow: {s} %', { s: res.scale }), 'ok'); },
+    fail: (e) => {
+      const reason = e.extra && e.extra.result && e.extra.result.reason;
+      if (e.code !== 'FAILED' || !reason) { say(why(e)); return; }
+      say(tr('Chưa được ({why}); vẫn đang thu, nghiêng thêm rồi bấm Xong lại.', { why: label('flow_cal_result', reason) }));
+    },
+  });
+  const cancel = cmdButton(tr('Huỷ'), 'FLOW_CAL', { step: 0 }, { done: () => say(tr('không chạy')) });
+  start.id = 'flow-cal-start'; finish.id = 'flow-cal-finish'; cancel.id = 'flow-cal-cancel';
+  return block(tr('Hiệu chuẩn hệ số optical flow'), h('p', {}, tr('Trạng thái: '), state), h('div', { class: 'btn-row' }, start, finish, cancel),
+    h('p', { class: 'help' }, tr('Cầm máy cách sàn 0,3 đến 1 m (sàn có hoa văn, đủ sáng), bấm Bắt đầu, rồi nghiêng máy qua lại theo cả roll lẫn pitch khoảng 10 giây, giữ cho cảm biến đứng yên một chỗ (xoay quanh cảm biến, không đưa máy đi). Khi máy chỉ xoay, hình chỉ chạy vì cảm biến xoay, nên flow phải bằng gyro: firmware so hai thứ đó theo từng trục (như INAV và ArduPilot) và đặt "hệ số tốc độ". Một trục ra số âm là cảm biến lắp sai hướng: sửa hướng lắp / lật ảnh trước.')));
 }
 
 // What the firmware said about the flow sensor when it started (boot report lines "flow: ...").
@@ -87,6 +108,7 @@ export default {
             flowDial(),
             h('p', { class: 'help' }, tr('Kiểm tra hướng lắp: cầm máy cách sàn 0,5 đến 1 m (sàn có hoa văn, đủ sáng), giữ phẳng. Đưa máy về phía mũi: mũi tên phải chỉ lên. Đưa sang phải: mũi tên chỉ sang phải. Mũi tên lệch một phần tư hay nửa vòng: đổi "Hướng lắp cảm biến". Trái phải ngược nhau: bật "Ảnh bị lật gương". Chỉ lắc máy tại chỗ thì mũi tên phải gần như đứng yên.')),
             fields('nav', ['flow_align', 'flow_flip', 'flow_scale', 'flow_quality_min', 'flow_max_height'])),
+          flowCal(),
           block(tr('Ước lượng vị trí'),
             kv([
               [tr('Vận tốc lấy từ'), withId('est-source', readout('estimate', (e) => (has(e.valid, 'FLOW') ? tr('optical flow') : has(e.valid, 'VEL') ? 'GPS' : tr('chưa có'))))],

@@ -511,6 +511,22 @@ def _dist(sim, n0=0.0, e0=0.0):
     return ((float(st["pn"]) - n0) ** 2 + (float(st["pe"]) - e0) ** 2) ** 0.5
 
 
+def test_flow_scale_calibration(sim, fc):
+    """0.42.1: FLOW_CAL - the craft tilted to and fro by hand; a sensor that reads 125 % of the turn gets nav.flow_scale 80."""
+    fc.set("flow", type="MSP"); fc.save(); fc.reboot(); sim.sleep(2.5)
+    sim.do("flow mount 0 0 1.25"); sim.do("carry 0.5 0 0"); sim.sleep(1.0)
+    with pytest.raises(WbError) as e:
+        fc.command("FLOW_CAL", step=2)
+    assert e.value.name == "BAD_STATE"
+    assert fc.command("FLOW_CAL", step=1) == {}
+    for _ in range(10):
+        sim.do("tumble 1.2 0.9 0"); sim.sleep(0.35); sim.do("tumble -1.2 -0.9 0"); sim.sleep(0.35)
+    sim.do("tumble off")
+    res = fc.command("FLOW_CAL", step=2)
+    assert res["reason"] == "OK" and abs(res["scale"] - 80) <= 4 and abs(res["scale_x"] - 80) <= 5 and abs(res["scale_y"] - 80) <= 5, res
+    assert fc.get("nav")["flow_scale"] == res["scale"]
+
+
 def test_optical_flow_sensor_and_position_hold(sim, fc):
     """An MSP flow sensor (with its lidar) from "not set up" to a craft that holds its position on it."""
     fc.subscribe("nav", 20); fc.subscribe("estimate", 20); fc.subscribe("status", 20)

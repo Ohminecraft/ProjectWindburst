@@ -77,7 +77,7 @@ struct Rig {
             if (us / 100000 != prev / 100000 && gps) { GpsMeas gm; gm.valid = true; gm.north_m = pl.pn; gm.east_m = pl.pe; gm.vn = pl.vn; gm.ve = pl.ve; gm.vd = -pl.vz; gm.vd_valid = gps_vd; gm.alt_m = pl.z + gps_alt_err; gm.sigma_alt = 2.0f; gm.rate_hz = gps_rate_said; core.on_gps(gm, in.now_ms); }
             if (us / 1000 != prev / 1000 && (ngps || flow)) {       // what the slow sensors will report later
                 if (past.empty()) past.resize(512);
-                past[past_i] = {pl.pn, pl.pe, pl.vn, pl.ve, pl.z, pl.vz, pl.w[0], pl.w[1], pl.v_forward(), pl.v_right(), (pl.z - ground_level) / fmaxf(pl.R22(), 0.3f)}; past_i = (past_i + 1) % past.size();
+                past[past_i] = {pl.pn, pl.pe, pl.vn, pl.ve, pl.z, pl.vz, pl.w[0], pl.w[1], pl.v_board_x(), pl.v_board_y(), (pl.z - ground_level) / fmaxf(pl.R22(), 0.3f)}; past_i = (past_i + 1) % past.size();
             }
             if (ngps && us / 100000 != prev / 100000 && us >= 600000) {
                 const Past& a = ago(gps_delay); GpsMeas g; g.valid = gps_valid;
@@ -867,6 +867,11 @@ static void t_position_hold() {
       CHECK(r.out.est.flow_reject == FLOW_HEIGHT && !r.out.est.flow_valid && !r.out.poshold_active && r.out.poshold_unavailable, "no distance to the ground for 0.6 s: the flow is not used (HEIGHT), Position Hold says it cannot");
       r.range = true; r.run(3.0f, p);
       CHECK(r.out.est.flow_reject == FLOW_OK && r.out.poshold_active, "the lidar is back: flow and Position Hold again"); }
+    // 0.42.1: the flow measures the velocity along the BOARD. Carried up at 1 m/s with the nose 20 deg down, part of the climb shows in
+    // it; turned into north / east with the whole attitude and the climb rate (ArduPilot EKF3 / PX4 EKF2) it is no speed over the ground
+    { KeepNoise k; Rig r; r.flow = true; r.range = true; r.h.flow_ok = true; r.flow_noise = 0.005f; r.pl.held = true; r.pl.z = 0.6f; r.pl.set_tilt(0, 20); Pilot p; r.run(2.0f, p);
+      r.pl.hold_vz = 1.0f; float worst = 0; for (int i = 0; i < 15; i++) { r.run(0.1f, p); if (i >= 5) worst = fmaxf(worst, hypotf(r.out.est.vel_n, r.out.est.vel_e)); }
+      CHECK(r.out.est.flow_valid && r.pl.z > 1.8f && worst < 0.08f, "carried up at 1 m/s, nose 20 deg down, still over the ground: estimated %.3f m/s at most (turned by the heading alone: %.2f)", worst, sinf(20 * kDeg2Rad)); }
     // flow and a GPS, no compass: the GPS's north cannot be matched with the flow's axes - while the flow works, the GPS waits
     { Rig r; r.pl.make_five_inch(); r.flow = true; r.range = true; r.h.flow_ok = true; r.ngps = true; r.h.gps_ok = true; Pilot p; nav_takeoff(r, p, 1.5f);
       CHECK(r.out.est.flow_valid && r.out.est.vel_valid && !r.out.est.pos_valid && !r.out.est.yaw_from_mag, "flow + GPS without a compass: the velocity comes from the flow, the GPS is not fused (no position on the map)");
@@ -1269,6 +1274,7 @@ static void t_crash_flip_core() {
       f.pitch = 1; r->run(0.05f, f);
       CHECK(fabsf(r->out.motor[1] - 1.0f) < 1e-4f && fabsf(r->out.motor[3] - 1.0f) < 1e-4f && r->out.motor[0] == 0 && r->out.motor[2] == 0, "pitch forward: the front motors at full, the rear ones stand (%.3f %.3f %.3f %.3f)", r->out.motor[0], r->out.motor[1], r->out.motor[2], r->out.motor[3]);
       f.link = false; r->run(0.1f, f); CHECK(stopped(*r), "the link lost: the sticks count as centred - the motors stand"); f.link = true; r->run(0.6f, f);
+      CHECK(r->out.armed && r->out.crashflip, "the link back: still in crash flip (a lost link is not the switch)");
       f.pitch = 0; f.aux7 = 1000; r->run(0.05f, f);
       CHECK(!r->out.armed && (r->out.arm_blockers & AB_CRASHFLIP) && stopped(*r), "the switch off: disarmed, blocker CRASHFLIP (0x%x)", r->out.arm_blockers);
       f.aux7 = 1500; r->run(0.1f, f); CHECK(!r->out.armed, "the switch on again: still disarmed (the arm switch has to go off first)");

@@ -1042,7 +1042,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.42.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.42.1" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -3280,6 +3280,38 @@ static void t_crash_flip_fw() {
         CHECK(!r->tel().armed && (r->tel().blockers & ARM_BLOCKER_CRASHFLIP), "Oneshot125 (no DShot): the switch on refuses the arming (CRASHFLIP)"); }
 }
 
+// 0.42.1: the flow scale calibration on the virtual board (FLOW_CAL): the craft held over the floor and tilted to and fro by hand;
+// an MTF-01 that reads 125 % of the turn gets nav.flow_scale 80; a mirrored picture is told, not "calibrated" away
+static void t_flow_cal_fw() {
+    printf("[flow calibration] tilted to and fro by hand: the scale from the gyro\n");
+    auto tilt = [](Rig& r, double seconds) {                    // roll at 0.4 Hz, pitch at 0.3 Hz, about the sensor itself
+        Plant& p = r.board.plant; const double t0 = g_stub_us * 1e-6;
+        for (double t = 0; t < seconds; t += 0.01) { const double u = g_stub_us * 1e-6 - t0; p.w[0] = (float)(1.5 * sin(2 * M_PI * 0.4 * u)); p.w[1] = (float)(1.2 * cos(2 * M_PI * 0.3 * u)); p.w[2] = 0; r.run(0.01); }
+        p.w[0] = p.w[1] = 0; };
+    auto res = [](const Rig::CmdResult& c, int& reason, int& scale, int& sx, int& sy) {
+        reason = c.data.size() >= 7 ? c.data[0] : -1; scale = c.data.size() >= 7 ? (int)(c.data[1] | (c.data[2] << 8)) : -1;
+        sx = c.data.size() >= 7 ? (int16_t)(c.data[3] | (c.data[4] << 8)) : 0; sy = c.data.size() >= 7 ? (int16_t)(c.data[5] | (c.data[6] << 8)) : 0; };
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { msp_flow(s, b); b.mtf.scale = 1.25f; s.nav.flow_scale = 150; });      // (a wrong scale set before: the result does not build on it)
+        VirtualBoard& b = r->board; b.plant.held = true; b.plant.z = 0.7f; r->run(3.0);
+        CHECK(r->command(CMD_FLOW_CAL, {2}).err == ERR_BAD_STATE, "FINISH before START: refused (BAD_STATE)");
+        CHECK(r->command(CMD_FLOW_CAL, {1}).err == ERR_OK, "START");
+        tilt(*r, 0.5); int reason, scale, sx, sy; Rig::CmdResult c = r->command(CMD_FLOW_CAL, {2}); res(c, reason, scale, sx, sy);
+        CHECK(c.err == ERR_FAILED && reason == FLOW_CAL_RESULT_TOO_FEW, "half a second of tilting: FAILED, too few samples - it keeps collecting");
+        tilt(*r, 8.0); c = r->command(CMD_FLOW_CAL, {2}); res(c, reason, scale, sx, sy);
+        wbp::S_nav n{}; r->get_section(wbp::SEC_NAV, &n, sizeof(n));
+        CHECK(c.err == ERR_OK && reason == FLOW_CAL_RESULT_OK && abs(scale - 80) <= 3 && abs(sx - 80) <= 4 && abs(sy - 80) <= 4 && n.flow_scale == scale,
+              "8 s more: the sensor reads 125 %% of the turn -> nav.flow_scale %d (x %d, y %d), in use at once", scale, sx, sy);
+        CHECK(r->command(CMD_FLOW_CAL, {2}).err == ERR_BAD_STATE, "done: a second FINISH has nothing to fit");
+        CHECK(r->command(CMD_FLOW_CAL, {1}).err == ERR_OK && r->command(CMD_FLOW_CAL, {0}).err == ERR_OK && r->command(CMD_FLOW_CAL, {2}).err == ERR_BAD_STATE, "START, CANCEL: nothing left to finish"); }
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { msp_flow(s, b); b.flow_truth.mirrored = true; });
+        VirtualBoard& b = r->board; b.plant.held = true; b.plant.z = 0.7f; r->run(3.0);
+        r->command(CMD_FLOW_CAL, {1}); tilt(*r, 6.0); int reason, scale, sx, sy; const Rig::CmdResult c = r->command(CMD_FLOW_CAL, {2}); res(c, reason, scale, sx, sy);
+        wbp::S_nav n{}; r->get_section(wbp::SEC_NAV, &n, sizeof(n));
+        CHECK(c.err == ERR_FAILED && reason == FLOW_CAL_RESULT_SIGN_X && sx < 0 && n.flow_scale == 100, "a mirrored picture: FAILED, SIGN_X (x %d %%) - set flow_flip; the scale is left as it was", sx); }
+    {   auto r = nav_rig([](wbp::Settings&, VirtualBoard&) {}); r->run(2.0);
+        CHECK(r->command(CMD_FLOW_CAL, {1}).err == ERR_NO_SENSOR, "no flow sensor: NO_SENSOR"); }
+}
+
 int main() {
     if (const char* only = getenv("WB_ONLY")) {            // one group alone (while working on it): WB_ONLY=nav ./build/test_fw
         if (!strcmp(only, "nav")) { t_nav_flow(); t_nav_mounting(); t_nav_uarts(); }
@@ -3308,6 +3340,7 @@ int main() {
         if (!strcmp(only, "mavlink")) { t_mavlink(); t_mavlink_rx(); t_mavlink_gcs(); }
         if (!strcmp(only, "loiter")) t_loiter_fw();
         if (!strcmp(only, "crashflip")) t_crash_flip_fw();
+        if (!strcmp(only, "flowcal")) t_flow_cal_fw();
         if (!strcmp(only, "osd")) t_osd();
         if (!strcmp(only, "switch")) t_switch_modes();
         if (!strcmp(only, "stickarm")) t_stick_arm();
@@ -3373,6 +3406,7 @@ int main() {
     t_mavlink_gcs();
     t_loiter_fw();
     t_crash_flip_fw();
+    t_flow_cal_fw();
     t_esc_passthrough();
     t_ekf();
     t_gps_alt();

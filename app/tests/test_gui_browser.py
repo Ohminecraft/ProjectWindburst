@@ -235,6 +235,17 @@ def test_loiter_on_the_page(gui):
     gui.wait(lambda: gui.setting("nav", "loiter_speed") == 4.0, what="loiter_speed stored: %s" % gui.setting("nav", "loiter_speed"))
 
 
+def test_flow_calibration_on_the_page(gui):
+    # 0.42.1: the optical flow scale calibration (FLOW_CAL) in the Position tab: start / finish / cancel, why it failed in words
+    pg = gui.connect().page
+    gui.tab("nav")
+    for btn in ("flow-cal-start", "flow-cal-finish", "flow-cal-cancel"):
+        pg.wait_for_selector("#" + btn, timeout=8000)
+    pg.click("#flow-cal-finish")
+    pg.wait_for_function("() => document.querySelector('#flow-cal-state').textContent.includes('Bắt đầu')", timeout=8000)
+    assert "Không có cảm biến" in pg.inner_text("#flow-cal-state") or "Bắt đầu" in pg.inner_text("#flow-cal-state")
+
+
 def test_crash_flip_on_the_page(gui):
     # 0.42: crash flip (Betaflight's turtle mode) - a mode for a switch, its three settings in the Motors tab
     pg = gui.connect().page
