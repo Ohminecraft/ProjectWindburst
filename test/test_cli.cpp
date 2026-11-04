@@ -103,7 +103,7 @@ static void t_cli() {
       r.run("defaults nope"); CHECK(r.has("No such section"), "an unknown section");
       r.mem.fail = true; r.run("save"); CHECK(r.has("Save FAILED"), "a flash that does not take it: said");
       r.run("reboot"); CHECK(r.host.rebooted, "reboot");
-      r.run("version"); CHECK(r.has("# Windburst ") && r.has("schema 0x"), "version");
+      r.out.clear(); r.cli.enter(); CHECK(r.has("Windburst Firmware: ") && r.has("config schema: 0x") && r.has("Entering CLI Mode"), "entering the command line: the firmware version and the schema hash first (the version command is gone)");
       r.run("status"); CHECK(r.has("disarmed") && r.has("not saved"), "status"); }
     { Rig r; r.cli.enter(); r.out.clear();
       for (const char* p = "get can.no"; *p; p++) r.cli.feed((uint8_t)*p);

@@ -223,6 +223,17 @@ h1 { font: 600 30px/1.1 var(--display); font-stretch: 87.5%; margin: 0 0 6px; le
 .ctl-line { display: flex; align-items: center; gap: 8px; min-height: 32px; }
 .unit { color: var(--muted); font-size: 12.5px; }
 .ctl .help { margin: 2px 0 0; }
+/* a long help text behind a "?" (ui.js helpTip): a bubble on hover, keyboard focus or a tap */
+.help-wrap { display: inline-flex; flex: none; }
+.help-tip { width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 1px solid var(--muted); background: transparent; color: var(--muted);
+  font: 700 11px/16px system-ui, sans-serif; text-align: center; cursor: help; flex: none; }
+.help-tip:hover, .help-wrap.open .help-tip { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
+.help-tip:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.help-pop { display: none; position: fixed; z-index: 20; max-width: min(380px, calc(100vw - 16px)); padding: 8px 10px; border-radius: 6px;
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18);
+  font-size: 12.5px; line-height: 1.45; font-weight: 400; text-align: left; white-space: normal; }
+.help-wrap.open .help-pop { display: block; }
+h3 .help-wrap { margin-left: 6px; vertical-align: middle; }
 input, select, button { font: inherit; color: inherit; }
 input[type="number"], input[type="text"], select { height: 32px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--panel); }
 input[type="number"]:hover, input[type="text"]:hover, select:hover:not(:disabled) { border-color: color-mix(in srgb, var(--muted) 60%, var(--line)); }

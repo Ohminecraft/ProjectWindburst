@@ -44,9 +44,10 @@ def log_dir(tmp_path, monkeypatch):
 class Sim:
     """A running simulator + its control channel (the tester's hand: sticks, poses, shaking)."""
 
-    def __init__(self, tmp_path, *extra, speed=4.0):
-        if not os.path.exists(SIM):
-            pytest.skip("build/wb_sim not built (run `make sim`)")
+    def __init__(self, tmp_path, *extra, speed=4.0, exe=None):
+        self.exe = exe or SIM                      # (another build: an older firmware's simulator, test_gui_browser.py gui_old)
+        if not os.path.exists(self.exe):
+            pytest.skip("%s not built (run `make sim`)" % self.exe)
         self.port = _free_port_pair()
         self.flash = str(tmp_path / "flash.bin")
         self.speed = speed
@@ -65,7 +66,7 @@ class Sim:
         return "socket://127.0.0.1:%d" % (self.port + 2)
 
     def start(self):
-        self.proc = subprocess.Popen([SIM, "--port", str(self.port), "--flash", self.flash, "--speed", str(self.speed)] + self.extra,
+        self.proc = subprocess.Popen([self.exe, "--port", str(self.port), "--flash", self.flash, "--speed", str(self.speed)] + self.extra,
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         end = time.monotonic() + 5
         while True:

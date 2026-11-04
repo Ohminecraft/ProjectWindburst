@@ -1,0 +1,68 @@
+# Every push and pull request: the firmware's own tests on a PC (g++), the app's tests against the simulated firmware, and a
+# build of the firmware for every board family. The badge in README.md shows this workflow.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pc-tests:
+    name: Firmware tests (PC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Schema is up to date
+        run: python3 tools/gen_proto.py --check
+      - name: Build and run every test (firmware-in-the-loop included)
+        run: make -j"$(nproc)" test
+
+  app-tests:
+    name: App tests (against wb_sim)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Simulator
+        run: make -j"$(nproc)" sim
+      - name: Python dependencies
+        run: pip install -r app/requirements.txt pytest
+      - name: Client, protocol and end-to-end tests (the browser tests need Chromium: run locally with playwright)
+        run: cd app && python -m pytest -q tests --ignore=tests/test_gui_browser.py
+
+  firmware:
+    name: Build ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [rx_esp32_s3, rx_esp32, rx_f405, rx_f412, rx_h563, rx_h562, rx_h523, rx_g473, rx_g491, rx_g431, rx_c552]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+      - name: PlatformIO
+        run: pip install platformio
+      - name: Build
+        run: pio run -e ${{ matrix.env }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.env }}
+          path: |
+            .pio/build/${{ matrix.env }}/firmware.bin
+            .pio/build/${{ matrix.env }}/firmware.elf
+            .pio/build/${{ matrix.env }}/bootloader.bin
+            .pio/build/${{ matrix.env }}/partitions.bin
+          if-no-files-found: ignore

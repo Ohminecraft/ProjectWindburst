@@ -631,8 +631,8 @@ static void t_misc() {
     { auto r = fresh(); r->run(1.0); r->clear_inbox();
       CHECK(r->command(CMD_REPORT).err == ERR_OK, "REPORT");
       const auto lg = r->logs(); bool imu = false, range = false; for (const auto& l : lg) { if (l.find("imu: SPI ICM42688P") != std::string::npos) imu = true; if (l.find("range: FAILED") != std::string::npos) range = true; }
-      for (const auto& l : lg) if (lg.size() != 12) printf("    %s\n", l.c_str());
-      CHECK(lg.size() == 12 && imu && range, "boot report re-sent as %zu LOG lines", lg.size());
+      for (const auto& l : lg) if (lg.size() != 13) printf("    %s\n", l.c_str());
+      CHECK(lg.size() == 13 && imu && range && lg[0].find("Start Initialization") != std::string::npos, "boot report re-sent as %zu LOG lines (the banner first)", lg.size());
       CHECK(r->command(CMD_SET_HOME).err == ERR_NO_SENSOR, "SET_HOME before a fix: refused");
       r->run(6.0);
       CHECK(r->command(CMD_SET_HOME).err == ERR_OK && r->app().gnss.home().has_home(), "SET_HOME with a 3D fix"); }
@@ -1042,7 +1042,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.42.1" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.43.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -3312,6 +3312,53 @@ static void t_flow_cal_fw() {
         CHECK(r->command(CMD_FLOW_CAL, {1}).err == ERR_NO_SENSOR, "no flow sensor: NO_SENSOR"); }
 }
 
+// 0.43: the Flycam style on the virtual board (general.fly_style): armed with the throttle in the middle, Angle + Altitude Hold +
+// Loiter forced whatever the switches say, pushed up it takes off, centred it holds; FPV stays as it was
+static void t_flycam_fw() {
+    printf("[flycam] general.fly_style FLYCAM on the virtual board\n");
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.general.fly_style = FLY_STYLE_FLYCAM; s.general.flycam_hold = FLYCAM_HOLD_LOITER; }); VirtualBoard& b = r->board;
+        r->run(3.0); b.rc[2] = 1500; r->run(0.5);
+        const uint32_t m = r->tel().modes;
+        CHECK(((m >> fc::M_ANGLE) & 1u) && ((m >> fc::M_ALTHOLD) & 1u) && ((m >> fc::M_LOITER) & 1u), "Flycam with every switch off: Angle + Altitude Hold + Loiter (0x%x)", m);
+        b.rc[4] = 2000; r->run(0.5);
+        CHECK(r->tel().armed && b.plant.z < 0.05f, "armed with the throttle stick in the middle: it stays on the ground");
+        b.rc[2] = 1800; for (int i = 0; i < 100 && b.plant.z < 1.5f; i++) r->run(0.05);
+        b.rc[2] = 1500; r->run(3.0); const float z = b.plant.z; r->run(3.0);
+        CHECK(z > 1.0f && fabsf(b.plant.z - z) < 0.4f, "pushed up it took off; back in the middle it holds %.1f m (%.2f m later)", z, b.plant.z); }
+    {   auto r = nav_rig([](wbp::Settings&, VirtualBoard&) {}); VirtualBoard& b = r->board; r->run(3.0); b.rc[2] = 1500; r->run(0.5); b.rc[4] = 2000; r->run(0.5);
+        CHECK(!r->tel().armed && (r->tel().blockers & ARM_BLOCKER_THROTTLE_HIGH) && !((r->tel().modes >> fc::M_ALTHOLD) & 1u), "FPV (the default): the throttle in the middle refuses the arming, no mode forced"); }
+}
+
+// 0.43: the tuning as MAVLink parameters on the virtual board (ELRS MAVLink link): the whole list, a PID changed from the ground
+// station takes effect at once and is kept in the flash once disarmed, a rate clamped to its range
+static void t_mav_params_fw() {
+    printf("[mavlink params] PARAM_REQUEST_LIST / PARAM_SET from a ground station: the PID in use, saved once disarmed\n");
+    using namespace mav;
+    auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { s.receiver.protocol = RX_PROTOCOL_MAVLINK; b.rc_link = VirtualBoard::RC_MAVLINK; });
+    GcsLink g{*r, true}; r->run(3.0);
+    auto id = [](const ParamValue& v) { return std::string(v.param_id, strnlen(v.param_id, 16)); };
+    g.clear(); ParamRequestList l; l.target_system = 1; l.target_component = 1; g.send(l); r->run(15.0); g.read();
+    std::vector<bool> idx_seen(wbp::kParamCount + 1, false); size_t idx_n = 0; uint16_t count = 0; float roll_p = -1;
+    for (const auto& f : g.got) { ParamValue v; if (unpack(f, v)) { if (v.param_index < idx_seen.size() && !idx_seen[v.param_index]) { idx_seen[v.param_index] = true; idx_n++; } count = v.param_count; if (id(v) == "PID_ROLL_P") roll_p = v.param_value; } }
+    CHECK(count == wbp::kParamCount && (int)idx_n == wbp::kParamCount && roll_p == 45.0f,
+          "PARAM_REQUEST_LIST: all %u parameters reach the ground station over the radio link (%zu seen), PID_ROLL_P = %g", count, idx_n, roll_p);
+    const uint8_t kp = r->app().core.cfg.pid.p[0];
+    g.clear(); ParamSet ps; ps.target_system = 1; ps.target_component = 1; strncpy(ps.param_id, "PID_ROLL_P", 16); ps.param_value = 61; g.send(ps); r->run(0.5);
+    ParamValue v; const bool echo = g.last(v) && id(v) == "PID_ROLL_P" && v.param_value == 61.0f;
+    wbp::S_pid pid{}; r->get_section(wbp::SEC_PID, &pid, sizeof(pid));
+    CHECK(echo && pid.p[0] == 61 && r->app().core.cfg.pid.p[0] == 61 && kp == 45, "PARAM_SET PID_ROLL_P 61: PARAM_VALUE 61, the setting and the PID in use changed at once");
+    r->run(3.0); wbp::Settings saved; wbp::SettingsStore st(r->flash); st.load(saved);
+    CHECK(saved.pid.p[0] == 61 && saved.pid.slider_mode == wbp::SLIDER_MODE_OFF, "kept in the flash once disarmed; the tuning sliders let go of the gains (else they would compute 45 again: Betaflight Configurator does the same)");
+    g.clear(); strncpy(ps.param_id, "RATE_MAX_RATE_R", 16); ps.param_value = 66000; g.send(ps); r->run(0.5);
+    wbp::S_rates rt{}; r->get_section(wbp::SEC_RATES, &rt, sizeof(rt));
+    CHECK(g.last(v) && id(v) == "RATE_MAX_RATE_R" && v.param_value == 1998.0f && rt.max_rate[0] == 1998, "66000 (past the range, past a 16-bit number too - it must not wrap round to 464): clamped to 1998 deg/s, PARAM_VALUE says what was stored (%g)", v.param_value);
+    g.clear(); strncpy(ps.param_id, "PID_STAB_ITC", 16); ps.param_value = 0.35f; g.send(ps); r->run(0.5); wbp::S_pid pid2{}; r->get_section(wbp::SEC_PID, &pid2, sizeof(pid2));
+    CHECK(g.last(v) && fabsf(v.param_value - 0.35f) < 1e-4f && pid2.stab_input_tc == 35, "a scaled one (PID_STAB_ITC, s): 0.35 stored as 35 hundredths, read back as 0.35 (%g)", v.param_value);
+    g.clear(); ParamSet a1 = ps, a2 = ps; strncpy(a1.param_id, "PID_PITCH_I", 16); a1.param_value = 90; strncpy(a2.param_id, "FLT_YAW_LP_HZ", 16); a2.param_value = 77; g.send(a1); g.send(a2); r->run(3.0);
+    { wbp::Settings s2; wbp::SettingsStore st2(r->flash); st2.load(s2);
+      CHECK(s2.pid.i[1] == 90 && s2.filters.yaw_lowpass_hz == 77, "two sections set one after the other: both kept in the flash (pid I %u, yaw lowpass %u)", s2.pid.i[1], s2.filters.yaw_lowpass_hz); }
+}
+
 int main() {
     if (const char* only = getenv("WB_ONLY")) {            // one group alone (while working on it): WB_ONLY=nav ./build/test_fw
         if (!strcmp(only, "nav")) { t_nav_flow(); t_nav_mounting(); t_nav_uarts(); }
@@ -3341,6 +3388,8 @@ int main() {
         if (!strcmp(only, "loiter")) t_loiter_fw();
         if (!strcmp(only, "crashflip")) t_crash_flip_fw();
         if (!strcmp(only, "flowcal")) t_flow_cal_fw();
+        if (!strcmp(only, "flycam")) t_flycam_fw();
+        if (!strcmp(only, "params")) t_mav_params_fw();
         if (!strcmp(only, "osd")) t_osd();
         if (!strcmp(only, "switch")) t_switch_modes();
         if (!strcmp(only, "stickarm")) t_stick_arm();
@@ -3407,6 +3456,8 @@ int main() {
     t_loiter_fw();
     t_crash_flip_fw();
     t_flow_cal_fw();
+    t_flycam_fw();
+    t_mav_params_fw();
     t_esc_passthrough();
     t_ekf();
     t_gps_alt();

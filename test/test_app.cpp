@@ -640,7 +640,7 @@ static void t_usb_name() {
     CHECK(!strcmp(app::usb_product_name(g.usb_name, "ESP32-S3", out), "Qu__d_"), "not printable ASCII: '_' (a USB string here is 8-bit) ('%s')", out);
     memset(g.usb_name, 'x', sizeof(g.usb_name)); app::usb_product_name(g.usb_name, "ESP32-S3", out);
     CHECK(strlen(out) == 32 && out[31] == 'x', "all 32 bytes used (no end mark): taken whole, ended in the output");
-    CHECK(sizeof(g.usb_name) == app::kUsbNameLen && offsetof(S_general, usb_name) == 24 && find_section(SEC_GENERAL)->compat4 == 24, "the field: 32 bytes at the end of the general section, the old size known");
+    CHECK(sizeof(g.usb_name) == app::kUsbNameLen && offsetof(S_general, usb_name) == 24 && find_section(SEC_GENERAL)->compat3 == 24, "the field: 32 bytes at the end of the general section, the old size known");
 }
 
 int main() {

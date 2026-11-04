@@ -33,7 +33,7 @@ public:
 
     // The byte that opens the command line: '#' between two protocol frames.
     static bool opens(uint8_t c, bool frame_under_way) { return c == '#' && !frame_under_way; }
-    void enter() { active_ = true; n_ = 0; cr_ = false; say("\r\nEntering CLI Mode, type 'exit' to return, or 'help'\r\n"); prompt(); }
+    void enter() { active_ = true; n_ = 0; cr_ = false; char b[64]; snprintf(b, sizeof(b), "\r\nWindburst Firmware: %d.%d.%d, config schema: 0x%08lX\r\n", WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH, (unsigned long)wbp::kSchemaHash); say(b); say("Entering CLI Mode, type 'exit' to return, or 'help'\r\n"); prompt(); }
     bool active() const { return active_; }
     // One byte from the terminal. false once the command line was left (exit).
     bool feed(uint8_t c) {
@@ -62,7 +62,6 @@ public:
         else if (!strcmp(l, "save")) save();
         else if (!strcmp(l, "reboot")) { say("Rebooting\r\n"); srv_.reboot_now(); }
         else if (!strcmp(l, "status")) status();
-        else if (!strcmp(l, "version")) { char b[64]; snprintf(b, sizeof(b), "# Windburst %d.%d.%d, schema 0x%08lX\r\n", WB_FW_MAJOR, WB_FW_MINOR, WB_FW_PATCH, (unsigned long)wbp::kSchemaHash); say(b); }
         else if (!strcmp(l, "exit")) { active_ = false; say(srv_.flags() & wbp::SF_REBOOT_REQUIRED ? "Leaving CLI mode - some changes need a reboot (save, then reboot)\r\n" : "Leaving CLI mode\r\n"); }
         else { say("Unknown command, try 'help'\r\n"); }
     }
@@ -129,7 +128,7 @@ private:
             "dump                  every setting as set lines\r\n"
             "defaults [section]    back to the defaults (in RAM: save to keep)\r\n"
             "save                  write the settings to flash\r\n"
-            "reboot | status | version | exit\r\n");
+            "reboot | status | exit\r\n");
     }
     void get(const char* part) {
         char b[260]; int n = 0;

@@ -8,7 +8,7 @@
 // so a struct is its own wire image). The Python client builds the same layouts from the same json.
 namespace wbp {
 constexpr uint8_t kProtocolVersion = 1;
-constexpr uint32_t kSchemaHash = 0x8FE0C8EEu;
+constexpr uint32_t kSchemaHash = 0x5ACBE279u;
 
 enum Err : uint8_t { ERR_OK, ERR_UNKNOWN, ERR_BAD_ARG, ERR_ARMED, ERR_BUSY, ERR_NOT_SUPPORTED, ERR_BAD_SECTION, ERR_SIZE_MISMATCH, ERR_STORAGE, ERR_NO_SENSOR, ERR_BAD_STATE, ERR_FAILED };
 enum Cmd : uint8_t { CMD_GYRO_CAL = 1, CMD_ACC_CAL_POINT = 2, CMD_ACC_CAL_FINISH = 3, CMD_LEVEL_TRIM = 4, CMD_MAG_CAL_START = 5, CMD_MAG_CAL_FINISH = 6, CMD_MAG_CAL_CANCEL = 7, CMD_MOTOR_TEST = 8, CMD_MOTOR_STOP = 9, CMD_MOTOR_DIRECTION = 10, CMD_MOTOR_BEACON = 11, CMD_SET_HOME = 12, CMD_ESC_TELEMETRY = 13, CMD_APPLY_SETTINGS = 14, CMD_REPORT = 15, CMD_ACC_CAL_CANCEL = 16, CMD_BEEP = 17, CMD_BLACKBOX_ERASE = 18, CMD_BLACKBOX_STREAM = 19, CMD_BLACKBOX_SESSION = 20, CMD_BLACKBOX_READ = 21, CMD_MAG_AUTOCAL = 22, CMD_MISSION = 23, CMD_BIND = 24, CMD_STICK_CAL = 25, CMD_FLOW_CAL = 26 };
@@ -89,6 +89,8 @@ enum NRF_PPS_E : uint8_t { NRF_PPS_HZ50, NRF_PPS_HZ100, NRF_PPS_HZ150 };
 enum BIND_STATE_E : uint8_t { BIND_STATE_IDLE, BIND_STATE_LISTEN, BIND_STATE_BINDING, BIND_STATE_BOUND, BIND_STATE_FAILED };
 enum FLY_MODE_E : uint8_t { FLY_MODE_ACRO, FLY_MODE_ANGLE, FLY_MODE_STABILIZE, FLY_MODE_ALTHOLD, FLY_MODE_POSHOLD, FLY_MODE_RESCUE, FLY_MODE_MISSION, FLY_MODE_LOITER, FLY_MODE_CRASHFLIP };
 enum FLOW_CAL_RESULT_E : uint8_t { FLOW_CAL_RESULT_OK, FLOW_CAL_RESULT_TOO_FEW, FLOW_CAL_RESULT_SIGN_X, FLOW_CAL_RESULT_SIGN_Y, FLOW_CAL_RESULT_AXES_DIFFER };
+enum FLY_STYLE_E : uint8_t { FLY_STYLE_FPV, FLY_STYLE_FLYCAM };
+enum FLYCAM_HOLD_E : uint8_t { FLYCAM_HOLD_LOITER, FLYCAM_HOLD_POSHOLD };
 enum TX_THROTTLE_E : uint8_t { TX_THROTTLE_ALTPOS, TX_THROTTLE_MANUAL };
 enum ARM_BLOCKER_B : uint32_t { ARM_BLOCKER_NO_IMU = 1u << 0, ARM_BLOCKER_GYRO_NOT_CAL = 1u << 1, ARM_BLOCKER_RX_LOST = 1u << 2, ARM_BLOCKER_THROTTLE_HIGH = 1u << 3, ARM_BLOCKER_ANGLE_TOO_HIGH = 1u << 4, ARM_BLOCKER_FAILSAFE = 1u << 5, ARM_BLOCKER_ALTHOLD_NO_BARO = 1u << 6, ARM_BLOCKER_BATT_LOW = 1u << 7, ARM_BLOCKER_ARM_SWITCH_ON = 1u << 8, ARM_BLOCKER_CONFIG_UNSAVED = 1u << 9, ARM_BLOCKER_CALIBRATING = 1u << 10, ARM_BLOCKER_POSHOLD_NO_GPS = 1u << 11, ARM_BLOCKER_MAG_NOT_CALIBRATED = 1u << 12, ARM_BLOCKER_PIN_CONFLICT = 1u << 13, ARM_BLOCKER_LOOP_RATE = 1u << 14, ARM_BLOCKER_RUNAWAY_TAKEOFF = 1u << 15, ARM_BLOCKER_RESCUE_NO_FIX = 1u << 16, ARM_BLOCKER_RESCUE_NO_COMPASS = 1u << 17, ARM_BLOCKER_MOTOR_STALL = 1u << 18, ARM_BLOCKER_CRASHFLIP = 1u << 19 };
 enum HEALTH_B : uint32_t { HEALTH_IMU = 1u << 0, HEALTH_GYRO_CAL = 1u << 1, HEALTH_BARO = 1u << 2, HEALTH_RANGE = 1u << 3, HEALTH_GPS = 1u << 4, HEALTH_MAG_READY = 1u << 5, HEALTH_MAG_CAL = 1u << 6, HEALTH_RX = 1u << 7, HEALTH_MOTORS = 1u << 8, HEALTH_ESC_TELEMETRY = 1u << 9, HEALTH_ACC_CAL = 1u << 10, HEALTH_BATTERY = 1u << 11, HEALTH_FLOW = 1u << 12, HEALTH_IMU2 = 1u << 13, HEALTH_CAN = 1u << 14 };
@@ -118,8 +120,10 @@ struct __attribute__((packed)) S_general {
     uint8_t pid_denom;
     uint8_t usb_name[32];
     uint8_t stick_arm;
+    uint8_t fly_style;
+    uint8_t flycam_hold;
 };
-static_assert(sizeof(S_general) == 57, "S_general layout");
+static_assert(sizeof(S_general) == 59, "S_general layout");
 inline void defaults(S_general& s) {
     s.loop_hz = 4000;
     s.est_hz = 500;
@@ -170,6 +174,8 @@ inline void defaults(S_general& s) {
     s.usb_name[30] = 0;
     s.usb_name[31] = 0;
     s.stick_arm = 0;
+    s.fly_style = 0;
+    s.flycam_hold = 0;
 }
 inline int validate(S_general& s) {
     int fixed = 0; (void)s;
@@ -189,6 +195,8 @@ inline int validate(S_general& s) {
     { if (s.runaway_takeoff > 1) { s.runaway_takeoff = 1; fixed++; } }
     { if (s.pid_denom < 1) { s.pid_denom = 1; fixed++; } else if (s.pid_denom > 8) { s.pid_denom = 8; fixed++; } }
     { if (s.stick_arm > 1) { s.stick_arm = 1; fixed++; } }
+    { if (s.fly_style > 1) { s.fly_style = 1; fixed++; } }
+    { if (s.flycam_hold > 1) { s.flycam_hold = 1; fixed++; } }
     return fixed;
 }
 
@@ -2029,7 +2037,7 @@ inline void defaults(Settings& s) { defaults(s.general); defaults(s.receiver); d
 // One schema for both: a server serves, and a store keeps, only the sections of its own role.
 struct SectionInfo { uint8_t id; const char* name; uint16_t size; bool live; uint16_t compat, compat2, compat3, compat4; uint8_t role; };
 constexpr int kSectionCount = 27;
-constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 57, false, 56, 22, 23, 24, 0}, {SEC_RECEIVER, "receiver", 22, false, 13, 12, 9, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0, 0, 0}, {SEC_PID, "pid", 79, true, 75, 0, 0, 0, 0}, {SEC_MOTORS, "motors", 47, false, 44, 37, 36, 35, 0}, {SEC_SENSORS, "sensors", 21, false, 20, 19, 18, 16, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0, 0, 0}, {SEC_PINS, "pins", 57, false, 52, 50, 48, 47, 0}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0, 0, 0}, {SEC_NAV, "nav", 44, true, 43, 38, 34, 31, 0}, {SEC_SERVO, "servo", 50, true, 26, 0, 0, 0, 0}, {SEC_ALTHOLD, "althold", 10, true, 6, 0, 0, 0, 0}, {SEC_CAN, "can", 4, false, 0, 0, 0, 0, 0}, {SEC_LED, "led", 165, false, 3, 0, 0, 0, 0}, {SEC_TELEMETRY, "telemetry", 16, false, 15, 14, 0, 0, 0}, {SEC_OSD, "osd", 90, false, 73, 0, 0, 0, 0}, {SEC_MSP, "msp", 2, true, 0, 0, 0, 0, 0}, {SEC_MISSION, "mission", 450, true, 0, 0, 0, 0, 0}, {SEC_TX_RADIO, "tx_radio", 15, false, 0, 0, 0, 0, 1}, {SEC_TX_STICKS, "tx_sticks", 40, true, 0, 0, 0, 0, 1}};
+constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 59, false, 57, 56, 24, 22, 0}, {SEC_RECEIVER, "receiver", 22, false, 13, 12, 9, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0, 0, 0}, {SEC_PID, "pid", 79, true, 75, 0, 0, 0, 0}, {SEC_MOTORS, "motors", 47, false, 44, 37, 36, 35, 0}, {SEC_SENSORS, "sensors", 21, false, 20, 19, 18, 16, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0, 0, 0}, {SEC_PINS, "pins", 57, false, 52, 50, 48, 47, 0}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0, 0, 0}, {SEC_NAV, "nav", 44, true, 43, 38, 34, 31, 0}, {SEC_SERVO, "servo", 50, true, 26, 0, 0, 0, 0}, {SEC_ALTHOLD, "althold", 10, true, 6, 0, 0, 0, 0}, {SEC_CAN, "can", 4, false, 0, 0, 0, 0, 0}, {SEC_LED, "led", 165, false, 3, 0, 0, 0, 0}, {SEC_TELEMETRY, "telemetry", 16, false, 15, 14, 0, 0, 0}, {SEC_OSD, "osd", 90, false, 73, 0, 0, 0, 0}, {SEC_MSP, "msp", 2, true, 0, 0, 0, 0, 0}, {SEC_MISSION, "mission", 450, true, 0, 0, 0, 0, 0}, {SEC_TX_RADIO, "tx_radio", 15, false, 0, 0, 0, 0, 1}, {SEC_TX_STICKS, "tx_sticks", 40, true, 0, 0, 0, 0, 1}};
 inline const SectionInfo* find_section(uint8_t id) { for (const auto& s : kSections) if (s.id == id) return &s; return nullptr; }
 // pointer to / size of a section inside a Settings object (nullptr if unknown)
 inline uint8_t* section_ptr(Settings& st, uint8_t id) { switch (id) {

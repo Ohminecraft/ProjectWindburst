@@ -183,7 +183,7 @@ static double pressure_at(double h, double p0) { return p0 * pow(1.0 - h / 44330
 
 static void t_altitude() {
     printf("[altitude] ground reference, drift, outliers, staleness\n");
-    BaroAltitude a; a.reset(); uint32_t ms = 0; BaroSample s; s.temp_c = 20;
+    BaroAltitude a; a.reset(); uint32_t ms = 0; BaroSample s; s.temp_c = 15;          // (the standard atmosphere's ground temperature)
     auto feed = [&](double p, bool armed, int n, float noise = 0.0f, int step_ms = 20) { bool acc = false; for (int i = 0; i < n; i++) { ms += step_ms; s.pressure_pa = (float)(p + gauss(noise)); acc = a.update(s, ms, armed); } return acc; };
     feed(101325, false, 39);
     CHECK(!a.calibrated() && !a.valid(ms), "not valid before the ground average is done");
@@ -212,6 +212,20 @@ static void t_altitude() {
     // staleness and range
     CHECK(b.valid(ms + 400) && !b.valid(ms + 600), "goes invalid 500 ms after the last sample");
     s.pressure_pa = 5000; CHECK(!b.update(s, ms + 30, false), "out-of-range pressure ignored");
+    // 0.43: the air's temperature (ArduPilot AP_Baro::get_altitude_difference_simple: 153.8462 x T_ground x (1 - (p/p0)^0.190259)).
+    // Warm air is thinner: the pressure falls more slowly with height, so the same pressure step is more metres. The model below is
+    // the troposphere with the ground at T0 (lapse rate 6.5 K/km): p = p0 (1 - 0.0065 h / T0)^5.2559.
+    auto atm = [](double h, double p0, double t0_c) { const double T0 = t0_c + 273.15; return p0 * pow(1.0 - 0.0065 * h / T0, 5.2559); };
+    for (const float tc : {35.0f, 0.0f}) {
+        BaroAltitude w; w.reset(); ms = 0; s.temp_c = tc; s.pressure_pa = 100000; for (int i = 0; i < 60; i++) { ms += 20; w.update(s, ms, false); }
+        s.pressure_pa = (float)atm(100.0, 100000, tc); for (int i = 0; i < 6; i++) w.update(s, ms += 20, true);      // (a jump that big must hold 5 samples)
+        CHECK(fabsf(w.altitude_m() - 100.0f) < 0.3f && fabsf(w.ground_temp_c() - tc) < 0.01f, "ground at %.0f C: 100 m up reads %.2f m (the 15 C formula: %.2f)", tc, w.altitude_m(), BaroAltitude::altitude_of(s.pressure_pa, 100000));
+    }
+    {   BaroAltitude w; w.reset(); ms = 0; s.temp_c = 60; s.pressure_pa = 100000; for (int i = 0; i < 60; i++) { ms += 20; w.update(s, ms, false); }
+        CHECK(fabsf(w.ground_temp_c() - 35.0f) < 0.01f, "a board heated to 60 C: taken as 35 C (ArduPilot: the baro reads high, at most 35 C)");
+        s.temp_c = 20; for (int i = 0; i < 6000; i++) { ms += 20; w.update(s, ms, false); }
+        const float g = w.ground_temp_c(); s.temp_c = 0; for (int i = 0; i < 500; i++) { ms += 20; w.update(s, ms, true); }
+        CHECK(fabsf(g - 20.0f) < 0.5f && w.ground_temp_c() == g, "disarmed it follows the air (%.1f C after 2 min); armed it is frozen with the ground pressure", g); }
 }
 
 static void pumpM(BaroSensor& b, int ms_total, bool armed, uint32_t& us, int& got) { for (int i = 0; i < ms_total; i++) { us += 1000; if (b.update(us, us / 1000, armed)) got++; } }

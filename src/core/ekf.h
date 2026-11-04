@@ -152,6 +152,7 @@ public:
         st_.test_pos = tp;
         if (pos_ok) last_gps_pos_ok_t_ = t_;
         else if (t_ - last_gps_pos_ok_t_ > cfg.reset_after_s) {          // rejected for long: the GPS is believed, the state jumps to it
+            { const float dv[3] = {vn - v_[0], ve - v_[1], 0.0f}, dp[3] = {pn - p_[0], pe - p_[1], 0.0f}; shift_hist(dv, dp); }
             p_[0] = pn; p_[1] = pe; v_[0] = vn; v_[1] = ve;
             for (int i = 3; i < 9; i++) { for (int j = 0; j < N; j++) { P_[i][j] = P_[j][i] = 0.0f; } }
             P_[3][3] = P_[4][4] = sv * sv; P_[5][5] = 1.0f; P_[6][6] = P_[7][7] = sp * sp; P_[8][8] = 4.0f;
@@ -174,7 +175,7 @@ public:
         if (fuse(8, -h_up, cfg.baro_sigma, cfg.gate_baro, &t)) last_baro_ok_t_ = t_;
         else {
             st_.baro_rejects++;
-            if (t_ - last_baro_ok_t_ > cfg.reset_after_s) { p_[2] = -h_up; v_[2] = 0.0f; for (int j = 0; j < N; j++) { P_[8][j] = P_[j][8] = P_[5][j] = P_[j][5] = 0.0f; } P_[8][8] = cfg.baro_sigma * cfg.baro_sigma; P_[5][5] = 1.0f; last_baro_ok_t_ = t_; st_.resets++; }
+            if (t_ - last_baro_ok_t_ > cfg.reset_after_s) { { const float dv[3] = {0.0f, 0.0f, -v_[2]}, dp[3] = {0.0f, 0.0f, -h_up - p_[2]}; shift_hist(dv, dp); } p_[2] = -h_up; v_[2] = 0.0f; for (int j = 0; j < N; j++) { P_[8][j] = P_[j][8] = P_[5][j] = P_[j][5] = 0.0f; } P_[8][8] = cfg.baro_sigma * cfg.baro_sigma; P_[5][5] = 1.0f; last_baro_ok_t_ = t_; st_.resets++; }
         }
         st_.test_baro = t;
     }
@@ -248,6 +249,12 @@ private:
     static constexpr int kHist = 128;                  // 0.5 s at 250 Hz
     Hist hist_[kHist]; int hist_n_ = 0, hist_i_ = 0;
 
+    // A correction (or a reset) moves the past states as well: the next delayed fix is compared with what the state was then AS WE
+    // NOW KNOW IT - without this, a correction made after that moment is not seen and is applied again (0.43; StateHistory::shift
+    // does the same for the other estimators; EKF3 / EKF2 fuse at the delayed horizon itself)
+    void shift_hist(const float dv[3], const float dp[3]) {
+        for (int k = 0; k < hist_n_; k++) { Hist& h = hist_[(hist_i_ - 1 - k + 2 * kHist) % kHist]; for (int i = 0; i < 3; i++) { h.v[i] += dv[i]; h.p[i] += dp[i]; } }
+    }
     void delayed(float age, Hist& out) const {
         out.t = t_; for (int i = 0; i < 3; i++) { out.v[i] = v_[i]; out.p[i] = p_[i]; }
         if (age <= 0.0f || hist_n_ == 0) return;
@@ -312,6 +319,7 @@ private:
         rotate_earth(dx[0], dx[1], dx[2]);
         for (int i = 0; i < 3; i++) { v_[i] += dx[3 + i]; p_[i] += dx[6 + i];
             bg_[i] = clampf(bg_[i] + dx[9 + i], -cfg.bias_limit_gyro, cfg.bias_limit_gyro); ba_[i] = clampf(ba_[i] + dx[12 + i], -cfg.bias_limit_accel, cfg.bias_limit_accel); }
+        shift_hist(dx + 3, dx + 6);
         return true;
     }
 };

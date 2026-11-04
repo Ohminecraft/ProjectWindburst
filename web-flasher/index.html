@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Windburst Flasher</title>
+<meta name="description" content="Flash the Windburst flight controller firmware to an ESP32 board from the browser (Web Serial).">
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+<style>
+  :root { --paper: #f4f6f7; --panel: #ffffff; --ink: #111c26; --muted: #55626e; --line: #ccd4d9; --blue: #2446c8; --warn: #855000; --warn-bg: #fbe9c0; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --paper: #12171c; --panel: #1b2229; --ink: #e8edf0; --muted: #9aa6b0; --line: #2e3740; --blue: #7d9bff; --warn: #ffcf73; --warn-bg: #3a2c0c; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .lead { color: var(--muted); margin: 0 0 24px; }
+  .board { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin: 0 0 14px; display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  .board h2 { font-size: 17px; margin: 0; }
+  .board p { margin: 2px 0 0; color: var(--muted); font-size: 13.5px; }
+  .note { background: var(--warn-bg); color: var(--warn); border-radius: 8px; padding: 10px 14px; font-size: 14px; margin: 18px 0; }
+  ol { padding-left: 20px; } li { margin: 4px 0; }
+  code { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 13px; }
+  a { color: var(--blue); }
+  #version { font-variant-numeric: tabular-nums; }
+  esp-web-install-button button[slot="activate"] { font: 600 14px system-ui, sans-serif; background: var(--blue); color: #fff; border: 0; border-radius: 6px; padding: 9px 16px; cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Windburst Flasher</h1>
+  <p class="lead">Flash the Windburst firmware <span id="version"></span> to an ESP32 board from this page (Chrome or Edge on a computer; Web Serial).</p>
+
+  <div class="board">
+    <div><h2>Flight controller: ESP32-S3 (N16R8)</h2><p>The main target. The app over a USB-UART bridge or the chip's own USB.</p></div>
+    <esp-web-install-button manifest="manifest-rx_esp32_s3.json"><button slot="activate">Connect and flash</button></esp-web-install-button>
+  </div>
+  <div class="board">
+    <div><h2>Flight controller: ESP32 (classic, 4 MB)</h2><p>Smaller boards; fewer features fit (see the docs).</p></div>
+    <esp-web-install-button manifest="manifest-rx_esp32.json"><button slot="activate">Connect and flash</button></esp-web-install-button>
+  </div>
+
+  <div class="note"><b>STM32 boards are experimental</b> and cannot be flashed from this page (use STM32CubeProgrammer or dfu-util with the
+    <code>.bin</code> of the release). For an STM32 flight controller you fly, prefer a firmware with a long flight history:
+    <a href="https://betaflight.com">Betaflight</a>, <a href="https://ardupilot.org">ArduPilot</a>, <a href="https://github.com/iNavFlight/inav">INAV</a> or <a href="https://px4.io">PX4</a>.</div>
+
+  <h2>Steps</h2>
+  <ol>
+    <li>Take the propellers off.</li>
+    <li>Plug the board in by USB. A board that does not show up: hold BOOT, press RESET, release BOOT (download mode).</li>
+    <li>Press "Connect and flash", pick the port, confirm. A first install erases the flash (settings and logs included).</li>
+    <li>Open the configurator: <code>python -m wbclient gui</code> in <code>app/</code>, or the Windows app of the release.</li>
+  </ol>
+  <p>Sources, documents and every release: <a href="https://github.com/Ohminecraft/ProjectWindburst_Re">github.com/Ohminecraft/ProjectWindburst_Re</a> (GPL-3.0).</p>
+</main>
+<script>
+  fetch('manifest-rx_esp32_s3.json').then((r) => r.json()).then((m) => { document.getElementById('version').textContent = m.version; }).catch(() => {});
+</script>
+</body>
+</html>

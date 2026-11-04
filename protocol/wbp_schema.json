@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0x8FE0C8EE",
+ "hash": "0x5ACBE279",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -568,6 +568,14 @@
    "SIGN_Y",
    "AXES_DIFFER"
   ],
+  "fly_style": [
+   "FPV",
+   "FLYCAM"
+  ],
+  "flycam_hold": [
+   "LOITER",
+   "POSHOLD"
+  ],
   "tx_throttle": [
    "ALTPOS",
    "MANUAL"
@@ -793,14 +801,28 @@
      "t": "bool",
      "d": 0,
      "desc": "arm / disarm with the sticks: throttle and pitch down, yaw and roll to opposite sides (yaw left + roll right, or yaw right + roll left), held 1 s; disarm only on the ground. An ARM switch, if assigned, must be on (off disarms at once)"
+    },
+    {
+     "n": "fly_style",
+     "t": "u8",
+     "d": 0,
+     "enum": "fly_style",
+     "desc": "FPV: every mode as its switch says. FLYCAM (0.43): self-levelling only - Angle + Altitude Hold always, Loiter or Position Hold (flycam_hold) when there is a position; Acro / Stabilize switches ignored; the throttle stick centred = hold (arming wants it no higher than the middle, pushed up = take off, held down 3 s after landing = motors stop)"
+    },
+    {
+     "n": "flycam_hold",
+     "t": "u8",
+     "d": 0,
+     "enum": "flycam_hold",
+     "desc": "how Flycam holds the place: LOITER (the stick = a velocity, it brakes by itself - DJI's P mode) or POSHOLD"
     }
    ],
    "live": false,
    "compat": [
+    57,
     56,
-    22,
-    23,
-    24
+    24,
+    22
    ]
   },
   {

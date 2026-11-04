@@ -1,76 +1,76 @@
 # GPS
 
-## Betaflight có những protocol / tính năng GPS nào (đọc từ `io/gps.c`, `io/gps.h`, `pg/gps.c`)
+## Which GPS protocols / features Betaflight has (read from `io/gps.c`, `io/gps.h`, `pg/gps.c`)
 | Betaflight | Windburst |
 |---|---|
-| Provider **UBLOX** (UBX binary) | ✅ M5/M6, M7/M8, M9/M10 — đúng "phương ngữ" từng thế hệ |
-| Provider **NMEA** (GGA, RMC, GSA, GSV) | ✅ + `nmea_custom_commands` gửi từng dòng cho module |
-| Provider **MSP** (GPS đưa vào qua MSP) và **VIRTUAL** | ✅ `inject()` (chưa có nguồn MSP thật — thuộc phần telemetry/app) |
-| Provider **DRONECAN** | ❌ chưa làm (cần CAN bus) |
-| `gps_auto_baud` (quét baud, dò module) | ✅ MON-VER 3 lần/330 ms rồi đổi baud, thứ tự 9600 → … → 230400 như BF |
-| `gps_auto_config` | ✅ chuỗi cấu hình từng bước, chờ ACK, thử lại 2 lần rồi bỏ qua bước đó |
-| `gps_baud` (mặc định **115200** từ 0.8.0, trước đó 57600; app cho chọn 9600 / 19200 / 38400 / 57600 / 115200 / 230400, giá trị khác → tốc độ chuẩn gần nhất), `gps_update_rate_hz` (mặc định 10) | ✅ |
-| `gps_ublox_acquire_model` / `flight_model` | ✅ lúc chưa có fix dùng model "acquire", có fix 3D đầu tiên thì đổi sang "flight" (AIRBORNE<4g) |
-| `gps_ublox_use_galileo`, `sbas_mode` (AUTO/EGNOS/WAAS/MSAS/GAGAN/NONE), `sbas_integrity`, `gps_ublox_utc_standard` | ✅ (CFG-SBAS + CFG-GNSS cho M7/M8, CFG-VALSET cho M9/M10) |
-| NAV-SAT tắt khi **arm**, bật lại khi disarm (đỡ nghẽn UART) | ✅ |
-| Home point đặt lúc **arm** (cần 3D fix + đủ vệ tinh), `gps_set_home_point_once` | ✅ |
-| Khoảng cách / hướng về home, quãng đường đã bay (`gps_use_3d_speed`, bỏ qua < 15 cm/s) | ✅ |
-| Tiếng "GPS ready" khi đủ điều kiện đặt home | ✅ cờ `take_ready_edge()` cho buzzer |
-| Phát hiện mất kết nối (2,5 s), tự dò lại | ✅ |
-| **GPS Rescue** (tự bay về home khi failsafe hoặc bật công tắc) | ✅ từ 0.7.0, các pha của Betaflight lái bộ điều khiển của mình; cần la bàn — xem `docs/NAV.md` (**chưa bay thật**) |
-| AssistNow Autonomous (`gps_ublox_enable_ana`) | ❌ mặc định tắt trong BF, bỏ qua |
+| Provider **UBLOX** (UBX binary) | ✅ M5/M6, M7/M8, M9/M10 — the right "dialect" for each generation |
+| Provider **NMEA** (GGA, RMC, GSA, GSV) | ✅ + `nmea_custom_commands` sent line by line to the module |
+| Provider **MSP** (GPS fed in over MSP) and **VIRTUAL** | ✅ `inject()` (no real MSP source yet — that belongs to the telemetry/app part) |
+| Provider **DRONECAN** | ❌ not done yet (needs a CAN bus) |
+| `gps_auto_baud` (baud scan, module detection) | ✅ MON-VER 3 times/330 ms then change baud, order 9600 → … → 230400 as in BF |
+| `gps_auto_config` | ✅ step-by-step configuration sequence, waits for ACK, retries 2 times then skips that step |
+| `gps_baud` (default **115200** since 0.8.0, previously 57600; the app offers 9600 / 19200 / 38400 / 57600 / 115200 / 230400, other values → nearest standard rate), `gps_update_rate_hz` (default 10) | ✅ |
+| `gps_ublox_acquire_model` / `flight_model` | ✅ uses the "acquire" model while there is no fix, switches to "flight" (AIRBORNE<4g) on the first 3D fix |
+| `gps_ublox_use_galileo`, `sbas_mode` (AUTO/EGNOS/WAAS/MSAS/GAGAN/NONE), `sbas_integrity`, `gps_ublox_utc_standard` | ✅ (CFG-SBAS + CFG-GNSS for M7/M8, CFG-VALSET for M9/M10) |
+| NAV-SAT off when **armed**, back on when disarmed (eases UART congestion) | ✅ |
+| Home point set at **arm** (needs 3D fix + enough satellites), `gps_set_home_point_once` | ✅ |
+| Distance / direction to home, distance flown (`gps_use_3d_speed`, ignores < 15 cm/s) | ✅ |
+| "GPS ready" beep when the conditions for setting home are met | ✅ `take_ready_edge()` flag for the buzzer |
+| Connection loss detection (2.5 s), automatic re-detection | ✅ |
+| **GPS Rescue** (flies home automatically on failsafe or when a switch is flipped) | ✅ since 0.7.0, Betaflight's phases drive our own controller; needs a compass — see `docs/NAV.md` (**not flown for real yet**) |
+| AssistNow Autonomous (`gps_ublox_enable_ana`) | ❌ off by default in BF, skipped |
 
-## Cấu trúc
-`hal/gps/gps_types.h` (dữ liệu, đơn vị như BF: 1e-7°, cm, cm/s, ddeg) · `ubx_proto.h` (khung UBX, parser, giải mã NAV-PVT/POSLLH/VELNED/SOL/STATUS/DOP/SAT/SVINFO, MON-VER) · `nmea_proto.h` · `gps_engine.h` (state machine) · `gps_nav.h` (hình học + home) · `gps_base.h` (`GpsSensor`, cổng UART Arduino).
+## Structure
+`hal/gps/gps_types.h` (data, units as in BF: 1e-7°, cm, cm/s, ddeg) · `ubx_proto.h` (UBX frame, parser, decoding of NAV-PVT/POSLLH/VELNED/SOL/STATUS/DOP/SAT/SVINFO, MON-VER) · `nmea_proto.h` · `gps_engine.h` (state machine) · `gps_nav.h` (geometry + home) · `gps_base.h` (`GpsSensor`, Arduino UART port).
 
-## Cách dùng
+## Usage
 ```cpp
 GpsSensor gnss;
-gnss.setPins(RX, TX);                 // hoặc getGpsPins() trong hardware_config.h
+gnss.setPins(RX, TX);                 // or getGpsPins() in hardware_config.h
 gnss.config().baud = 115200;          // + provider / update_rate_hz / sbas / use_galileo / models ...
 if (!gnss.begin(Serial1)) Serial.println(gnss.failReason());
-// vòng lặp nhanh (>= 100 Hz, chỉ rút UART):
+// fast loop (>= 100 Hz, only drains the UART):
 gnss.update(millis(), armed);
 if (gnss.newSolution()) { auto& s = gnss.solution(); /* lat, lon, alt_cm, vel_n/e/d_cms, num_sat, h_acc_mm ... */ }
-arm.gps_fix = gnss.usable();          // link tốt + fix 3D + >= 8 vệ tinh + hdop <= 3.0 + hAcc <= 5 m (đổi bằng setLimits)
-float east, north; gnss.home().offset_from_home_cm(east, north);   // đầu vào cho Position Hold / RTH
+arm.gps_fix = gnss.usable();          // good link + 3D fix + >= 8 satellites + hdop <= 3.0 + hAcc <= 5 m (change with setLimits)
+float east, north; gnss.home().offset_from_home_cm(east, north);   // input for Position Hold / RTH
 ```
 
-## Đã kiểm chứng
-- **Trên PC (187 test, 21 lỗi cố ý đều bị bắt):** bộ mô phỏng u-blox *nghiêm khắc theo thế hệ* — M9/M10 trả NACK cho lệnh legacy, M5–M8 NACK cho CFG-VALSET, M5/M6 không có NAV-PVT/NAV-SAT. Driver phải gửi đúng phương ngữ mới cấu hình được (`nacks == 0` cho cả 5 thế hệ). Kiểm tra: dò baud từ 9600 → 57600 với câu `$PUBX,41` đúng từng byte như bảng của Betaflight, mất kết nối/khôi phục, module không bao giờ ACK (không treo), mặt nạ PRN của SBAS, fix 3D nhưng `gnssFixOK=0` không được tính là fix, giải mã vận tốc NED/tốc độ/hướng/độ cao MSL, NMEA 2 bán cầu, home/khoảng cách/hướng/quãng bay.
-- **Build thật cho ESP32-S3** thành công. Lần build này bắt được một lỗi test PC không thấy: Arduino định nghĩa macro `bit(b)` nên hàm cục bộ tên `bit` bị nuốt và mặt nạ SBAS của M9/M10 thành 0. Đã đổi tên; stub Arduino của test giờ có các macro đó (`bit`, `sq`, `radians`, `word`, ...) để bắt tái diễn.
+## Verified
+- **On PC (187 tests, all 21 deliberate bugs caught):** a *generation-strict* u-blox simulator — M9/M10 NACK legacy commands, M5–M8 NACK CFG-VALSET, M5/M6 have no NAV-PVT/NAV-SAT. The driver must send the right dialect to configure anything (`nacks == 0` for all 5 generations). Checks: baud detection from 9600 → 57600 with a `$PUBX,41` sentence byte-identical to Betaflight's table, connection loss/recovery, a module that never ACKs (no hang), the SBAS PRN mask, a 3D fix with `gnssFixOK=0` not counted as a fix, decoding of NED velocity/speed/heading/MSL altitude, NMEA in both hemispheres, home/distance/direction/distance flown.
+- **Real build for ESP32-S3** succeeded. This build caught a bug the PC tests did not see: Arduino defines the macro `bit(b)`, so a local function named `bit` was swallowed and the M9/M10 SBAS mask became 0. Renamed; the tests' Arduino stub now has those macros (`bit`, `sq`, `radians`, `word`, ...) to catch a recurrence.
 
-## Chỗ khác Betaflight có chủ đích
-- **Kinh độ gần ±180°:** BF tính `to->lon - from->lon` bằng `int32_t`; hai điểm 179,9999° và −179,9999° tràn số và ra chênh lệch ~69,5° thay vì 0,0002° (mình kiểm bằng phép tính wrap thật). Ở đây dùng 64-bit.
-- M5/M6 không gọi CFG-GNSS (chip không hỗ trợ), BF vẫn gọi rồi nhận NACK.
-- Khi mất kết nối, fix/số vệ tinh xóa ngay lúc timeout (không đợi vòng sau).
+## Deliberate differences from Betaflight
+- **Longitude near ±180°:** BF computes `to->lon - from->lon` as `int32_t`; the two points 179.9999° and −179.9999° overflow and give a difference of ~69.5° instead of 0.0002° (we checked with the real wrap arithmetic). Here 64-bit is used.
+- M5/M6 do not get CFG-GNSS (the chip does not support it); BF still sends it and receives a NACK.
+- On connection loss, fix/satellite count are cleared right at the timeout (not waiting for the next pass).
 
-## Chưa chạy trên chip thật — kiểm tra theo thứ tự
-1. `gnss.begin()` true? Nối module, in `stateName()`, `module()` (M8/M9/M10...), `baud()`; trạng thái phải đi detect baud → change baud → configure → receiving trong vài giây.
-2. `configNacks()` phải = 0; nếu khác 0 gửi mình số đó + `module()`.
-3. Ngoài trời: `solution().num_sat`, `rateHz()` ≈ `update_rate_hz`, `fix` lên sau vài chục giây.
-4. Nếu module đã đổi baud sang giá trị lạ và lưu flash từ trước: bật `auto_baud` (mặc định bật) và chờ — quét một vòng hết khoảng 10–20 s.
-5. Module M9/M10 (BN-880 mới, M10 giá rẻ) dùng CFG-VALSET: nếu `module()` in UNKNOWN thì module có chuỗi `hwVersion` lạ — mình coi là M8 và báo `version_assumed()`.
+## Not yet run on a real chip — check in this order
+1. Does `gnss.begin()` return true? Connect the module, print `stateName()`, `module()` (M8/M9/M10...), `baud()`; the state must go detect baud → change baud → configure → receiving within a few seconds.
+2. `configNacks()` must be 0; if not, send me that number + `module()`.
+3. Outdoors: `solution().num_sat`, `rateHz()` ≈ `update_rate_hz`, `fix` comes up after a few tens of seconds.
+4. If the module was previously switched to an unusual baud and saved to flash: enable `auto_baud` (on by default) and wait — one full scan takes about 10–20 s.
+5. M9/M10 modules (new BN-880, cheap M10) use CFG-VALSET: if `module()` prints UNKNOWN, the module has an unusual `hwVersion` string — we treat it as M8 and report `version_assumed()`.
 
-## Tự chuyển baud (0.8.0)
-Module u-blox được tìm ở tốc độ nó đang chạy (`gps.auto_baud` bật: thử lần lượt các tốc độ, mỗi tốc độ hỏi MON-VER 3 lần) rồi được chuyển sang `gps.baud` bằng `$PUBX,41` (như Betaflight); mặc định nay là **115200** (đủ chỗ cho NAV-PVT + NAV-SAT ở 10 Hz). Bản ghi cài đặt của bản cũ giữ giá trị cũ (57600): muốn 115200 thì chọn ở tab Cảm biến, mục GPS, "Baud GPS", lưu và khởi động lại. Module NMEA (giao thức `NMEA`) không được chuyển: phải đặt sẵn đúng tốc độ. Lần khởi động sau, module (nếu không có pin dự phòng giữ cấu hình) lại về tốc độ gốc và được chuyển lại. Kiểm chứng: `test_gps` (100000 → 115200, 20000 → 19200), `test_fw` nhóm `gpsbaud` (module ảo ở 9600 / 230400 / 38400 được chuyển sang 115200 / 57600 / 115200 và có fix; tắt tự dò thì module ở 9600 không được tìm). **Chưa thử với module thật.**
+## Automatic baud switching (0.8.0)
+A u-blox module is found at the rate it is currently running (`gps.auto_baud` on: tries each rate in turn, asking MON-VER 3 times at each) and then switched to `gps.baud` with `$PUBX,41` (as in Betaflight); the default is now **115200** (enough room for NAV-PVT + NAV-SAT at 10 Hz). Settings records from older versions keep the old value (57600): to get 115200, select it in the Sensors tab, GPS section, "GPS baud", save and reboot. NMEA modules (protocol `NMEA`) are not switched: they must already be set to the right rate. On the next boot the module (unless it has a backup battery keeping its configuration) returns to its original rate and is switched again. Verified: `test_gps` (100000 → 115200, 20000 → 19200), `test_fw` group `gpsbaud` (virtual modules at 9600 / 230400 / 38400 are switched to 115200 / 57600 / 115200 and get a fix; with auto-detect off, a module at 9600 is not found). **Not yet tested with a real module.**
 
-## Độ cao GPS trong Altitude Hold (0.8.3)
-**Trước 0.8.3:** độ cao GPS chỉ được trộn vào bộ ước lượng khi không có barometer lẫn lidar, và ngay cả khi đó độ cao vẫn bị coi là "không hợp lệ" — nên trên thực tế Altitude Hold **không bao giờ** dùng GPS. Vận tốc đứng của GPS (u-blox `velD`) thì không dùng ở đâu cả.
+## GPS altitude in Altitude Hold (0.8.3)
+**Before 0.8.3:** GPS altitude was only blended into the estimator when there was neither a barometer nor a lidar, and even then the altitude was still treated as "invalid" — so in practice Altitude Hold **never** used GPS. GPS vertical velocity (u-blox `velD`) was not used anywhere.
 
-**Có nên dùng không?** Độ cao GPS trôi 1–3 m trong một phút (vệ tinh di chuyển, tầng khí quyển thay đổi); barometer ổn định hơn nhiều trong vài giây nhưng trôi theo thời tiết và nhiệt độ của mạch (thường 0,5–2 m trong 10 phút). Vì vậy:
-- **Vận tốc đứng của GPS: nên dùng luôn** (ArduPilot cũng mặc định dùng). Nó không trôi, sai số 0,1–0,3 m/s, và đúng chỗ barometer yếu nhất: gió cánh quạt, leo / hạ nhanh. Mặc định bật (`nav.gps_vel_z`). Trễ 0,15 s của module được bù bằng gia tốc đo được (như bộ ước lượng ngang). Chỉ module u-blox có số này; module NMEA không có (cờ `has_vel_d`), nên không bị trộn số 0 vào.
-- **Độ cao GPS thay cho barometer: nên**, khi không có gì khác (`FALLBACK`, mặc định — như `altitude_source = DEFAULT` của Betaflight). Máy không lắp barometer giờ dùng được Altitude Hold / hạ cánh tự động / GPS Rescue theo độ cao GPS (chính xác cỡ ±1–3 m, đủ để bay ngoài trời ở trên cao, không đủ để bay sát đất). Barometer mất tín hiệu giữa chuyến bay: GPS nhận việc **không giật** (mốc GPS − z được theo dõi suốt lúc barometer còn chạy), Altitude Hold không bị ngắt quãng. Blocker `ALTHOLD_NO_BARO` chỉ còn khi không có barometer **và** không có GPS fix.
-- **Trộn độ cao GPS với barometer: tuỳ** (`BLEND`, không mặc định). Lợi cho chuyến bay dài (10 phút trở lên, thời tiết đổi), hại nhẹ với chuyến ngắn: một mét trôi của GPS thì sẽ bị theo một phần. Cách làm: lấy trung bình (GPS − z) của 20 số đo đầu sau khi arm làm mốc, sau đó độ cao GPS so với mốc đó sửa *offset* của barometer với sigma ≥ 3 m (hằng số thời gian cỡ một phút). Độ cao GPS lệch khỏi ước lượng quá 4 m (mất / thêm vệ tinh) thì bị bỏ, 10 lần liền thì lấy mốc mới — không kéo `z`. Mất GPS quá 3 s cũng lấy mốc mới.
+**Should it be used?** GPS altitude drifts 1–3 m within a minute (satellites move, the atmosphere changes); a barometer is much more stable over a few seconds but drifts with the weather and the board temperature (typically 0.5–2 m in 10 minutes). Therefore:
+- **GPS vertical velocity: use it always** (ArduPilot also uses it by default). It does not drift, has 0.1–0.3 m/s error, and helps exactly where the barometer is weakest: prop wash, fast climbs / descents. On by default (`nav.gps_vel_z`). The module's 0.15 s delay is compensated with the measured acceleration (like the horizontal estimator). Only u-blox modules provide this number; NMEA modules do not (flag `has_vel_d`), so zeros are not blended in.
+- **GPS altitude in place of the barometer: yes**, when there is nothing else (`FALLBACK`, the default — like Betaflight's `altitude_source = DEFAULT`). A craft without a barometer can now use Altitude Hold / auto-landing / GPS Rescue on GPS altitude (accurate to about ±1–3 m, enough for flying high outdoors, not enough for flying close to the ground). If the barometer loses its signal mid-flight: GPS takes over **without a jump** (the GPS − z reference is tracked the whole time the barometer is running), Altitude Hold is not interrupted. The `ALTHOLD_NO_BARO` blocker now only applies when there is no barometer **and** no GPS fix.
+- **Blending GPS altitude with the barometer: optional** (`BLEND`, not the default). Helps on long flights (10 minutes or more, changing weather), slightly hurts short ones: a metre of GPS drift will be partly followed. How it works: the mean (GPS − z) of the first 20 measurements after arming is taken as the reference, after which GPS altitude relative to that reference corrects the barometer *offset* with sigma ≥ 3 m (time constant about one minute). GPS altitude deviating from the estimate by more than 4 m (satellites lost / gained) is rejected, and after 10 in a row a new reference is taken — it does not pull `z`. GPS lost for more than 3 s also takes a new reference.
 
-Cài đặt ở tab **Vị trí**, khung **"Độ cao từ GPS"** (có hiệu lực ngay, không cần khởi động lại); khung đó cũng cho biết độ cao / vận tốc đứng GPS có đang được dùng không (bit `GPS_ALT`, `GPS_VZ` của stream `estimate`). Độ cao GPS chỉ có khi đã có điểm home (GPS fix lúc arm).
+Settings are in the **Position** tab, **"Altitude from GPS"** panel (take effect immediately, no reboot needed); that panel also shows whether GPS altitude / vertical velocity are in use (bits `GPS_ALT`, `GPS_VZ` of the `estimate` stream). GPS altitude only exists once a home point is set (GPS fix at arm).
 
-**Sửa kèm:** với giao thức NMEA, vận tốc bắc / đông trước đây luôn bằng 0 (chỉ UBX điền nó), nên bộ ước lượng ngang được báo "đứng yên" khi máy đang bay — Position Hold / Rescue với module NMEA sẽ hỏng. Nay tính từ tốc độ + hướng của câu RMC.
+**Fixed alongside:** with the NMEA protocol, north / east velocity used to always be 0 (only UBX filled it), so the horizontal estimator was told "stationary" while the craft was flying — Position Hold / Rescue with an NMEA module would fail. It is now computed from the speed + course of the RMC sentence.
 
-**Kiểm chứng trên PC:**
-- `test_core` [vertical estimator: GPS]: vận tốc đứng GPS làm sai số tốc độ leo giảm một nửa (0,035 so với 0,071 m/s RMS) và tự nó giữ được tốc độ leo khi không có độ cao; barometer trôi 1 m/phút trong 5 phút: lệch 5,0 m nếu chỉ có baro, 0,2 m khi BLEND; GPS lệch 25 m từ đầu không ảnh hưởng (mốc); GPS nhảy 8 m: lấy mốc mới, ước lượng dịch < 0,4 m (không có cổng 4 m thì dịch 6,5 m); barometer im lặng: GPS nhận việc, ước lượng dịch 0,14 m; chỉ có GPS: z bám độ cao GPS, GPS nhảy 30 m thì sau 10 số đo z được đặt lại.
-- `test_flight`: chỉ GPS (nhiễu 1 m, trễ 150 ms), Altitude Hold ở 5 m trong 20 s: lệch < 0,3 m; `OFF`: Altitude Hold không có độ cao; Altitude Hold 3 phút, barometer trôi 1 m/phút: máy tụt 2,8 m với `FALLBACK`, chỉ 0,65 m với `BLEND`; barometer tắt ở 5 m: Altitude Hold không ngắt, máy trong 0,33 m suốt 20 s; NMEA: vận tốc đứng không được dùng.
-- `test_fw` nhóm `gpsalt` (firmware đầy đủ trên mạch ảo, GPS ảo không nhiễu): không barometer + GPS fix → arm được với công tắc Altitude Hold, giữ độ cao, bit `GPS_ALT` + `GPS_VZ`; `OFF` → `ALTHOLD_NO_BARO`; có barometer: `FALLBACK` dùng vận tốc đứng, không dùng độ cao; `BLEND` dùng cả hai; `gps_vel_z` tắt → không dùng.
-- `test_gps`: RMC → vận tốc bắc / đông, NMEA không có vận tốc đứng, UBX có.
+**Verified on PC:**
+- `test_core` [vertical estimator: GPS]: GPS vertical velocity halves the climb-rate error (0.035 vs 0.071 m/s RMS) and on its own holds the climb rate when there is no altitude; barometer drifting 1 m/minute for 5 minutes: 5.0 m off with baro only, 0.2 m with BLEND; GPS 25 m off from the start has no effect (reference); GPS jumping 8 m: new reference, estimate shifts < 0.4 m (without the 4 m gate it shifts 6.5 m); barometer silent: GPS takes over, estimate shifts 0.14 m; GPS only: z tracks GPS altitude, a 30 m GPS jump resets z after 10 measurements.
+- `test_flight`: GPS only (1 m noise, 150 ms delay), Altitude Hold at 5 m for 20 s: error < 0.3 m; `OFF`: Altitude Hold has no altitude; Altitude Hold for 3 minutes, barometer drifting 1 m/minute: the craft sinks 2.8 m with `FALLBACK`, only 0.65 m with `BLEND`; barometer off at 5 m: Altitude Hold does not drop out, the craft stays within 0.33 m for 20 s; NMEA: vertical velocity is not used.
+- `test_fw` group `gpsalt` (full firmware on a virtual board, noise-free virtual GPS): no barometer + GPS fix → can arm with the Altitude Hold switch, holds altitude, bits `GPS_ALT` + `GPS_VZ`; `OFF` → `ALTHOLD_NO_BARO`; with barometer: `FALLBACK` uses vertical velocity, not altitude; `BLEND` uses both; `gps_vel_z` off → not used.
+- `test_gps`: RMC → north / east velocity, NMEA has no vertical velocity, UBX does.
 
-**Chưa thử với GPS thật.** GPS ảo trong test chỉ có nhiễu trắng (test_flight) hoặc không nhiễu (test_fw); GPS thật còn trôi chậm và nhảy khi vệ tinh đổi, nên con số ngoài trời sẽ kém hơn. Lần đầu thử: (1) có barometer, để mặc định, bay Altitude Hold như cũ — chỉ khác là bit `GPS_VZ` sáng; (2) thử `BLEND` trong một chuyến dài, so độ cao lúc hạ cánh; (3) chỉ khi đó mới thử máy không barometer, chỗ thoáng, trên 5 m, tay sẵn sàng tắt công tắc.
+**Not yet tested with a real GPS.** The virtual GPS in the tests only has white noise (test_flight) or no noise (test_fw); a real GPS also drifts slowly and jumps when satellites change, so outdoor numbers will be worse. First tests: (1) with a barometer, leave the defaults, fly Altitude Hold as before — the only difference is that the `GPS_VZ` bit is lit; (2) try `BLEND` on a long flight, compare the altitude at landing; (3) only then try a craft without a barometer, in an open area, above 5 m, hand ready on the switch.

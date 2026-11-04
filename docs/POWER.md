@@ -1,83 +1,83 @@
-# Pin và tiếng báo (còi / motor) — `src/hal/battery`, `src/hal/beeper`
+# Battery and alerts (beeper / motors) — `src/hal/battery`, `src/hal/beeper`
 
-Hành vi lấy theo Betaflight (`sensors/battery.c`, `sensors/voltage.c`, `io/beeper.c`) để các con số phi công đã quen có cùng ý nghĩa.
+Behaviour follows Betaflight (`sensors/battery.c`, `sensors/voltage.c`, `io/beeper.c`) so that the numbers pilots are used to mean the same thing.
 
-## Pin
-
-```
-src/hal/battery/battery_monitor.h   batt::Monitor: điện áp → điện áp đã lọc, số cell, trạng thái      [portable]
-src/hal/battery/battery_base.h      BatterySensor: chọn nguồn (ADC / ESC), đọc ADC, gọi Monitor 50 Hz
-```
-- **Nguồn đo** (`battery.source`): `AUTO` (ADC nếu có chân `pins.batt_adc`, không thì telemetry ESC), `ADC`, `ESC`, `NONE`.
-  ADC đọc bằng `analogReadMilliVolts()` (đã hiệu chỉnh của Arduino-ESP32) rồi nhân `battery.divider` (= điện áp pin / điện áp ở chân; cầu 10k : 1k là 11).
-- **Lọc**: PT1 1/3 Hz ở 50 Hz, nên một cú đạp ga không trông như pin cạn.
-- **Có pin hay không**: điện áp đã lọc ổn định (10 trong 11 khoảng 100 ms không lệch quá 0,1 V) và hợp lý: 3,0 V … một cell đầy, hoặc trên 6,0 V. Khoảng giữa là nguồn USB 5 V, không phải pin.
-- **Số cell**: theo `battery.cells`, hoặc tự nhận lúc cắm pin: `điện áp / cell_max + 1` (tối đa 8). Pin cắm lúc gần cạn bị nhận thiếu một cell (4S còn 12,8 V = 3S đầy): biết số cell thì nên nhập. Từ 0.18.1, khi điện áp ổn định vượt `số cell × cell_max` (một cell không thể cao hơn) thì đếm lại: nguồn lên từng bậc, như điện áp từ telemetry ESC dừng một lúc quanh 4 V, không còn bị chốt 1S. Chỉ đếm tăng, không bao giờ giảm.
-- **Trạng thái**: `NOT_PRESENT → OK → WARNING → CRITICAL`, có trễ 10 mV và thời gian chờ (`warning_delay`, `critical_delay`; thời gian chờ nguy hiểm đếm thời gian **liên tục** dưới ngưỡng).
-- **Tác dụng**: `WARNING` trở xuống chặn arm (blocker `BATT_LOW`); `CRITICAL` lúc đang bay → failsafe hạ cánh nếu `land_on_critical` bật. Lõi bay không còn ngưỡng pin riêng: nó nhận `fc::Health{batt_low, batt_critical}` từ `FlightApp`.
-- Cả section `battery` là **live**: sửa ngưỡng có hiệu lực ngay.
-
-### Dòng, mAh đã dùng, phần trăm còn lại (firmware 0.8)
-
-- **Nguồn đo dòng** (`battery.current_source`): `AUTO` (cảm biến dòng nếu chân `pins.curr_adc` dùng được, không thì ESC), `ADC`, `ESC`, `NONE`.
-- **Cảm biến dòng ADC**: `dòng (mA) = mV ở chân × 10000 / current_scale + current_offset`, đúng công thức và đơn vị của Betaflight (`ibata_scale` 0,1 mV/A, `ibata_offset` mA): số của nhà sản xuất board dùng được luôn. Mặc định 400 = 40 mV/A. Hệ số âm cho cảm biến lắp ngược.
-- **ESC**: tổng dòng các ESC báo qua *extended DShot telemetry* (cần `motors.bidirectional` và `motors.edt`). ESC chỉ gửi khi được bật bằng lệnh DShot 13: firmware gửi lệnh này **khi các ESC bắt đầu trả lời** (lúc cắm pin, kể cả cắm sau khi đã cắm USB), gửi lại khi chúng im hết rồi trả lời lại (ESC khởi động lại). **Không bao giờ gửi khi đang arm** (lệnh DShot dừng motor trong lúc lặp lệnh); nếu ESC khởi động lại giữa chuyến bay thì lệnh được gửi ngay sau khi disarm. Số đo của một ESC còn tính trong 1 s sau lần báo cuối.
-- **Lọc**: dòng hiển thị qua PT1 1 Hz (như Betaflight); số mAh cộng dồn số đo chưa lọc, 50 lần/giây, tính từ lúc cấp nguồn (không reset khi arm, như Betaflight). Một khoảng hở ≥ 1 s (tác vụ cảm biến bị treo) không được cộng.
-- **Còn lại (%)**: có `battery.capacity_mah` và có số đo dòng → `(dung lượng − mAh đã dùng) / dung lượng`; không thì theo điện áp giữa `cells × cell_min` và `cells × cell_max`.
-- Báo cáo khởi động: `current: ADC sensor on GPIO3, 400 x 0.1 mV/A`, `current: from the ESCs (extended DShot telemetry)`, `current: none (...)`, hoặc `current: FAILED - ...` (chọn ADC mà chưa có chân, chân không phải ADC, chọn ESC mà chưa bật extended telemetry). Chân trùng: `pins: FAILED ...`, không cho arm.
-- Stream `battery`: `current` (0,01 A), `mah`, `remaining` (%), `current_source`, `current_mv` (điện áp ở chân cảm biến, để hiệu chỉnh). Blackbox: cột `current`, `mah` (nhóm battery).
-- `current_scale`, `current_offset`, `capacity_mah`, `current_source` có hiệu lực ngay; đổi chân thì lưu và khởi động lại.
-
-## Còi
+## Battery
 
 ```
-src/hal/beeper/beeper_core.h   beep::Beeper (bảng mẫu âm, ưu tiên), beep::Conditions (tình huống → âm)   [portable]
-src/hal/beeper/beeper_base.h   BuzzerOutput: còi chủ động (mức logic) hoặc thụ động (PWM qua LEDC)
+src/hal/battery/battery_monitor.h   batt::Monitor: voltage → filtered voltage, cell count, state      [portable]
+src/hal/battery/battery_base.h      BatterySensor: picks the source (ADC / ESC), reads the ADC, calls Monitor at 50 Hz
 ```
-- 18 tình huống (enum `beeper_cond` trong schema): gyro hiệu chuẩn xong, mất sóng, đang hạ cánh failsafe (SOS), arm / disarm, arm có / chưa có GPS fix, pin thấp / nguy hiểm, công tắc Beeper, hiệu chuẩn accelerometer, GPS sẵn sàng, đang arm ga thấp, bật nguồn, không arm được, xoá xong blackbox, và `USB`.
-- Mẫu âm theo đơn vị 10 ms, lấy từ Betaflight; thêm hai mẫu riêng: bật nguồn và "không arm được".
-- **Ưu tiên** = thứ tự trong enum; âm đang kêu không bị âm ưu tiên bằng hoặc thấp hơn chen vào.
-  Khác Betaflight có chủ đích: tình huống **bị tắt** thì coi như không tồn tại (không chặn âm ưu tiên thấp hơn).
-- **Im lặng trên bàn**: app đang kết nối + không đo được pin + tình huống `USB` tắt (mặc định) → **còi** không kêu, trừ nút "Thử" trong app. Từ 0.8.1 luật này **không áp cho motor**: ESC chỉ kêu được khi có điện, tức là đã cắm pin, dù firmware không đo được pin (không có chân ADC, ESC không báo điện áp). Trước 0.8.1, máy không đo được pin mà đang nối app thì motor không bao giờ kêu. "App đang kết nối" = có khung hợp lệ trong 3 s gần nhất (client Python gửi keepalive mỗi 0,3 s).
-- Lệnh `BEEP {condition}`: phát thử một âm trên còi và motor (kể cả âm đang tắt, kể cả đang "im lặng trên bàn"); `condition` trống = im lặng.
+- **Measurement source** (`battery.source`): `AUTO` (ADC if pin `pins.batt_adc` is set, otherwise ESC telemetry), `ADC`, `ESC`, `NONE`.
+  The ADC is read with `analogReadMilliVolts()` (calibrated by Arduino-ESP32) and multiplied by `battery.divider` (= battery voltage / voltage at the pin; a 10k : 1k divider is 11).
+- **Filtering**: PT1 1/3 Hz at 50 Hz, so a throttle punch does not look like an empty battery.
+- **Battery present or not**: the filtered voltage is stable (10 out of 11 intervals of 100 ms within 0.1 V) and plausible: 3.0 V … one full cell, or above 6.0 V. The range in between is 5 V USB power, not a battery.
+- **Cell count**: from `battery.cells`, or detected when the battery is plugged in: `voltage / cell_max + 1` (at most 8). A battery plugged in nearly empty is detected one cell short (a 4S at 12.8 V = a full 3S): if you know the cell count, enter it. Since 0.18.1, when the stable voltage exceeds `cell count × cell_max` (a cell cannot be higher) it is recounted: power coming up in steps, such as ESC telemetry voltage pausing for a while around 4 V, no longer gets stuck at 1S. It only counts up, never down.
+- **State**: `NOT_PRESENT → OK → WARNING → CRITICAL`, with 10 mV hysteresis and delays (`warning_delay`, `critical_delay`; the critical delay counts time **continuously** below the threshold).
+- **Effect**: `WARNING` or worse blocks arming (blocker `BATT_LOW`); `CRITICAL` in flight → failsafe landing if `land_on_critical` is on. The flight core no longer has its own battery thresholds: it receives `fc::Health{batt_low, batt_critical}` from `FlightApp`.
+- The whole `battery` section is **live**: threshold changes take effect immediately.
 
-### Motor kêu thay còi (máy không gắn còi)
+### Current, mAh used, percent remaining (firmware 0.8)
 
-ESC nhận lệnh DShot "beacon" (lệnh 1 đến 5 = năm âm khác nhau) và cho motor rung thành tiếng bíp. Firmware dùng cách này làm **bộ phát tiếng thứ hai**, chạy song song với còi và có danh sách tình huống riêng (`beeper.motor_conditions`). Máy không gán chân còi thì đây là tiếng báo duy nhất, không cần cài gì thêm: mặc định đã bật.
+- **Current source** (`battery.current_source`): `AUTO` (current sensor if pin `pins.curr_adc` is usable, otherwise ESC), `ADC`, `ESC`, `NONE`.
+- **ADC current sensor**: `current (mA) = mV at the pin × 10000 / current_scale + current_offset`, exactly Betaflight's formula and units (`ibata_scale` 0.1 mV/A, `ibata_offset` mA): the board manufacturer's numbers work as they are. Default 400 = 40 mV/A. A negative scale for a sensor mounted backwards.
+- **ESC**: sum of the currents the ESCs report via *extended DShot telemetry* (needs `motors.bidirectional` and `motors.edt`). ESCs only send it when enabled with DShot command 13: the firmware sends this command **when the ESCs start answering** (when the battery is plugged in, including after USB was plugged in), and sends it again when they all go silent and then answer again (ESC restart). **Never sent while armed** (DShot commands stop the motors while the command repeats); if an ESC restarts mid-flight the command is sent right after disarm. An ESC's reading still counts for 1 s after its last report.
+- **Filtering**: displayed current goes through a 1 Hz PT1 (as in Betaflight); mAh accumulates the unfiltered readings, 50 times per second, from power-up (not reset on arming, as in Betaflight). A gap ≥ 1 s (sensor task stalled) is not added.
+- **Remaining (%)**: with `battery.capacity_mah` and a current reading → `(capacity − mAh used) / capacity`; otherwise by voltage between `cells × cell_min` and `cells × cell_max`.
+- Startup report: `current: ADC sensor on GPIO3, 400 x 0.1 mV/A`, `current: from the ESCs (extended DShot telemetry)`, `current: none (...)`, or `current: FAILED - ...` (ADC chosen with no pin set, pin is not an ADC, ESC chosen without extended telemetry on). Clashing pins: `pins: FAILED ...`, arming not allowed.
+- Stream `battery`: `current` (0.01 A), `mah`, `remaining` (%), `current_source`, `current_mv` (voltage at the sensor pin, for calibration). Blackbox: columns `current`, `mah` (battery group).
+- `current_scale`, `current_offset`, `capacity_mah`, `current_source` take effect immediately; changing pins needs save and restart.
+
+## Beeper
 
 ```
-beep::Beeper beeper        mẫu âm cho còi (như cũ)
-beep::Beeper motor_beeper  cùng các tình huống, slot_ms = 450: mỗi đoạn "bật" của mẫu âm = đúng MỘT tiếng của ESC
-beep::Conditions           đưa yêu cầu cho cả hai; motor chỉ nhận khi được phép (dưới đây)
-MotorOutputManager::beacon_all(tone)   một khung DShot, mọi motor cùng lúc (Betaflight: dshotCommandWrite(ALL_MOTORS))
+src/hal/beeper/beeper_core.h   beep::Beeper (tone pattern table, priority), beep::Conditions (condition → tone)   [portable]
+src/hal/beeper/beeper_base.h   BuzzerOutput: active buzzer (logic level) or passive (PWM via LEDC)
 ```
-- Motor phát **số tiếng** của mẫu âm, theo nhịp của mẫu (0.18.1): gyro hiệu chuẩn xong = 3 tiếng, vừa disarm = 2 tiếng, không arm được = 3 tiếng, mất sóng = 1 tiếng mỗi 1 s, pin dưới mức tối thiểu = một tiếng mỗi 0,52 s. Một phần "bật" ngắn hơn 450 ms (`DSHOT_BEACON_MODE_INTERVAL_US` của Betaflight) được kéo lên 450 ms, phần dài hơn giữ nguyên. **Độ dài của từng tiếng do ESC quyết định**: DShot chỉ có lệnh "beacon 1 – 5", không có độ dài (Betaflight: "the DShot Beacon tone duration is determined by the ESC").
-- **Chỉ khi chưa arm**, và không sớm hơn 1,2 s sau khi disarm (`DSHOT_BEACON_GUARD_DELAY_US`). Tiếng "vừa disarm" vì thế đến sau 1,2 s.
-- **Lúc đang bay motor không báo được gì**: pin yếu, failsafe đang hạ cánh, "đang arm, ga thấp" không có tiếng. Các tình huống đó (`ARMING*`, `ARMED`, `RX_LOST_LANDING`) bị firmware loại khỏi danh sách của motor dù settings có bật. Muốn có cảnh báo lúc bay: gắn còi, hoặc xem điện áp trên tay điều khiển (telemetry CRSF, phần việc sau).
-- Chỉ với giao thức **DShot** (PWM / Oneshot / Multishot không có lệnh). Báo cáo khởi động ghi rõ: `beeper: motors (DShot beacon, disarmed only)`, `beeper: active buzzer + motors (...)`, hoặc `beeper: FAILED - no buzzer pin set, and the motors can only beep with a DShot protocol`.
-- Không chen vào việc khác: đang có lệnh DShot khác (đảo chiều…) hoặc app đang chạy thử motor thì tiếng đó bị bỏ, không xếp hàng.
-- Tiếng "bật nguồn" mặc định tắt cho motor (ESC tự phát nhạc khởi động của nó). Tiếng "gyro hiệu chuẩn xong" đến khoảng 1 s sau khi cấp điện: ESC còn đang khởi động thì có thể không phát.
-- Quy tắc "im lặng trên bàn" và "mất sóng không kêu khi app đang kết nối" áp dụng cho motor như cho còi.
-- `beeper.dshot_beacon_tone` (1 đến 5): âm nào của ESC. Stream `battery` có thêm `motor_beeping` (tình huống motor đang phát + 1).
+- 18 conditions (enum `beeper_cond` in the schema): gyro calibration done, signal lost, failsafe landing in progress (SOS), arm / disarm, arm with / without GPS fix, battery low / critical, Beeper switch, accelerometer calibration, GPS ready, armed at low throttle, power-on, cannot arm, blackbox erase done, and `USB`.
+- Tone patterns in 10 ms units, taken from Betaflight; plus two of our own: power-on and "cannot arm".
+- **Priority** = order in the enum; a tone that is playing is not interrupted by a tone of equal or lower priority.
+  Deliberately different from Betaflight: a condition that is **turned off** is treated as non-existent (it does not block lower-priority tones).
+- **Silent on the bench**: app connected + battery not measurable + condition `USB` off (default) → the **buzzer** does not sound, except for the "Try" button in the app. Since 0.8.1 this rule **does not apply to the motors**: ESCs can only beep when powered, i.e. the battery is plugged in, even if the firmware cannot measure the battery (no ADC pin, ESC does not report voltage). Before 0.8.1, a craft that could not measure the battery and was connected to the app never beeped its motors. "App connected" = a valid frame in the last 3 s (the Python client sends a keepalive every 0.3 s).
+- Command `BEEP {condition}`: plays a test tone on the buzzer and motors (even a tone that is turned off, even while "silent on the bench"); empty `condition` = silence.
+
+### Motors beeping instead of a buzzer (craft without a buzzer)
+
+ESCs accept the DShot "beacon" commands (commands 1 to 5 = five different tones) and make the motors vibrate into a beep. The firmware uses this as a **second sound output**, running in parallel with the buzzer and with its own condition list (`beeper.motor_conditions`). On a craft with no buzzer pin assigned this is the only alert sound, with nothing extra to set up: it is on by default.
+
+```
+beep::Beeper beeper        tone patterns for the buzzer (as before)
+beep::Beeper motor_beeper  same conditions, slot_ms = 450: each "on" segment of the pattern = exactly ONE ESC beep
+beep::Conditions           passes requests to both; the motors only take them when allowed (below)
+MotorOutputManager::beacon_all(tone)   one DShot frame, all motors at once (Betaflight: dshotCommandWrite(ALL_MOTORS))
+```
+- The motors play the pattern's **number of beeps**, at the pattern's rhythm (0.18.1): gyro calibration done = 3 beeps, just disarmed = 2 beeps, cannot arm = 3 beeps, signal lost = 1 beep every 1 s, battery below minimum = one beep every 0.52 s. An "on" part shorter than 450 ms (Betaflight's `DSHOT_BEACON_MODE_INTERVAL_US`) is stretched to 450 ms, longer parts stay as they are. **Each beep's length is decided by the ESC**: DShot only has "beacon 1 – 5" commands, with no duration (Betaflight: "the DShot Beacon tone duration is determined by the ESC").
+- **Only while disarmed**, and no sooner than 1.2 s after disarm (`DSHOT_BEACON_GUARD_DELAY_US`). The "just disarmed" beep therefore comes after 1.2 s.
+- **In flight the motors cannot signal anything**: low battery, failsafe landing, "armed, low throttle" have no sound. Those conditions (`ARMING*`, `ARMED`, `RX_LOST_LANDING`) are removed from the motor list by the firmware even if the settings turn them on. For in-flight warnings: fit a buzzer, or watch the voltage on the transmitter (CRSF telemetry, later work).
+- Only with the **DShot** protocol (PWM / Oneshot / Multishot have no commands). The startup report says it clearly: `beeper: motors (DShot beacon, disarmed only)`, `beeper: active buzzer + motors (...)`, or `beeper: FAILED - no buzzer pin set, and the motors can only beep with a DShot protocol`.
+- It does not cut into other work: when another DShot command (reversing…) is in progress or the app is running a motor test, the beep is dropped, not queued.
+- The "power-on" beep is off by default for the motors (the ESC plays its own startup tune). The "gyro calibration done" beep comes about 1 s after power-up: if the ESC is still starting up it may not play.
+- The "silent on the bench" and "no signal-lost beep while the app is connected" rules apply to the motors as to the buzzer.
+- `beeper.dshot_beacon_tone` (1 to 5): which ESC tone. Stream `battery` also has `motor_beeping` (condition the motors are playing + 1).
 
 ## App
 
-Tab **Pin và còi**: số đo trực tiếp, thang một cell (đỏ / vàng / xanh theo ngưỡng), các ngưỡng, hiệu chỉnh hệ số chia (nhập điện áp đo bằng đồng hồ, app tính từ điện áp đang có ở chân). Khối **Đo dòng và dung lượng**: dòng, mAh đã dùng, phần trăm còn lại; nguồn đo, hệ số / độ lệch cảm biến, dung lượng pin; hiệu chỉnh hệ số cảm biến (nhập dòng đo bằng ampe kìm lúc motor quay đều, app tính từ điện áp đang có ở chân cảm biến). Chân `ADC đo dòng` ở tab Chân và cổng. Bảng tình huống có **hai cột dấu chọn** (còi, motor), hình mẫu âm, số tiếng motor sẽ phát, nút "Thử"; ô ghi chú đầu bảng nói máy đang có gì để kêu (còi, motor, cả hai, hoặc không có gì). Hình mẫu âm, số tiếng của motor và danh sách tình huống motor không phát được đều được so với firmware (`tools/ui_reference.cpp` → `test_gui_math.py`).
+**Battery and beeper** tab: live readings, a one-cell gauge (red / yellow / green by threshold), the thresholds, divider calibration (enter the voltage measured with a meter, the app computes from the voltage currently at the pin). **Current and capacity** block: current, mAh used, percent remaining; measurement source, sensor scale / offset, battery capacity; sensor scale calibration (enter the current measured with a clamp meter while the motors spin steadily, the app computes from the voltage currently at the sensor pin). The `Current ADC` pin is in the Pins and ports tab. The condition table has **two checkbox columns** (buzzer, motors), the tone pattern picture, the number of beeps the motors will play, a "Try" button; the note at the top of the table says what the craft currently has to beep with (buzzer, motors, both, or nothing). The tone pattern pictures, motor beep counts and the list of conditions the motors cannot play are all compared against the firmware (`tools/ui_reference.cpp` → `test_gui_math.py`).
 
-## Đã kiểm chứng (PC)
+## Verified (PC)
 
-- `test_power` 119 kiểm tra; trong `test_fw`: pin thật của mạch ảo (ADC + cầu chia, sụt áp khi tải), chặn arm, failsafe khi pin nguy hiểm, còi đo ở chân GPIO ảo, im lặng trên bàn.
-- Motor kêu: `test_power` (số tiếng, khoảng cách, không kêu khi arm / trong 1,2 s sau disarm / trên bàn / với ESC không có DShot, qua lúc `millis()` tràn), `test_motor` (một khung cho mọi motor, không xếp hàng sau lệnh khác, không chen vào test motor), và `test_fw` kịch bản **máy không có còi**: đếm chính các khung lệnh DShot đi ra chân motor (thời điểm, âm, đủ 4 motor trong một khung), lúc arm không có khung lệnh nào.
-- Lỗi cố ý (`tools/mutate.py`): xem `docs/HANDOFF.md`.
-- App: `test_e2e.py` (pin, còi, im lặng trên bàn, motor kêu), trang thật trong trình duyệt (`test_battery_and_beeper_tab`).
-- Đo dòng: `test_power` nhóm `[current]` (công thức Betaflight với số tính tay, chọn nguồn, lọc 1 Hz, mAh, khoảng hở, NaN, phần trăm còn lại); `test_fw` nhóm `current` (`WB_ONLY=current`): cảm biến ADC trên mạch ảo (10 A → 10 mAh trong 3,6 s, đổi hệ số / độ lệch khi đang chạy), ESC ảo có extended telemetry (chỉ bật sau khi nghe lệnh 13 sáu lần; dòng cộng của 4 ESC; tốc độ motor không bị khung dòng làm sai; ESC im rồi khởi động lại → hỏi lại; khởi động lại lúc đang arm → chỉ hỏi sau khi disarm), các cài đặt sai; trang thật (`test_current_sensor_and_servos_on_the_page`).
+- `test_power` 119 checks; in `test_fw`: the virtual board's real battery (ADC + divider, voltage sag under load), arming block, failsafe on critical battery, buzzer measured on the virtual GPIO pin, silent on the bench.
+- Motor beeps: `test_power` (beep count, spacing, no beeps when armed / within 1.2 s after disarm / on the bench / with non-DShot ESCs, across `millis()` wraparound), `test_motor` (one frame for all motors, not queued behind other commands, not cutting into motor tests), and the `test_fw` **craft without a buzzer** scenario: counting the actual DShot command frames going out on the motor pins (timing, tone, all 4 motors in one frame), no command frames while armed.
+- Deliberate faults (`tools/mutate.py`).
+- App: `test_e2e.py` (battery, beeper, silent on the bench, motor beeps), the real page in a browser (`test_battery_and_beeper_tab`).
+- Current measurement: `test_power` group `[current]` (Betaflight's formula with hand-computed numbers, source choice, 1 Hz filter, mAh, gaps, NaN, percent remaining); `test_fw` group `current` (`WB_ONLY=current`): ADC sensor on the virtual board (10 A → 10 mAh in 3.6 s, changing scale / offset while running), virtual ESCs with extended telemetry (only enabled after hearing command 13 six times; summed current of 4 ESCs; motor speed not corrupted by current frames; ESC silent then restarting → asked again; restart while armed → asked only after disarm), wrong settings; the real page (`test_current_sensor_and_servos_on_the_page`).
 
-## Chưa kiểm chứng (cần mạch thật)
+## Not verified (needs a real board)
 
-- Thời gian một lần `analogReadMilliVolts()` trong vòng bay (đọc 50 lần/giây; xem `status.loop_max_us`).
-- Độ chính xác ADC của ESP32-S3 ở hai đầu dải; điện áp ở chân không được vượt ~3,1 V khi pin đầy.
-- Còi thụ động dùng một kênh LEDC: chưa thử cùng lúc với motor PWM / Oneshot (cũng dùng LEDC).
-- **Đo dòng trên mạch thật**: cảm biến dòng thật (nhiễu ADC khi motor quay, cần lọc thêm không); ESC thật có gửi extended telemetry sau lệnh 13 không, bao lâu một lần, đơn vị dòng của từng loại ESC (BLHeli_32 / AM32 / Bluejay). ESC 4-in-1 báo dòng tổng trên mỗi kênh thì tổng bị nhân 4: báo lại loại ESC nếu số đo gấp 4 lần.
-- Tự nhận số cell với pin thật; ngưỡng mặc định (4,30 / 3,50 / 3,30 V) là của Betaflight cho LiPo.
-- **Motor kêu trên ESC thật**: mô phỏng chỉ kiểm tra khung lệnh đi ra đúng lúc, đúng âm. ESC (BLHeli_S / Bluejay / BLHeli_32 / AM32) có phát tiếng với mỗi lệnh không, một tiếng dài bao lâu, năm âm nghe ra sao, có cần lặp lệnh không: phải nghe trên mạch. Nếu ESC bỏ tiếng, báo lại loại ESC và firmware của nó.
-- Motor nóng lên khi kêu lâu (dòng qua cuộn dây): "mất sóng" và "pin nguy hiểm" kêu liên tục cho tới khi hết điều kiện. Betaflight cũng làm vậy; chưa đo nhiệt.
+- Time of one `analogReadMilliVolts()` in the flight loop (read 50 times per second; see `status.loop_max_us`).
+- ESP32-S3 ADC accuracy at both ends of the range; the pin voltage must not exceed ~3.1 V with a full battery.
+- The passive buzzer uses an LEDC channel: not yet tried together with PWM / Oneshot motors (which also use LEDC).
+- **Current measurement on a real board**: a real current sensor (ADC noise with motors spinning, whether more filtering is needed); whether real ESCs send extended telemetry after command 13, how often, the current unit of each ESC type (BLHeli_32 / AM32 / Bluejay). A 4-in-1 ESC that reports the total current on every channel gets multiplied by 4: report the ESC type if the reading is 4 times too high.
+- Cell count detection with a real battery; the default thresholds (4.30 / 3.50 / 3.30 V) are Betaflight's for LiPo.
+- **Motor beeps on real ESCs**: the simulation only checks that the command frames go out at the right time with the right tone. Whether the ESC (BLHeli_S / Bluejay / BLHeli_32 / AM32) beeps on every command, how long one beep lasts, what the five tones sound like, whether the command needs repeating: must be heard on the board. If the ESC skips beeps, report the ESC type and its firmware.
+- Motors heat up when beeping for a long time (current through the windings): "signal lost" and "critical battery" beep continuously until the condition ends. Betaflight does the same; temperature not yet measured.

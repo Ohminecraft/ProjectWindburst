@@ -26,6 +26,11 @@ struct FakeVehicle : Vehicle {
     bool mission_busy() const override { return busy; }
     bool home_alt_mm(int32_t& a) const override { a = home_alt; return have_home; }
     bool mission_replace(const StoreItem* it, int n) override { if (refuse_replace) return false; replaces++; store.assign(it, it + n); return true; }
+    // 0.43: three tuning parameters; the last one stores at most 250 (as a setting's max)
+    const char* pname[3] = {"PID_ROLL_P", "PID_ROLL_I", "RATE_MAX_ROLL"}; float pval[3] = {45, 80, 670}; int sets = 0; bool refuse_set = false;
+    int param_count() const override { return 3; }
+    bool param_get(int i, char id[17], float& v) const override { if (i < 0 || i >= 3) return false; strncpy(id, pname[i], 16); id[16] = 0; v = pval[i]; return true; }
+    bool param_set(int i, float v) override { if (refuse_set || i < 0 || i >= 3) return false; sets++; pval[i] = i == 0 && v > 250 ? 250 : v; return true; }
 };
 
 // the ground station (system 255, component 190) and the craft (system 1) on one wire
@@ -253,8 +258,35 @@ static void t_commands() {
         b.out.clear(); q.tc1 = 1; b.send(q); CHECK(b.out.empty(), "a TIMESYNC answer (tc1 set) is not answered"); }
 }
 
+// 0.43: the parameter protocol (PARAM_REQUEST_LIST / _READ, PARAM_SET, PARAM_VALUE): the tuning from Mission Planner / QGroundControl
+static void t_params() {
+    printf("[params] the tuning as MAVLink parameters\n");
+    auto pid = [](const ParamValue& v) { return std::string(v.param_id, strnlen(v.param_id, 16)); };
+    {   Bench b; ParamRequestList l; l.target_system = 1; l.target_component = 1; b.send(l); b.wait(200);
+        std::vector<ParamValue> got; ParamValue v; for (auto& f : b.out) if (unpack(f, v)) got.push_back(v);
+        CHECK(got.size() == 3 && pid(got[0]) == "PID_ROLL_P" && got[0].param_index == 0 && got[2].param_index == 2 && got[1].param_count == 3 && got[0].param_value == 45.0f && got[0].param_type == PARAM_TYPE_REAL32,
+              "PARAM_REQUEST_LIST: every parameter once, in order, with its index, the count and REAL32 (%zu)", got.size()); }
+    {   Bench b; ParamRequestList l; l.target_system = 1; l.target_component = 1; b.send(l); int most = 0;
+        for (int k = 0; k < 50; k++) { b.t += 20; b.g.update(b.v, b.sch, b.s, b.t); if (b.sch.pending_replies() > most) most = b.sch.pending_replies(); }
+        CHECK(most == 1 && b.sch.dropped_replies() == 0, "a link that takes nothing for a second: the list waits, one PARAM_VALUE queued at most (%d), none dropped", most); }
+    {   Bench b; ParamRequestList l; l.target_system = 7; l.target_component = 1; b.send(l); b.wait(200);
+        CHECK(b.count<ParamValue>() == 0, "a list asked of another system: nothing"); }
+    {   Bench b; ParamRequestRead r; r.target_system = 1; r.target_component = 1; r.param_index = -1; strncpy(r.param_id, "RATE_MAX_ROLL", 16); b.send(r);
+        ParamValue v; CHECK(b.last(v) && pid(v) == "RATE_MAX_ROLL" && v.param_index == 2 && v.param_value == 670.0f, "PARAM_REQUEST_READ by name (index -1)");
+        b.out.clear(); r.param_index = 1; memset(r.param_id, 0, 16); b.send(r); CHECK(b.last(v) && pid(v) == "PID_ROLL_I", "... by index");
+        b.out.clear(); r.param_index = -1; strncpy(r.param_id, "NO_SUCH", 16); b.send(r); CHECK(b.count<ParamValue>() == 0, "an unknown name: no answer (ArduPilot)"); }
+    {   Bench b; ParamSet p; p.target_system = 1; p.target_component = 1; strncpy(p.param_id, "PID_ROLL_P", 16); p.param_value = 52; p.param_type = PARAM_TYPE_REAL32; b.send(p);
+        ParamValue v; CHECK(b.v.sets == 1 && b.v.pval[0] == 52 && b.last(v) && pid(v) == "PID_ROLL_P" && v.param_value == 52.0f && v.param_count == 3, "PARAM_SET: stored, and PARAM_VALUE says so");
+        b.out.clear(); p.param_value = 900; b.send(p); CHECK(b.last(v) && v.param_value == 250.0f, "too big: PARAM_VALUE carries what was really stored (%g)", v.param_value);
+        b.out.clear(); p.param_value = NAN; b.send(p); CHECK(b.v.sets == 2 && b.last(v) && v.param_value == 250.0f, "NaN: not stored, the value as it is is sent back");
+        b.out.clear(); strncpy(p.param_id, "NO_SUCH", 16); b.send(p); CHECK(b.count<ParamValue>() == 0 && b.v.sets == 2, "an unknown name: ignored");
+        b.out.clear(); b.v.refuse_set = true; strncpy(p.param_id, "PID_ROLL_I", 16); p.param_value = 90; b.send(p); CHECK(b.last(v) && v.param_value == 80.0f, "refused by the craft: the old value is sent back"); }
+    {   Bench b; ParamSet p; p.target_system = 1; p.target_component = 5; strncpy(p.param_id, "PID_ROLL_P", 16); p.param_value = 60; b.send(p);
+        CHECK(b.v.sets == 0, "a PARAM_SET for another component: ignored"); }
+}
+
 int main() {
-    t_upload(); t_download(); t_mission_planner(); t_commands();
+    t_upload(); t_download(); t_mission_planner(); t_commands(); t_params();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

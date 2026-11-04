@@ -122,6 +122,7 @@ void setup() {
     //    ... then USB, under the name from the settings
     app::usb_product_name(settings.general.usb_name, WB_MCU_NAME, g_usb_name);
     USB.manufacturerName("Windburst"); USB.productName(g_usb_name);
+    USB.VID(0x0483); USB.PID(0x5740); USB.firmwareVersion((WB_FW_MAJOR << 8) | WB_FW_MINOR); // (0x5740 = STMicroelectronics Virtual COM Port) for betaflight app compatibility
     usb_cdc.setRxBufferSize(2048);
     usb_cdc.enableReboot(false); usb_cdc.onEvent(on_usb_cdc);
     usb_cdc.begin();
@@ -210,6 +211,7 @@ void setup() {
     snprintf(line, sizeof(line), "settings: %s, loaded 0x%08lx (0x%08lx from an older firmware), defaulted 0x%08lx, clamped %u",
              nvs_ok ? "NVS ok" : "NVS FAILED (nothing can be saved)", (unsigned long)rep.loaded_mask, (unsigned long)rep.migrated_mask, (unsigned long)rep.defaulted_mask, (unsigned)(uint16_t)rep.clamped_fields);
     flight.add_report(line);
+    flight.add_report("============= End Initialization =============");
     { static uint8_t pins[port::kPinMaskBytes]; port::chip_pins(pins); server.set_chip(WB_MCU_NAME, pins); }      // the app: which MCU, which pins exist
     host.attach(&server);
     host.set_report(flight.report(), flight.report_lines());

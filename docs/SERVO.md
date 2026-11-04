@@ -1,27 +1,27 @@
-# Servo (firmware 0.7.1, sửa lỗi ở 0.7.2)
+# Servo (firmware 0.7.1, bug fix in 0.7.2)
 
-Tối đa **4 servo**, mỗi servo đi theo một kênh RC (gimbal nghiêng camera trên một núm xoay, kẹp gắp trên một công tắc...).
+Up to **4 servos**, each following an RC channel (camera tilt gimbal on a knob, gripper on a switch...).
 
-**Chưa chạy trên mạch thật.** Đã kiểm chứng trên PC: firmware thật trên mạch ảo (xung PWM đo ở bộ PWM giả lập), biên dịch cho ESP32-S3.
+**Not run on a real board yet.** Verified on PC: real firmware on the virtual board (PWM pulses measured at a simulated PWM unit), compiled for ESP32-S3.
 
-**0.7.2:** sửa lỗi của 0.7.1: firmware đọc cài đặt servo qua con trỏ có thể không thẳng hàng, trên ESP32-S3 có thể gây lỗi (crash) khi khởi động hoặc khi đổi cài đặt servo. Nếu đã nạp 0.7.1 thì nạp lại 0.7.2.
+**0.7.2:** fixes a 0.7.1 bug: the firmware read the servo settings through a possibly unaligned pointer, which on the ESP32-S3 could cause a crash at boot or when changing servo settings. If you flashed 0.7.1, flash 0.7.2.
 
-## Cách dùng
-1. Tab **Chân và cổng**, nhóm "Servo": nhập GPIO cho servo 1..4. **Lưu và khởi động lại.**
-2. Tab **Motor**, khối "Servo": chọn kênh RC cho từng servo (CH1..CH16, "Tắt" = không phát xung), xung nhỏ nhất / lớn nhất, đảo chiều. Có tác dụng ngay, không cần khởi động lại. Cột "Đang phát" hiện xung đang gửi ra.
-3. "Tần số xung servo": 50 Hz cho servo analog (mặc định), tới 330 Hz cho servo digital. Đổi tần số cần lưu và khởi động lại.
+## Usage
+1. **Pins and ports** tab, "Servo" group: enter the GPIO for servos 1..4. **Save and reboot.**
+2. **Motor** tab, "Servo" block: choose the RC channel for each servo (CH1..CH16, "Off" = no pulses), minimum / maximum pulse, reverse. Takes effect immediately, no reboot needed. The "Output" column shows the pulse being sent.
+3. "Servo pulse rate": 50 Hz for analog servos (default), up to 330 Hz for digital servos. Changing the rate needs save and reboot.
 
-## Firmware làm gì
-- Kênh RC ở 1000 µs → xung "nhỏ nhất", 2000 µs → xung "lớn nhất", tuyến tính, kẹp ở hai đầu; "đảo chiều" đổi chỗ hai đầu.
-- Chưa nhận khung RC nào (vừa bật nguồn, chưa có receiver): servo đứng ở giữa khoảng. **Mất sóng: servo giữ nguyên vị trí cuối.**
-- Phần cứng: bộ LEDC PWM của ESP32 (14 bit). ESP32-S3 có **8 kênh LEDC dùng chung**: motor ở giao thức PWM / Oneshot và còi thụ động cũng dùng chúng. Với DShot, cả 8 kênh rảnh. Hết kênh: báo cáo khởi động ghi `servo: FAILED - no free PWM (LEDC) channel ...`.
-- Chân servo trùng chân khác (motor, ADC...): `pins: FAILED ...` và không cho arm.
-- Mã: `src/hal/servo/servo_out.h`; settings: section `servo` (id 18, live), `pins.servo[4]`; stream `motors` có thêm `servo[4]` (µs).
+## What the firmware does
+- RC channel at 1000 µs → "minimum" pulse, 2000 µs → "maximum" pulse, linear, clamped at both ends; "reverse" swaps the two ends.
+- No RC frame received yet (just powered up, no receiver yet): the servo sits in the middle of the range. **Signal loss: the servo holds its last position.**
+- Hardware: the ESP32's LEDC PWM unit (14 bits). The ESP32-S3 has **8 shared LEDC channels**: motors using the PWM / Oneshot protocol and the passive buzzer also use them. With DShot, all 8 channels are free. Out of channels: the boot report says `servo: FAILED - no free PWM (LEDC) channel ...`.
+- A servo pin conflicting with another pin (motor, ADC...): `pins: FAILED ...` and arming is not allowed.
+- Code: `src/hal/servo/servo_out.h`; settings: section `servo` (id 18, live), `pins.servo[4]`; the `motors` stream gains `servo[4]` (µs).
 
-## Lưu ý phần cứng
-- Nguồn servo lấy từ BEC 5 / 6 V riêng, **nối chung GND** với mạch. Không cấp servo từ 3,3 V của ESP32.
-- Xung 3,3 V của ESP32 đủ cho hầu hết servo. Servo nào không nhận thì cần mạch nâng mức 5 V.
-- Nhiều servo chịu được 500..2500 µs, nhưng hãy bắt đầu với 1000..2000 µs rồi nới dần: servo bị ép vào chặn cơ khí sẽ nóng và tốn dòng.
+## Hardware notes
+- Power the servos from a separate 5 / 6 V BEC, **with a common GND** to the board. Do not power servos from the ESP32's 3.3 V.
+- The ESP32's 3.3 V pulses are enough for most servos. A servo that does not accept them needs a 5 V level shifter.
+- Many servos tolerate 500..2500 µs, but start with 1000..2000 µs and widen gradually: a servo forced against its mechanical stop gets hot and draws current.
 
-## Kiểm chứng
-`test_fw` (nhóm `servo`, `WB_ONLY=servo ./build/test_fw`): báo cáo khởi động, tần số / độ phân giải PWM, ánh xạ kênh → xung (có đảo chiều), kẹp ở hai đầu, đổi khoảng xung khi đang chạy, giữ vị trí khi mất sóng, tắt servo, xung ở giữa trước khung RC đầu tiên ở 200 Hz, trùng chân với motor, hết kênh PWM. Chưa có test trình duyệt riêng cho khối Servo ở tab Motor.
+## Verification
+`test_fw` (group `servo`, `WB_ONLY=servo ./build/test_fw`): boot report, PWM rate / resolution, channel → pulse mapping (with reverse), clamping at both ends, changing the pulse range while running, holding position on signal loss, servo off, centred pulse before the first RC frame at 200 Hz, pin conflict with a motor, out of PWM channels. There is no dedicated browser test yet for the Servo block in the Motor tab.

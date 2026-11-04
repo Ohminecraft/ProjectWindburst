@@ -1,62 +1,62 @@
-# Magnetometer (HMC5883L, QMC5883L/P, AK8963 trong MPU9250)
+# Magnetometer (HMC5883L, QMC5883L/P, AK8963 in the MPU9250)
 
-| File | Vai trò |
+| File | Role |
 |---|---|
-| `hal/mag/hmc5883l_mag.h` | HMC5883L @0x1E (id "H43", đọc thứ tự X,Z,Y big-endian, 1090 LSB/G) |
-| `hal/mag/rm3100_mag.h` | RM3100 @0x20-0x23 hoặc SPI trên bus IMU (0.28, 150 Hz, 7500 LSB/G) - xem `docs/SENSORS2.md` |
-| `hal/mag/qmc5883_mag.h` | QMC5883L @0x0D (200 Hz, 3000 LSB/G, mở khóa DOR) và QMC5883P @0x2C (3750 LSB/G) — thông số theo Betaflight |
-| `hal/mag/ak8963_mpu9250_mag.h` | AK8963 bên trong MPU9250 qua I2C master của MPU (chạy khi IMU nối SPI), điều chỉnh độ nhạy ASA, đổi trục sang hệ MPU; **init sau IMU** |
-| `hal/mag/mag_calibration.h` | Hiệu chuẩn ellipsoid: hard iron + ma trận soft iron 3×3 (Betaflight chỉ có offset); độ phủ 32 ô cầu; từ chối dữ liệu thiếu phủ, méo quá (tỉ trục > 2), nhiễu, từ trường vô lý |
-| `hal/mag/mag_processor.h` | hiệu chuẩn → alignment 8 hướng + trim (cùng toán với IMU) → theo dõi cường độ ±30% |
-| `hal/mag/mag_base.h` | `MagSensor`: tự dò, công tắc bật/tắt, API hiệu chuẩn cho app, `readyForFusion()` |
+| `hal/mag/hmc5883l_mag.h` | HMC5883L @0x1E (id "H43", reads in X,Z,Y order big-endian, 1090 LSB/G) |
+| `hal/mag/rm3100_mag.h` | RM3100 @0x20-0x23 or SPI on the IMU bus (0.28, 150 Hz, 7500 LSB/G) - see `docs/SENSORS2.md` |
+| `hal/mag/qmc5883_mag.h` | QMC5883L @0x0D (200 Hz, 3000 LSB/G, DOR unlock) and QMC5883P @0x2C (3750 LSB/G) — parameters per Betaflight |
+| `hal/mag/ak8963_mpu9250_mag.h` | AK8963 inside the MPU9250 via the MPU's I2C master (runs when the IMU is on SPI), ASA sensitivity adjustment, axes converted to the MPU frame; **init after the IMU** |
+| `hal/mag/mag_calibration.h` | Ellipsoid calibration: hard iron + 3×3 soft iron matrix (Betaflight only has offsets); 32-cell sphere coverage; rejects data with insufficient coverage, too much distortion (axis ratio > 2), noise, implausible field |
+| `hal/mag/mag_processor.h` | calibration → 8-orientation alignment + trim (same maths as the IMU) → ±30% field strength monitoring |
+| `hal/mag/mag_base.h` | `MagSensor`: auto-detect, on/off switch, calibration API for the app, `readyForFusion()` |
 
-## Cách dùng
+## Usage
 ```cpp
 mag.attachI2C(sensorBus); mag.attachImuBus(imu.regBus(), imu.detected());
 if (!mag.MagInit()) Serial.println(mag.failReason());
 mag.setAlignment(CW90_DEG); mag.setCalibration(saved);
 // loop: if (mag.update(micros(), millis())) core.on_mag({b[0],b[1],b[2]}, mag.readyForFusion(millis()), millis());
-// hiệu chuẩn: mag.startCalibration(); ...xoay máy mọi hướng, đọc mag.calibrationProgress()... mag.finishCalibration(); lưu mag.calibration()
+// calibration: mag.startCalibration(); ...rotate the craft in every direction, read mag.calibrationProgress()... mag.finishCalibration(); save mag.calibration()
 ```
-`mag.rawGauss()` cho view 3D của configurator. Hiệu chuẩn lưu ở hệ chip (trước alignment) nên đổi alignment không làm mất hiệu chuẩn.
+`mag.rawGauss()` feeds the configurator's 3D view. Calibration is stored in the chip frame (before alignment), so changing alignment does not lose the calibration.
 
-## Trong core
-La bàn chỉ sửa **yaw** (quay quanh trục Down của trái đất), không bao giờ làm nghiêng máy; chỉ dùng khi `core.cfg.use_mag`, đã hiệu chuẩn, mẫu còn mới (< 300 ms) và cường độ trong ±30% giá trị đã hiệu chuẩn (dòng điện motor làm méo từ trường → tự bỏ). `declination_deg` (đông dương): yaw 0 = bắc thật. Lúc disarm và còn đứng yên, yaw được đặt khớp la bàn ngay (seed). Bật la bàn mà chưa hiệu chuẩn → không arm được (`AB_MAG_NOT_CALIBRATED`).
+## In the core
+The compass only corrects **yaw** (rotation about the earth's Down axis), never tilts the craft; it is only used when `core.cfg.use_mag`, calibrated, the sample is fresh (< 300 ms) and the field strength is within ±30% of the calibrated value (motor current distorts the field → dropped automatically). `declination_deg` (east positive): yaw 0 = true north. While disarmed and stationary, yaw is set to match the compass immediately (seed). Compass enabled but not calibrated → cannot arm (`AB_MAG_NOT_CALIBRATED`).
 
-## Tự hiệu chuẩn (0.18.0, giống Betaflight 4.5)
-- **Cách bắt đầu** (chỉ khi disarm, la bàn đã được tìm thấy):
-  - nút "Tự hiệu chuẩn (xoay tay)" trong tab Cảm biến (lệnh `MAG_AUTOCAL`);
-  - hoặc ngoài sân, bằng cần: **ga lên hết, cần pitch kéo về, roll và yaw ở giữa, giữ 1 giây** (`app/stick_commands.h`). Cùng nơi đó có lệnh hiệu chuẩn gyro: ga thấp, yaw trái, pitch kéo về.
-  - Lúc bắt đầu beeper kêu như khi hiệu chuẩn gia tốc.
-- **Sau đó**: nhấc máy lên, xoay theo mọi hướng. Gyro quay trên 30 °/s mới tính là "đang xoay"; đặt máy nằm yên thì không thu mẫu.
-- **Cách tính** (`hal/mag/mag_autocal.h`):
-  - Khớp hình cầu bình phương tối thiểu: |u|² = 2 b·u + c, với u = M·raw, M là ma trận soft iron đang dùng (đơn vị nếu chưa có).
-  - Cộng dồn thành phương trình chuẩn 4×4, tương đương RLS không có hệ số quên.
-  - Offset mới = M⁻¹·b. **Ma trận M giữ nguyên**: lần hiệu chuẩn đầy đủ (ellipsoid) vẫn còn giá trị, chỉ hard iron được làm mới (ví dụ khi dây buộc pin, cột GPS hay con ốc bị dời chỗ).
-- **Tự dừng** khi đủ cả bốn điều kiện:
-  - mẫu phủ ít nhất 18/32 ô hướng (8 phương vị × 4 dải độ cao);
-  - có ít nhất 60 mẫu;
-  - máy đã được xoay ít nhất 4 s;
-  - ước lượng đứng yên (đổi dưới 0,004 G) suốt 1,5 s.
-  - Thường mất 5 – 15 s. Khoảng cách giữa hai mẫu giữ lại bằng 5 % cường độ trường, nên bộ đệm 300 mẫu dùng được lâu như nhau dù trường mạnh hay yếu.
-- **Thất bại**:
-  - không ai xoay trong 15 s: `NO_MOTION`;
-  - hết 30 s mà chưa đủ: `TOO_FEW_SAMPLES` / `POOR_COVERAGE`;
-  - cường độ trường ngoài 0,15 – 0,9 G: `BAD_FIELD_STRENGTH`;
-  - sai số khớp trên 8 %: `BAD_FIT`.
-  - Thất bại thì hiệu chuẩn cũ giữ nguyên, beeper kêu kiểu lỗi.
-- **Xong**: hiệu chuẩn mới được dùng ngay, beeper kêu 3 tiếng, và **firmware tự ghi section `calibration` vào flash** (giống level trim khi bay): ngoài sân không có app để bấm Lưu.
-- Trong lúc chạy, arming bị chặn (blocker CALIBRATING) và LED hiện màu đang hiệu chuẩn.
-- Stream `calibration`: kind `MAG_AUTO`, state, progress, và trường mới `result` (lý do thất bại, cũng dùng cho lần hiệu chuẩn bằng tay).
-- Kiểm thử:
-  - `test_mag` nhóm auto calibration: xoay tay, có / không có ma trận soft iron, không xoay, chỉ xoay phẳng, trường mạnh gấp 4, la bàn im giữa chừng, huỷ.
-  - `test_app` nhóm stick commands.
-  - `test_fw` nhóm `magauto`: lệnh bằng cần, xoay, tự lưu flash, heading đúng sau đó, lệnh từ app, không xoay, huỷ, không có la bàn.
-  - `test_e2e` `test_automatic_compass_calibration` và trình duyệt `test_compass_calibration_flow` (lệnh `tumble` mới của wb_sim).
-  - Mutant: `python3 tools/mutate.py magauto`.
-- **Chưa thử trên máy thật**: ngưỡng 30 °/s và 18/32 ô có thể cần chỉnh theo cách người cầm máy xoay.
+## Auto calibration (0.18.0, like Betaflight 4.5)
+- **How to start** (only when disarmed, compass detected):
+  - the "Auto calibrate (hand rotation)" button in the Sensors tab (command `MAG_AUTOCAL`);
+  - or in the field, with the sticks: **throttle full up, pitch stick pulled back, roll and yaw centred, hold 1 second** (`app/stick_commands.h`). The same place has the gyro calibration command: throttle low, yaw left, pitch pulled back.
+  - On start the beeper sounds like for accelerometer calibration.
+- **Then**: pick the craft up and rotate it in every direction. Only gyro rotation above 30 °/s counts as "rotating"; leaving the craft still collects no samples.
+- **Computation** (`hal/mag/mag_autocal.h`):
+  - Least-squares sphere fit: |u|² = 2 b·u + c, with u = M·raw, M the soft iron matrix in use (identity if none yet).
+  - Accumulated into 4×4 normal equations, equivalent to RLS without a forgetting factor.
+  - New offset = M⁻¹·b. **The matrix M is kept**: the full (ellipsoid) calibration is still valid, only the hard iron is refreshed (e.g. when a battery strap, GPS mast or screw has moved).
+- **Stops by itself** when all four conditions hold:
+  - samples cover at least 18/32 direction cells (8 azimuths × 4 elevation bands);
+  - at least 60 samples;
+  - the craft has been rotated for at least 4 s;
+  - the estimate is stable (changes below 0.004 G) for 1.5 s.
+  - Usually takes 5 – 15 s. The spacing between two kept samples is 5 % of the field strength, so the 300-sample buffer lasts equally long whether the field is strong or weak.
+- **Failure**:
+  - nobody rotates it within 15 s: `NO_MOTION`;
+  - 30 s elapsed without enough: `TOO_FEW_SAMPLES` / `POOR_COVERAGE`;
+  - field strength outside 0.15 – 0.9 G: `BAD_FIELD_STRENGTH`;
+  - fit error above 8 %: `BAD_FIT`.
+  - On failure the old calibration is kept, the beeper plays the error pattern.
+- **Done**: the new calibration is used immediately, the beeper sounds 3 tones, and **the firmware writes the `calibration` section to flash by itself** (like in-flight level trim): in the field there is no app to press Save.
+- While it runs, arming is blocked (blocker CALIBRATING) and the LED shows the calibrating colour.
+- Stream `calibration`: kind `MAG_AUTO`, state, progress, and a new field `result` (the failure reason, also used for manual calibration).
+- Tests:
+  - `test_mag` auto calibration group: hand rotation, with / without a soft iron matrix, no rotation, flat-only rotation, 4× stronger field, compass going silent midway, cancel.
+  - `test_app` stick commands group.
+  - `test_fw` group `magauto`: stick command, rotation, automatic flash save, correct heading afterwards, command from the app, no rotation, cancel, no compass.
+  - `test_e2e` `test_automatic_compass_calibration` and the browser test `test_compass_calibration_flow` (new `tumble` command of wb_sim).
+  - Mutants: `python3 tools/mutate.py magauto`.
+- **Not tried on a real craft yet**: the 30 °/s and 18/32 cell thresholds may need tuning to how people rotate the craft by hand.
 
-## Đã kiểm chứng (PC, 90 test + 17 lỗi cố ý đều bị bắt)
-Driver vs mô phỏng mức thanh ghi (kể cả mô phỏng I2C master của MPU9250); hiệu chuẩn phục hồi offset và soft-iron có thành phần chéo, từ chối nửa cầu / méo 4:1 / từ trường 2,5 G / nhiễu 12%; luồng hiệu chuẩn đầy đủ qua `MagSensor`; hợp nhất yaw (khai báo declination, nghiêng, sai 175°, quay 90°/s) — `test/test_mag.cpp` và `test/test_flight.cpp`.
-## Chưa kiểm chứng
-Chưa chạy trên chip thật. Điểm dễ sai nhất: trục của từng module GY-271 so với khung gắn (dùng `setAlignment` và quan sát: quay máy quanh trục thẳng đứng, heading phải tăng khi quay phải); AK8963 qua I2C master (thanh ghi SLV0/EXT_SENS_DATA theo hiểu biết datasheet, Betaflight trong zip chỉ dùng bypass).
+## Verified (PC, 90 tests + 17 deliberate bugs all caught)
+Drivers vs register-level simulation (including a simulation of the MPU9250's I2C master); calibration recovers offsets and soft iron with cross terms, rejects half sphere / 4:1 distortion / 2.5 G field / 12% noise; full calibration flow through `MagSensor`; yaw fusion (declination, tilt, 175° error, 90°/s rotation) — `test/test_mag.cpp` and `test/test_flight.cpp`.
+## Not verified
+Not run on a real chip yet. Most error-prone points: the axes of each GY-271 module relative to the mounting frame (use `setAlignment` and observe: rotating the craft about the vertical axis, heading must increase when turning right); AK8963 via the I2C master (SLV0/EXT_SENS_DATA registers per my reading of the datasheet, Betaflight in the zip only uses bypass).

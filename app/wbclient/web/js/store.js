@@ -34,6 +34,8 @@ export async function loadSchema() {
   store.schema = s;
 }
 export const sectionDef = (section) => store.schema.sectionByName[section];
+// The connected firmware has this setting (an older firmware - 0.43: the app talks to it with its own schema - may not).
+export function hasField(section, name) { const s = sectionDef(section); return !!s && s.fields.some((x) => x.n === name); }
 export function fieldDef(section, name) {
   const f = sectionDef(section).fields.find((x) => x.n === name);
   if (!f) throw new Error(`no field ${section}.${name}`);

@@ -35,8 +35,7 @@ class WbTimeout(WbError):
         super().__init__("TIMEOUT", what)
 
 
-class SchemaMismatch(Exception):
-    pass
+from .schema import SchemaMismatch, pick_schema      # noqa: E402 (re-exported: wbclient.SchemaMismatch)
 
 
 class DeviceInfo:
@@ -70,6 +69,8 @@ class WbClient:
         self.port_name = port
         self.baud = baud
         self.schema = schema or Schema()
+        self.own_schema = self.schema         # the app's own; self.schema becomes an older firmware's after hello() (pick_schema)
+        self.schema_note = None
         self.timeout = timeout
         self.check_schema = check_schema
         self.info = None
@@ -280,11 +281,8 @@ class WbClient:
         info = DeviceInfo(payload)
         self.info = info
         if self.check_schema:
-            if info.protocol != self.schema.version:
-                raise SchemaMismatch("firmware speaks protocol %d, this client %d" % (info.protocol, self.schema.version))
-            if info.schema_hash != self.schema.hash:
-                raise SchemaMismatch("firmware schema 0x%08X != client schema 0x%08X: flash the firmware built from this repository (or use its wbp_schema.json)"
-                                     % (info.schema_hash, self.schema.hash))
+            # an older firmware: talk to it with its own schema (the app's library of released schemas); a newer one: update the app
+            self.schema, self.schema_note = pick_schema(self.own_schema, info.protocol, info.schema_hash, info.version)
         return info
 
     def get(self, section):

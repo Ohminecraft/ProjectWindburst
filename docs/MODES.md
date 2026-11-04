@@ -1,127 +1,146 @@
-# Các mode gán công tắc (0.23), arm bằng cần (0.24)
+# Switch-assigned modes (0.23), stick arming (0.24)
 
-Bốn mode mới trong tab **Mode**, thêm vào cuối enum `mode` (số cũ không đổi): `ACRO_TRAINER` (10), `AIRMODE` (11), `ANTI_GRAVITY` (12), `BLACKBOX_ERASE` (13). Trên MSP, firmware báo chúng bằng box id cố định của Betaflight: ACRO TRAINER 47, AIR MODE 28, ANTI GRAVITY 4, BLACKBOX ERASE 31. Kính hoặc tay điều khiển đọc được mode nào đang bật.
+Four new modes in the **Modes** tab, added at the end of the `mode` enum (old numbers unchanged): `ACRO_TRAINER` (10), `AIRMODE` (11), `ANTI_GRAVITY` (12), `BLACKBOX_ERASE` (13). Over MSP, the firmware reports them with Betaflight's fixed box ids: ACRO TRAINER 47, AIR MODE 28, ANTI GRAVITY 4, BLACKBOX ERASE 31. Goggles or the transmitter can read which mode is on.
 
 ## Acro trainer (`ACRO_TRAINER`)
-Giống `applyAcroTrainer()` trong `flight/pid.c` của Betaflight 4.5 (`src/core/acro_trainer.h`).
-- **Khi nào chạy:** chỉ trong Acro. Angle, Stabilize, các mode giữ (hold) và GPS Rescue đều đã tự giới hạn góc, nên trainer không làm gì ở đó.
-- **Cần vẫn điều khiển tốc độ quay như Acro.** Trainer chỉ thay setpoint roll / pitch khi máy sắp vượt góc giới hạn:
-  - Đã vượt góc mà cần vẫn đẩy về phía đó: setpoint = (giới hạn − góc) × gain. Máy được giữ ở giới hạn tới khi cần đổi chiều.
-  - Sắp vượt (góc + tốc độ quay × thời gian nhìn trước): setpoint = (giới hạn − góc dự đoán) × gain. Thời gian nhìn trước tăng theo tốc độ quay: 0 khi đứng yên, đủ `lookahead` khi quay từ 500 °/s.
-  - Mỗi lần trainer giành quyền, I-term của trục đó về 0.
-  - Setpoint sửa góc giới hạn ở ±1000 °/s.
-- **Cài đặt** (tab PID, khối "Acro trainer"; section `pid`, có hiệu lực ngay):
+Same as `applyAcroTrainer()` in Betaflight 4.5's `flight/pid.c` (`src/core/acro_trainer.h`).
+- **When it runs:** only in Acro. Angle, Stabilize, the hold modes and GPS Rescue already limit the angle themselves, so the trainer does nothing there.
+- **The sticks still control rotation rate as in Acro.** The trainer only replaces the roll / pitch setpoint when the craft is about to exceed the limit angle:
+  - Already past the angle and the stick still pushes that way: setpoint = (limit − angle) × gain. The craft is held at the limit until the stick reverses.
+  - About to pass it (angle + rotation rate × lookahead time): setpoint = (limit − predicted angle) × gain. The lookahead time grows with rotation rate: 0 when still, the full `lookahead` when rotating at 500 °/s or more.
+  - Each time the trainer takes over, that axis's I-term goes to 0.
+  - The angle-correcting setpoint is limited to ±1000 °/s.
+- **Settings** (PID tab, "Acro trainer" block; section `pid`, takes effect immediately):
 
-  | Trường | Mặc định | Khoảng | Ý nghĩa |
+  | Field | Default | Range | Meaning |
   |---|---|---|---|
-  | `acro_trainer_angle_limit` | 20 ° | 10 – 80 | góc nghiêng tối đa |
-  | `acro_trainer_lookahead_ms` | 50 ms | 10 – 200 | thời gian nhìn trước |
-  | `acro_trainer_gain` | 75 | 25 – 255 | độ mạnh (Betaflight: chia 10) |
+  | `acro_trainer_angle_limit` | 20 ° | 10 – 80 | maximum tilt angle |
+  | `acro_trainer_lookahead_ms` | 50 ms | 10 – 200 | lookahead time |
+  | `acro_trainer_gain` | 75 | 25 – 255 | strength (Betaflight: divided by 10) |
 
-- **Trên máy mô phỏng** (`test_flight`): giữ cần roll hết cỡ 1,5 s thì máy dừng ở khoảng 20 °. Vượt nhiều nhất khoảng 34 °, vì cần hết cỡ là 670 °/s. Không có trainer, máy lật qua 170 °.
+- **On the simulated craft** (`test_flight`): holding full roll stick for 1.5 s, the craft stops at about 20 °. The largest overshoot is about 34 °, because full stick is 670 °/s. Without the trainer, the craft flips past 170 °.
 
-## Airmode bằng công tắc (`AIRMODE`)
-- **Có gán công tắc:** công tắc quyết định airmode.
-  - Công tắc tắt: không có airmode. Ga về min thì mọi motor về idle, dù `general.airmode` đặt gì.
-  - Công tắc bật: airmode chạy theo kiểu `general.airmode` đặt (`AUTO` hoặc `ALWAYS`). Nếu `general.airmode` là `OFF` thì dùng `AUTO`.
-- **Không gán công tắc:** như trước, chỉ `general.airmode` quyết định.
-- **Khác Betaflight:** ở Betaflight, box AIR MODE chỉ có tác dụng khi tắt feature AIRMODE (bật hoặc là đủ). Ở đây công tắc đã gán là thắng, nên không cần đổi cài đặt nào khác.
+## Airmode by switch (`AIRMODE`)
+- **Switch assigned:** the switch decides airmode.
+  - Switch off: no airmode. Throttle at min puts every motor at idle, whatever `general.airmode` is set to.
+  - Switch on: airmode runs in the style set by `general.airmode` (`AUTO` or `ALWAYS`). If `general.airmode` is `OFF`, `AUTO` is used.
+- **No switch assigned:** as before, only `general.airmode` decides.
+- **Different from Betaflight:** in Betaflight, the AIR MODE box only has an effect when the AIRMODE feature is off (either one being on is enough). Here an assigned switch wins, so no other setting needs to change.
 
-## Anti Gravity bằng công tắc (`ANTI_GRAVITY`)
-- **Có gán công tắc:** Anti Gravity chỉ chạy khi công tắc bật, bất kể `pid.anti_gravity` đặt gì. Các số gain / cutoff vẫn lấy từ section `pid`.
-- **Không gán công tắc:** `pid.anti_gravity` quyết định, như trước.
+## Anti Gravity by switch (`ANTI_GRAVITY`)
+- **Switch assigned:** Anti Gravity only runs while the switch is on, regardless of `pid.anti_gravity`. The gain / cutoff numbers still come from section `pid`.
+- **No switch assigned:** `pid.anti_gravity` decides, as before.
 
-## Xoá blackbox bằng công tắc (`BLACKBOX_ERASE`)
-Giống box BLACKBOX ERASE của Betaflight.
-- **Cách xoá:** gạt công tắc từ tắt sang bật khi chưa arm. Firmware xoá như nút "Xoá" trong tab Blackbox: xoá flash, hoặc xoá các file log trên thẻ SD. Xoá xong thì còi kêu tiếng `BLACKBOX_ERASE`. Trong lúc xoá không arm được.
-- **Chỉ một lần gạt mới tính:**
-  - Công tắc đang bật sẵn lúc khởi động thì không xoá.
-  - Giữ công tắc bật thì chỉ xoá một lần.
-  - Gạt lúc đang arm thì bị bỏ qua.
-- **Lần gạt bị từ chối thì không thử lại:** ví dụ đang ghi log trên mặt đất (kiểu ghi `ALWAYS`) hoặc không có bộ nhớ log. Muốn xoá thì gạt lại.
-- Mã nguồn: `Service::poll()` trong `src/blackbox/bb_service.h`, dùng `Inputs::erase_switch`.
+## Blackbox erase by switch (`BLACKBOX_ERASE`)
+Same as Betaflight's BLACKBOX ERASE box.
+- **How to erase:** flip the switch from off to on while disarmed. The firmware erases like the "Delete" button in the Blackbox tab: erases the flash, or deletes the log files on the SD card. When done the beeper plays the `BLACKBOX_ERASE` tone. Arming is not possible while erasing.
+- **Only a new flip counts:**
+  - A switch already on at startup does not erase.
+  - Holding the switch on erases only once.
+  - A flip while armed is ignored.
+- **A rejected flip is not retried:** for example while logging on the ground (log mode `ALWAYS`) or when there is no log storage. To erase, flip again.
+- Source: `Service::poll()` in `src/blackbox/bb_service.h`, using `Inputs::erase_switch`.
+
+## Flying style: FPV and Flycam (`general.fly_style`, 0.43)
+**Modes** tab, "Flying style" block. Needs save and restart.
+
+- **FPV** (default): as before, every mode follows the switches, including Acro.
+- **Flycam**: for camera operators, flies like a DJI craft.
+  - **Angle + Altitude Hold + position hold** always on, per `flycam_hold`: **Loiter** (default, stick = velocity, release to brake and stop, like DJI's P mode) or **Position Hold**. The Acro, Stabilize, Acro Trainer switches are ignored. The GPS Rescue, Mission, Crash flip, Failsafe switches still work.
+  - **Throttle stick at centre = hold altitude.** Arming is allowed when the throttle stick is **not above centre** (at centre or at the bottom, so DJI-style stick arming still works). Throttle above centre blocks arming (`THROTTLE_HIGH`).
+  - **Takeoff:** push up from centre to take off, no need to pull to the bottom first as in FPV. In FPV you still have to pull to the bottom first, so the craft does not climb by itself if armed by mistake with the throttle high. If the throttle is above centre at arming or right after landing, it must go back to centre before takeoff is possible.
+  - **Landing:** pull the stick down and the craft descends. After touchdown, holding the stick at the bottom for 3 seconds stops the motors (DJI). To fly again, flip ARM to OFF and back on.
+  - **No GPS / optical flow:** can still arm, only holds altitude (like DJI's ATTI). The app shows "position hold: nothing to hold". **No baro means no arming** (`ALTHOLD_NO_BARO`).
+- **Code:** `CoreConfig::flycam` / `flycam_loiter` in `src/core/flight_core.h`, `AltConfig::centred_stick` in `src/core/nav/alt_control.h`.
+- **Verification:**
+  - `test_flight` flycam group: forced mode, arming at centre, push up to take off, altitude and position hold, motors off 3 s after landing, Position Hold, no flow, no baro, FPV unchanged;
+  - `test_fw` group `flycam`;
+  - `test_proto` (section `general` 59 bytes; 57, 56, 24, 22 still accepted; the 23 bytes of 0.9.0 – 0.9.4 dropped);
+  - app `test_fly_style_setting`;
+  - 12 mutants `flycam:`.
+  - **Not yet flown.**
 
 ## Crash flip (`CRASHFLIP`, 0.42)
-Turtle mode của Betaflight, viết theo mã thật: `mixer.c` (`applyCrashFlipModeToMotors`) và `core.c` (`tryArm`, `updateArmingStatus`, `disarm`). Máy rơi ngửa thì lật lại bằng cần, không phải đi nhặt.
+Betaflight's Turtle mode, written from the real code: `mixer.c` (`applyCrashFlipModeToMotors`) and `core.c` (`tryArm`, `updateArmingStatus`, `disarm`). A craft that lands upside down is flipped back with the sticks instead of walking over to pick it up.
 
-**Cách dùng:** gán công tắc CRASHFLIP ở tab **Mode**. Máy nằm ngửa: bật CRASHFLIP, rồi arm. Motor quay ngược chiều, mỗi cần chọn motor chạy:
+**How to use:** assign a CRASHFLIP switch in the **Modes** tab. Craft upside down: turn CRASHFLIP on, then arm. The motors spin in reverse, and each stick picks which motors run:
 
-| Cần | Motor chạy (Quad X, cánh "props in") |
+| Stick | Motors running (Quad X, "props in") |
 |---|---|
-| pitch tới | hai motor trước |
-| pitch lùi | hai motor sau |
-| roll phải / trái | hai motor bên phải / trái |
-| gần đường chéo (trong 30°) | một motor ở góc đó |
-| yaw (khi lớn nhất trong ba cần) | một cặp chéo: yaw phải là hai cánh quay theo chiều kim đồng hồ (props out: cặp kia). Dùng khi một cánh bị kẹt |
+| pitch forward | the two front motors |
+| pitch back | the two rear motors |
+| roll right / left | the two right / left motors |
+| near a diagonal (within 30°) | the one motor in that corner |
+| yaw (when it is the largest of the three sticks) | a diagonal pair: yaw right is the two clockwise props (props out: the other pair). Use it when one prop is stuck |
 
-- Đẩy cần càng xa thì motor càng mạnh (độ dài của roll + pitch). Trong 15 % quanh giữa: không motor nào chạy.
-- Motor không được chọn **đứng yên**, không chạy idle. Lệnh dưới 2 % hành trình cũng là đứng yên.
-- Gạt CRASHFLIP về tắt: máy disarm, lý do `CRASHFLIP` hiện cho tới khi gạt ARM về OFF. Gạt ARM OFF rồi ON để bay như thường.
-- Công tắc chỉ được xét **lúc arm**. Đang bay mà bật CRASHFLIP thì không có gì xảy ra.
+- The further the stick, the stronger the motors (length of roll + pitch). Within 15 % of centre: no motor runs.
+- Unselected motors **stand still**, they do not run at idle. Commands below 2 % of travel also mean standing still.
+- Flip CRASHFLIP off: the craft disarms, reason `CRASHFLIP` shown until ARM is flipped to OFF. Flip ARM OFF then ON to fly normally.
+- The switch is only checked **at arming**. Turning CRASHFLIP on in flight does nothing.
 
-**Cài đặt** (tab **Motor**, khối "Crash flip"; cần lưu và khởi động lại), tên và mặc định như Betaflight:
+**Settings** (**Motors** tab, "Crash flip" block; needs save and restart), names and defaults as in Betaflight:
 
-| Cài đặt | Betaflight | Mặc định | Ý nghĩa |
+| Setting | Betaflight | Default | Meaning |
 |---|---|---|---|
-| `motors.crashflip_rate` | `crashflip_rate` (x10) | 0 | °/s. Máy xoay nhanh hơn nửa mức này thì lực giảm dần, tới mức này thì motor dừng. Máy đổi tư thế quá cạnh (cos góc nghiêng đổi hơn 1) thì motor cũng dừng: đã lật xong. 0 = không giảm. Nên thử 350 |
-| `motors.crashflip_motor_pct` | `crashflip_motor_percent` | 0 | các motor phía bên kia chạy bằng % này của lực. 0 = đứng yên |
-| `motors.crashflip_auto_rearm` | `crashflip_auto_rearm` | tắt | bật: gạt CRASHFLIP về tắt thì máy vẫn arm và bay tiếp (motor đứng khoảng 1 s để đổi lại chiều quay) |
+| `motors.crashflip_rate` | `crashflip_rate` (x10) | 0 | °/s. When the craft rotates faster than half this value the power fades, at this value the motors stop. When the attitude has changed past the edge (cos of tilt changed by more than 1) the motors also stop: the flip is done. 0 = no fade. Try 350 |
+| `motors.crashflip_motor_pct` | `crashflip_motor_percent` | 0 | the motors on the opposite side run at this % of power. 0 = stand still |
+| `motors.crashflip_auto_rearm` | `crashflip_auto_rearm` | off | on: flipping CRASHFLIP off keeps the craft armed and it flies on (motors stand for about 1 s to restore spin direction) |
 
-**Đổi chiều quay:** lúc arm vào crash flip, mọi ESC nhận lệnh DShot 21 (quay ngược so với chiều đã lưu trong ESC, không lưu lại), 10 lần như Betaflight. Motor chỉ chạy sau lệnh cuối cùng. Hết crash flip (disarm, hoặc tắt công tắc khi có auto re-arm): lệnh DShot 20 (trả lại chiều đã lưu), gửi sau khi motor đã quay chậm lại (1 s kể từ khung cuối có lệnh quay). Lệnh 7 / 8 + 12 của nút "Đảo chiều" ở tab Motor không bị đụng tới.
+**Reversing spin direction:** when arming into crash flip, every ESC receives DShot command 21 (spin opposite to the direction stored in the ESC, not saved), 10 times as in Betaflight. The motors only run after the last command. When crash flip ends (disarm, or switch off with auto re-arm): DShot command 20 (restore the stored direction), sent once the motors have slowed down (1 s after the last frame with a spin command). Commands 7 / 8 + 12 from the "Reversed" button in the Motors tab are not touched.
 
-**Điều kiện arm:**
-- Có công tắc CRASHFLIP bật: không chặn vì nằm nghiêng / ngửa (`ANGLE_TOO_HIGH`), không chặn vì GPS Rescue thiếu fix (`RESCUE_NO_FIX`), như Betaflight. Các điều kiện khác giữ nguyên (ga thấp, gyro đã hiệu chuẩn, có sóng...).
-- ESC không phải DShot (PWM, Oneshot, Multishot, DroneCAN): bật CRASHFLIP thì **chặn arm** (`CRASHFLIP`). Betaflight trong trường hợp này vẫn bỏ qua góc nghiêng và arm với motor quay xuôi chiều. Ở đây chặn luôn cho an toàn.
+**Arming conditions:**
+- CRASHFLIP switch on: arming is not blocked for lying tilted / upside down (`ANGLE_TOO_HIGH`), nor for GPS Rescue lacking a fix (`RESCUE_NO_FIX`), as in Betaflight. Other conditions stay (low throttle, gyro calibrated, link present...).
+- Non-DShot ESCs (PWM, Oneshot, Multishot, DroneCAN): turning CRASHFLIP on **blocks arming** (`CRASHFLIP`). Betaflight in this case still skips the tilt check and arms with the motors spinning forward. Here it is simply blocked for safety.
 
-**Khi đang crash flip:**
-- Mất sóng: cần coi như ở giữa nên motor đứng. Failsafe làm như cũ.
-- Không chạy PID, Altitude Hold, runaway takeoff, phát hiện motor dừng. Motor kẹt trong cỏ là chuyện bình thường lúc lật.
-- OSD và CRSF ghi `FLIP`. Cờ `CRASHFLIP` có trong `nav.flags`, `fly_mode` của tay phát DIY là `CRASHFLIP`.
+**During crash flip:**
+- Signal loss: the sticks are treated as centred so the motors stand. Failsafe works as before.
+- No PID, Altitude Hold, runaway takeoff, motor stop detection. Motors stuck in grass are normal while flipping.
+- OSD and CRSF show `FLIP`. The `CRASHFLIP` flag is in `nav.flags`, the DIY transmitter's `fly_mode` is `CRASHFLIP`.
 
-**Khác Betaflight:**
-- Chặn arm khi không có DShot (xem trên).
-- Lệnh 20 khi kết thúc chờ motor quay chậm lại rồi mới gửi. Trong lúc đó motor đứng. Betaflight bỏ lệnh nếu motor chưa ở 0, nên auto re-arm có thể để motor quay ngược.
-- Arm bình thường (không crash flip) **không** gửi lệnh 20. Betaflight gửi 20 ở mọi lần arm.
-- Không có tiếng beeper riêng cho crash flip.
-- Cần đi thẳng, không qua đường cong rate. Betaflight cũng đọc độ lệch cần như vậy.
+**Different from Betaflight:**
+- Arming blocked without DShot (see above).
+- Command 20 at the end waits for the motors to slow down before being sent. Meanwhile the motors stand. Betaflight drops the command if the motor is not at 0, so auto re-arm can leave the motors spinning in reverse.
+- Normal arming (not crash flip) does **not** send command 20. Betaflight sends 20 on every arm.
+- No dedicated beeper tone for crash flip.
+- The sticks go straight through, not through the rate curve. Betaflight reads stick deflection the same way.
 
-**Mã nguồn:**
-- `src/core/crash_flip.h` (lệnh motor);
-- `FlightCore` (lúc nào bật / tắt);
-- `MotorOutputManager::update(..., flip)` (DShot 21 / 20, motor đứng).
+**Source:**
+- `src/core/crash_flip.h` (motor commands);
+- `FlightCore` (when it turns on / off);
+- `MotorOutputManager::update(..., flip)` (DShot 21 / 20, motors standing).
 
-**Kiểm chứng:**
-- `test_core` (các giá trị tính tay theo công thức Betaflight cho Quad X, hexa);
-- `test_motor` (21 x10 trước khi bay, motor 0 đứng yên, 20 sau khi quay chậm, auto re-arm, arm lại trong lúc chờ, giao thức xung);
-- `test_flight` (arm khi ngửa, công tắc, auto re-arm, mất sóng, tốc độ xoay và tư thế qua AHRS thật);
-- `test_fw` nhóm `crashflip` (ESC ảo nghe 21 / 20, cần, cài đặt % và tốc độ, Oneshot125 bị chặn);
+**Verification:**
+- `test_core` (values computed by hand from Betaflight's formulas for Quad X, hexa);
+- `test_motor` (21 x10 before flying, motor 0 standing still, 20 after slowing down, auto re-arm, re-arming while waiting, pulse protocols);
+- `test_flight` (arming upside down, switch, auto re-arm, signal loss, rotation rate and attitude through the real AHRS);
+- `test_fw` group `crashflip` (virtual ESC listens for 21 / 20, sticks, % and rate settings, Oneshot125 blocked);
 - `test_osd`, `test_rx`, `test_radio`, `test_proto`, app (`test_crash_flip_on_the_page`);
-- 36 mutant `crashflip:`.
-- **Chưa thử trên máy thật.** Cũng chưa biết ESC nào nhận lệnh 20 / 21: BLHeli_32, AM32, Bluejay thì có; BLHeli_S thì cần bản 16.7 trở lên.
+- 36 mutants `crashflip:`.
+- **Not yet tried on a real craft.** It is also not yet known which ESCs accept commands 20 / 21: BLHeli_32, AM32, Bluejay do; BLHeli_S needs version 16.7 or newer.
 
-## Arm bằng cần (`general.stick_arm`, 0.24)
-Bật ở tab **Mode**, ô "Arm bằng cần". Cần lưu và khởi động lại. Mặc định tắt.
-- **Động tác:** kéo cần ga và cần pitch xuống hết, đồng thời kéo cần yaw và cần roll sang hai phía ngược nhau (yaw trái + roll phải, hoặc yaw phải + roll trái). Với tay điều khiển mode 2, đó là hai cần cùng xuống dưới và cùng hướng ra ngoài, hoặc cùng hướng vào trong (giống "combination stick" của DJI). Mỗi cần phải gạt quá 80 % hành trình.
-- **Arm:** giữ động tác 1 giây khi chưa arm. Các điều kiện chặn arm vẫn áp dụng như với công tắc.
-- **Disarm:** giữ đúng động tác đó 1 giây khi máy đang nằm trên đất. Khi đang bay thì không bao giờ disarm, vì phi công có thể gạt cần đúng như vậy lúc bay.
-- **Phải thả cần giữa hai lần,** và cả sau khi cấp nguồn: giữ sẵn động tác lúc bật máy thì không arm.
-- **Có gán công tắc ARM:** công tắc thành nút cho phép và ngắt khẩn cấp.
-  - Công tắc phải bật thì động tác mới arm được.
-  - Gạt tắt là disarm ngay.
-  - Gạt công tắc bật lại thì không tự arm; phải làm lại động tác.
-- **Không gán công tắc ARM:** chỉ dùng động tác để arm và disarm. Nên gán công tắc ARM để có cách tắt motor ngay lập tức.
-- **Bị chặn arm:** công tắc ảo (do động tác bật) tự về tắt khi thả cần, nên không còn báo "công tắc ARM bật sẵn". Lý do bị buộc disarm (runaway, motor dừng) vẫn hiện cho tới khi bắt đầu động tác kế tiếp.
-- **Mất sóng:** động tác không có tác dụng gì. Lúc đó failsafe xử lý như cũ.
-- Báo cáo khởi động: `arming: sticks: throttle + pitch down, yaw and roll to opposite sides, 1 s (disarm: the same, on the ground)`, thêm `; the ARM switch must be on` nếu có gán công tắc ARM.
-- Mã nguồn: `StickArm` trong `src/core/safety.h`. Nó tạo một công tắc ảo đưa vào `Arming`.
+## Stick arming (`general.stick_arm`, 0.24)
+Turned on in the **Modes** tab, "Arm with the sticks" box. Needs save and restart. Off by default.
+- **Gesture:** pull the throttle and pitch sticks all the way down, while pushing the yaw and roll sticks to opposite sides (yaw left + roll right, or yaw right + roll left). On a mode 2 transmitter, that is both sticks down and both pointing outward, or both pointing inward (like DJI's "combination stick"). Each stick must go past 80 % of its travel.
+- **Arm:** hold the gesture for 1 second while disarmed. The arming-block conditions still apply as with a switch.
+- **Disarm:** hold the same gesture for 1 second while the craft is on the ground. It never disarms in flight, because a pilot may move the sticks exactly like that while flying.
+- **The sticks must be released between two gestures,** and also after power-up: holding the gesture at power-on does not arm.
+- **ARM switch assigned:** the switch becomes an enable and emergency cut-off.
+  - The switch must be on for the gesture to arm.
+  - Flipping it off disarms immediately.
+  - Flipping the switch back on does not arm by itself; the gesture must be repeated.
+- **No ARM switch assigned:** only the gesture arms and disarms. Assigning an ARM switch is recommended so the motors can be stopped instantly.
+- **Arming blocked:** the virtual switch (turned on by the gesture) goes back off when the sticks are released, so "ARM switch already on" is no longer reported. The reason for a forced disarm (runaway, motor stop) is still shown until the next gesture begins.
+- **Signal loss:** the gesture has no effect. Failsafe handles it as before.
+- Startup report: `arming: sticks: throttle + pitch down, yaw and roll to opposite sides, 1 s (disarm: the same, on the ground)`, plus `; the ARM switch must be on` if an ARM switch is assigned.
+- Source: `StickArm` in `src/core/safety.h`. It creates a virtual switch fed into `Arming`.
 
-## Kiểm chứng
-- `test_control` nhóm acro trainer: từng nhánh so với code Betaflight (giữ, nhìn trước, đổi chiều cần, dấu của 0, giới hạn 1000 °/s).
-- `test_flight` nhóm switch modes: trainer khi bay (roll, pitch, đổi chiều cần, không chạy trong Angle, giới hạn 45 °), airmode và anti-gravity theo công tắc.
-- `test_blackbox`: công tắc xoá (bật sẵn lúc khởi động, gạt, giữ, lúc arm, lúc đang ghi).
-- `test_fw` nhóm `switch`: bảng mode, `status.modes`, cài đặt trainer có hiệu lực ngay, xoá blackbox bằng công tắc trên mạch ảo.
-- `test_esc4way`: BOXIDS / STATUS kiểu Betaflight.
-- `test_proto`: section `pid` cũ (75 byte) vẫn đọc được.
-- Arm bằng cần: `test_flight` nhóm stick arming (động tác, giữ 1 s, thả cần, giữ sẵn lúc cấp nguồn, đang bay, bị chặn, công tắc ARM làm nút ngắt), `test_core` (giữ lý do disarm), `test_fw` nhóm `stickarm`, `test_proto` (section general cũ), 12 mutant `stickarm:`, `test_gui_browser::test_stick_arm_setting` (chưa chạy được ở máy này).
-- 17 mutant `modes:`. `test_gui_browser::test_switch_modes` đã viết nhưng chưa chạy được ở máy này.
-- **Chưa thử trên máy thật.**
+## Verification
+- `test_control` acro trainer group: each branch compared with Betaflight's code (hold, lookahead, stick reversal, sign of 0, 1000 °/s limit).
+- `test_flight` switch modes group: trainer in flight (roll, pitch, stick reversal, not running in Angle, 45 ° limit), airmode and anti-gravity by switch.
+- `test_blackbox`: erase switch (already on at startup, flip, hold, while armed, while logging).
+- `test_fw` group `switch`: mode table, `status.modes`, trainer settings taking effect immediately, blackbox erase by switch on the virtual board.
+- `test_esc4way`: Betaflight-style BOXIDS / STATUS.
+- `test_proto`: the old `pid` section (75 bytes) is still readable.
+- Stick arming: `test_flight` stick arming group (gesture, 1 s hold, stick release, held at power-up, in flight, blocked, ARM switch as cut-off), `test_core` (keeping the disarm reason), `test_fw` group `stickarm`, `test_proto` (old general section), 12 mutants `stickarm:`, `test_gui_browser::test_stick_arm_setting` (cannot run on this machine yet).
+- 17 mutants `modes:`. `test_gui_browser::test_switch_modes` is written but cannot run on this machine yet.
+- **Not yet tried on a real craft.**

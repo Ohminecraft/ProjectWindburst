@@ -62,7 +62,9 @@ class Hub:
     FAST = "gyro_fast"                      # the only stream whose every sample is forwarded (vibration graph); the others send their latest value
 
     def __init__(self, schema=None, log_dir=None):
-        self.schema = schema or Schema()
+        self.own_schema = schema or Schema()    # the app's own; self.schema: the one the connected firmware speaks (an older one's, 0.43)
+        self.schema = self.own_schema
+        self.schema_note = None
         self.library = logview.Library(log_dir)             # the .wblog files on this computer
         self.rec = None                     # logview.Recording: the live blackbox stream being recorded (kept after it stopped, until the next one)
         self.job = None                     # the log download in progress or just finished: {"kind", "state": running | done | failed, "done", "total", "file", "error"}
@@ -108,6 +110,7 @@ class Hub:
             "boots": self.boots,
             "stalls": self.stalls,
             "link": self.link,
+            "schema_hash": self.schema.raw["hash"], "schema_note": self.schema_note,      # (the page reloads /api/schema when it changes)
             "info": None if not info else {"name": info.name, "version": info.version, "role": info.role, "protocol": info.protocol,
                                           "schema_hash": "0x%08X" % info.schema_hash, "features": info.features, "mcu": info.mcu, "pins": info.pins},
             "report": list(self.report),
@@ -181,7 +184,7 @@ class Hub:
     REOPEN_S = 20.0                         # how long a port that went away is waited for
 
     def _new_client(self, port, baud):
-        fc = WbClient(port, baud, schema=self.schema, timeout=1.0)
+        fc = WbClient(port, baud, schema=self.own_schema, timeout=1.0)
         fc.on_log = self._on_log
         fc.on_disconnect = lambda: self._on_lost(fc)
         fc.on_raw = self._on_raw
@@ -208,6 +211,7 @@ class Hub:
                     fc.close()
                     continue
                 self.fc, self.port, self.baud, self.responding = fc, port, baud, True
+                self.schema, self.schema_note = fc.schema, fc.schema_note
                 self.note = {"code": "RECONNECTED", "port": port}
                 self.boots += 1             # the page reloads its settings
                 self._last_frame = time.monotonic()
@@ -283,6 +287,7 @@ class Hub:
                 raise ApiError(504, "NO_ANSWER", "%s opened at %d baud, but no Windburst firmware answered (%s)" % (port, baud, e.name),
                                port=port, baud=baud, detail=e.name, raw=heard)
             self.fc, self.port, self.baud, self.note, self.responding = fc, port, baud, None, True
+            self.schema, self.schema_note = fc.schema, fc.schema_note
             self.boots = 0
             self._last_frame = time.monotonic()
             self._after_boot()

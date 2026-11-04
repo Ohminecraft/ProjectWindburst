@@ -1300,8 +1300,44 @@ static void t_crash_flip_core() {
         r->pl.w[0] = 0; f.arm = false; f.pitch = 0; }
 }
 
+// 0.43: the Flycam style (CoreConfig::flycam). Self-levelling only, the height always held, the position held with Loiter (or Position
+// Hold) when there is something to hold it with; the throttle stick centred = hold (DJI style): armed with it in the middle, pushed up
+// it takes off, held down after the touch-down for 3 s the motors stop. FPV (the default): everything as before.
+static void t_flycam() {
+    printf("[flycam] Angle + Altitude Hold + Loiter always; the throttle stick centred; FPV untouched\n");
+    auto rig = [](bool flycam, bool loiter = true, bool flow = true) { Rig* r = new Rig(); r->pl.make_five_inch(); r->baro = true; r->h.baro_ok = true;
+        if (flow) { r->flow = true; r->range = true; r->h.flow_ok = true; }
+        r->core.cfg.flycam = flycam; r->core.cfg.flycam_loiter = loiter; r->core.configure(); return std::unique_ptr<Rig>(r); };
+    const uint32_t ah = 1u << M_ALTHOLD, ang = 1u << M_ANGLE, lt = 1u << M_LOITER, ph = 1u << M_POSHOLD, st = 1u << M_STABILIZE;
+    {   auto r = rig(true); Pilot p; p.althold = false; p.thr = 0.5f; p.mode = 0; r->run(1.0f, p);           // (mode 0: no ANGLE switch = Acro)
+        const uint32_t m = r->out.modes;
+        CHECK((m & ang) && (m & ah) && (m & lt) && !(m & ph), "Flycam, the switches on Acro: Angle + Altitude Hold + Loiter all the same (0x%x)", m);
+        p.mode = 2; r->run(0.1f, p); CHECK(!(r->out.modes & st) && (r->out.modes & ang), "the Stabilize switch: ignored, Angle stays");
+        p.mode = 1; p.althold = true; p.thr = 0.8f; p.arm = true; r->run(0.3f, p);
+        CHECK(!r->out.armed && (r->out.arm_blockers & AB_THROTTLE_HIGH), "the throttle stick above the middle: arming refused (THROTTLE_HIGH)");
+        p.arm = false; r->run(0.2f, p); p.thr = 0.5f; r->run(0.2f, p); p.arm = true; r->run(0.3f, p);
+        CHECK(r->out.armed && r->pl.z < 0.05f && !(r->out.arm_blockers & AB_POSHOLD_NO_GPS), "the stick in the middle: armed, it stays on the ground");
+        p.thr = 0.85f; for (int i = 0; i < 80 && r->pl.z < 1.5f; i++) r->run(0.05f, p);
+        CHECK(r->pl.z >= 1.5f, "pushed up from the middle (no pulling it down first): it takes off (%.1f m)", r->pl.z);
+        p.thr = 0.5f; r->run(4.0f, p); const float z0 = r->pl.z; r->run(3.0f, p);
+        CHECK(r->out.loiter_active && r->out.althold_active && fabsf(r->pl.z - z0) < 0.3f && hypotf(r->pl.vn, r->pl.ve) < 0.3f, "back in the middle: it holds height and place (Loiter on flow)");
+        p.thr = 0.0f; for (int i = 0; i < 200 && r->out.ah_state != AhState::LANDED_IDLE; i++) r->run(0.1f, p);
+        CHECK(r->out.armed && r->out.ah_state == AhState::LANDED_IDLE, "the stick down: it comes down and lands, still armed");
+        r->run(2.5f, p); const bool still = r->out.armed; r->run(1.0f, p);
+        CHECK(still && !r->out.armed && r->out.motor[0] == 0, "held down 3 s after the touch-down: the motors stop (DJI)"); }
+    {   auto r = rig(true, false); Pilot p; p.althold = true; p.thr = 0.5f; r->run(1.0f, p);
+        CHECK((r->out.modes & ph) && !(r->out.modes & lt), "flycam_hold POSHOLD: Position Hold instead of Loiter"); }
+    {   auto r = rig(true, true, false); Pilot p; p.althold = true; p.thr = 0.5f; r->run(1.0f, p); p.arm = true; r->run(0.3f, p);
+        CHECK(r->out.armed && r->out.poshold_unavailable, "nothing to hold the place with: it arms all the same and says so (Angle + Altitude Hold, DJI's ATTI)"); }
+    {   auto r = rig(true); r->baro = false; r->h.baro_ok = false; Pilot p; p.althold = true; p.thr = 0.5f; r->run(1.0f, p); p.arm = true; r->run(0.3f, p);
+        CHECK(!r->out.armed && (r->out.arm_blockers & AB_ALTHOLD_NO_BARO), "no barometer: refused (ALTHOLD_NO_BARO) - Flycam always holds the height"); }
+    {   auto r = rig(false); Pilot p; p.thr = 0; p.mode = 0; r->run(1.0f, p);
+        CHECK(!(r->out.modes & (ang | ah | lt)), "FPV: the switches as they are (Acro)");
+        p.thr = 0.5f; p.arm = true; r->run(0.3f, p); CHECK(!r->out.armed && (r->out.arm_blockers & AB_THROTTLE_HIGH), "FPV: the throttle must be down to arm, as before"); }
+}
+
 int main() {
     t_arming(); t_attitude_modes(); t_rate_loop(); t_filters_in_the_loop(); t_throttle_boost(); t_level_modes(); t_mode_details(); t_airmode(); t_compass(); t_althold(); t_failsafe(); t_uneven_cycles(); t_pid_denom(); t_stall(); t_runaway(); t_motor_layer(); t_estimator_in_flight();
-    t_position_hold(); t_nav_fence(); t_nav_request(); t_gps_rescue(); t_switch_modes(); t_stick_arm(); t_mission(); t_ground_station(); t_loiter_flight(); t_crash_flip_core();
+    t_position_hold(); t_nav_fence(); t_nav_request(); t_gps_rescue(); t_switch_modes(); t_stick_arm(); t_mission(); t_ground_station(); t_loiter_flight(); t_crash_flip_core(); t_flycam();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

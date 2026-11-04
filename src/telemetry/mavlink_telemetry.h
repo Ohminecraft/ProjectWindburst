@@ -106,6 +106,7 @@ public:
     template <class M> bool reply(const M& m) { return reply(M::kId, payload_of(m)); }
     int queued_replies() const { return n_reply_; }
     uint32_t dropped_replies() const { return dropped_replies_; }
+    int pending_replies() const { return n_reply_; }
     Encoder& encoder() { return enc_; }
 
     // one RADIO_STATUS.txbuf (see above)

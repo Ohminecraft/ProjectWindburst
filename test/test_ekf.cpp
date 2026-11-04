@@ -153,8 +153,29 @@ static void t_ground() {
     CHECK(fabsf(s.ekf.vel()[0]) < 0.05f && fabsf(s.ekf.vel()[2]) < 0.05f && fabsf(s.ekf.accel_bias()[2] - 0.3f) < 0.1f, "standing: velocity %.3f / %.3f m/s, the accelerometer's 0.3 m/s^2 error on z learned (%.2f)", s.ekf.vel()[0], s.ekf.vel()[2], s.ekf.accel_bias()[2]);
 }
 
+// 0.43: the delayed GPS against the state of its own time. A correction applied after that time must be in the history too, or
+// the next fix - taken against the uncorrected past - does not see it: a craft standing still, fixes at 0 (10 Hz, 0.15 s late,
+// as the filter assumes: a fix comes sooner than the delay), one of them at 0.6 m. The good fixes after it must pull the estimate
+// back at once (before 0.43 the first one pushed it further out). ArduPilot EKF3 / PX4 EKF2 fuse at the delayed horizon itself;
+// StateHistory::shift does it for the other estimators.
+static void t_delayed_history() {
+    printf("[ekf] a correction is in the delayed history (the next fix sees it)\n");
+    Ekf e; e.init({0, 0, -1}, 0.0f, true);
+    const float dt = 0.004f; float t = 0, next = 0; int fixes = 0; float after[4] = {};
+    for (int k = 0; k < 250 * 12; k++) {
+        e.predict({0, 0, 0}, {0, 0, -kG0 * dt}, dt); t += dt;
+        if (t >= next) {
+            next += 0.1f; fixes++;
+            e.fuse_gps(fixes == 100 ? 0.6f : 0.0f, 0, 0, 0, 0, true, 0.3f, 0.1f);
+            if (fixes >= 100 && fixes < 104) after[fixes - 100] = e.pos()[0];
+        }
+    }
+    CHECK(after[0] > 0.01f && after[1] < after[0] && after[2] < after[1] && after[3] < after[2],
+          "one fix 0.6 m off among fixes at 0: the estimate goes out to %.4f, the next fixes bring it back at once (%.4f, %.4f, %.4f)", after[0], after[1], after[2], after[3]);
+}
+
 int main() {
-    t_basic(); t_heading(); t_gps_trouble(); t_ground();
+    t_basic(); t_heading(); t_gps_trouble(); t_ground(); t_delayed_history();
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

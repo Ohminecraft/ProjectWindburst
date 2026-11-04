@@ -1,93 +1,93 @@
-# OSD cho kính FPV digital — section `osd` (firmware 0.21)
+# OSD for digital FPV goggles — section `osd` (firmware 0.21)
 
-OSD hiện trong kính của các hệ FPV digital: DJI O3 / O4, Walksnail Avatar, HDZero. Firmware gửi qua **MSP DisplayPort**, giống Betaflight (`io/displayport_msp.c`, `osd/osd_elements.c`). Kính tự vẽ bằng font Betaflight có sẵn trong nó, nên firmware dùng đúng mã ký tự của Betaflight (`drivers/osd_symbols.h`). OSD analog (chip MAX7456) chưa có.
+The OSD shows in the goggles of digital FPV systems: DJI O3 / O4, Walksnail Avatar, HDZero. The firmware sends it over **MSP DisplayPort**, like Betaflight (`io/displayport_msp.c`, `osd/osd_elements.c`). The goggles draw it themselves with the Betaflight font built into them, so the firmware uses exactly Betaflight's character codes (`drivers/osd_symbols.h`). Analog OSD (MAX7456 chip) is not available yet.
 
-## Nối dây và cài đặt
-- **Dây:** TX của flight controller vào RX của bộ phát hình, RX vào TX của nó, nối chung GND. Bộ phát hỏi trạng thái arm qua dây RX để bắt đầu quay video; thiếu dây RX thì OSD vẫn hiện nhưng kính không tự quay.
-- **Cài đặt:** ở tab **OSD** (khối "Kết nối"):
+## Wiring and settings
+- **Wiring:** the flight controller's TX to the video transmitter's RX, RX to its TX, common GND. The video transmitter asks for the arm state over the RX wire to start recording; without the RX wire the OSD still shows but the goggles do not record by themselves.
+- **Settings:** in the **OSD** tab ("Connection" block):
 
-  | Trường | Mặc định | Ý nghĩa |
+  | Field | Default | Meaning |
   |---|---|---|
-  | `type` | `NONE` | `MSP_DISPLAYPORT` = bật |
-  | `canvas` | `AUTO` | lưới ký tự. AUTO: HDZero / Walksnail tự báo lưới (`MSP_SET_OSD_CANVAS`); không báo thì 53 x 20 (DJI). Hoặc chọn cố định: 53 x 20, 50 x 18, 30 x 16 |
-  | `baud` | 115200 | tốc độ UART |
-  | `tx_pin`, `rx_pin` | trống | chân UART |
-  | `rate` | 10 | số lần vẽ mỗi giây (1 – 30) |
-  | `name` | trống | tên máy bay (mục "Tên máy bay", và trả lời `MSP_NAME`) |
-  | `pos[24]` | xem dưới | vị trí từng mục, cách mã hoá của Betaflight: cột = bit 0-5, hàng = bit 6-10, hiện = bit 11 |
-- **Chọn UART:**
-  - AUTO: UART còn trống sau GPS, receiver, optical flow, dây telemetry ESC. OSD được chọn **trước** telemetry MAVLink: nếu chỉ còn một UART thì OSD lấy, MAVLink báo không còn UART.
-  - TABLE: UART có chức năng `DISPLAYPORT` (tab Chân và cổng).
-- **Trong kính:** chọn OSD kiểu "Custom" / "Betaflight" (DJI: canvas mode / custom OSD).
-- Đổi cài đặt cần lưu và khởi động lại.
+  | `type` | `NONE` | `MSP_DISPLAYPORT` = on |
+  | `canvas` | `AUTO` | character grid. AUTO: HDZero / Walksnail report their grid themselves (`MSP_SET_OSD_CANVAS`); if not reported, 53 x 20 (DJI). Or pick a fixed one: 53 x 20, 50 x 18, 30 x 16 |
+  | `baud` | 115200 | UART speed |
+  | `tx_pin`, `rx_pin` | empty | UART pins |
+  | `rate` | 10 | redraws per second (1 – 30) |
+  | `name` | empty | craft name ("Craft name" element, and the `MSP_NAME` reply) |
+  | `pos[24]` | see below | position of each element, Betaflight's encoding: column = bits 0-5, row = bits 6-10, visible = bit 11 |
+- **UART selection:**
+  - AUTO: a UART still free after GPS, receiver, optical flow, ESC telemetry wire. The OSD is chosen **before** MAVLink telemetry: if only one UART is left, the OSD takes it and MAVLink reports no UART left.
+  - TABLE: the UART with the `DISPLAYPORT` function (Pins and ports tab).
+- **In the goggles:** select the "Custom" / "Betaflight" OSD type (DJI: canvas mode / custom OSD).
+- Changing settings requires saving and rebooting.
 
-## Các mục (thứ tự trong `pos[]`, thêm vào cuối)
-RSSI / LQ, điện áp pin (ký hiệu pin 7 mức theo khoảng cell; nhấp nháy khi pin ở mức critical), điện áp trung bình mỗi cell, dòng, mAh, mode bay (ACRO / ANGL / STAB / ALTH / POSH / RESC / LOIT, `FLIP` khi đang crash flip, `!FS!` khi failsafe), tên máy bay (chữ in hoa), thời gian bay (chỉ đếm khi arm), thời gian bật nguồn, số vệ tinh (nhấp nháy khi chưa có fix 3D), tốc độ GPS (km/h), hướng về nhà (mũi tên so với mũi máy bay, 16 hướng), khoảng cách về nhà, độ cao (bộ ước lượng), tốc độ lên / xuống, ga, tâm ngắm, đường chân trời giả (giới hạn pitch 20°, roll 40° như mặc định của Betaflight), cảnh báo, hướng mũi, góc pitch, góc roll, nhiệt độ ESC (cao nhất), chữ DISARMED.
+## Elements (order in `pos[]`, new ones appended at the end)
+RSSI / LQ, battery voltage (7-level battery symbol according to the cell range; blinks when the battery is critical), average voltage per cell, current, mAh, flight mode (ACRO / ANGL / STAB / ALTH / POSH / RESC / LOIT, `FLIP` during crash flip, `!FS!` during failsafe), craft name (upper case), flight time (only counts while armed), power-on time, satellite count (blinks while there is no 3D fix), GPS speed (km/h), direction to home (arrow relative to the craft's nose, 16 directions), distance to home, altitude (estimator), climb / descent rate, throttle, crosshair, artificial horizon (pitch limit 20°, roll 40° as in Betaflight's defaults), warnings, heading, pitch angle, roll angle, ESC temperature (highest), DISARMED text.
 
-**Cảnh báo:** chỉ hiện một, theo thứ tự ưu tiên:
+**Warnings:** only one is shown, in priority order:
 1. `FAILSAFE`
-2. `LAND NOW` (pin critical)
+2. `LAND NOW` (battery critical)
 3. `LOW BATTERY`
 4. `RXLOSS`
-5. khi chưa arm: lý do không arm được đầu tiên, ví dụ `GYRO NOT CAL`.
+5. while disarmed: the first reason arming is blocked, e.g. `GYRO NOT CAL`.
 
-Mặc định đang hiện: LQ, pin, dòng, mAh, mode, tên, thời gian bay, vệ tinh, tốc độ, về nhà, độ cao, ga, tâm ngắm, cảnh báo, DISARMED. Bố cục mặc định cho lưới 53 x 20.
+Shown by default: LQ, battery, current, mAh, mode, name, flight time, satellites, speed, home, altitude, throttle, crosshair, warnings, DISARMED. The default layout is for the 53 x 20 grid.
 
-**App:** ở tab OSD, kéo một mục trên màn hình xem trước để dời nó (hoặc bấm vào mục rồi dùng phím mũi tên), công tắc trong bảng "Các mục" để ẩn / hiện. Ký hiệu trong màn hình xem trước chỉ là hình minh hoạ cùng độ rộng.
+**App:** in the OSD tab, drag an element on the preview screen to move it (or click the element and use the arrow keys), and use the switches in the "Elements" table to hide / show. The symbols on the preview screen are only illustrations of the same width.
 
-## Trên dây
-- **Mỗi màn hình:** heartbeat (mỗi giây một lần), clear, mỗi mục một lệnh "write string" (hàng, cột, thuộc tính, tối đa 30 ký tự), rồi draw. Tất cả là khung MSP v1 kiểu trả lời (`$M>`), lệnh 182. Thuộc tính `0x40` = nhấp nháy, kính tự làm.
-- **Dung lượng:** một màn hình khoảng 0,5 kB, tức 5 kB/s ở 10 màn hình mỗi giây (115200 baud chở được 11 kB/s).
-- **Không bao giờ chặn:** firmware không giao cho UART nhiều hơn chỗ trống của nó, và chỉ dựng màn hình mới khi màn hình trước đã gửi hết.
-- **Bộ phát hình hỏi lại** trên cùng dây:
-  - `MSP_STATUS` / `MSP_STATUS_EX`: trả lời như Betaflight 4.5 (`msp::Bridge`). Box ARM bật khi đã arm, nên kính bắt đầu quay khi arm.
-  - `MSP_SET_OSD_CANVAS`: lưới của bộ phát, chỉ dùng khi `canvas = AUTO`, và chỉ nhận lưới hợp lý (20 – 63 cột, 10 – 31 hàng).
-  - `MSP_NAME`: trả lời tên máy bay.
-  - `MSP_FC_VARIANT` ("BTFL"), `MSP_API_VERSION` ...: trả lời như Betaflight 4.5.
-  - ESC passthrough luôn bị từ chối trên cổng này.
+## On the wire
+- **Each screen:** heartbeat (once per second), clear, one "write string" command per element (row, column, attribute, at most 30 characters), then draw. All are MSP v1 frames of the reply kind (`$M>`), command 182. Attribute `0x40` = blink, done by the goggles.
+- **Bandwidth:** one screen is about 0.5 kB, i.e. 5 kB/s at 10 screens per second (115200 baud carries 11 kB/s).
+- **Never blocks:** the firmware never hands the UART more than its free space, and only builds a new screen once the previous one has been fully sent.
+- **The video transmitter asks back** on the same wire:
+  - `MSP_STATUS` / `MSP_STATUS_EX`: answered like Betaflight 4.5 (`msp::Bridge`). The ARM box is set when armed, so the goggles start recording on arm.
+  - `MSP_SET_OSD_CANVAS`: the transmitter's grid, only used when `canvas = AUTO`, and only a sensible grid is accepted (20 – 63 columns, 10 – 31 rows).
+  - `MSP_NAME`: answered with the craft name.
+  - `MSP_FC_VARIANT` ("BTFL"), `MSP_API_VERSION` ...: answered like Betaflight 4.5.
+  - ESC passthrough is always refused on this port.
 
-Báo cáo khởi động: `osd: MSP DisplayPort on UART0 TX GPIO43 RX GPIO44, 115200 baud, 53 x 20 (or what the video transmitter asks for), 10 screens/s`, hoặc `osd: FAILED - <lý do>`. Chân TX / RX được kiểm tra trùng với các chân khác.
+Boot report: `osd: MSP DisplayPort on UART0 TX GPIO43 RX GPIO44, 115200 baud, 53 x 20 (or what the video transmitter asks for), 10 screens/s`, or `osd: FAILED - <reason>`. The TX / RX pins are checked for conflicts with other pins.
 
-Mã nguồn: `src/osd/osd.h` (portable), `FlightApp::osd_in()` / `osd_send()` trong `src/app/flight_app.h`.
+Source code: `src/osd/osd.h` (portable), `FlightApp::osd_in()` / `osd_send()` in `src/app/flight_app.h`.
 
-## Kiểm chứng
-- `test_osd` (57 kiểm tra): từng mục so với cách Betaflight vẽ (ký hiệu pin, mũi tên, số lẻ, nhấp nháy), đường chân trời giả theo công thức số nguyên của Betaflight, vẽ trong lưới, byte trên dây, UART chậm (16 byte mỗi lần, khung không bao giờ bị cắt), các yêu cầu của bộ phát hình.
-- `test_fw` nhóm `osd` (`WB_ONLY=osd`): mạch ảo, 2 s ra 20 màn hình, bộ phát hỏi trạng thái arm và đổi lưới, khi arm thì mode, timer và ARM box thay đổi, chia UART cùng MAVLink, bảng cổng, chân trùng.
-- 28 mutant `osd:`; `test_gui_browser.py::test_osd_tab` (viết nhưng chưa chạy được ở máy này).
-- **Chưa thử với kính thật.** Cần thử: DJI O3 (canvas mode), Walksnail, HDZero. Kính có hiện OSD không, các mục có đúng chỗ không, có quay video khi arm không.
+## Verification
+- `test_osd` (57 checks): each element compared with how Betaflight draws it (battery symbol, arrows, decimals, blinking), the artificial horizon using Betaflight's integer formula, drawing within the grid, bytes on the wire, slow UART (16 bytes at a time, frames are never cut), the video transmitter's requests.
+- `test_fw` group `osd` (`WB_ONLY=osd`): virtual board, 2 s gives 20 screens, the transmitter asks for the arm state and changes the grid, on arming the mode, timer and ARM box change, UART sharing with MAVLink, port table, pin conflicts.
+- 28 `osd:` mutants; `test_gui_browser.py::test_osd_tab` (written but cannot run on this machine yet).
+- **Not yet tested with real goggles.** To test: DJI O3 (canvas mode), Walksnail, HDZero. Do the goggles show the OSD, are the elements in the right place, does it record video on arm.
 
-## 0.33: thêm mục, bảng thống kê, màn hình xem trước mới
+## 0.33: more elements, statistics screen, new preview screen
 
-**Mục mới** (nối vào cuối `pos[]`, nên `pos` giờ có 32 ô; cài đặt từ bản cũ vẫn giữ, 8 mục mới mặc định ẩn). Cách vẽ theo `osd_elements.c` của Betaflight:
+**New elements** (appended to the end of `pos[]`, so `pos` now has 32 slots; settings from older versions are kept, the 8 new elements are hidden by default). Drawn following Betaflight's `osd_elements.c`:
 
-| Mục | Ví dụ | Ghi chú |
+| Element | Example | Notes |
 |---|---|---|
-| POWER | `198W` | dòng × áp; cần đo pin và đo dòng |
-| FLIGHT_DIST | `⟷1235m` | quãng đường bay từ lúc arm, theo tốc độ GPS khi có fix 3D |
-| GPS_LAT / GPS_LON | `10.7654321` | ký hiệu, độ, 7 số lẻ, có dấu âm (`osdFormatCoordinate`) |
-| COMPASS_BAR | `W·┴·N·┴·E` | 9 ký tự, hướng mũi ở giữa, mỗi bước 1/16 vòng (`osdElementCompassBar`) |
-| SIDEBARS | | hai thanh dọc 7 hàng, cách tâm 7 cột, dấu ngang ở cột ±6 (`osdElementHorizonSidebars`) |
-| G_FORCE | `1.0G` | độ lớn gia tốc đo được |
-| BATT_USAGE | `[■■■■■■■◧□□]` | 10 ô, mỗi ô 10 % pin còn lại; cần `battery.capacity_mah`; nhấp nháy khi pin yếu |
+| POWER | `198W` | current × voltage; needs battery voltage and current measurement |
+| FLIGHT_DIST | `⟷1235m` | distance flown since arming, from GPS speed while there is a 3D fix |
+| GPS_LAT / GPS_LON | `10.7654321` | symbol, degrees, 7 decimals, with minus sign (`osdFormatCoordinate`) |
+| COMPASS_BAR | `W·┴·N·┴·E` | 9 characters, heading in the middle, each step 1/16 of a turn (`osdElementCompassBar`) |
+| SIDEBARS | | two vertical bars of 7 rows, 7 columns from the centre, tick marks at column ±6 (`osdElementHorizonSidebars`) |
+| G_FORCE | `1.0G` | magnitude of the measured acceleration |
+| BATT_USAGE | `[■■■■■■■◧□□]` | 10 cells, each 10 % of remaining battery; needs `battery.capacity_mah`; blinks when the battery is low |
 
-**Bảng thống kê sau chuyến bay** (`osd.stats`, mặc định bật; giống `osdShowStats` của Betaflight):
-- Disarm xong thì kính hiện bảng thống kê thay cho các mục, trong 20 giây hoặc tới lần arm sau. Lần arm mới thì số liệu tính lại từ đầu.
-- Bảng có tiêu đề `--- STATS ---` và các dòng:
+**Post-flight statistics screen** (`osd.stats`, on by default; like Betaflight's `osdShowStats`):
+- After disarming, the goggles show the statistics screen instead of the elements, for 20 seconds or until the next arm. A new arm restarts the figures from scratch.
+- The screen has the title `--- STATS ---` and the lines:
   - FLY TIME;
-  - MAX SPEED, MAX DISTANCE, FLIGHT DISTANCE (khi có GPS);
+  - MAX SPEED, MAX DISTANCE, FLIGHT DISTANCE (with GPS);
   - MAX ALTITUDE;
   - MIN BATTERY;
-  - MAX CURRENT, USED MAH (khi có đo dòng).
+  - MAX CURRENT, USED MAH (with current measurement).
 
-**App, tab OSD:**
-- **Xem trước như trong kính:** nền là ảnh camera (trời và đất) nghiêng theo máy. Có lưới ký tự. Mỗi ký tự nằm đúng một ô.
-- **Ký hiệu:** vẽ lại thành hình vector cùng nghĩa với font Betaflight, trắng viền đen như kính hiện (`js/gfx/osdglyph.js`). Không chép font bitmap của Betaflight.
-- **Số hiện là số máy đang báo:** pin, dòng, GPS, độ cao, tư thế, ga, mode. Khi chưa kết nối thì hiện số ví dụ.
-- **Đường chân trời giả và thanh bên** vẽ theo đúng công thức của firmware.
-- **Bố cục:** khối "Màn hình" lên đầu cột trái; danh sách mục ở cột phải.
+**App, OSD tab:**
+- **Preview as in the goggles:** the background is a camera image (sky and ground) tilting with the craft. There is a character grid. Each character sits in exactly one cell.
+- **Symbols:** redrawn as vector shapes with the same meaning as the Betaflight font, white with a black outline as the goggles show them (`js/gfx/osdglyph.js`). Betaflight's bitmap font is not copied.
+- **The numbers shown are what the craft is reporting:** battery, current, GPS, altitude, attitude, throttle, mode. When not connected, example numbers are shown.
+- **The artificial horizon and sidebars** are drawn with exactly the firmware's formula.
+- **Layout:** the "Screen" block is at the top of the left column; the element list is in the right column.
 
-**Test:**
-- `test_osd`: thêm nhóm `[elements 0.33]` và `[statistics]`, tổng 84 kiểm tra.
-- `test_fw` nhóm `osd`: bay, hạ cánh, disarm thì kính hiện bảng thống kê.
-- `test_proto`: bản ghi `osd` 73 byte của bản cũ đọc được.
-- 15 mutant `osd33:`.
+**Tests:**
+- `test_osd`: added groups `[elements 0.33]` and `[statistics]`, 84 checks in total.
+- `test_fw` group `osd`: fly, land, disarm and the goggles show the statistics screen.
+- `test_proto`: the old 73-byte `osd` record can be read.
+- 15 `osd33:` mutants.

@@ -36,6 +36,8 @@ namespace nav {
 struct AltConfig {
     // the throttle stick (0..1 as the receiver gives it; the throttle curve is not used here)
     float mid_stick = 0.5f, deadband = 0.05f, max_stick = 1.0f, low_stick = 0.06f;
+    bool centred_stick = false;         // (0.43, Flycam) a self-centring throttle: in the middle = ready on the ground, pushed up = take off;
+                                        // only a stick ABOVE the middle at arming / touch-down has to come back first (not down to the bottom)
     float climb_max_mps = 2.0f, descend_max_mps = 1.2f;
     // the target's shaping
     float accel_max_mps2 = 2.5f;        // the wanted climb rate changes with at most this acceleration (PILOT_ACCEL_Z)
@@ -219,13 +221,13 @@ public:
         if (!in.armed) { state_ = AhState::STOPPED; ctl_.reset(cfg, in.pos_d); return 0.0f; }
         switch (state_) {
         case AhState::STOPPED:
-            ctl_.reset(cfg, in.pos_d); state_ = AhState::LANDED_IDLE; need_low_ = in.stick01 > cfg.low_stick;
+            ctl_.reset(cfg, in.pos_d); state_ = AhState::LANDED_IDLE; need_low_ = in.stick01 > rest_stick();
             return 0.0f;
         case AhState::LANDED_IDLE:
             ctl_.reset(cfg, in.pos_d);
             if (in.auto_takeoff && !in.failsafe_descent) { begin_takeoff(in); return 0.0f; }
             if (in.pilot_absent || in.failsafe_descent) return 0.0f;             // nobody at the stick: it stays where it stands
-            if (in.stick01 <= cfg.low_stick) need_low_ = false;                  // the stick has been down since landing / arming
+            if (in.stick01 <= rest_stick()) need_low_ = false;                   // the stick has been down (Flycam: back in the middle) since landing / arming
             if (!need_low_ && in.stick01 > cfg.low_stick + 0.04f) state_ = AhState::LANDED_PRE_TAKEOFF;
             return 0.0f;
         case AhState::LANDED_PRE_TAKEOFF:
@@ -288,6 +290,7 @@ private:
         return thr;
     }
 
+    float rest_stick() const { return cfg.centred_stick ? cfg.mid_stick + cfg.deadband : cfg.low_stick; }      // where the stick "rests"
     void begin_takeoff(const AltInput& in) { takeoff_t_ = 0; takeoff_pos_d_ = in.pos_d; ramp_ = 0.0f; lifted_ = false; state_ = AhState::TAKEOFF; }
     static constexpr float kTakeoffBrake = 1.0f;     // m/s^2 the take-off climb is planned to stop with
     AltController ctl_; HoverEstimator hover_;

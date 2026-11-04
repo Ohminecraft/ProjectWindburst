@@ -29,6 +29,69 @@ def default_path():
     raise FileNotFoundError("wbp_schema.json not found (set WBP_SCHEMA or keep the repository layout)")
 
 
+class SchemaMismatch(Exception):
+    pass
+
+
+def _ver(v):
+    try:
+        return tuple(int(x) for x in str(v).split(".")[:3])
+    except ValueError:
+        return (0, 0, 0)
+
+
+class SchemaLibrary:
+    """The schemas of the released firmware versions (wbclient/schemas, written by tools/schema_library.py): an app talks to any
+    older firmware with that firmware's own schema."""
+
+    def __init__(self, folder=None):
+        self.folder = folder or os.path.join(os.path.dirname(os.path.abspath(__file__)), "schemas")
+        idx = os.path.join(self.folder, "index.json")
+        self._idx = json.load(open(idx, encoding="utf-8")) if os.path.exists(idx) else []
+        self._cache = {}
+
+    def entries(self):
+        return list(self._idx)
+
+    def newest_fw(self):
+        return max((e["fw"] for e in self._idx), key=_ver, default=None)
+
+    def by_hash(self, h):
+        for e in self._idx:
+            if int(e["hash"], 16) == h:
+                if e["file"] not in self._cache:
+                    self._cache[e["file"]] = Schema(os.path.join(self.folder, e["file"]))
+                return self._cache[e["file"]]
+        return None
+
+
+_LIB = None
+
+
+def library():
+    global _LIB
+    if _LIB is None:
+        _LIB = SchemaLibrary()
+    return _LIB
+
+
+def pick_schema(current, protocol, schema_hash, fw):
+    """The schema to talk to a firmware with: (schema, note). note: None, or why it is not the app's own (an older firmware).
+    Raises SchemaMismatch: another protocol; a firmware newer than any this app knows (update the app); an unknown build."""
+    if protocol != current.version:
+        raise SchemaMismatch("firmware speaks protocol %d, this app %d" % (protocol, current.version))
+    if schema_hash == current.hash:
+        return current, None
+    s = library().by_hash(schema_hash)
+    if s is not None:
+        return s, "firmware %s is older than this app: its own settings are shown, newer ones are left out" % fw
+    newest = library().newest_fw()
+    if newest and _ver(fw) > _ver(newest):
+        raise SchemaMismatch("firmware %s is newer than this app (it knows firmware up to %s): update the app" % (fw, newest))
+    raise SchemaMismatch("firmware %s with schema 0x%08X is not one this app knows (a development build?): flash a released firmware, "
+                         "or use the app built from the same source" % (fw, schema_hash))
+
+
 def _strip(o):
     if isinstance(o, dict):
         return {k: _strip(v) for k, v in o.items() if k not in ("desc", "hash", "compat")}

@@ -156,6 +156,11 @@ int main() {
     CHECK(accgyro::classify_i2c(0x68) == MPU6050_I2C && accgyro::classify_i2c(0x70) == MPU6500_I2C && accgyro::classify_i2c(0x00) == NONE, "i2c ids");
     CHECK(accgyro::classify_i2c(0x00, 0xEA) == ICM20948_I2C && accgyro::classify_i2c(0x00, 0xE1) == ICM20649_I2C && accgyro::classify_i2c(0x70, 0xEA) == MPU6500_I2C, "i2c ICM-209xx from reg 0x00, an MPU first");
     CHECK(accgyro::classify_spi(0, 0xEA, 0, 0x70) == MPU6500_SPI && accgyro::classify_spi(0, 0xE1, 0, 0x47) == ICM42688P_SPI, "an MPU / ICM426xx whose reg 0x00 happens to read 0xEA / 0xE1 stays itself");
+    // 0.43: reg 0x00 / 0x01 are a factory trim byte on the MPU family and live accel data on the ICM-456xx - an ID there must not
+    // win over the chip's own WHO_AM_I (Betaflight gyroSpiDetectFnTable tries the 0x75 family first)
+    CHECK(accgyro::classify_spi(0x24, 0xD1, 0, 0x70) == MPU6500_SPI && accgyro::classify_spi(0x24, 0xD1, 0, 0x12) == ICM20602_SPI
+          && accgyro::classify_spi(0x24, 0xD1, 0, 0x47) == ICM42688P_SPI, "an MPU6500 / ICM20602 / ICM42688P whose trim bytes read 0x24 / 0xD1 stays itself");
+    CHECK(accgyro::classify_spi(0x24, 0xD1, 0xE9, 0) == ICM45686_SPI, "an ICM45686 whose accel data reads 0x24 / 0xD1 stays itself");
     CHECK(accgyro::classify_spi(0xFF, 0xFF, 0xFF, 0xFF) == NONE && accgyro::classify_spi(0, 0, 0, 0) == NONE, "floating / dead MISO is NONE");
 
     printf("[align] Betaflight-compatible mounting\n");

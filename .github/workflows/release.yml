@@ -1,0 +1,136 @@
+# A new firmware version (src/config/version.h) pushed to main: build every board, write the release notes ("What changed": the
+# commits since the previous version), publish a GitHub release with the binaries, and
+# put the web flasher (web-flasher/) with the ESP32 images on GitHub Pages (Settings -> Pages -> Source: GitHub Actions).
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [src/config/version.h]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      new: ${{ steps.v.outputs.new }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        name: Version and whether it is released already
+        run: |
+          v=$(python3 -c "import re;t=open('src/config/version.h').read();print('.'.join(re.search(r'#define WB_FW_%s (\d+)'%k,t).group(1) for k in ('MAJOR','MINOR','PATCH')))")
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+          if git rev-parse "v$v" >/dev/null 2>&1; then echo "new=false" >> "$GITHUB_OUTPUT"; else echo "new=true" >> "$GITHUB_OUTPUT"; fi
+
+  build:
+    needs: version
+    if: needs.version.outputs.new == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { env: rx_esp32_s3, chip: esp32s3, boot: "0x0" }
+          - { env: rx_esp32, chip: esp32, boot: "0x1000" }
+          - { env: rx_f405, chip: stm32 }
+          - { env: rx_f412, chip: stm32 }
+          - { env: rx_h563, chip: stm32 }
+          - { env: rx_h562, chip: stm32 }
+          - { env: rx_h523, chip: stm32 }
+          - { env: rx_g473, chip: stm32 }
+          - { env: rx_g491, chip: stm32 }
+          - { env: rx_g431, chip: stm32 }
+          - { env: rx_c552, chip: stm32 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: PlatformIO
+        run: pip install platformio esptool
+      - name: Build
+        run: pio run -e ${{ matrix.env }}
+      - name: One image to flash at 0x0 (ESP32: bootloader + partition table + boot_app0 + app)
+        if: matrix.chip != 'stm32'
+        run: |
+          b=.pio/build/${{ matrix.env }}
+          app0=$(find ~/.platformio/packages -name boot_app0.bin | head -1)
+          python -m esptool --chip ${{ matrix.chip }} merge_bin -o $b/windburst-${{ matrix.env }}.bin --flash_mode keep --flash_freq keep --flash_size keep \
+            ${{ matrix.boot }} $b/bootloader.bin 0x8000 $b/partitions.bin 0xe000 "$app0" 0x10000 $b/firmware.bin
+      - name: STM32 image
+        if: matrix.chip == 'stm32'
+        run: cp .pio/build/${{ matrix.env }}/firmware.bin .pio/build/${{ matrix.env }}/windburst-${{ matrix.env }}.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.env }}
+          path: .pio/build/${{ matrix.env }}/windburst-${{ matrix.env }}.bin
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: bins
+          pattern: bin-*
+          merge-multiple: true
+      - name: What changed
+        run: |
+          tag=${{ needs.version.outputs.tag }}
+          prev=$(git tag --list 'v*' --sort=-v:refname | head -1)
+          v=${tag#v}
+          {
+            echo "## What changed in $v"
+            echo
+            echo "### Commits"
+            if [ -n "$prev" ]; then git log --format='- %s (%h)' "$prev"..HEAD; else git log --format='- %s (%h)' -20; fi
+            echo
+            echo "### Flashing"
+            echo "- ESP32 boards: the web flasher (https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/) or \`esptool.py write_flash 0x0 windburst-<board>.bin\`."
+            echo "- STM32 boards (experimental): STM32CubeProgrammer / dfu-util at 0x08000000. For an STM32 flight controller in real use, prefer a firmware with a long flight history: Betaflight, ArduPilot, INAV or PX4."
+            echo "- The configurator app talks to this firmware and to every older released one (app/wbclient/schemas)."
+          } > notes.md
+          cat notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: Windburst ${{ needs.version.outputs.tag }}
+          body_path: notes.md
+          files: bins/*.bin
+
+  pages:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: bins
+          pattern: bin-*
+          merge-multiple: true
+      - name: The flasher and its firmware (the same origin: the browser reads the images from the page's own site)
+        run: |
+          mkdir -p site/firmware
+          cp web-flasher/* site/
+          for e in rx_esp32_s3 rx_esp32; do cp bins/windburst-$e.bin site/firmware/; done
+          python3 web-flasher/make_manifests.py site "${{ needs.version.outputs.tag }}"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -77,6 +77,11 @@ add("timesync", m.MAVLink_timesync_message(tc1=0, ts1=1234567890123), 67, **GCS)
 add("mission_item", m.MAVLink_mission_item_message(target_system=1, target_component=1, seq=1, frame=3, command=16, current=0, autocontinue=1,
                                                    param1=5.0, param2=0.0, param3=0.0, param4=0.0, x=47.398, y=8.546, z=25.5, mission_type=0), 68, **GCS)
 add("mission_request", m.MAVLink_mission_request_message(target_system=1, target_component=1, seq=2, mission_type=0), 69, **GCS)
+# 0.43: the parameter protocol (the tuning: PID, rates, filters)
+add("param_request_list", m.MAVLink_param_request_list_message(target_system=1, target_component=1), 70, **GCS)
+add("param_request_read", m.MAVLink_param_request_read_message(target_system=1, target_component=1, param_id=b"PID_ROLL_P", param_index=-1), 71, **GCS)
+add("param_set", m.MAVLink_param_set_message(target_system=1, target_component=1, param_id=b"PID_ROLL_P", param_value=50.0, param_type=9), 72, **GCS)
+add("param_value", m.MAVLink_param_value_message(param_id=b"PID_ROLL_P", param_value=45.0, param_type=9, param_count=120, param_index=0), 73)
 
 print("// Made by tools/mavlink_vectors.py with pymavlink %s - do not edit." % pymavlink.__version__)
 print("#pragma once\n#include <stdint.h>\nstruct MavVector { const char* name; uint8_t seq; int n; uint8_t bytes[280]; };")

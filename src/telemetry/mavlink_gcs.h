@@ -24,6 +24,10 @@
 //                               MISSION_ITEM_REACHED as the mission moves on (MISSION_CURRENT: the Scheduler, 1 Hz). Item 0 is the first
 //                               command (PX4 / Betaflight), not ArduPilot's home. Fence and rally: none (an empty list).
 //   TIMESYNC                    a request (tc1 = 0) is answered with this craft's time.
+//   the parameters (0.43)       PARAM_REQUEST_LIST -> every PARAM_VALUE, one at a time as the link takes them (a ground station
+//                               asks again for what it missed); PARAM_REQUEST_READ (by index, or by name with index -1) -> PARAM_VALUE;
+//                               PARAM_SET -> stored by the craft, PARAM_VALUE with what it really stored (clamped). An unknown name:
+//                               no answer (ArduPilot). The craft decides what the parameters are (FlightApp: the tuning, wbp_params.h).
 // A message for another system (target_system not 0 / ours) or another component (not 0 / 1) is ignored.
 // The commands a mission holds, both ways (the section `mission`, StoreItem): NAV_WAYPOINT (hold s), NAV_LOITER_TIME (s), NAV_RETURN_TO_LAUNCH,
 // NAV_LAND, NAV_TAKEOFF, NAV_DELAY (s), DO_SET_SERVO (servo 1..4, us), DO_CHANGE_SPEED (m/s); heights above home (frame
@@ -54,6 +58,10 @@ public:
     virtual bool mission_busy() const = 0;                       // the mission flies: it is not replaced
     virtual bool home_alt_mm(int32_t& alt_mm) const = 0;         // false: no home point yet
     virtual bool mission_replace(const StoreItem* items, int n) = 0;   // false: refused
+    // the parameters (0.43): id = 16 characters + NUL; param_set stores (clamped) - param_get then gives what is stored
+    virtual int param_count() const { return 0; }
+    virtual bool param_get(int i, char id[17], float& v) const { (void)i; (void)id; (void)v; return false; }
+    virtual bool param_set(int i, float v) { (void)i; (void)v; return false; }
 };
 
 // The modes a ground station may show and choose (AVAILABLE_MODES): ArduCopter's numbers, as HEARTBEAT.custom_mode carries them (the
@@ -131,13 +139,13 @@ public:
     static constexpr float kForceDisarm = 21196.0f;     // ArduPilot: COMPONENT_ARM_DISARM param2 that disarms in the air
 
     void configure(uint8_t sysid, uint32_t flight_sw_version, bool home_item = false) {
-        sysid_ = sysid ? sysid : 1; version_ = flight_sw_version; home_item_ = home_item; x_ = Xfer(); pending_ = false; track_ = false;
+        sysid_ = sysid ? sysid : 1; version_ = flight_sw_version; home_item_ = home_item; x_ = Xfer(); pending_ = false; track_ = false; plist_on_ = false; plist_next_ = 0;
     }
 
     // one frame from the ground station (or from anything else on the wire: what is not for us is dropped)
     void handle(const Parser::Frame& f, Vehicle& v, Scheduler& out, const State& s, uint32_t now_ms, uint64_t now_us) {
         CommandLong cl; CommandInt ci; MissionRequestList rl; MissionRequestInt ri; MissionCount mc; MissionItemInt it; MissionAck ma; MissionClearAll ca; MissionSetCurrent sc; Timesync ts;
-        MissionItem fi; MissionRequest fr;
+        MissionItem fi; MissionRequest fr; ParamRequestList pl; ParamRequestRead pr; ParamSet ps;
         if (unpack(f, cl)) { if (to_us(cl.target_system, cl.target_component)) command(f, cl.command, cl.param, v, out, s); }
         else if (unpack(f, ci)) { if (to_us(ci.target_system, ci.target_component)) { float p[7] = {ci.param[0], ci.param[1], ci.param[2], ci.param[3], 0, 0, ci.z}; command(f, ci.command, p, v, out, s); } }
         else if (unpack(f, rl)) { if (to_us(rl.target_system, rl.target_component)) request_list(f, rl.mission_type, v, out, now_ms); }
@@ -150,10 +158,24 @@ public:
         else if (unpack(f, ca)) { if (to_us(ca.target_system, ca.target_component)) clear_all(f, ca.mission_type, v, out); }
         else if (unpack(f, sc)) { if (to_us(sc.target_system, sc.target_component)) set_current(f, sc.seq, out, s); }
         else if (unpack(f, ts)) { if (ts.tc1 == 0) { Timesync r; r.tc1 = (int64_t)now_us * 1000; r.ts1 = ts.ts1; out.reply(r); } }
+        else if (unpack(f, pl)) { if (to_us(pl.target_system, pl.target_component)) { plist_next_ = 0; plist_on_ = v.param_count() > 0; } }
+        else if (unpack(f, pr)) { if (to_us(pr.target_system, pr.target_component)) { const int i = pr.param_index >= 0 ? pr.param_index : param_find(v, pr.param_id); if (i >= 0) param_value(v, i, out); } }
+        else if (unpack(f, ps)) {
+            if (to_us(ps.target_system, ps.target_component)) {
+                const int i = param_find(v, ps.param_id);
+                if (i >= 0) { if (isfinite(ps.param_value)) v.param_set(i, ps.param_value); param_value(v, i, out); }      // (refused or not: what is stored now)
+            }
+        }
     }
 
     // every pass: the upload's retries, an abandoned download, MISSION_ITEM_REACHED
-    void update(Vehicle&, Scheduler& out, const State& s, uint32_t now_ms) {
+    void update(Vehicle& v, Scheduler& out, const State& s, uint32_t now_ms) {
+        // the parameter list: one PARAM_VALUE when the replies before it are out and kParamGapMs (+ the link's slowdown) has passed - a
+        // burst of them overflows a radio's buffer (ExpressLRS flushes a full one) and they are all lost (ArduPilot paces it by txspace)
+        if (plist_on_ && out.pending_replies() == 0 && (uint32_t)(now_ms - plist_ms_) >= kParamGapMs + out.slowdown_ms()) {
+            if (plist_next_ >= v.param_count()) plist_on_ = false;
+            else if (param_value(v, plist_next_, out)) { plist_next_++; plist_ms_ = now_ms; }
+        }
         if (x_.state == RECEIVING && (uint32_t)(now_ms - x_.last_ms) >= kRetryMs) {
             if (x_.retries >= kMaxRetry) mission_ack(x_.sys, x_.comp, x_.type, MISSION_OPERATION_CANCELLED, out);
             else { x_.retries++; x_.last_ms = now_ms; request(x_.next, out); }
@@ -176,6 +198,18 @@ private:
     enum XState : uint8_t { IDLE, RECEIVING, SENDING };
     struct Xfer { XState state = IDLE; uint8_t type = 0, sys = 0, comp = 0, retries = 0; uint16_t next = 0, total = 0; uint32_t last_ms = 0; };
 
+    static constexpr uint32_t kParamGapMs = 10;
+    int param_find(Vehicle& v, const char* id16) const {
+        char want[17]; memcpy(want, id16, 16); want[16] = 0;
+        for (int i = 0, n = v.param_count(); i < n; i++) { char id[17]; float x; if (v.param_get(i, id, x) && !strncmp(id, want, 16)) return i; }
+        return -1;
+    }
+    bool param_value(Vehicle& v, int i, Scheduler& out) {
+        ParamValue pv; char id[17] = {}; float x = 0;
+        if (!v.param_get(i, id, x)) return true;                      // (no such parameter: nothing to send)
+        memcpy(pv.param_id, id, 16); pv.param_value = x; pv.param_count = (uint16_t)v.param_count(); pv.param_index = (uint16_t)i;
+        return out.reply(pv);
+    }
     bool to_us(uint8_t ts, uint8_t tc) const { return (ts == 0 || ts == sysid_) && (tc == 0 || tc == 1); }
     bool partner(const Parser::Frame& f) const { return f.sysid == x_.sys && f.compid == x_.comp; }
     void ack(uint16_t cmd, uint8_t result, uint8_t sys, uint8_t comp, Scheduler& out) { CommandAck a; a.command = cmd; a.result = result; a.target_system = sys; a.target_component = comp; out.reply(a); }
@@ -318,6 +352,7 @@ private:
     Xfer x_; StoreItem staged_[kStoreMax];
     bool pending_ = false; uint16_t pending_cmd_ = 0; uint8_t pending_sys_ = 0, pending_comp_ = 0;
     bool track_ = false; uint16_t reached_ = 0;
+    bool plist_on_ = false; int plist_next_ = 0; uint32_t plist_ms_ = 0;          // PARAM_REQUEST_LIST: sending, the next index
 };
 
 } // namespace mav

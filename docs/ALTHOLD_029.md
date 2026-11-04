@@ -1,75 +1,75 @@
-# Altitude Hold / Position Hold viết lại theo ArduPilot (0.29)
+# Altitude Hold / Position Hold rewritten after ArduPilot (0.29)
 
-Mới kiểm tra trên PC: unit test và firmware chạy trên mạch ảo. **Chưa bay thật.**
+Only checked on PC so far: unit tests and firmware running on the virtual board. **Not flown for real yet.**
 
-## 1. Lý do
-Bộ điều khiển trước 0.29 có các điểm sau:
-- Chỉ có vòng vị trí P → vận tốc PI. Gia tốc mong muốn được đổi thẳng ra ga qua mô hình ga treo (hover), không có phản hồi gia tốc đo được.
-- Cần ga nhảy từ "giữ" sang "leo 2 m/s" thì vận tốc mục tiêu nhảy theo ngay. Sai số vận tốc nhảy 2 m/s, gia tốc yêu cầu nhảy kp_v × 2 = 10 m/s², motor giật.
-- Ước lượng ga treo học rất nhanh (0,4 s), cả khi Altitude Hold đang bay. Trong Altitude Hold nó thành thêm một bộ tích phân cãi nhau với tích phân vận tốc, có thể là nguồn dao động chậm lên xuống.
+## 1. Why
+The controller before 0.29 had these issues:
+- There was only a position P → velocity PI loop. Desired acceleration was converted straight to throttle through the hover throttle model, with no feedback from measured acceleration.
+- When the throttle stick jumped from "hold" to "climb 2 m/s", the target velocity jumped immediately. The velocity error jumped by 2 m/s, the requested acceleration jumped by kp_v × 2 = 10 m/s², and the motors jerked.
+- The hover throttle estimate learned very fast (0.4 s), even while Altitude Hold was flying. In Altitude Hold it became one more integrator fighting the velocity integrator, a possible source of slow up-and-down oscillation.
 
-## 2. Bộ điều khiển mới (`src/core/althold.h`, `src/core/kinematics.h`)
-Theo `AC_PosControl::D_update_controller` của ArduPilot; lực đẩy được chuẩn hoá theo ga treo như PX4.
+## 2. The new controller (`src/core/althold.h`, `src/core/kinematics.h`)
+After ArduPilot's `AC_PosControl::D_update_controller`; thrust is normalised to hover throttle like PX4.
 
-1. **Tạo mục tiêu có giới hạn jerk** (port `shape_vel_accel`, `update_pos_vel_accel` từ `AP_Math/control.cpp`):
-   - Cần ga cho tốc độ leo mong muốn.
-   - Tốc độ mục tiêu tiến tới đó với gia tốc ≤ `althold.accel_z` (2,5 m/s², giống PILOT_ACCEL_Z) và jerk ≤ `althold.jerk_z` (5 m/s³, giống PSC_JERK_D).
-   - Vị trí mục tiêu = tích phân của tốc độ mục tiêu.
-   - Motor đang bão hoà theo chiều nào thì mục tiêu không chạy tiếp theo chiều đó (limit vector của AP).
-2. **Vị trí → vận tốc:** P (`kp_z` 1,2) cộng tốc độ mục tiêu. Mục tiêu không cách máy quá 2 m.
-3. **Vận tốc → gia tốc:** P (`kp_v` 5). I mặc định 0, vì tích phân nằm ở vòng gia tốc như AP. Cộng gia tốc mục tiêu làm feed-forward.
-4. **Vòng gia tốc đo được (mới):**
-   - Sai lệch = gia tốc yêu cầu − gia tốc đo (IMU, hệ trục đất), lọc 20 Hz.
-   - Lực đẩy = hover × (1 + (a_yêu_cầu + P·sai_lệch + I) / g) / cos(nghiêng), với P = `althold.acc_p` (0,5) và I = `althold.acc_i` (1,0/s).
-   - Tác dụng: gió giật, luồng gió cánh, pin sụt được bù ngay, không phải chờ thành sai số vận tốc. Tích phân I gánh phần ga treo ước lượng sai.
-   - Test mô phỏng một luồng gió xuống 3 m/s² trong 1 s: mất độ cao ít hơn rõ rệt so với kiểu cũ (`test_core`, nhóm `[althold 0.28]`).
-5. **Over-speed** (`calculate_overspeed_gain` của AP): bật Altitude Hold khi máy đang leo / hạ nhanh hơn giới hạn thì gia tốc và jerk dừng được nhân lên. Máy không trôi thêm vài mét.
-6. **Chuyển sang Altitude Hold giữa chuyến bay:**
-   - Mục tiêu bắt đầu ở vị trí, tốc độ và gia tốc hiện tại của máy (`D_init_controller`).
-   - Tích phân lấy từ ga đang dùng, nên ga không nhảy.
-   - Máy đang leo thì dừng êm với gia tốc giới hạn, thay vì bị giật về điểm bật.
-7. **Cất cánh:**
-   - Vẫn tăng ga từ từ đến khi rời đất như trước.
-   - Sau đó leo tới độ cao cất cánh với tốc độ giảm dần theo √(2·a·d), tính cả quãng dừng của bộ tạo mục tiêu, nên không vọt quá độ cao.
-8. **Ga treo:**
-   - Khi Altitude Hold đang bay: học chậm (3 s), vì ở đây nó chỉ là feed-forward (AP học trong 10 s).
-   - Khi bay tay: vẫn học nhanh (0,4 s), vì failsafe hạ cánh không có ước lượng độ cao chỉ có số này.
+1. **Jerk-limited target generation** (port of `shape_vel_accel`, `update_pos_vel_accel` from `AP_Math/control.cpp`):
+   - The throttle stick gives the desired climb rate.
+   - The target velocity approaches it with acceleration ≤ `althold.accel_z` (2.5 m/s², like PILOT_ACCEL_Z) and jerk ≤ `althold.jerk_z` (5 m/s³, like PSC_JERK_D).
+   - Target position = integral of the target velocity.
+   - When the motors saturate in one direction, the target does not keep moving in that direction (AP's limit vector).
+2. **Position → velocity:** P (`kp_z` 1.2) plus the target velocity. The target is never more than 2 m from the craft.
+3. **Velocity → acceleration:** P (`kp_v` 5). I defaults to 0, because the integrator lives in the acceleration loop like AP. The target acceleration is added as feed-forward.
+4. **Measured acceleration loop (new):**
+   - Error = requested acceleration − measured acceleration (IMU, earth frame), filtered at 20 Hz.
+   - Thrust = hover × (1 + (a_requested + P·error + I) / g) / cos(tilt), with P = `althold.acc_p` (0.5) and I = `althold.acc_i` (1.0/s).
+   - Effect: gusts, prop wash and battery sag are compensated immediately, without waiting for them to become a velocity error. The I term absorbs a wrong hover throttle estimate.
+   - A simulated 3 m/s² downdraft for 1 s: noticeably less altitude lost than the old scheme (`test_core`, group `[althold 0.28]`).
+5. **Over-speed** (AP's `calculate_overspeed_gain`): engaging Altitude Hold while the craft climbs / descends faster than the limit multiplies the stopping acceleration and jerk. The craft does not drift a few extra metres.
+6. **Switching to Altitude Hold mid-flight:**
+   - The target starts at the craft's current position, velocity and acceleration (`D_init_controller`).
+   - The integrator is taken from the throttle in use, so throttle does not jump.
+   - A climbing craft stops smoothly with limited acceleration, instead of being yanked back to the engage point.
+7. **Takeoff:**
+   - Throttle still ramps up gradually until it leaves the ground, as before.
+   - Then it climbs to the takeoff altitude with a speed decreasing as √(2·a·d), including the target generator's stopping distance, so it does not overshoot the altitude.
+8. **Hover throttle:**
+   - While Altitude Hold is flying: learns slowly (3 s), since here it is only feed-forward (AP learns over 10 s).
+   - While flying manually: still learns fast (0.4 s), because the failsafe landing without an altitude estimate only has this number.
 
 ## 3. Position Hold / GPS Rescue (`src/core/poscontrol.h`)
-- Vận tốc mong muốn (Rescue bay về) cũng đi qua bộ tạo mục tiêu 2-D có giới hạn jerk: gia tốc ≤ 2,5 m/s², jerk ≤ 5 m/s³ (`input_vel_accel_NE` của AP).
-- Gia tốc mục tiêu được cộng làm feed-forward.
-- Vòng vị trí / vận tốc giữ nguyên như AP: sqrt controller, PID có lọc 5 Hz, giới hạn nghiêng.
+- The desired velocity (Rescue flying home) also goes through a jerk-limited 2-D target generator: acceleration ≤ 2.5 m/s², jerk ≤ 5 m/s³ (AP's `input_vel_accel_NE`).
+- The target acceleration is added as feed-forward.
+- The position / velocity loops are unchanged, as in AP: sqrt controller, PID with a 5 Hz filter, tilt limit.
 
-## 4. Không đổi
-Các phần sau không đổi, vì đã theo ArduPilot / EKF và đã có test:
-- bộ ước lượng độ cao (Kalman 4 trạng thái: baro / lidar / GPS);
-- bộ ước lượng ngang;
+## 4. Unchanged
+The following are unchanged, since they already follow ArduPilot / EKF and have tests:
+- the altitude estimator (4-state Kalman: baro / lidar / GPS);
+- the horizontal estimator;
 - optical flow;
-- Position Hold kiểu brake / loiter của ArduCopter.
+- ArduCopter-style brake / loiter Position Hold.
 
-Muốn sửa các phần này cần log bay thật cho thấy chỗ sai.
+Changing these needs real flight logs showing what is wrong.
 
-## 5. Cài đặt mới (section althold, compat [6])
-| Trường | Mặc định | Ý nghĩa |
+## 5. New settings (section althold, compat [6])
+| Field | Default | Meaning |
 |---|---|---|
-| `accel_z` | 2,5 m/s² | gia tốc tối đa khi đổi tốc độ leo |
-| `jerk_z` | 5 m/s³ | jerk tối đa |
-| `acc_p` | 0,50 | P vòng gia tốc. 0 = không phản hồi gia tốc |
-| `acc_i` | 1,00 /s | I vòng gia tốc |
+| `accel_z` | 2.5 m/s² | maximum acceleration when changing climb rate |
+| `jerk_z` | 5 m/s³ | maximum jerk |
+| `acc_p` | 0.50 | acceleration loop P. 0 = no acceleration feedback |
+| `acc_i` | 1.00 /s | acceleration loop I |
 
-App: tab Rates, khối "Cần ga trong Altitude Hold".
+App: Rates tab, block "Throttle stick in Altitude Hold".
 
-## 6. Thay đổi cảm giác bay (cố ý)
-- Bắt đầu leo / dừng leo mềm hơn: mất khoảng 1 s để đạt 2 m/s.
-- Thả cần ở 2 m/s thì máy dừng cao hơn khoảng 1,5 m.
-- Rescue tăng tốc tối đa 2,5 m/s².
-- Thấy quá mềm thì tăng `accel_z` / `jerk_z`. Thấy dao động lên xuống nhanh thì giảm `acc_p`.
+## 6. Change in flight feel (intentional)
+- Starting / stopping a climb is softer: about 1 s to reach 2 m/s.
+- Releasing the stick at 2 m/s, the craft stops about 1.5 m higher.
+- Rescue accelerates at most 2.5 m/s².
+- If it feels too soft, increase `accel_z` / `jerk_z`. If it oscillates up and down quickly, decrease `acc_p`.
 
-## 7. Cần thử trên mạch
-1. Hover Altitude Hold 1 phút.
-   - Biên độ lên xuống, so với 0.28.
-   - Trong blackbox: tích phân (`integrator`) ổn định, không trôi.
-2. Đẩy ga lên hết rồi về giữa: leo / dừng êm, không giật motor.
-3. Bay tay rồi bật Altitude Hold khi đang leo: dừng êm, ga không nhảy.
-4. Có gió hoặc bay ngang nhanh: độ cao giữ tốt hơn trước.
-5. Thử `acc_p` = 0 để so với cách cũ.
+## 7. To try on the board
+1. Hover in Altitude Hold for 1 minute.
+   - Up-and-down amplitude, compared with 0.28.
+   - In the blackbox: the integrator (`integrator`) is stable, not drifting.
+2. Push the throttle fully up then back to centre: smooth climb / stop, no motor jerk.
+3. Fly manually then engage Altitude Hold while climbing: stops smoothly, throttle does not jump.
+4. In wind or fast horizontal flight: altitude held better than before.
+5. Try `acc_p` = 0 to compare with the old scheme.

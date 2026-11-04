@@ -959,7 +959,7 @@ m('failsafe: disarmed in the air after the guard time', SFT, "if (action_ == FA_
 m('mixer: ground idle ignored', MXR, "        if (ground_idle) { for (int i = 0; i < n_; i++) out[i] = bot; for (int i = n_; i < kMaxMotors; i++) out[i] = 0.0f; return; }\n", "", tcf3)
 m('mixer: ground idle stops the motors', MXR, "        if (ground_idle) { for (int i = 0; i < n_; i++) out[i] = bot;", "        if (ground_idle) { for (int i = 0; i < n_; i++) out[i] = 0.0f;", tcf3)
 m('core: arming does not see the link', FCO, "armed_ = arming_.update((cmd.modes >> M_ARM) & 1u, in.rc_link, ai);", "armed_ = arming_.update((cmd.modes >> M_ARM) & 1u, true, ai);", tfl)
-m('core: arming does not see the throttle stick', FCO, "ai.rx_ok = in.rc_link; ai.throttle_low = cmd.throttle_low;", "ai.rx_ok = in.rc_link; ai.throttle_low = true;", tfl)
+m('core: arming does not see the throttle stick', FCO, "ai.rx_ok = in.rc_link; ai.throttle_low = cfg.flycam ?", "ai.rx_ok = in.rc_link; ai.throttle_low = true || cfg.flycam ?", tfl)
 m('core: failsafe not told that the craft stands', FCO, "fi.airborne = airborne_; ", "", tfl)
 m('core: Altitude Hold takes a flying craft by the stick position', FCO, "if (!was_althold_ && airborne_) alt_.begin_flight(", "if (!was_althold_ && cmd.throttle_raw > 0.15f) alt_.begin_flight(", tfl)
 m('core: Altitude Hold takes a parked craft for a flying one', FCO, "if (!was_althold_ && airborne_) alt_.begin_flight(", "if (!was_althold_) alt_.begin_flight(", tfl)
@@ -2499,7 +2499,7 @@ m('loiter: the whole lean limit to the pilot', LT, "lim * (2.0f / 3.0f)", "lim",
 m('loiter: the wanted velocity shaped again', PCT, "        if (!direct_) {\n", "        if (true) {\n", 'test_nav_ctl')
 m('loiter: Altitude Hold not brought along', RCH, "        if (m & (1u << M_LOITER)) m |= 1u << M_ALTHOLD;", "", 'test_flight test_fw')
 m('loiter: never flies', FCO, "            } else if (lt_on && ph_ok) {", "            } else if (false && lt_on && ph_ok) {", 'test_flight test_fw')
-m('loiter: arms without a position', FCO, "ai.poshold_switch = ((cmd.modes >> M_POSHOLD) | (cmd.modes >> M_LOITER)) & 1u;", "ai.poshold_switch = (cmd.modes >> M_POSHOLD) & 1u;", 'test_flight test_fw')
+m('loiter: arms without a position', FCO, "ai.poshold_switch = ((pilot_modes >> M_POSHOLD) | (pilot_modes >> M_LOITER)) & 1u;", "ai.poshold_switch = (pilot_modes >> M_POSHOLD) & 1u;", 'test_flight test_fw')
 m('loiter: Position Hold wins when both are on', FCO, "const bool lt_on = ((cmd.modes >> M_LOITER) & 1u) && !neutral", "const bool lt_on = ((cmd.modes >> M_LOITER) & 1u) && !((cmd.modes >> M_POSHOLD) & 1u) && !neutral", 'test_flight')
 m('loiter: the ground station cannot override it', FCO, "(1u << M_RESCUE) | (1u << M_MISSION) | (1u << M_LOITER);", "(1u << M_RESCUE) | (1u << M_MISSION);", 'test_fw')
 m('loiter: HEARTBEAT shows POSHOLD', MT, "s.loiter ? COPTER_LOITER : ", "", 'test_mavlink test_fw')
@@ -2546,6 +2546,44 @@ m('crashflip: crashflip_auto_rearm not applied', SA, "c.crashflip.auto_rearm = s
 m('crashflip: CRSF does not say FLIP', CRT, "    if (t.crashflip) return \"FLIP\";\n", "", 'test_rx')
 m('crashflip: the OSD does not say FLIP', 'src/osd/osd.h', "    return s.mode <= MODE_FLIP ? n[s.mode] : \"ACRO\";", "    return s.mode < MODE_FLIP ? n[s.mode] : \"ACRO\";", 'test_osd')
 m('crashflip: the DIY transmitter refuses CRASHFLIP', 'src/radio/wb_radio.h', "p[2] > wbp::FLY_MODE_CRASHFLIP ||", "p[2] > wbp::FLY_MODE_LOITER ||", 'test_radio')
+# 0.43: the tuning as MAVLink parameters (mavlink_gcs.h, FlightApp::MavVehicle, wbp_params.h); run: python tools/mutate.py params:
+m('params: the list never sent', GC, "        if (plist_on_ && out.pending_replies() == 0 &&", "        if (false && plist_on_ && out.pending_replies() == 0 &&", 'test_gcs test_fw')
+m('params: the list in a burst', GC, "        if (plist_on_ && out.pending_replies() == 0 &&", "        if (plist_on_ &&", 'test_gcs test_fw')
+m('params: the list stops early', GC, "            if (plist_next_ >= v.param_count()) plist_on_ = false;", "            if (plist_next_ >= v.param_count() - 1) plist_on_ = false;", 'test_gcs test_fw')
+m('params: read by name only', GC, "const int i = pr.param_index >= 0 ? pr.param_index : param_find(v, pr.param_id);", "const int i = param_find(v, pr.param_id);", 'test_gcs')
+m('params: NaN stored', GC, "if (isfinite(ps.param_value)) v.param_set(i, ps.param_value);", "v.param_set(i, ps.param_value);", 'test_gcs')
+m('params: no echo after a set', GC, "v.param_set(i, ps.param_value); param_value(v, i, out); }", "v.param_set(i, ps.param_value); }", 'test_gcs test_fw')
+m('params: another component taken', GC, "        else if (unpack(f, ps)) {\n            if (to_us(ps.target_system, ps.target_component)) {", "        else if (unpack(f, ps)) {\n            if (true) {", 'test_gcs')
+m('params: the count wrong', GC, "pv.param_count = (uint16_t)v.param_count();", "pv.param_count = (uint16_t)(v.param_count() - 1);", 'test_gcs test_fw')
+m('params: the value not clamped', FA, "            r = r < lo ? lo : (r > hi ? hi : r);\n", "", 'test_fw')
+m('params: the scale ignored', FA, "            double r = (double)v / (double)p.scale;", "            double r = (double)v;", 'test_fw')
+m('params: not applied live', FA, "            a.apply_live(p.section);\n            a.tel_.fw_saved_mask", "            a.tel_.fw_saved_mask", 'test_fw')
+m('params: never saved', FA, "            a.tel_.fw_saved_mask |= 1u << p.section; a.tel_.fw_saved_section = p.section; a.tel_.fw_saved_seq++;", "", 'test_fw')
+m('params: the sliders keep the gains', FA, "&& p.offset < offsetof(wbp::S_pid, iterm_relax)) a.s_->pid.slider_mode = wbp::SLIDER_MODE_OFF;", "&& p.offset < offsetof(wbp::S_pid, iterm_relax)) {}", 'test_fw')
+m('params: the link saves one section only', 'src/app/link_host.h', "autosave_ |= (1u << tel_.fw_saved_section) | tel_.fw_saved_mask;", "autosave_ |= (1u << tel_.fw_saved_section);", 'test_fw')
+
+# 0.43: the Flycam style (CoreConfig::flycam, general.fly_style); run: python tools/mutate.py flycam:
+ACT = 'src/core/nav/alt_control.h'
+m('flycam: no mode forced', FCO, "        if (cfg.flycam) cmd.modes = ", "        if (false) cmd.modes = ", 'test_flight test_fw')
+m('flycam: Acro allowed', FCO, "(cmd.modes & ~((1u << M_STABILIZE) | (1u << M_ACRO_TRAINER))) | (1u << M_ANGLE)", "cmd.modes | (1u << M_ANGLE)", 'test_flight')
+m('flycam: the height not held', FCO, " | (1u << M_ALTHOLD) | (1u << (cfg.flycam_loiter", " | (1u << (cfg.flycam_loiter", 'test_flight test_fw')
+m('flycam: the hold choice ignored', FCO, "(1u << (cfg.flycam_loiter ? M_LOITER : M_POSHOLD))", "(1u << M_LOITER)", 'test_flight')
+m('flycam: arming wants the throttle down', FCO, "ai.throttle_low = cfg.flycam ? cmd.throttle_raw <= cfg.alt.mid_stick + cfg.alt.deadband : cmd.throttle_low;", "ai.throttle_low = cmd.throttle_low;", 'test_flight test_fw')
+m('flycam: arming with the throttle up', FCO, "ai.throttle_low = cfg.flycam ? cmd.throttle_raw <= cfg.alt.mid_stick + cfg.alt.deadband : cmd.throttle_low;", "ai.throttle_low = cfg.flycam ? true : cmd.throttle_low;", 'test_flight')
+m('flycam: no position blocks arming', FCO, "ai.poshold_switch = ((pilot_modes >> M_POSHOLD) | (pilot_modes >> M_LOITER)) & 1u;", "ai.poshold_switch = ((cmd.modes >> M_POSHOLD) | (cmd.modes >> M_LOITER)) & 1u;", 'test_flight')
+m('flycam: the stick must go down before the take-off', ACT, "    float rest_stick() const { return cfg.centred_stick ? cfg.mid_stick + cfg.deadband : cfg.low_stick; }", "    float rest_stick() const { return cfg.low_stick; }", 'test_flight test_fw')
+m('flycam: the centred stick not passed on', FCO, "        alt_.cfg = cfg.alt; alt_.cfg.centred_stick = cfg.flycam; alt_.init();", "        alt_.cfg = cfg.alt; alt_.init();", 'test_flight test_fw')
+m('flycam: the motors never stop after landing', FCO, "            if (fc_land_t_ >= cfg.flycam_land_disarm_s) {", "            if (false) {", 'test_flight')
+m('flycam: the motors stop at once', FCO, "            if (fc_land_t_ >= cfg.flycam_land_disarm_s) {", "            if (fc_land_t_ >= 0.0f) {", 'test_flight')
+m('flycam: the setting not applied', SA, "    c.flycam = s.general.fly_style == wbp::FLY_STYLE_FLYCAM;", "    c.flycam = false;", 'test_fw')
+
+# 0.43: the baro altitude with the air's temperature (ArduPilot get_altitude_difference_simple); run: python tools/mutate.py baroT:
+BA = 'src/hal/baro/baro_altitude.h'
+m('baroT: the standard 15 C always', BA, "        float a = altitude_of(s.pressure_pa, p0_, t0_c_);", "        float a = altitude_of(s.pressure_pa, p0_);", 'test_baro')
+m('baroT: a hot board taken at its word', BA, "return baro_c > 35.0f ? 35.0f :", "return baro_c > 85.0f ? 85.0f :", 'test_baro')
+m('baroT: the temperature not followed on the ground', BA, " t0_c_ += k * (air_c(s.temp_c) - t0_c_);", "", 'test_baro')
+m('baroT: the temperature follows in flight', BA, "        if (!armed && dt > 0 && dt < 1.0f) {", "        if (dt > 0 && dt < 1.0f) { if (armed) t0_c_ += 0.1f * (air_c(s.temp_c) - t0_c_);", 'test_baro')
+
 # 0.42.1: optical flow against ArduPilot / PX4 (core/flow.h, hal/flow/pmw3901.h); run: python tools/mutate.py flowfix:
 FL = 'src/core/flow.h'; PMW = 'src/hal/flow/pmw3901.h'
 m('flowfix: turned by the heading alone again', FL, "    const float bz = (vd - R[2][0] * fwd - R[2][1] * right) / maxf(R[2][2], 0.1f);", "    const float bz = 0.0f; (void)vd;", 'test_nav test_flight')

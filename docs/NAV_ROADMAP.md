@@ -1,146 +1,146 @@
-# Altitude Hold / Position Hold — viết lại (lộ trình)
+# Altitude Hold / Position Hold — rewrite (roadmap)
 
-Viết lại phần dẫn đường trong `src/core/nav/` (namespace `fc::nav`), chia lớp: **Estimator → Setpoint → Controller → Mode logic**.
-Mỗi giai đoạn: build sạch mọi MCU, unit test qua, cập nhật file này, rồi **dừng chờ thử trên mạch**.
+Rewrite of the navigation code in `src/core/nav/` (namespace `fc::nav`), split into layers: **Estimator → Setpoint → Controller → Mode logic**.
+Each phase: builds clean on every MCU, unit tests pass, this file is updated, then **stop and wait for a board test**.
 
-## Quyết định (2026-10-24)
+## Decisions (2026-10-24)
 
-| Câu hỏi | Chọn |
+| Question | Choice |
 |---|---|
-| Sửa bản cũ hay viết lại | Viết lại hẳn. Bản cũ (`vertical_est.h`, `horizontal_est.h`, `althold.h`, `poshold.h`, `poscontrol.h`) vẫn chạy cho tới khi bản mới thay được từng phần |
-| Chạy ở task nào | Task bay (ổn định trên mọi chip: ESP32-S3, ESP32, STM32), chia tần số còn khoảng 200 Hz. Cảm biến chậm (baro, GPS, flow) vẫn do task cảm biến đẩy vào bằng `on_baro` / `on_gps` / ... |
-| Log | Nhóm blackbox mới `NAV_DEBUG`, nằm trong mọi bản ghi nhanh (mặc định 250 Hz, tức là trên 100 Hz) |
-| EKF 15 trạng thái (`ekf.h`) | Để nguyên, vẫn chạy song song (shadow). Nav mới **không** dùng nó |
+| Fix the old code or rewrite | Full rewrite. The old code (`vertical_est.h`, `horizontal_est.h`, `althold.h`, `poshold.h`, `poscontrol.h`) keeps running until the new code can replace each part |
+| Which task it runs in | The flight task (stable on every chip: ESP32-S3, ESP32, STM32), divided down to about 200 Hz. Slow sensors (baro, GPS, flow) are still pushed in by the sensor task via `on_baro` / `on_gps` / ... |
+| Logging | New blackbox group `NAV_DEBUG`, present in every fast record (default 250 Hz, i.e. above 100 Hz) |
+| 15-state EKF (`ekf.h`) | Left as is, still runs in parallel (shadow). The new nav does **not** use it |
 
-Quy tắc chung:
-- Chỉ dùng float, không dùng double; không cấp phát động trong vòng bay.
-- Đơn vị SI, hệ NED, gốc tại home.
-- Phần toán thuần tách riêng để unit test; mỗi module có `reset()` và xử lý `dt` xấu.
-- Tham số nằm trong config, tên có hậu tố đơn vị.
-- Khi ALT / POS HOLD tắt, hành vi bay không đổi.
-- Nguồn tham khảo: ArduPilot, PX4, Betaflight, INAV. Chỉ học thuật toán, tự viết lại, ghi nguồn ở đầu file.
+General rules:
+- Float only, no double; no dynamic allocation in the flight loop.
+- SI units, NED frame, origin at home.
+- Pure math kept separate for unit testing; every module has `reset()` and handles a bad `dt`.
+- Parameters live in the config, with names suffixed by their unit.
+- When ALT / POS HOLD is off, flight behaviour is unchanged.
+- References: ArduPilot, PX4, Betaflight, INAV. Learn the algorithms only, rewrite them ourselves, credit the source at the top of the file.
 
-## Giai đoạn
+## Phases
 
-| | Nội dung | Trạng thái |
+| | Content | Status |
 |---|---|---|
-| P0 | Log nav + cách vẽ đồ thị | xong trên PC (0.34.0) |
-| P1 | `AltEstimator` (`nav/alt_estimator.h`, `nav/state_history.h`) | xong trên PC (0.35.0) |
-| P2 | ALT HOLD: vòng vận tốc + ước lượng ga treo + máy trạng thái (`nav/alt_control.h`) | xong trên PC (0.35.0) |
-| P3 | Vòng vị trí Z, cần ga = tốc độ lên/xuống, khoá độ cao, cất / hạ cánh (`nav/alt_control.h`) | xong trên PC (0.35.0) |
-| P4 | `PosEstimator` (`nav/pos_estimator.h`) | xong trên PC (0.35.0) |
-| P5 | POS HOLD (`nav/pos_control.h`, `nav/pos_hold.h`) | xong trên PC (0.35.0) |
-| P6 | An toàn: xử lý reset, hàng rào (fence), xuống cấp khi mất cảm biến | xong trên PC (0.35.0) |
-| P7 | Móc cho RTH / waypoint (`NavRequest`, GPS Rescue chạy trên `PosController` mới) | xong trên PC (0.35.0) |
-| P8 | Rescue viết lại theo ArduPilot / PX4: RTL (hình nón PX4, điểm dừng được, đường bay có giới hạn gia tốc, chờ trên home), SmartRTL, LAND; OSD báo số mét còn lại (`rescue.h`, `nav/breadcrumbs.h`, `docs/NAV.md` mục 4) | xong trên PC (0.36.0) |
+| P0 | Nav logging + how to plot it | done on PC (0.34.0) |
+| P1 | `AltEstimator` (`nav/alt_estimator.h`, `nav/state_history.h`) | done on PC (0.35.0) |
+| P2 | ALT HOLD: velocity loop + hover-throttle estimate + state machine (`nav/alt_control.h`) | done on PC (0.35.0) |
+| P3 | Z position loop, throttle stick = climb/descent rate, altitude lock, takeoff / landing (`nav/alt_control.h`) | done on PC (0.35.0) |
+| P4 | `PosEstimator` (`nav/pos_estimator.h`) | done on PC (0.35.0) |
+| P5 | POS HOLD (`nav/pos_control.h`, `nav/pos_hold.h`) | done on PC (0.35.0) |
+| P6 | Safety: reset handling, fence, degradation on sensor loss | done on PC (0.35.0) |
+| P7 | Hooks for RTH / waypoints (`NavRequest`, GPS Rescue running on the new `PosController`) | done on PC (0.35.0) |
+| P8 | Rescue rewritten after ArduPilot / PX4: RTL (PX4 cone, stoppable, acceleration-limited flight path, loiter above home), SmartRTL, LAND; OSD shows metres remaining (`rescue.h`, `nav/breadcrumbs.h`, `docs/NAV.md` section 4) | done on PC (0.36.0) |
 
-Người dùng chọn làm liền P1 đến P7 rồi mới thử trên mạch một lần (2026-10-28). **Chưa phần nào được thử trên mạch.**
+The user chose to do P1 through P7 in one go and then test on the board once (2026-10-28). **None of it has been tested on the board yet.**
 
-## P0 — log nav (0.34.0)
+## P0 — nav logging (0.34.0)
 
-`fc::nav::Log` (`src/core/nav/nav_log.h`) được `FlightCore::estimator_step` điền ở mỗi bước ước lượng (500 Hz). Blackbox nhóm `NAV_DEBUG` (bit 15 của `blackbox.fields`, mặc định tắt) ghi các trường sau vào mỗi bản ghi nhanh:
+`fc::nav::Log` (`src/core/nav/nav_log.h`) is filled by `FlightCore::estimator_step` at every estimator step (500 Hz). The blackbox group `NAV_DEBUG` (bit 15 of `blackbox.fields`, off by default) writes the following fields into every fast record:
 
-| Trường | Đơn vị | Ý nghĩa |
+| Field | Unit | Meaning |
 |---|---|---|
-| `nav_acc[0..2]` | m/s² | Gia tốc N, E, D đã bỏ trọng lực. Đứng yên thì cả ba khoảng 0; khi bay lên, D âm |
-| `nav_vib` | m/s² | Độ rung: \|a − trung bình 2 Hz\|, lọc 5 Hz (ArduPilot / PX4 cũng đánh giá accelerometer theo cách này) |
-| `nav_clip` | mẫu | Số mẫu accelerometer chạm biên (> `acc_clip_g` = 15.5 g) kể từ bước trước |
-| `nav_baro` | m | Độ cao baro so với điểm cất cánh (lên +) |
-| `nav_gps_pos[0..2]` | m | Vị trí GPS so với home: N, E, D |
-| `nav_gps_vel[0..2]` | m/s | Vận tốc GPS theo NED (D = 0 nếu module không đo) |
-| `nav_gps_hacc`, `nav_gps_sacc` | m, m/s | Độ chính xác vị trí / vận tốc do module tự báo |
-| `nav_gps_sats` | | Số vệ tinh |
-| `nav_gps_flags` | bit | bit 0: đã có fix; bit 1: có đo vận tốc dọc; bit 2: được dùng cho XY |
-| `nav_gps_seq` | | Tăng 1 ở mỗi fix: chỗ nào nó nhảy là có fix mới, nên xem được tần số GPS thật |
+| `nav_acc[0..2]` | m/s² | N, E, D acceleration with gravity removed. At rest all three are about 0; when climbing, D is negative |
+| `nav_vib` | m/s² | Vibration: \|a − 2 Hz mean\|, filtered at 5 Hz (ArduPilot / PX4 also assess the accelerometer this way) |
+| `nav_clip` | samples | Number of accelerometer samples hitting the limit (> `acc_clip_g` = 15.5 g) since the previous step |
+| `nav_baro` | m | Baro altitude relative to the takeoff point (up +) |
+| `nav_gps_pos[0..2]` | m | GPS position relative to home: N, E, D |
+| `nav_gps_vel[0..2]` | m/s | GPS velocity in NED (D = 0 if the module does not measure it) |
+| `nav_gps_hacc`, `nav_gps_sacc` | m, m/s | Position / velocity accuracy reported by the module itself |
+| `nav_gps_sats` | | Number of satellites |
+| `nav_gps_flags` | bit | bit 0: has a fix; bit 1: has vertical velocity; bit 2: used for XY |
+| `nav_gps_seq` | | Increments by 1 on each fix: wherever it steps there is a new fix, so the real GPS rate can be seen |
 
-GPS chỉ được đưa vào nav khi đã có home, tức là sau khi arm (giống bản cũ).
+GPS is only fed into nav once home is set, i.e. after arming (same as the old code).
 
-Cách xem: bật nhóm "Dữ liệu dẫn đường chi tiết" ở tab Blackbox, ghi một phiên, mở viewer rồi chọn nhóm đồ thị "Dẫn đường chi tiết". Nhóm này có 6 đồ thị: gia tốc NED, rung + clip, baro, vị trí GPS, vận tốc GPS, độ chính xác GPS. Cũng có thể xuất CSV từ viewer.
+How to view it: enable the "Detailed navigation data" group in the Blackbox tab, record a session, open the viewer and pick the "Detailed navigation" plot group. This group has 6 plots: NED acceleration, vibration + clip, baro, GPS position, GPS velocity, GPS accuracy. CSV can also be exported from the viewer.
 
-Kích thước: nhóm này thêm 38 byte vào mỗi bản ghi nhanh. Khi bật mọi nhóm với 8 motor, bản ghi là 148 byte (bộ đệm của recorder là 192 byte). Với tốc độ mặc định 250 Hz, nhóm này thêm khoảng 9.5 kB/s.
+Size: this group adds 38 bytes to every fast record. With every group enabled and 8 motors, a record is 148 bytes (the recorder's buffer is 192 bytes). At the default rate of 250 Hz this group adds about 9.5 kB/s.
 
-### Cần thử trên mạch (P0)
+### To test on the board (P0)
 
-1. Flash 0.34.0. Ở tab Blackbox, bật thêm nhóm **Dữ liệu dẫn đường chi tiết**; rate 250 Hz; trigger ARMED (hoặc ghi tay).
-2. **Cầm tay, không lắp cánh**, arm (hoặc ghi tay). Làm lần lượt:
-   - đứng yên 10 s;
-   - nâng lên khoảng 1 m rồi hạ xuống, 3 lần;
-   - nghiêng khoảng 30° qua lại;
-   - đi bộ khoảng 10 m về phía bắc rồi quay lại (nếu có GPS, làm ngoài trời).
-3. Gửi file log. Những điểm cần xem:
-   - Đứng yên: `nav_acc` cả ba trục gần 0 (lệch dưới khoảng 0.3 m/s²). Nếu lệch nhiều thì accelerometer chưa hiệu chỉnh, hoặc trục gắn sai.
-   - Khi nâng lên: `nav_acc[2]` âm rồi dương; `nav_baro` tăng khoảng 1 m, nhiễu baro dưới khoảng 0.3 m.
-   - Khi nghiêng: `nav_acc` gần như không đổi (trọng lực đã được bỏ đúng).
-   - `nav_vib` và `nav_clip` khi đứng yên. Nếu được thì làm thêm một lần **có cánh, buộc chặt máy, ga khoảng 50 %**: `nav_vib` dưới khoảng 3 m/s², `nav_clip` = 0. Nếu vượt thì phải giảm rung trước khi sang P2.
-   - GPS: `nav_gps_seq` tăng đều (5 / 10 Hz tuỳ module); khi đi 10 m về bắc, `nav_gps_pos[0]` tăng khoảng 10; xem `nav_gps_hacc` và `nav_gps_sats`.
+1. Flash 0.34.0. In the Blackbox tab, also enable the **Detailed navigation data** group; rate 250 Hz; trigger ARMED (or manual recording).
+2. **Hand-held, no props**, arm (or record manually). Do in turn:
+   - stay still for 10 s;
+   - lift about 1 m and lower again, 3 times;
+   - tilt about 30° back and forth;
+   - walk about 10 m north and back (if there is GPS, do this outdoors).
+3. Send the log file. Things to check:
+   - At rest: `nav_acc` near 0 on all three axes (off by less than about 0.3 m/s²). If it is off by a lot, the accelerometer is not calibrated or the axes are mounted wrong.
+   - When lifting: `nav_acc[2]` negative then positive; `nav_baro` rises about 1 m, baro noise below about 0.3 m.
+   - When tilting: `nav_acc` almost unchanged (gravity is removed correctly).
+   - `nav_vib` and `nav_clip` at rest. If possible, do one more run **with props, the craft tied down, about 50 % throttle**: `nav_vib` below about 3 m/s², `nav_clip` = 0. If exceeded, vibration must be reduced before moving to P2.
+   - GPS: `nav_gps_seq` increments steadily (5 / 10 Hz depending on the module); when walking 10 m north, `nav_gps_pos[0]` rises by about 10; check `nav_gps_hacc` and `nav_gps_sats`.
 
 ## P1 - P7 (0.35.0)
 
-Thay hẳn bản cũ. Các file `althold.h`, `vertical_est.h`, `horizontal_est.h`, `poshold.h`, `poscontrol.h` đã bị xoá. Unit test cũ của chúng nay chạy trên module mới:
-- test_nav (132 kiểm tra) dùng thẳng `nav::PosController`, `nav::PosHoldMode`, `nav::PosEstimator`;
-- test_core (Altitude Hold) qua một adapter nhỏ trong file test;
-- test của estimator cũ được viết lại trong `test_nav_est`.
+Fully replaces the old code. The files `althold.h`, `vertical_est.h`, `horizontal_est.h`, `poshold.h`, `poscontrol.h` have been deleted. Their old unit tests now run against the new modules:
+- test_nav (132 checks) uses `nav::PosController`, `nav::PosHoldMode`, `nav::PosEstimator` directly;
+- test_core (Altitude Hold) through a small adapter in the test file;
+- the old estimator's tests were rewritten in `test_nav_est`.
 
-Thứ tự trong `FlightCore`: **Estimator → Setpoint → Controller → Mode logic**. Tất cả chạy trong task bay; estimator ở `est_hz` (mặc định 500 Hz).
+Order in `FlightCore`: **Estimator → Setpoint → Controller → Mode logic**. Everything runs in the flight task; the estimator at `est_hz` (default 500 Hz).
 
-| Module | Việc | Điểm mới so với bản cũ |
+| Module | Job | What is new compared with the old code |
 |---|---|---|
-| `state_history.h` | Lưu trạng thái của khoảng 128 bước gần nhất | Đo đạc đến trễ (GPS 150 ms, baro, flow) được so với trạng thái **lúc đo**. Phần hiệu chỉnh áp vào cả hiện tại lẫn quá khứ (PX4 EKF2, INAV) |
-| `alt_estimator.h` | Độ cao NED: pos_d, vel_d, bias gia tốc, offset baro | NED; baro / GPS / vận tốc dọc GPS so với trạng thái trễ; innovation và test ratio của từng nguồn; reset được **đếm**, kèm bước nhảy |
-| `alt_control.h` | `HoverEstimator`, `AltSetpoint` (cần ga, trần), `AltController` (cascade vị trí → vận tốc → gia tốc đo), `AltHoldMode` (máy trạng thái) | Tách 4 phần; NED; khi estimator reset thì target dời theo, máy không bay theo bước nhảy; có trần độ cao |
-| `pos_estimator.h` | N/E: vị trí, vận tốc, bias | GPS so với trạng thái trễ; xử lý **glitch**: GPS bị loại suốt `glitch_reset_s` = 2 s thì đặt lại theo GPS, có đếm (ArduPilot EKF3) |
-| `pos_control.h` | Cascade NE của AC_PosControl | Target dời theo khi estimator reset |
-| `pos_hold.h` | Cảm giác PosHold của ArduCopter (phanh, loiter, học gió) | Xử lý reset; hàng rào bán kính có tính quãng dừng; đẩy cần về phía home thì phi công lấy lại |
-| `nav_math.h` | sqrt controller, góc nghiêng ↔ gia tốc, đổi trục NE ↔ thân, `NavRequest` | |
+| `state_history.h` | Stores the state of roughly the last 128 steps | Delayed measurements (GPS 150 ms, baro, flow) are compared with the state **at measurement time**. The correction is applied to both present and past (PX4 EKF2, INAV) |
+| `alt_estimator.h` | NED altitude: pos_d, vel_d, accel bias, baro offset | NED; baro / GPS / GPS vertical velocity compared with the delayed state; innovation and test ratio per source; resets are **counted**, with the step size |
+| `alt_control.h` | `HoverEstimator`, `AltSetpoint` (throttle stick, ceiling), `AltController` (cascade position → velocity → measured acceleration), `AltHoldMode` (state machine) | Split into 4 parts; NED; when the estimator resets, the target shifts with it so the craft does not follow the step; has an altitude ceiling |
+| `pos_estimator.h` | N/E: position, velocity, bias | GPS compared with the delayed state; **glitch** handling: if GPS is rejected for `glitch_reset_s` = 2 s, reset to GPS, counted (ArduPilot EKF3) |
+| `pos_control.h` | NE cascade from AC_PosControl | Target shifts when the estimator resets |
+| `pos_hold.h` | ArduCopter PosHold feel (brake, loiter, wind learning) | Reset handling; radius fence that accounts for stopping distance; pushing the stick toward home gives control back to the pilot |
+| `nav_math.h` | sqrt controller, lean angle ↔ acceleration, NE ↔ body axis rotation, `NavRequest` | |
 
-**Xuống cấp khi mất cảm biến** (giữ như bản cũ, đã có test vòng kín):
-- POS HOLD không còn vị trí / vận tốc → báo "unavailable", phi công bay Angle + ALT HOLD;
-- ALT HOLD mất độ cao → giữa cần ga = ga treo đo được;
-- baro im → GPS thay, không có bước nhảy.
+**Degradation on sensor loss** (kept from the old code, with closed-loop tests):
+- POS HOLD has no position / velocity → reports "unavailable", pilot flies Angle + ALT HOLD;
+- ALT HOLD loses altitude → throttle stick centre = measured hover throttle;
+- baro silent → GPS takes over, no step.
 
-**Hàng rào** (`nav.fence_alt_max`, `nav.fence_radius`; 0 = tắt; tab Vị trí):
-- trần: tốc độ leo được giảm để dừng dưới trần 0.5 m; cao hơn trần thì tự hạ;
-- bán kính: chỗ nào máy không còn kịp dừng trước vòng tròn thì cần không còn được theo, máy giữ ở mép;
-- khi hàng rào đang tác động, bit `FENCE` trong `nav_flags` được bật.
+**Fence** (`nav.fence_alt_max`, `nav.fence_radius`; 0 = off; Position tab):
+- ceiling: climb rate is reduced so the craft stops 0.5 m below the ceiling; above the ceiling it descends by itself;
+- radius: wherever the craft can no longer stop before the circle, the stick is no longer followed and the craft holds at the edge;
+- while the fence is acting, the `FENCE` bit in `nav_flags` is set.
 
-**Móc P7**: `FlightCore::set_nav_request(NavRequest, ms)` nhận một điểm (N, E), có thể kèm độ cao, hoặc một vận tốc. Yêu cầu chỉ được bay khi:
-- POS HOLD đang bật;
-- vị trí hợp lệ;
-- cần roll / pitch ở giữa;
-- yêu cầu được gửi lại trong `nav_request_timeout_ms` = 500 ms.
+**P7 hook**: `FlightCore::set_nav_request(NavRequest, ms)` takes a point (N, E), optionally with an altitude, or a velocity. A request is only flown when:
+- POS HOLD is on;
+- the position is valid;
+- the roll / pitch sticks are centred;
+- the request is resent within `nav_request_timeout_ms` = 500 ms.
 
-Phi công chạm cần là lấy lại máy. GPS Rescue (RTH) dùng `PosController` và `AltHoldMode` mới.
+Touching the sticks gives the pilot control back. GPS Rescue (RTH) uses the new `PosController` and `AltHoldMode`.
 
-**Log** (nhóm blackbox `NAV_DEBUG`): ngoài các trường của P0 còn có
+**Log** (blackbox group `NAV_DEBUG`): besides the P0 fields there are also
 - `nav_est_pd`, `nav_est_vd`, `nav_est_bias`, `nav_baro_off`;
-- `nav_baro_ratio`, `nav_gps_ratio` (lớn hơn 1 = bị loại);
-- `nav_resets[2]` (độ cao, vị trí);
+- `nav_baro_ratio`, `nav_gps_ratio` (greater than 1 = rejected);
+- `nav_resets[2]` (altitude, position);
 - `nav_est_pos[2]`, `nav_est_vel[2]`, `nav_tgt_pd`, `nav_tgt_vd`, `nav_hover`, `nav_tgt_pos[2]`;
-- `nav_ctl`: bit 0 ALT HOLD, 1 POS HOLD, 2 đang giữ, 3 hàng rào.
+- `nav_ctl`: bit 0 ALT HOLD, 1 POS HOLD, 2 holding, 3 fence.
 
-### Cần thử trên mạch (0.35.0), theo thứ tự, dừng ngay khi có gì lạ
+### To test on the board (0.35.0), in order, stop as soon as anything looks odd
 
-Bật nhóm blackbox "Dữ liệu dẫn đường chi tiết" cho mọi lần bay.
+Enable the blackbox group "Detailed navigation data" for every flight.
 
-1. **Cầm tay, không cánh** (như P0): `nav_est_pd` phải theo `-nav_baro`; đứng yên thì `nav_est_vd` gần 0 và `nav_baro_ratio` dưới 1.
-2. **ALT HOLD, chỗ rộng, gió nhẹ, độ cao thấp:**
-   - cất cánh bằng cần ga (máy tự ramp lên khoảng 0.6 m);
-   - giữ cần giữa 20 s: độ cao lệch dưới khoảng 0.3 m;
-   - đẩy lên rồi thả: dừng mượt, không vọt;
-   - hạ cần hết: hạ cánh, motor về idle.
-   - Trong log xem `nav_tgt_pd` với `nav_est_pd`, và `nav_hover` (ổn định, đúng mức ga treo).
-3. **Trần độ cao:** đặt `nav.fence_alt_max` = 5, ALT HOLD, đẩy cần lên hết: máy dừng khoảng 4.5 m.
-4. **POS HOLD (GPS + la bàn), ngoài trời:**
-   - bật trong lúc treo: giữ trong khoảng 1.5 m trong 30 s;
-   - đẩy pitch rồi thả: phanh, dừng, giữ;
-   - có gió thì xem máy nghiêng ngược gió.
-   - Trong log xem `nav_gps_ratio` (phần lớn dưới 1), `nav_resets[1]` (nên đứng yên), và `nav_tgt_pos` với `nav_est_pos`.
-5. **Hàng rào bán kính:** đặt `nav.fence_radius` = 20, POS HOLD, bay ra xa: máy dừng ở mép khoảng 20 m, app báo hàng rào; đẩy cần về phía home thì bay lại được.
-6. **GPS Rescue 0.36** (công tắc trước, chỗ trống, 30 - 50 m, khoảng 10 m cao; `docs/NAV.md` mục 4):
-   - **RTL**: leo tới độ cao bay về (cách xa hơn `rescue_min_start_dist` thì lên `rescue_return_alt`), bay thẳng về với mũi theo hướng bay, hạ xuống 10 m trên home, chờ 5 s, hạ cánh, tự disarm. Kính: `RTL ..M` giảm dần, rồi `RTL HOME`, `RTL LAND`.
-   - **SmartRTL**: bay hình chữ L (ra bắc rồi sang đông), bật rescue: máy phải về theo chữ L, không cắt chéo.
-   - **LAND**: bật rescue: máy hạ ngay tại chỗ, đứng yên (trong khoảng 2 - 3 m) cả khi có gió.
-   - Chỉ khi công tắc chạy đúng mới đặt failsafe = Rescue và thử tắt tay điều khiển.
-   - Trong log xem `rescue_phase`, `nav_target_n/e` (điểm đích chạy dọc đường bay) với vị trí máy.
+1. **Hand-held, no props** (as in P0): `nav_est_pd` must follow `-nav_baro`; at rest `nav_est_vd` near 0 and `nav_baro_ratio` below 1.
+2. **ALT HOLD, open area, light wind, low altitude:**
+   - take off with the throttle stick (the craft ramps up to about 0.6 m by itself);
+   - hold the stick centred for 20 s: altitude error below about 0.3 m;
+   - push up then release: smooth stop, no overshoot;
+   - lower the stick fully: lands, motors go to idle.
+   - In the log check `nav_tgt_pd` against `nav_est_pd`, and `nav_hover` (stable, at the right hover throttle).
+3. **Altitude ceiling:** set `nav.fence_alt_max` = 5, ALT HOLD, push the stick fully up: the craft stops at about 4.5 m.
+4. **POS HOLD (GPS + compass), outdoors:**
+   - enable while hovering: holds within about 1.5 m for 30 s;
+   - push pitch then release: brakes, stops, holds;
+   - in wind, check that the craft leans into the wind.
+   - In the log check `nav_gps_ratio` (mostly below 1), `nav_resets[1]` (should stay constant), and `nav_tgt_pos` against `nav_est_pos`.
+5. **Radius fence:** set `nav.fence_radius` = 20, POS HOLD, fly away: the craft stops at the edge at about 20 m, the app reports the fence; pushing the stick toward home lets it fly back.
+6. **GPS Rescue 0.36** (switch first, open area, 30 - 50 m, about 10 m high; `docs/NAV.md` section 4):
+   - **RTL**: climbs to the return altitude (farther than `rescue_min_start_dist` → goes up to `rescue_return_alt`), flies straight back with the nose along the flight direction, descends to 10 m above home, waits 5 s, lands, disarms by itself. Goggles: `RTL ..M` counting down, then `RTL HOME`, `RTL LAND`.
+   - **SmartRTL**: fly an L shape (north then east), enable rescue: the craft must return along the L, not cut diagonally.
+   - **LAND**: enable rescue: the craft descends right where it is and stays put (within about 2 - 3 m) even in wind.
+   - Only once the switch works correctly set failsafe = Rescue and test switching the transmitter off.
+   - In the log check `rescue_phase`, `nav_target_n/e` (the target point running along the flight path) against the craft's position.
 
-Gửi log của từng bước. Nếu ALT HOLD dao động, giảm `althold.acc_p` / `acc_i`. Nếu POS HOLD lắc, giảm `nav.vel_p`.
+Send the log from each step. If ALT HOLD oscillates, lower `althold.acc_p` / `acc_i`. If POS HOLD wobbles, lower `nav.vel_p`.

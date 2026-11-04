@@ -1,173 +1,173 @@
-# MAVLink qua ExpressLRS (ELRS)
+# MAVLink over ExpressLRS (ELRS)
 
-Cách đưa telemetry MAVLink của Windburst lên Mission Planner / QGroundControl bằng phần cứng ELRS. Viết theo tài liệu ELRS (`expresslrs.org/software/mavlink`), mã nguồn ELRS (receiver: `src/src/rx-serial/SerialMavlink.cpp`; TX: `src/lib/MAVLink/MAVLink.cpp`), Betaflight (`rx/mavlink.c`, `telemetry/mavlink.c`) và ArduPilot (`GCS_MAVLINK::handle_radio_status`), đối chiếu với firmware Windburst 0.40.0. **Chưa thử trên mạch thật.**
+How to get Windburst's MAVLink telemetry to Mission Planner / QGroundControl using ELRS hardware. Written from the ELRS documentation (`expresslrs.org/software/mavlink`), the ELRS source (receiver: `src/src/rx-serial/SerialMavlink.cpp`; TX: `src/lib/MAVLink/MAVLink.cpp`), Betaflight (`rx/mavlink.c`, `telemetry/mavlink.c`) and ArduPilot (`GCS_MAVLINK::handle_radio_status`), cross-checked against Windburst firmware 0.40.0. **Not yet tried on a real board.**
 
-## Tóm tắt: dùng được cách nào
+## Summary: which methods work
 
-| Cách | Lệnh điều khiển đi bằng | Telemetry tới | Với Windburst |
+| Method | Control commands go over | Telemetry goes to | With Windburst |
 |---|---|---|---|
-| 1. ELRS bình thường (CRSF) | ELRS, CRSF | màn hình tay phát (EdgeTX "Discover new") | **Dùng được** (từ 0.8.0, `docs/RX.md`) |
-| 2. Một cặp ELRS thứ hai làm radio telemetry | receiver chính (ELRS CRSF hay loại khác) | Mission Planner / QGroundControl | **Dùng được, chỉ xem** (chưa thử trên mạch) |
-| 3. ELRS chế độ MAVLink: một link cho cả điều khiển lẫn telemetry | ELRS, MAVLink | tay phát + ground station | **Dùng được từ 0.39.0** (chưa thử trên mạch) |
+| 1. Normal ELRS (CRSF) | ELRS, CRSF | transmitter screen (EdgeTX "Discover new") | **Works** (since 0.8.0, `docs/RX.md`) |
+| 2. A second ELRS pair as a telemetry radio | main receiver (ELRS CRSF or another type) | Mission Planner / QGroundControl | **Works, view only** (not yet tried on a board) |
+| 3. ELRS in MAVLink mode: one link for both control and telemetry | ELRS, MAVLink | transmitter + ground station | **Works since 0.39.0** (not yet tried on a board) |
 
-Cách 3 là cách nên dùng nếu cần ground station: một receiver, một UART, không cần radio thứ hai.
+Method 3 is the recommended one if you need a ground station: one receiver, one UART, no second radio.
 
-## Cảnh báo: firmware và cài đặt phải khớp với Link Mode
+## Warning: firmware and settings must match the Link Mode
 
-Ở chế độ MAVLink, receiver ELRS **không gửi CRSF nữa**. Nó gửi lệnh điều khiển bằng message `RC_CHANNELS_OVERRIDE`. Vì vậy:
-- Firmware **cũ hơn 0.39.0** không đọc được message này: đổi Link Mode sang MAVLink là **mất điều khiển** (không arm được, đang bay thì vào failsafe).
-- Từ 0.39.0: đổi Link Mode sang MAVLink thì **phải** đổi `receiver.protocol` thành `MAVLINK` cùng lúc, và ngược lại. Giao thức không khớp thì receiver vẫn gửi nhưng mạch bay không nhận ra khung nào. Trước khi bay, xem tab Receiver: "Tín hiệu: có", khoảng 100 khung/s.
+In MAVLink mode the ELRS receiver **no longer sends CRSF**. It sends the control commands as `RC_CHANNELS_OVERRIDE` messages. Therefore:
+- Firmware **older than 0.39.0** cannot read this message: switching Link Mode to MAVLink means **losing control** (cannot arm; in flight it goes into failsafe).
+- Since 0.39.0: when switching Link Mode to MAVLink you **must** change `receiver.protocol` to `MAVLINK` at the same time, and vice versa. If the protocol does not match, the receiver still sends but the flight controller recognises no frames. Before flying, check the Receiver tab: "Link: yes", about 100 frames/s.
 
-## Cách 1: ELRS bình thường, telemetry về tay phát
+## Method 1: normal ELRS, telemetry to the transmitter
 
-Receiver ELRS để giao thức CRSF (mặc định), nối hai dây vào một UART. Ở app, tab Receiver: giao thức CRSF, có chân TX, `receiver.telemetry` bật. Trên tay phát EdgeTX: Telemetry → "Discover new" sẽ thấy pin, dòng, mAh, tư thế, GPS, độ cao, vario, chế độ bay. Chi tiết: `docs/RX.md`, mục "Telemetry CRSF".
+ELRS receiver left on the CRSF protocol (default), two wires to a UART. In the app, Receiver tab: protocol CRSF, TX pin set, `receiver.telemetry` on. On the EdgeTX transmitter: Telemetry → "Discover new" will find battery, current, mAh, attitude, GPS, altitude, vario, flight mode. Details: `docs/RX.md`, section "CRSF telemetry".
 
-Cách này không có ground station trên máy tính.
+This method has no ground station on a computer.
 
-## Cách 3: một link ELRS cho cả điều khiển lẫn telemetry (từ 0.39.0)
+## Method 3: one ELRS link for both control and telemetry (since 0.39.0)
 
-### Cần có
-- **TX module và receiver ELRS chạy ESP** (loại có WiFi). Receiver dùng chip STM32 không chạy được chế độ MAVLink.
-- **Firmware ELRS 3.5.0 trở lên** cho cả hai. Nếu dùng WiFi của backpack thì TX Backpack phải từ 1.5.0 trở lên.
-- **Windburst 0.39.0 trở lên** (nạp firmware và build lại app, vì schema đã đổi).
-- Nên dùng hàng 2,4 GHz hoặc LR1121; hàng 900 MHz đời cũ (SX127x) chở được rất ít telemetry.
+### Requirements
+- **ESP-based ELRS TX module and receiver** (the kind with WiFi). Receivers with an STM32 chip cannot run MAVLink mode.
+- **ELRS firmware 3.5.0 or newer** on both. If you use the backpack's WiFi, the TX Backpack must be 1.5.0 or newer.
+- **Windburst 0.39.0 or newer** (flash the firmware and rebuild the app, since the schema changed).
+- Preferably 2.4 GHz or LR1121 hardware; old 900 MHz hardware (SX127x) carries very little telemetry.
 
-### Bước 1: cài ELRS
-1. Bật tay phát và receiver, đợi ELRS Lua script hiện chữ **C** ở góc phải trên (đã nối với nhau).
-2. Đặt giao thức serial của receiver thành **MAVLink**.
-   - ELRS 3.x: Lua script → Other Devices → chọn receiver → giao thức serial = MAVLink.
-   - ELRS 4.x: bỏ qua bước này, receiver tự đổi khi TX đổi Link Mode.
-3. Tắt receiver (Link Mode không đổi được khi đang nối), rồi đặt **Link Mode = MAVLink** ở menu chính của Lua script. Tỉ lệ telemetry tự thành 1:2 và không đổi được.
-4. Chọn packet rate theo bảng băng thông ở dưới.
+### Step 1: set up ELRS
+1. Power the transmitter and receiver, wait until the ELRS Lua script shows a **C** in the top right corner (connected).
+2. Set the receiver's serial protocol to **MAVLink**.
+   - ELRS 3.x: Lua script → Other Devices → select the receiver → serial protocol = MAVLink.
+   - ELRS 4.x: skip this step, the receiver switches by itself when the TX changes Link Mode.
+3. Power off the receiver (Link Mode cannot be changed while connected), then set **Link Mode = MAVLink** in the Lua script's main menu. The telemetry ratio becomes 1:2 automatically and cannot be changed.
+4. Choose the packet rate from the bandwidth table below.
 
-### Bước 2: nối dây
-Giống hệt receiver CRSF: hai dây vào UART của receiver (chân `rx_rx`, `rx_tx` ở tab Chân và cổng, nhóm "Receiver nối tiếp").
+### Step 2: wiring
+Exactly like a CRSF receiver: two wires to the receiver UART (pins `rx_rx`, `rx_tx` in the Pins and ports tab, group "Serial receiver").
 
-| Mạch bay (Windburst) | Receiver ELRS |
+| Flight controller (Windburst) | ELRS receiver |
 |---|---|
-| `pins.rx_rx` (RX của UART) | TX |
-| `pins.rx_tx` (TX của UART) | RX |
+| `pins.rx_rx` (UART RX) | TX |
+| `pins.rx_tx` (UART TX) | RX |
 | 5 V, GND | 5 V, GND |
 
-Lần này **cần cả hai dây**: dây vào mang cần điều khiển và `RADIO_STATUS`, dây ra mang telemetry.
+This time **both wires are needed**: the incoming wire carries the sticks and `RADIO_STATUS`, the outgoing wire carries telemetry.
 
-### Bước 3: cài Windburst
-- Tab Receiver: **Giao thức = MAVLink (ELRS ở chế độ MAVLink)**, **Telemetry về tay điều khiển = bật**. Thứ tự kênh vẫn như ELRS CRSF (AETR).
-- Tab Chân và cổng, khối "Telemetry (MAVLink)": chỉ còn dùng **System ID** (để 1, là Target SysID mặc định của ELRS) và **tốc độ gửi** từng nhóm. Giao thức, baud, chân TX / RX của khối này không dùng; giao thức để NONE cũng được.
-- Baud của UART receiver tự là **460800** (tốc độ ELRS dùng ở chế độ MAVLink), không cần đặt.
+### Step 3: set up Windburst
+- Receiver tab: **Protocol = MAVLink (ELRS in MAVLink mode)**, **Telemetry to the transmitter = on**. Channel order stays as for ELRS CRSF (AETR).
+- Pins and ports tab, "Telemetry (MAVLink)" block: only the **System ID** (leave at 1, ELRS's default Target SysID) and each group's **send rate** are used. This block's protocol, baud, TX / RX pins are unused; leaving the protocol at NONE is fine.
+- The receiver UART baud is automatically **460800** (the speed ELRS uses in MAVLink mode), no need to set it.
 
-Lưu rồi khởi động lại. Báo cáo khởi động phải có hai dòng:
+Save and restart. The startup report must have two lines:
 ```
 rx: MAVLINK on UART2, MAVLink telemetry on its TX pin
 telemetry: MAVLink 2, system id 1, on the receiver's UART (UART2 TX GPIOnn, 460800 baud)
 ```
-Nếu thấy `telemetry: FAILED - the receiver's UART has no TX pin (pins.rx_tx)`: chưa đặt chân TX của receiver. Cần điều khiển vẫn chạy, chỉ không có telemetry.
+If you see `telemetry: FAILED - the receiver's UART has no TX pin (pins.rx_tx)`: the receiver's TX pin is not set. The sticks still work, there is just no telemetry.
 
-### Bước 4: tay phát
-Cần, công tắc, mode đặt như bình thường trên EdgeTX. TX module ELRS tự đổi MAVLink thành telemetry CRSF cho tay phát: Telemetry → "Discover new" thấy pin, GPS, tư thế, độ cao / vario, chế độ bay. Tên chế độ theo mã của ArduCopter, có thêm `*` khi chưa arm (ví dụ `STAB*`). ELRS chỉ đọc khung có component id 1, đúng là cái Windburst gửi.
+### Step 4: transmitter
+Sticks, switches and modes are set up as usual in EdgeTX. The ELRS TX module converts MAVLink into CRSF telemetry for the transmitter by itself: Telemetry → "Discover new" finds battery, GPS, attitude, altitude / vario, flight mode. Mode names follow ArduCopter's codes, with a `*` added while disarmed (for example `STAB*`). ELRS only reads frames with component id 1, which is exactly what Windburst sends.
 
-### Bước 5: ground station
-Như bước 4 của cách 2 bên dưới: cắm USB vào TX module (460800 baud), hoặc qua WiFi của backpack (UDP 14550).
+### Step 5: ground station
+As step 4 of method 2 below: plug USB into the TX module (460800 baud), or via the backpack's WiFi (UDP 14550).
 
-### Firmware tự điều tiết tốc độ gửi
-Receiver ELRS có bộ đệm 1 kB cho telemetry. Bộ đệm đầy thì byte mới bị mất, và khung MAVLink chứa chúng hỏng theo. Mỗi 10 ms receiver gửi `RADIO_STATUS`, trong đó `txbuf` = % bộ đệm còn trống. Windburst dùng nó theo hai cách (`telemetry/mavlink_telemetry.h`):
-- **Như Betaflight** (`mavlink_min_txbuff` = 35): khi `txbuf` ≤ 35 % thì không gửi gì, đợi receiver gửi bớt.
-- **Như ArduPilot** (`stream_slowdown_ms`): `txbuf` < 20 thì chu kỳ mỗi nhóm dài thêm 60 ms, < 50 thì thêm 20 ms (tối đa khoảng 2 s); > 95 thì bớt 40 ms, > 90 thì bớt 20 ms. Riêng HEARTBEAT giữ 1 Hz và STATUSTEXT không bị làm chậm, như ArduPilot. Thiếu HEARTBEAT quá lâu thì ground station báo mất kết nối.
+### The firmware throttles its send rate by itself
+The ELRS receiver has a 1 kB telemetry buffer. When the buffer is full new bytes are lost, and the MAVLink frames containing them are corrupted. Every 10 ms the receiver sends `RADIO_STATUS`, where `txbuf` = % of the buffer still free. Windburst uses it in two ways (`telemetry/mavlink_telemetry.h`):
+- **Like Betaflight** (`mavlink_min_txbuff` = 35): when `txbuf` ≤ 35 % nothing is sent, waiting for the receiver to drain.
+- **Like ArduPilot** (`stream_slowdown_ms`): `txbuf` < 20 → each group's period gets 60 ms longer, < 50 → 20 ms longer (up to about 2 s); > 95 → 40 ms shorter, > 90 → 20 ms shorter. HEARTBEAT alone stays at 1 Hz and STATUSTEXT is not slowed, as in ArduPilot. Missing HEARTBEAT for too long makes the ground station report a lost connection.
 
-Trên máy tính đã thử với bộ đệm giả lập: packet rate 250Hz (khoảng 360 B/s đi xuống) với tốc độ mặc định (khoảng 1400 B/s) thì 10 giây không mất byte nào, bộ đệm cao nhất khoảng 870 / 1024 byte. HEARTBEAT vẫn đủ 1 Hz, các nhóm khác chậm lại. Muốn ATTITUDE mượt hơn ở packet rate thấp, đặt tốc độ gửi theo bảng ở dưới để không phải chờ điều tiết.
+Tried on a computer with a simulated buffer: packet rate 250Hz (about 360 B/s downlink) with the default rates (about 1400 B/s) lost no byte in 10 seconds, the buffer peaked at about 870 / 1024 bytes. HEARTBEAT still kept 1 Hz, the other groups slowed down. For smoother ATTITUDE at low packet rates, set the send rates from the table below so it does not have to wait on throttling.
 
-### Giới hạn
-- Từ 0.40 ground station **nạp / tải mission, đổi chế độ, RTL, bắt đầu mission, disarm** qua chính link này; **arm** khi bật `telemetry.remote_arm` (`docs/MAVLINK.md`, mục "Nhận từ ground station"). Tham số thì chưa: Mission Planner sẽ thử tải tham số rồi hết thời gian chờ, bỏ qua thông báo đó.
-- Không kiểm `target_system` của `RC_CHANNELS_OVERRIDE` (như Betaflight): trên dây này chỉ có một người gửi là receiver.
-- Mất sóng: receiver ngừng gửi `RC_CHANNELS_OVERRIDE`, sau `receiver.rx_timeout_ms` thì mạch bay vào failsafe như mọi giao thức khác.
+### Limits
+- Since 0.40 the ground station can **upload / download missions, change mode, RTL, start a mission, disarm** over this same link; **arm** when `telemetry.remote_arm` is on (`docs/MAVLINK.md`, section "Receiving from the ground station"). Parameters not yet: Mission Planner will try to load parameters and time out; ignore that message.
+- The `target_system` of `RC_CHANNELS_OVERRIDE` is not checked (as in Betaflight): on this wire the only sender is the receiver.
+- Signal loss: the receiver stops sending `RC_CHANNELS_OVERRIDE`; after `receiver.rx_timeout_ms` the flight controller goes into failsafe as with any other protocol.
 
-## Cách 2: cặp ELRS thứ hai làm radio telemetry
+## Method 2: a second ELRS pair as a telemetry radio
 
-Giống một bộ radio telemetry 433 / 915 MHz (SiK), nhưng dùng phần cứng ELRS. Cặp này **chỉ chở telemetry**. Lệnh điều khiển vẫn đi qua receiver chính như bình thường. Dùng khi receiver chính không phải ELRS, hoặc muốn giữ link điều khiển ở CRSF.
+Like a 433 / 915 MHz telemetry radio set (SiK), but using ELRS hardware. This pair **carries telemetry only**. Control commands still go through the main receiver as usual. Use it when the main receiver is not ELRS, or you want to keep the control link on CRSF.
 
-### Cần có
-- **TX module ELRS chạy ESP32** (có WiFi). Nó cắm USB vào máy tính, không cần gắn vào tay phát. Module trong tay phát (ví dụ TX16S có ELRS bên trong) không cắm USB được: phải dùng WiFi của backpack.
-- **Receiver ELRS chạy ESP**, **firmware ELRS 3.5.0 trở lên**, như cách 3.
-- **Một UART còn trống** trên mạch bay.
-- **Binding phrase riêng** cho cặp này, khác cặp điều khiển.
+### Requirements
+- **ESP32-based ELRS TX module** (with WiFi). It plugs into the computer over USB, it does not need to be attached to a transmitter. A module inside a transmitter (for example a TX16S with internal ELRS) cannot be plugged in over USB: you must use the backpack's WiFi.
+- **ESP-based ELRS receiver**, **ELRS firmware 3.5.0 or newer**, as for method 3.
+- **A free UART** on the flight controller.
+- **A separate binding phrase** for this pair, different from the control pair.
 
-### Bước 1: cài ELRS
-1. Gắn TX module vào tay phát, chọn **Model ID 0** trong EdgeTX. Khi chạy không có tay phát, ELRS dùng cài đặt của Model ID 0.
-2. Làm như bước 1 của cách 3 (giao thức serial MAVLink, Link Mode MAVLink, packet rate).
+### Step 1: set up ELRS
+1. Attach the TX module to the transmitter, select **Model ID 0** in EdgeTX. When running without a transmitter, ELRS uses the Model ID 0 settings.
+2. Do step 1 of method 3 (serial protocol MAVLink, Link Mode MAVLink, packet rate).
 
-### Bước 2: nối dây
-| Mạch bay (Windburst) | Receiver ELRS thứ hai |
+### Step 2: wiring
+| Flight controller (Windburst) | Second ELRS receiver |
 |---|---|
-| `telemetry.tx_pin` (TX của UART) | RX |
-| `telemetry.rx_pin` (RX của UART) | TX |
+| `telemetry.tx_pin` (UART TX) | RX |
+| `telemetry.rx_pin` (UART RX) | TX |
 | 5 V, GND | 5 V, GND |
 
-Dây RX mang lệnh và mission của ground station (0.40); không nối thì chỉ xem được. Trên STM32 phải đặt `rx_pin`, vì firmware cần chân này để khởi động UART. `RC_CHANNELS_OVERRIDE` và `RADIO_STATUS` của receiver này bị bỏ qua: cặp này không điều khiển được máy bay, và **không có điều tiết tốc độ** - phải tự chọn tốc độ gửi theo bảng băng thông.
+The RX wire carries commands and missions from the ground station (0.40); without it, view only. On STM32 `rx_pin` must be set, because the firmware needs this pin to start the UART. This receiver's `RC_CHANNELS_OVERRIDE` and `RADIO_STATUS` are ignored: this pair cannot control the craft, and there is **no rate throttling** - you must pick the send rates yourself from the bandwidth table.
 
-### Bước 3: cài Windburst (tab Chân và cổng, khối "Telemetry (MAVLink)")
-- Giao thức: **MAVLink**. Baud: **460800**. Chân TX / RX: theo bước 2.
-- System ID: **1**. Tốc độ gửi: theo bảng băng thông.
-- Nếu receiver chính cũng là ELRS ở chế độ MAVLink (cách 3) với `receiver.telemetry` bật, telemetry đi theo receiver chính và khối này không dùng chân TX nữa (báo cáo khởi động ghi `telemetry.tx_pin is not used`).
+### Step 3: set up Windburst (Pins and ports tab, "Telemetry (MAVLink)" block)
+- Protocol: **MAVLink**. Baud: **460800**. TX / RX pins: per step 2.
+- System ID: **1**. Send rates: per the bandwidth table.
+- If the main receiver is also ELRS in MAVLink mode (method 3) with `receiver.telemetry` on, telemetry goes through the main receiver and this block no longer uses the TX pin (the startup report says `telemetry.tx_pin is not used`).
 
-Lưu rồi khởi động lại. Báo cáo khởi động phải có dòng `telemetry: MAVLink 2, system id 1, UARTx TX GPIOnn, 460800 baud`. Cách chọn UART và chân: `docs/MAVLINK.md`.
+Save and restart. The startup report must have the line `telemetry: MAVLink 2, system id 1, UARTx TX GPIOnn, 460800 baud`. How the UART and pins are chosen: `docs/MAVLINK.md`.
 
-### Bước 4: nối ground station (dùng chung cho cách 2 và 3)
-- **Qua USB (nên thử trước):** cắm TX module vào máy tính, bật máy bay.
-  - Mission Planner: chọn cổng COM của TX module, baud **460800**, bấm Connect.
-  - QGroundControl: tắt hết auto-connect, tạo Comm Link kiểu Serial, baud 460800. **Trên Windows phải tick "Force DTR Low"** (Advanced Settings); không tick thì TX module khởi động lại hoặc treo. Tuỳ chọn này mới có, nên ELRS khuyên dùng bản QGC daily build.
-  - Module trong tay phát không cắm USB được: dùng WiFi.
-- **Qua WiFi (cần TX Backpack):** trong Lua script, Backpack → **Telemetry = WiFi**. **Không** bật WiFi bằng mục "Enable Backpack WiFi": mục đó đưa backpack vào chế độ nạp firmware, không phải MAVLink.
-  - Máy tính vào mạng `ExpressLRS TX Backpack XXXXXX`, mật khẩu `expresslrs` (backpack là 10.0.0.1).
-  - Mission Planner: chọn UDP, cổng **14550**. QGroundControl: bật auto-connect UDP.
-- Mission Planner: bật `telemetry.mp_home_item` để Read WPs không mất lệnh đầu (`docs/MAVLINK.md`, mục "Dùng với Mission Planner").
+### Step 4: connect the ground station (shared by methods 2 and 3)
+- **Over USB (try this first):** plug the TX module into the computer, power the craft.
+  - Mission Planner: select the TX module's COM port, baud **460800**, press Connect.
+  - QGroundControl: turn off all auto-connect, create a Serial Comm Link, baud 460800. **On Windows you must tick "Force DTR Low"** (Advanced Settings); otherwise the TX module restarts or hangs. This option is new, so ELRS recommends the QGC daily build.
+  - A module inside a transmitter cannot be plugged in over USB: use WiFi.
+- **Over WiFi (needs a TX Backpack):** in the Lua script, Backpack → **Telemetry = WiFi**. Do **not** turn on WiFi with the "Enable Backpack WiFi" item: that puts the backpack into firmware update mode, not MAVLink.
+  - The computer joins the network `ExpressLRS TX Backpack XXXXXX`, password `expresslrs` (the backpack is 10.0.0.1).
+  - Mission Planner: select UDP, port **14550**. QGroundControl: turn on UDP auto-connect.
+- Mission Planner: turn on `telemetry.mp_home_item` so that Read WPs does not lose the first command (`docs/MAVLINK.md`, section "Using with Mission Planner").
 
-### Bước 5: thấy gì trên ground station
-- **Hiện được:** HUD (tư thế, độ cao, tốc độ), vị trí GPS trên bản đồ, pin, chế độ bay (theo mã chế độ của ArduCopter), các dòng STATUSTEXT (báo cáo khởi động, "Arming blocked: ...", "Armed").
-- **Cách 3 và cách 2 (khi nối dây RX của UART telemetry):** nạp / tải mission, đổi chế độ, RTL, bắt đầu mission, disarm, arm nếu bật `remote_arm` (`docs/MAVLINK.md`).
-- **Chưa có:** tham số.
+### Step 5: what you see on the ground station
+- **Shown:** HUD (attitude, altitude, speed), GPS position on the map, battery, flight mode (by ArduCopter mode code), STATUSTEXT lines (startup report, "Arming blocked: ...", "Armed").
+- **Method 3 and method 2 (with the telemetry UART's RX wire connected):** upload / download missions, change mode, RTL, start a mission, disarm, arm if `remote_arm` is on (`docs/MAVLINK.md`).
+- **Not yet:** parameters.
 
-## Băng thông: chọn tốc độ gửi
+## Bandwidth: choosing the send rates
 
-Cách 3 tự điều tiết, nhưng tốc độ đặt vừa với sức chở thì dữ liệu đều hơn (không bị dồn rồi chờ). Cách 2 **không** điều tiết, nên tổng lượng gửi phải thấp hơn rõ sức chở. Nếu không, bộ đệm của receiver đầy và các khung bị bỏ (trang MAVLink trên WebUI của backpack có số "Buffer overflows").
+Method 3 throttles itself, but rates set to fit the capacity give more even data (no bursts followed by waits). Method 2 does **not** throttle, so the total sent must be clearly below the capacity. Otherwise the receiver's buffer fills and frames are dropped (the MAVLink page on the backpack's WebUI has a "Buffer overflows" counter).
 
-**Windburst gửi bao nhiêu** (MAVLink 2: 12 byte khung + nội dung):
+**How much Windburst sends** (MAVLink 2: 12 bytes of framing + payload):
 
-| Message | Byte / khung | Tốc độ (trường) | Mặc định | B/s ở mặc định |
+| Message | Bytes / frame | Rate (field) | Default | B/s at default |
 |---|---|---|---|---|
-| HEARTBEAT | 21 | luôn 1 Hz | 1 | 21 |
+| HEARTBEAT | 21 | always 1 Hz | 1 | 21 |
 | ATTITUDE | 40 | `rate_attitude` | 10 | 400 |
 | GLOBAL_POSITION_INT + GPS_RAW_INT | 40 + 64 | `rate_position` | 5 | 520 |
 | VFR_HUD | 32 | `rate_hud` | 4 | 128 |
 | SYS_STATUS + BATTERY_STATUS | 55 + 66 | `rate_status` | 2 | 242 |
 | RC_CHANNELS | 54 | `rate_rc` | 2 | 108 |
-| **Tổng** | | | | **≈ 1420** |
+| **Total** | | | | **≈ 1420** |
 
-Byte / khung là mức tối đa (GPS_RAW_INT, SYS_STATUS, BATTERY_STATUS gửi cả phần mở rộng của MAVLink 2). MAVLink 2 cắt các byte 0 ở cuối, nên thực tế thường gửi ít hơn. GPS_RAW_INT chỉ gửi khi có GPS, BATTERY_STATUS chỉ khi có đo pin. Ở cách 3, RC_CHANNELS chỉ lặp lại cần mà tay phát đã biết: có thể để `rate_rc` = 0.
+Bytes / frame is the maximum (GPS_RAW_INT, SYS_STATUS, BATTERY_STATUS also send the MAVLink 2 extensions). MAVLink 2 trims trailing zero bytes, so in practice less is usually sent. GPS_RAW_INT is only sent when there is a GPS, BATTERY_STATUS only when the battery is measured. In method 3, RC_CHANNELS only repeats sticks the transmitter already knows: `rate_rc` can be 0.
 
-**ELRS chở được bao nhiêu** chiều máy bay → đất, theo bảng của ELRS ở tỉ lệ 1:2. Cột "gợi ý" là bộ tốc độ giữ dưới khoảng 70 % sức chở:
+**How much ELRS can carry** in the craft → ground direction, per the ELRS table at a 1:2 ratio. The "suggested" column is a rate set that stays under about 70 % of capacity:
 
-| Packet rate (2,4 GHz) | Sức chở | Gợi ý `attitude / position / hud / status / rc` | Windburst gửi |
+| Packet rate (2.4 GHz) | Capacity | Suggested `attitude / position / hud / status / rc` | Windburst sends |
 |---|---|---|---|
-| F1000 (SX128x), K1000 (LR1121) | ~2375 B/s | mặc định 10 / 5 / 4 / 2 / 2 | ≤ 1420 B/s |
+| F1000 (SX128x), K1000 (LR1121) | ~2375 B/s | default 10 / 5 / 4 / 2 / 2 | ≤ 1420 B/s |
 | 333Hz Full | ~1470 B/s | 5 / 2 / 2 / 1 / 1 | ≤ 670 B/s |
 | 500Hz | ~1185 B/s | 5 / 2 / 2 / 1 / 1 | ≤ 670 B/s |
 | 250Hz | ~590 B/s | 2 / 1 / 1 / 1 / 0 | ≤ 360 B/s |
 | 100Hz Full | ~435 B/s | 1 / 1 / 0 / 1 / 0 | ≤ 290 B/s |
-| 150Hz | ~350 B/s | không nên: bộ nhỏ nhất (1 / 1 / 0 / 1 / 0) đã tới 82 % | – |
-| 50Hz | ~110 B/s | không đủ | – |
+| 150Hz | ~350 B/s | not recommended: the smallest set (1 / 1 / 0 / 1 / 0) already reaches 82 % | – |
+| 50Hz | ~110 B/s | not enough | – |
 
-Packet rate cao chở nhiều nhưng tầm ngắn hơn. Ở cách 3, packet rate cũng là tốc độ gửi cần điều khiển: chọn theo việc bay trước (tầm, độ trễ), rồi mới chỉnh tốc độ telemetry cho vừa. Ở cách 2, cặp telemetry mất sóng thì chỉ mất hình trên ground station, nên 333Hz Full là lựa chọn cân bằng. Hàng 900 MHz: xem bảng trên trang ELRS; ở 200Hz (~470 B/s) dùng bộ 1 / 1 / 1 / 1 / 0 (≤ 320 B/s).
+A high packet rate carries more but has shorter range. In method 3 the packet rate is also the stick update rate: choose it for flying first (range, latency), then fit the telemetry rates to it. In method 2, if the telemetry pair loses signal you only lose the picture on the ground station, so 333Hz Full is a balanced choice. 900 MHz hardware: see the table on the ELRS site; at 200Hz (~470 B/s) use the set 1 / 1 / 1 / 1 / 0 (≤ 320 B/s).
 
-## Khi chạy thật nên kiểm tra
-- Cách 3:
-  - Báo cáo khởi động có hai dòng `rx: MAVLINK ...` và `telemetry: MAVLink 2 ... on the receiver's UART`.
-  - Tab Receiver: "Tín hiệu: có", khoảng 100 khung/s, các kênh theo cần.
-  - "Chất lượng" ở tab Receiver bằng LQ trên Lua script (lấy từ `RADIO_STATUS`).
-  - Tắt tay phát: tín hiệu mất, failsafe đúng như cài đặt.
-- Ground station: HUD chạy theo khi nghiêng máy bay, GPS và pin đúng, HEARTBEAT không đứt (không có thông báo mất kết nối).
-- Tay phát (cách 3): "Discover new" thấy pin, GPS, chế độ bay.
-- Nếu dùng backpack: trang MAVLink trên WebUI (http://10.0.0.1) có "Downlink packets" tăng dần và "Buffer overflows" đứng yên ở 0. Ở cách 2, overflow tăng thì giảm tốc độ gửi; ở cách 3, overflow tăng là lỗi điều tiết: gửi lại cho tôi số liệu và packet rate.
-- Cách 2, hai link ELRS cùng dải 2,4 GHz trên một máy bay: đặt hai receiver và anten cách xa nhau, xem LQ của link điều khiển có giảm khi bật cặp telemetry không.
+## What to check when running for real
+- Method 3:
+  - The startup report has the two lines `rx: MAVLINK ...` and `telemetry: MAVLink 2 ... on the receiver's UART`.
+  - Receiver tab: "Link: yes", about 100 frames/s, channels follow the sticks.
+  - "Quality" in the Receiver tab equals the LQ in the Lua script (taken from `RADIO_STATUS`).
+  - Turn off the transmitter: signal lost, failsafe exactly as configured.
+- Ground station: the HUD follows when tilting the craft, GPS and battery are right, HEARTBEAT does not drop out (no lost-connection message).
+- Transmitter (method 3): "Discover new" finds battery, GPS, flight mode.
+- If using a backpack: the MAVLink page on the WebUI (http://10.0.0.1) shows "Downlink packets" rising and "Buffer overflows" staying at 0. In method 2, if overflows rise, lower the send rates; in method 3, rising overflows are a throttling bug: send me the numbers and the packet rate.
+- Method 2, two ELRS links on the same 2.4 GHz band on one craft: place the two receivers and antennas far apart, and check whether the control link's LQ drops when the telemetry pair is turned on.
 
-## Còn thiếu
-- Trả lời yêu cầu tham số (`PARAM_REQUEST_LIST`) để ground station không phải chờ hết giờ.
+## Still missing
+- Answering parameter requests (`PARAM_REQUEST_LIST`) so the ground station does not have to time out.

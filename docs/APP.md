@@ -1,136 +1,151 @@
-# App: configurator đồ họa, thư viện client, dòng lệnh — `app/`
+# App: graphical configurator, client library, command line — `app/`
 
-## Configurator đồ họa (GUI)
+## Graphical configurator (GUI)
 
 ```
-cd app && pip install -r requirements.txt      # chỉ cần pyserial
-python -m wbclient gui                         # mở trình duyệt tại http://127.0.0.1:8765/ ; chọn cổng COM trong trang
-python -m wbclient --port COM5 gui             # nối luôn vào COM5
+cd app && pip install -r requirements.txt      # only needs pyserial
+python -m wbclient gui                         # opens the browser at http://127.0.0.1:8765/ ; pick the COM port in the page
+python -m wbclient --port COM5 gui             # connect straight to COM5
 python -m wbclient gui --http 9000 --no-browser
-python -m wbclient gui --logs D:\\logs               # thư mục log blackbox (mặc định ~/Windburst/logs)
+python -m wbclient gui --logs D:\\logs               # blackbox log directory (default ~/Windburst/logs)
 ```
-Không có mạch: `make sim && build/wb_sim`, rồi bấm "Tìm cổng" và chọn "Mô phỏng wb_sim".
+No board: `make sim && build/wb_sim`, then press "Find ports" and pick "Simulator wb_sim".
 
-**Cấu trúc.** GUI là một trang web chạy cục bộ, không cần Internet, không có bước build, không dùng thư viện ngoài:
+**The new app works with old firmware** (0.43):
+- The app carries the schema of every released firmware version, in `wbclient/schemas/` (`index.json` lists version, hash, file).
+- On connect, the firmware reports its schema hash in HELLO. The app picks exactly that schema (`schema.pick_schema`) and reloads the page with it.
+- Settings, modes and commands that the old firmware does not have are not shown; buttons for new features are greyed out with the note "This firmware does not have this feature yet".
+- There is a notice "Firmware x.y.z is older than the app".
+- **Firmware newer than any version the app knows**: the app refuses and says "update the app".
+- **Unknown hash** (a development build): the app refuses, as before.
+- The library is written every time `tools/gen_proto.py` runs: the entry for the version in `src/config/version.h`; a development version gets overwritten. `python tools/schema_library.py --from-git` rebuilds it from git history (currently 0.11.0 → 0.43.0).
+- Verification:
+  - `tests/test_compat.py`;
+  - `test_gui_browser::test_an_older_firmware` runs against 0.41.0's own wb_sim, path set with `WB_OLD_SIM`, built with `git worktree add <dir> 80590f8` and then `make sim` inside it. Every tab renders, what 0.41.0 lacks is hidden, settings can still be written.
+- With very old versions (before 0.37) some tabs may be missing items; the app says so in the tab rather than hanging.
+
+**Long help behind a "?"** (0.42.1): help text for a setting or a mode longer than 140 characters is no longer printed under the field. Instead there is a "?" circle next to the field (in the Modes tab: next to the mode name). Hovering, tabbing to it, or tapping it shows a bubble that always stays inside the window; Esc or moving the mouse away hides it. Short help stays under the field as before. Code: `helpFor` / `helpTip` in `web/js/ui.js`, threshold `kHelpInline`. Test: `test_long_help_behind_a_question_mark`.
+
+**Structure.** The GUI is a locally served web page, needs no Internet, has no build step, uses no external libraries:
 
 ```
-trình duyệt  ──HTTP + server-sent events──  wbclient/gui.py  ──WbClient (WBP)──  USB serial / wb_sim
+browser  ──HTTP + server-sent events──  wbclient/gui.py  ──WbClient (WBP)──  USB serial / wb_sim
 wbclient/web/index.html, app.css
-wbclient/web/js/main.js        thanh kết nối, dòng "vì sao chưa arm được", nút Lưu, chuyển tab
-wbclient/web/js/store.js       schema, settings (đúng như firmware đang giữ trong RAM), telemetry, đăng ký stream
-wbclient/web/js/ui.js          widget gắn với một field của schema (số / enum / công tắc), nút lệnh
-wbclient/web/js/labels.js      nhãn tiếng Việt, đơn vị, giải thích; tên blocker; thứ firmware chưa hỗ trợ
-wbclient/web/js/i18n.js        tr('chuỗi tiếng Việt', {giá trị}) → chuỗi theo ngôn ngữ đang chọn
-wbclient/web/js/lang/en.js     bản tiếng Anh: EN (Việt → Anh) và SAME (chuỗi giống nhau ở hai ngôn ngữ)
-wbclient/web/js/tabs/*.js      mỗi tab một file
-wbclient/web/js/gfx/           fwmath.js (công thức giống firmware), craft3d.js (hình 3D), stickpreview.js (máy bay xem thử theo cần), scope.js (đồ thị cuộn), logplot.js (đồ thị log blackbox)
-wbclient/logview.py            thư mục log trên máy tính, khung nhìn rút gọn của một log cho đồ thị (xem docs/BLACKBOX.md)
+wbclient/web/js/main.js        connection bar, the "why it cannot arm yet" line, Save button, tab switching
+wbclient/web/js/store.js       schema, settings (exactly as the firmware holds them in RAM), telemetry, stream subscriptions
+wbclient/web/js/ui.js          widgets bound to a schema field (number / enum / switch), command buttons
+wbclient/web/js/labels.js      Vietnamese labels, units, explanations; blocker names; things the firmware does not support yet
+wbclient/web/js/i18n.js        tr('Vietnamese string', {values}) → string in the selected language
+wbclient/web/js/lang/en.js     the English version: EN (Vietnamese → English) and SAME (strings identical in both languages)
+wbclient/web/js/tabs/*.js      one file per tab
+wbclient/web/js/gfx/           fwmath.js (formulas identical to the firmware), craft3d.js (3D model), stickpreview.js (preview craft following the sticks), scope.js (scrolling chart), logplot.js (blackbox log chart)
+wbclient/logview.py            log directory on the computer, decimated view of a log for the charts (see docs/BLACKBOX.md)
 ```
-- Trình duyệt không thấy giao thức nhị phân: settings và telemetry tới dưới dạng JSON, đơn vị kỹ thuật, enum bằng tên (đúng các giá trị dòng lệnh in ra).
-- Sửa một ô là gửi ngay vào **RAM** của firmware (0,2 s sau), và trang hiện lại **giá trị firmware thực sự nhận** (đã kẹp miền). Nút "Lưu" hiện khi firmware báo `DIRTY`; đổi mục cần khởi động lại thì nút thành "Lưu và khởi động lại". Sửa lại đúng giá trị cũ thì nút tự ẩn: firmware so với bản trong flash (từ 0.37.1). "Bỏ thay đổi" = khởi động lại không lưu.
-- Đang ARM: mọi ô và nút lệnh bị khóa (firmware cũng từ chối).
-- Flight controller tự khởi động lại (nút reset, sụt nguồn) → `gui.py` thấy im lặng, hỏi lại, đăng ký lại stream; trang đọc lại settings. Rút cáp → trang về màn hình kết nối kèm lý do.
-- Muốn làm app Electron sau này: bọc đúng trang này (Electron chạy `python -m wbclient gui --no-browser` rồi mở URL), hoặc viết lại `gui.py` bằng Node. Giao diện không phụ thuộc Python.
+- The browser never sees the binary protocol: settings and telemetry arrive as JSON, in engineering units, enums by name (exactly the values the command line prints).
+- Editing a field sends it straight into the firmware's **RAM** (0.2 s later), and the page shows back **the value the firmware actually accepted** (range-clamped). The "Save" button appears when the firmware reports `DIRTY`; when an item needing a reboot changed, the button becomes "Save and reboot". Editing back to exactly the old value hides the button by itself: the firmware compares with the copy in flash (since 0.37.1). "Discard changes" = reboot without saving.
+- While ARMED: every field and command button is locked (the firmware refuses too).
+- The flight controller reboots by itself (reset button, brownout) → `gui.py` notices the silence, asks again, re-subscribes the streams; the page re-reads the settings. Cable pulled → the page goes back to the connect screen with the reason.
+- To make an Electron app later: wrap exactly this page (Electron runs `python -m wbclient gui --no-browser` and then opens the URL), or rewrite `gui.py` in Node. The interface does not depend on Python.
 
-**Hai ngôn ngữ (Việt / Anh).** Ô chọn ở cuối thanh tab; mặc định theo ngôn ngữ của trình duyệt, lựa chọn được nhớ lại. Đổi ngôn ngữ thì trang tải lại (vẫn giữ kết nối với mạch).
-- Chuỗi nguồn trong mã là tiếng Việt, luôn đi qua `tr()`. Bản tiếng Anh nằm ở một file: `web/js/lang/en.js`.
-- **Sửa hay thêm một dòng chữ**: viết `tr('Chữ tiếng Việt {n}', { n })` trong mã, thêm một dòng `"Chữ tiếng Việt {n}": "English text {n}"` vào `EN` (hoặc vào `SAME` nếu hai ngôn ngữ viết như nhau: `Hz`, `Roll`, `DShot600`...). Quên thì `test_gui_i18n.py` báo đúng chuỗi nào thiếu, chuỗi nào thừa, `{n}` nào lệch.
-- **Thêm ngôn ngữ thứ ba**: thêm file `lang/xx.js` cùng dạng, khai báo trong `LANGS` của `i18n.js`.
-- `gui.py` không chứa câu chữ nào cho người dùng: lỗi và trạng thái đi dưới dạng **mã + giá trị** (`{"error": "OPEN_FAILED", "port": ..., "detail": ...}`, `note: {"code": "PORT_LOST", "port": ...}`), trang ghép thành câu theo ngôn ngữ đang chọn. Chữ do firmware gửi (báo cáo khởi động, log) vốn là tiếng Anh và được hiện nguyên văn.
-- Tài liệu trong `docs/` vẫn là tiếng Việt.
+**Two languages (Vietnamese / English).** The selector is at the end of the tab bar; the default follows the browser's language, and the choice is remembered. Changing the language reloads the page (keeping the connection to the board).
+- Source strings in the code are Vietnamese and always go through `tr()`. The English version lives in one file: `web/js/lang/en.js`.
+- **Editing or adding a line of text**: write `tr('Chữ tiếng Việt {n}', { n })` in the code, add a line `"Chữ tiếng Việt {n}": "English text {n}"` to `EN` (or to `SAME` if both languages write it the same way: `Hz`, `Roll`, `DShot600`...). If you forget, `test_gui_i18n.py` reports exactly which strings are missing, which are extra, and which `{n}` do not match.
+- **Adding a third language**: add a file `lang/xx.js` of the same shape, declare it in `LANGS` in `i18n.js`.
+- `gui.py` contains no user-facing text: errors and status travel as **code + values** (`{"error": "OPEN_FAILED", "port": ..., "detail": ...}`, `note: {"code": "PORT_LOST", "port": ...}`), and the page builds the sentence in the selected language. Text sent by the firmware (boot report, log) is English to begin with and is shown verbatim.
+- The documentation in `docs/` is in English; the Vietnamese originals are in `docs/vi/`.
 
-**Kết nối serial.** Trang nối với mạch qua cổng serial của máy (COM trên Windows, `/dev/ttyACM*` / `ttyUSB*` trên Linux) bằng pyserial trong `gui.py`; `socket://` chỉ dùng cho mô phỏng.
-- Danh sách cổng có mô tả của hệ điều hành; cổng có chip hay gặp trên mạch ESP32 (USB gốc Espressif, CP210x, CH34x / CH910x, FTDI) được xếp lên đầu và chọn sẵn. Danh sách tự làm mới mỗi 2,5 s khi chưa kết nối, nên cắm mạch vào là thấy. "Nhập cổng khác…" để gõ tên cổng bất kỳ.
-- Ô **baud** cạnh ô cổng (115200 / 230400 / 460800 / 921600, mặc định 230400 = `WB_LINK_BAUD` trong `main.cpp`). Chỉ có ý nghĩa với cầu USB-UART; USB gốc của ESP32-S3 thì baud nào cũng chạy. Lựa chọn được nhớ lại.
-- **Mạch không trả lời** (sai cổng, sai baud, chưa nạp firmware, firmware treo vòng lặp khởi động): trang nói rõ từng khả năng và in ra **những gì cổng đã gửi về** (log khởi động của ESP32, "Guru Meditation", hay toàn ký tự lạ khi sai baud). Không mở được cổng: gợi ý đóng serial monitor đang giữ cổng.
-- **Một cổng chỉ một chương trình.** Client mở cổng ở chế độ độc quyền (`exclusive` của pyserial) nên trên Linux / macOS cũng như Windows: cổng đang bị serial monitor hay cửa sổ configurator khác giữ thì báo "không mở được", không dùng chung rồi mỗi bên đọc mất một nửa câu trả lời. Kết nối thất bại thì cổng được nhả ngay (để thử lại, hoặc để nạp firmware).
-- **Dữ liệu thô** (tab Hệ thống): mọi byte không thuộc khung WBP trong lúc đang kết nối được tách riêng và hiện dưới dạng chữ, ví dụ firmware in lỗi rồi khởi động lại. Liên kết vẫn chạy bình thường vì parser tự đồng bộ lại.
-- Rút cáp: trang về màn hình kết nối và ghi "Mất kết nối với cổng …".
+**Serial connection.** The page connects to the board through the computer's serial port (COM on Windows, `/dev/ttyACM*` / `ttyUSB*` on Linux) via pyserial in `gui.py`; `socket://` is only used for the simulator.
+- The port list includes the operating system's descriptions; ports with chips common on ESP32 boards (Espressif native USB, CP210x, CH34x / CH910x, FTDI) are sorted to the top and preselected. The list refreshes itself every 2.5 s while not connected, so plugging in the board makes it appear. "Enter another port…" lets you type any port name.
+- The **baud** box next to the port box (115200 / 230400 / 460800 / 921600, default 230400 = `WB_LINK_BAUD` in `main.cpp`). Only matters for a USB-UART bridge; the ESP32-S3's native USB works at any baud. The choice is remembered.
+- **Board not responding** (wrong port, wrong baud, no firmware flashed, firmware stuck in a boot loop): the page spells out each possibility and prints **what the port sent back** (the ESP32 boot log, "Guru Meditation", or all garbage characters with a wrong baud). Port cannot be opened: suggests closing the serial monitor that is holding the port.
+- **One port, one program.** The client opens the port in exclusive mode (pyserial's `exclusive`), so on Linux / macOS just as on Windows: a port already held by a serial monitor or another configurator window reports "cannot open", rather than being shared with each side reading half of the replies. When a connection fails the port is released immediately (to retry, or to flash firmware).
+- **Raw data** (System tab): every byte that does not belong to a WBP frame while connected is separated out and shown as text, for example when the firmware prints an error and reboots. The link keeps working normally because the parser resynchronises by itself.
+- Cable pulled: the page goes back to the connect screen and says "Lost connection to port …".
 
-**Các tab**
+**Tabs**
 
-| Tab | Có gì | Firmware chưa có (trang ghi rõ) |
+| Tab | What it has | Not yet in the firmware (the page says so) |
 |---|---|---|
-| Tổng quan | hình 3D theo tư thế, bảng module (có / không có + lý do firmware báo; thêm dòng "Optical flow" khi đã chọn cảm biến và dòng "Bảng chân" khi firmware thấy trùng chân), danh sách lý do chưa arm được (kể cả "vòng điều khiển không đạt tần số", "vừa bị tắt vì runaway"), số đo trực tiếp, **CPU / RAM / PSRAM**, **tần số thực / tần số đặt và số chu kỳ bỏ lỡ, thời gian từng khâu của một chu kỳ, failsafe kèm nguyên nhân** | |
-| Receiver | 12 kênh trực tiếp theo channel map, chất lượng sóng, giao thức, thứ tự kênh (AETR / TAER), RC smoothing, máy bay xem thử theo cần (mặc định Angle) | SPEKTRUM, nRF24, PPM, PWM |
-| Mode | dải AUX cho từng mode (kéo hai đầu dải; vạch đậm = vị trí công tắc lúc này), trạng thái bật/tắt thật; có Position Hold và GPS Rescue | |
-| Cảm biến | hiệu chuẩn gyro, accelerometer 6 mặt, level trim, **level trim khi bay** (trạng thái lần đo: chưa đo / đang đo % / đã đo xong chờ disarm; trang tự đọc lại và báo khi firmware tự lưu), la bàn (đám mây điểm); hướng chip; airmode + ngưỡng ga bắt đầu; bật tắt module; GPS + đặt home | gyro 1/2 |
-| Motor | hình khung với số motor và chiều quay bắt buộc, giao thức ESC (motor idle chỉ hiện với DShot), test từng motor (RPM, lỗi telemetry), **dòng trạng thái DShot hai chiều: ESC nào không trả lời, khung bỏ qua, lượt trả lời bị lỡ**, đảo chiều, thứ tự motor, đồ thị rung gyro thô / sau lọc | DShot quá 4 motor |
-| PID | **thanh trượt tune** (kéo: chỉ con số cạnh thanh đổi; thả: một lần ghi; firmware tính P I D Dmax F và trả về, ô của trục do thanh trượt tính bị khoá), bảng PID từng trục, feedforward, I-term relax, anti-gravity, D max, TPA và throttle boost, Angle, Stabilize (P từng trục, gia tốc, input time constant); số liệu lúc này: TPA, anti-gravity, airmode, PID sum, **ga treo đo được** | |
-| Rate | rate kiểu Actual + đồ thị có chấm vị trí cần, máy bay xem thử theo cần (mặc định Acro), đường cong ga, giới hạn góc của Angle / Stabilize | |
-| Bộ lọc | **bản đồ tần số** (từng lowpass và vùng nó trượt, notch tĩnh, vị trí dynamic notch từng trục và RPM notch từng motor lúc này), hai thanh trượt lọc (bật thì các ô tần số cắt bị khoá và hiện kết quả), gyro lowpass 1 / 2, notch tĩnh, RPM filter (ghi rõ khi DShot hai chiều chưa bật), dynamic notch, lọc D-term, yaw lowpass | |
-| **Vị trí** | cảm biến optical flow: loại, dòng firmware báo lúc khởi động, số mẫu/giây, chất lượng bề mặt, lý do mẫu bị bỏ, tốc độ đo được và **vòng tròn có mũi tên** để kiểm tra hướng lắp (mũi máy ở phía trên; hướng lắp / lật gương / hệ số có tác dụng ngay); ước lượng vị trí (nguồn vận tốc, vị trí, hướng mũi theo la bàn hay chỉ gyro, góc nghiêng có được chỉnh hay không); Position Hold (trạng thái, từng trục, góc nghiêng yêu cầu, điểm giữ, bù gió, hệ số); GPS Rescue và thủ tục failsafe (sẵn sàng hay chưa, giai đoạn + lý do bỏ cuộc, khoảng cách tới home, độ cao bay về, mọi thông số); xem `docs/NAV.md` | |
-| **Nhiệm vụ** | kế hoạch bay tự động trên bản đồ (bố cục: bản đồ chiếm hết tab, các ô nổi): ảnh vệ tinh / đường phố (lưu cache trên đĩa, dùng được khi không có mạng ở chỗ đã xem), tìm địa chỉ, vị trí của laptop (dịch vụ vị trí của Windows), bấm để thêm điểm, kéo để dời, xoá hết điểm, ô sửa từng điểm (bay tới / đứng yên + bước servo theo độ / hạ cánh - chờ - cất cánh), số mét từng chặng, drone + vệt bay theo GPS, dòng trạng thái (đang làm gì, còn bao xa, còn chờ, pin, cách nhà, cả chuyến), nút Nạp / Tải / Bắt đầu / Dừng; xem `docs/MISSION.md` | |
-| Pin và còi | điện áp, số cell, thang một cell theo ngưỡng, các ngưỡng, hiệu chỉnh hệ số chia ADC; bảng 18 tình huống với **hai cột: còi và motor**, hình mẫu âm, số tiếng motor phát, nút "Thử"; âm của motor; loại còi (xem `docs/POWER.md`) | đo dòng điện, mAh |
-| Blackbox | chọn nơi ghi (**flash / thẻ SD**) / điều kiện / tốc độ / nhóm trường; kiểu nối và tốc độ thẻ; bộ nhớ log (tải về, xoá, mức đầy bộ đệm thẻ); ghi trực tiếp qua cáp; thư viện log trên máy; **đồ thị** nhiều khung chung trục thời gian, thu phóng, đọc giá trị ở con trỏ, sự kiện, xuất CSV. Xem log không cần nối mạch (xem `docs/BLACKBOX.md`) | ổ USB (mass storage) |
-| Chân và cổng | GPIO từng module (kể cả ADC pin, còi, thẻ SD, **optical flow**: chân của loại cảm biến không được chọn thì không tính là trùng, như firmware), cảnh báo chân trùng / chân strapping / USB / flash / PSRAM của ESP32-S3, chân không đọc được ADC; nút **"Điền bộ chân gợi ý"** cho DevKitC N16R8 (xem `docs/BOARD_N16R8.md`) | đổi chức năng UART |
-| Hệ thống | failsafe (thời gian chờ, thời gian sóng phải ổn định lại, giới hạn khi không xuống được), **chặn runaway lúc cất cánh**, sao lưu / khôi phục, về mặc định, nhật ký firmware, dữ liệu thô của cổng | |
+| Overview | 3D model following the attitude, module table (present / absent + the reason the firmware reports; plus an "Optical flow" row when a sensor is selected and a "Pin table" row when the firmware detects a pin conflict), list of reasons it cannot arm yet (including "control loop not reaching its rate", "just shut down because of runaway"), live readings, **CPU / RAM / PSRAM**, **actual rate / set rate and missed cycles, time of each stage of a cycle, failsafe with its cause** | |
+| Receiver | 12 live channels following the channel map, link quality, protocol, channel order (AETR / TAER), RC smoothing, preview craft following the sticks (Angle by default) | SPEKTRUM, nRF24, PPM, PWM |
+| Modes | AUX ranges for each mode (drag both ends of the range; bold mark = current switch position), actual on/off state; includes Position Hold and GPS Rescue | |
+| Sensors | gyro calibration, 6-side accelerometer, level trim, **in-flight level trim** (measurement state: not measured / measuring % / measured, waiting for disarm; the page re-reads and tells you when the firmware saves it by itself), compass (point cloud); chip orientation; airmode + start throttle threshold; module enable/disable; GPS + set home | gyro 1/2 |
+| Motors | frame picture with motor numbers and required spin directions, ESC protocol (motor idle only shown with DShot), per-motor test (RPM, telemetry errors), **bidirectional DShot status line: which ESC does not answer, skipped frames, missed replies**, reversing, motor order, raw / filtered gyro vibration chart | DShot with more than 4 motors |
+| PID | **tuning sliders** (dragging: only the number next to the slider changes; release: one write; the firmware computes P I D Dmax F and returns them, the fields of axes computed by the slider are locked), per-axis PID table, feedforward, I-term relax, anti-gravity, D max, TPA and throttle boost, Angle, Stabilize (per-axis P, acceleration, input time constant); live values: TPA, anti-gravity, airmode, PID sum, **measured hover throttle** | |
+| Rates | Actual-style rates + chart with a dot at the stick position, preview craft following the sticks (Acro by default), throttle curve, angle limits for Angle / Stabilize | |
+| Filters | **frequency map** (each lowpass and the range it slides over, static notches, the current position of the dynamic notch per axis and the RPM notch per motor), two filter sliders (when enabled the cutoff fields are locked and show the result), gyro lowpass 1 / 2, static notch, RPM filter (says so when bidirectional DShot is not enabled), dynamic notch, D-term filtering, yaw lowpass | |
+| **Position** | optical flow sensor: type, the line the firmware reports at boot, samples/second, surface quality, why samples are dropped, measured speed and a **circle with an arrow** to check the mounting orientation (craft nose at the top; orientation / mirroring / scale take effect immediately); position estimate (velocity source, position, nose heading from compass or gyro only, whether the tilt angle is being corrected); Position Hold (state, per axis, requested tilt angle, held point, wind compensation, gains); GPS Rescue and the failsafe procedure (ready or not, phase + give-up reason, distance to home, return altitude, every parameter); see `docs/NAV.md` | |
+| **Mission** | automatic flight plan on a map (layout: the map fills the whole tab, floating panels): satellite / street imagery (cached on disk, usable offline in places already viewed), address search, the laptop's location (Windows location service), click to add a point, drag to move, clear all points, a per-point edit box (fly to / hover + servo step in degrees / land - wait - take off), metres per leg, drone + flight trail from GPS, status line (what it is doing, how far to go, time left waiting, battery, distance from home, whole trip), Upload / Download / Start / Stop buttons; see `docs/MISSION.md` | |
+| Battery and buzzer | voltage, cell count, single-cell gauge against the thresholds, the thresholds, ADC divider calibration; table of 18 situations with **two columns: buzzer and motors**, tone pattern, number of beeps the motors play, a "Test" button; motor tones; buzzer type (see `docs/POWER.md`) | current measurement, mAh |
+| Blackbox | choose destination (**flash / SD card**) / condition / rate / field groups; card wiring mode and speed; log memory (download, erase, card buffer fill level); live recording over the cable; log library on the computer; **charts** with several panels sharing the time axis, zoom, cursor value readout, events, CSV export. Viewing logs needs no board connection (see `docs/BLACKBOX.md`) | USB drive (mass storage) |
+| Pins and ports | GPIO per module (including battery ADC, buzzer, SD card, **optical flow**: pins of the sensor type not selected do not count as conflicts, as in the firmware), warnings for duplicate pins / ESP32-S3 strapping / USB / flash / PSRAM pins, pins that cannot read ADC; a **"Fill in the suggested pin set"** button for the DevKitC N16R8 (see `docs/BOARD_N16R8.md`) | remapping UART functions |
+| System | failsafe (delay, time the signal must be stable again, limit when it cannot get down), **runaway takeoff prevention**, backup / restore, reset to defaults, firmware log, the port's raw data | |
 
-Thanh trên cùng: khi failsafe đang chạy thì ghi "Failsafe: đang tự hạ cánh (mất sóng)" (giai đoạn + nguyên nhân); ô "Vòng lặp" hiện `thực / đặt Hz` và đổi màu khi dưới 80 %.
-Tab Blackbox: thông tin log có "thực tế … bản ghi/giây" khi log thưa hơn cấu hình; bấm tải log lúc đang ghi trực tiếp thì phiên ghi tự dừng (file được giữ) rồi mới tải.
+Top bar: while failsafe is active it says "Failsafe: landing by itself (signal lost)" (phase + cause); the "Loop" box shows `actual / set Hz` and changes colour below 80 %.
+Blackbox tab: the log info shows "actual … records/second" when the log is sparser than configured; pressing download while live recording stops the recording session by itself (the file is kept) and then downloads.
 
-Chưa có: tab cho TX.
+Not yet available: a tab for the TX.
 
-Cách tune và ý nghĩa từng thanh trượt: `docs/TUNING.md`.
+How to tune and what each slider means: `docs/TUNING.md`.
 
-**An toàn của server cục bộ** (nó quay được motor, nên không được nghe lời bất kỳ trang web nào đang mở): chỉ nghe trên `127.0.0.1`; mọi `/api` phải kèm token ngẫu nhiên nhúng trong trang do chính nó phục vụ; kiểm tra `Host` và `Origin` (chặn DNS rebinding và request từ site khác); POST phải là `application/json`.
+**Safety of the local server** (it can spin motors, so it must not obey just any open web page): listens only on `127.0.0.1`; every `/api` call must carry a random token embedded in the page it serves itself; checks `Host` and `Origin` (blocks DNS rebinding and cross-site requests); POSTs must be `application/json`.
 
-**Test motor**: thanh trượt bị khóa cho tới khi tick "Đã tháo hết cánh quạt"; trang gửi lại lệnh mỗi 0,2 s và firmware tự dừng motor nếu 0,6 s không nhận được, nên trang treo hay rút cáp thì motor dừng; rời tab hoặc ẩn cửa sổ cũng dừng.
+**Motor test**: the sliders stay locked until "All props removed" is ticked; the page resends the command every 0.2 s and the firmware stops the motors by itself if nothing arrives for 0.6 s, so if the page hangs or the cable is pulled the motors stop; leaving the tab or hiding the window stops them too.
 
-**Hình vẽ không được lệch khỏi firmware**: `tools/ui_reference.cpp` in ra hàng mixer, đường cong rate, đường cong ga, deadband do **mã firmware** tính; `app/tests/test_gui_math.py` so với `js/gfx/fwmath.js` (chạy bằng node).
+**Drawings must not drift from the firmware**: `tools/ui_reference.cpp` prints mixer rows, rate curves, throttle curves, deadband as computed by **the firmware code**; `app/tests/test_gui_math.py` compares them with `js/gfx/fwmath.js` (run with node).
 
-## Tay phát DIY (0.38)
-Cắm tay phát (firmware `tx_c5`, `docs/TX.md`) thì app nhận ra qua `role` của `DEVICE_INFO` và thanh tab chỉ còn 4 tab của tay: **Tổng quan** (hai ô cần, 8 kênh, sóng tới drone, drone báo về, cảnh báo chế độ ga không hợp chế độ bay), **Joystick** (chế độ ga, hiệu chỉnh, gán trục, đảo chiều, vùng chết, expo, giá trị ADC), **Radio** (bind, kênh tần số, tốc độ, công suất, số gói, chân nRF24), **Hệ thống** (phiên bản, boot report, về mặc định, khởi động lại). Thanh trên cùng: đã / chưa nối drone, số gói, pin drone, nút Lưu theo cờ `settings_dirty` của stream `tx`. Cắm lại mạch bay thì các tab của mạch bay quay lại. Tab Receiver của mạch bay có khung nRF24 (bind, trạng thái, LQ) khi giao thức là NRF24; tab Chân và cổng có nhóm Receiver nRF24. Kiểm chứng: `test_gui_browser.py` (`test_tx_*`, `test_receiver_nrf24_block`).
+## DIY transmitter (0.38)
+When the transmitter (firmware `tx_c5`, `docs/TX.md`) is plugged in, the app recognises it through `role` in `DEVICE_INFO` and the tab bar shows only the transmitter's 4 tabs: **Overview** (two stick boxes, 8 channels, link to the drone, drone telemetry, a warning when the throttle mode does not suit the flight mode), **Joystick** (throttle mode, calibration, axis assignment, reversing, deadzone, expo, ADC values), **Radio** (bind, frequency channel, rate, power, packet counts, nRF24 pins), **System** (version, boot report, reset to defaults, reboot). Top bar: drone connected / not connected, packet count, drone battery, Save button driven by the `settings_dirty` flag of the `tx` stream. Plugging the flight board back in brings back the flight board's tabs. The flight board's Receiver tab has an nRF24 panel (bind, status, LQ) when the protocol is NRF24; the Pins and ports tab has an nRF24 Receiver group. Verified: `test_gui_browser.py` (`test_tx_*`, `test_receiver_nrf24_block`).
 
-## Thư viện client và dòng lệnh
+## Client library and command line
 
 ```
-app/wbclient/framing.py     khung WBP + parser tự đồng bộ (bản Python của wbp_codec.h)
-app/wbclient/schema.py      đọc protocol/wbp_schema.json: layout, scale, enum, bit → giá trị "người đọc được"
+app/wbclient/framing.py     WBP frames + self-resynchronising parser (Python version of wbp_codec.h)
+app/wbclient/schema.py      reads protocol/wbp_schema.json: layout, scale, enum, bit → "human-readable" values
 app/wbclient/client.py      WbClient: hello, get/set/save/defaults/reboot, subscribe, command, report, blackbox_*
-app/wbclient/wblog.py       đọc log blackbox (.wblog): docs/BLACKBOX.md
-app/wbclient/__main__.py    python -m wbclient ...  (configurator dòng lệnh, và lệnh `gui`)
-app/wbclient/gui.py         server cục bộ của GUI;  app/wbclient/web/  trang web
-app/tests/                  pytest: khung, schema, và test đầu-cuối với build/wb_sim
+app/wbclient/wblog.py       reads blackbox logs (.wblog): docs/BLACKBOX.md
+app/wbclient/__main__.py    python -m wbclient ...  (command-line configurator, and the `gui` command)
+app/wbclient/gui.py         the GUI's local server;  app/wbclient/web/  the web page
+app/tests/                  pytest: framing, schema, and end-to-end tests with build/wb_sim
 app/requirements.txt        pyserial
 ```
 
-## Thư viện
+## Library
 
 ```python
 from wbclient import WbClient, WbError
 
-with WbClient("COM5") as fc:                      # hoặc "/dev/ttyACM0", hoặc "socket://127.0.0.1:5760" (wb_sim)
-    print(fc.info)                                # tên, phiên bản, role, schema hash, features
-    print(fc.report())                            # cảm biến nào tìm thấy / vì sao không
+with WbClient("COM5") as fc:                      # or "/dev/ttyACM0", or "socket://127.0.0.1:5760" (wb_sim)
+    print(fc.info)                                # name, version, role, schema hash, features
+    print(fc.report())                            # which sensors were found / why not
 
-    pid = fc.get("pid")                           # dict, đơn vị kỹ thuật
-    stored = fc.set("pid", p=[0.05, 0.05, 0.012]) # trả về giá trị firmware THỰC SỰ lưu (đã kẹp miền)
-    fc.set("motors", protocol="DSHOT600")         # enum bằng tên
-    fc.save(); fc.reboot()                        # reboot() chờ tới khi firmware trả lời lại
+    pid = fc.get("pid")                           # dict, engineering units
+    stored = fc.set("pid", p=[0.05, 0.05, 0.012]) # returns the value the firmware ACTUALLY stored (range-clamped)
+    fc.set("motors", protocol="DSHOT600")         # enum by name
+    fc.save(); fc.reboot()                        # reboot() waits until the firmware answers again
 
     fc.subscribe("attitude", 50, lambda v: print(v["roll"], v["pitch"]))
     fc.subscribe("status", 10)
     st = fc.wait_stream("status")                 # {'armed': 0, 'blockers': ['RX_LOST'], 'health': ['IMU', ...], ...}
 
     try:
-        fc.command("MOTOR_TEST", motor=0, value=100)       # 10 %, phải gửi lại ≤ 0,5 s/lần
+        fc.command("MOTOR_TEST", motor=0, value=100)       # 10 %, must be resent every ≤ 0.5 s
     except WbError as e:
         print(e.name)                             # 'ARMED', 'BAD_ARG', 'NO_SENSOR', ...
 ```
-- Mở cổng là gửi `HELLO` và so **schema hash**; khác nhau → `SchemaMismatch` (không đọc nhầm settings).
-- Một luồng đọc giải mã mọi thứ: trả lời khớp theo `seq`, stream vào `latest()` / callback, log firmware vào `fc.logs`.
-- Yêu cầu đọc/ghi settings được tự gửi lại khi quá hạn; **command thì không** (không lặp lại một lệnh có tác dụng phụ).
-- Scale, enum, bit được đổi sẵn: `0.1°` → độ, `blockers` → danh sách tên, ô mode trống → `None`.
+- Opening the port sends `HELLO` and compares the **schema hash**; a mismatch → `SchemaMismatch` (settings are never misread).
+- One reader thread decodes everything: replies are matched by `seq`, streams go into `latest()` / callbacks, firmware logs into `fc.logs`.
+- Settings read/write requests are resent automatically on timeout; **commands are not** (a command with side effects is never repeated).
+- Scales, enums and bits are converted already: `0.1°` → degrees, `blockers` → list of names, empty mode slot → `None`.
 
-## Dòng lệnh
+## Command line
 
 ```
 cd app && pip install -r requirements.txt
 python -m wbclient --port COM5 info
 python -m wbclient --port COM5 get pid
 python -m wbclient --port COM5 set pins imu_cs=10 imu_miso=13 imu_mosi=11 imu_sck=12 motor=4,5,6,7,255,255,255,255
-python -m wbclient --port COM5 set modes mode[0]=ARM aux[0]=0 lo[0]=1700 hi[0]=2100            # ô mode số 0: ARM khi AUX1 ở 1700..2100
+python -m wbclient --port COM5 set modes mode[0]=ARM aux[0]=0 lo[0]=1700 hi[0]=2100            # mode slot 0: ARM when AUX1 is at 1700..2100
 python -m wbclient --port COM5 set modes mode[1]=ANGLE aux[1]=1 lo[1]=1700 hi[1]=2100
 python -m wbclient --port COM5 save
 python -m wbclient --port COM5 reboot
@@ -139,55 +154,55 @@ python -m wbclient --port COM5 calibrate gyro | level | acc | mag
 python -m wbclient --port COM5 motor 0 10 --seconds 2 --props-off
 python -m wbclient --port COM5 backup my_quad.json      /   restore my_quad.json
 python -m wbclient --port COM5 blackbox status | list | download [N] | erase | record FILE     # docs/BLACKBOX.md
-python -m wbclient blackbox info FILE | csv FILE        # đọc file log, không cần mạch
-python -m wbclient schema                               # liệt kê section, stream, command
+python -m wbclient blackbox info FILE | csv FILE        # reads a log file, no board needed
+python -m wbclient schema                               # lists sections, streams, commands
 ```
-Trường mảng: nhập cả mảng (`motor=4,5,6,7,255,255,255,255`, phải **đủ số phần tử**) hoặc từng phần tử (`motor[2]=6`). Sửa nhiều thứ một lúc: `backup` → sửa file json → `restore`.
+Array fields: enter the whole array (`motor=4,5,6,7,255,255,255,255`, must have **every element**) or one element (`motor[2]=6`). Changing many things at once: `backup` → edit the json file → `restore`.
 
-Không có mạch: `make sim && build/wb_sim`, rồi dùng `--port socket://127.0.0.1:5760`.
+No board: `make sim && build/wb_sim`, then use `--port socket://127.0.0.1:5760`.
 
-## Kiểm chứng
+## Verification
 
-`make apptest` (`pip install -r app/requirements-dev.txt`; test trình duyệt cần `playwright` + Chromium, test công thức và bản dịch cần `node`, thiếu thì tự bỏ qua):
+`make apptest` (`pip install -r app/requirements-dev.txt`; browser tests need `playwright` + Chromium, formula and translation tests need `node`, and are skipped if missing):
 
-| File | Số test | Nội dung |
+| File | Tests | Content |
 |---|---|---|
-| `test_framing.py`, `test_e2e.py` | 29 | khung và parser (nhiễu, header giả, lỗi bit), json khớp header C++, **mặc định của mọi trường = của firmware**, kịch bản đầu-cuối của thư viện và CLI với firmware thật trong `wb_sim`; pin (ADC, ngưỡng live), còi và im lặng trên bàn; từ 0.7.0: cảm biến optical flow (cầm máy đi, hướng lắp, Position Hold trong gió) và GPS Rescue từ đầu đến khi hạ cánh |
-| `test_blackbox.py` | 8 | trình đọc `.wblog` với log viết tay từng byte (tràn đồng hồ, khung hỏng, file cụt), bay → flash mô phỏng → tải → giải mã → so với máy ảo, luồng trực tiếp, dữ liệu lạ trong phân vùng, CLI |
-| `test_logview.py` | 5 | đọc log đang lớn dần = đọc một lần; khung nhìn rút gọn giữ mọi cực trị; thư mục log (tên file an toàn, không ghi đè, file đổi thì đọc lại); ghi trực tiếp vừa ra file vừa ra đồ thị |
-| `test_gui_api.py` | 18 | server của GUI và lệnh `gui`: token / Host / Origin, lỗi dạng mã + giá trị, set + kẹp + lưu + reboot, stream, từ chối khi ARM, firmware tự reset, rút cáp, sao lưu / khôi phục; **serial qua thiết bị thật của hệ điều hành** (pseudo-terminal nối với `wb_sim`): baud, telemetry, chữ lạ xen giữa các khung, rút cáp, cổng không trả lời (có / không có dữ liệu) và được nhả sau đó, cổng đang bị chương trình khác giữ; **log blackbox**: tải từ mạch có tiến độ, một lúc một việc, khung nhìn rút gọn, CSV, settings của chuyến bay, xoá / thêm file, ghi trực tiếp và đồ thị bám theo, từ chối khi đang bay |
-| `test_gui_store.py` | 1 | kho settings của trang (chạy bằng node): hai lần sửa liên tiếp của cùng một section tới firmware đúng thứ tự, không cái nào mất |
-| `test_gui_math.py` | 7 | công thức của trang = số do firmware tính (hàng mixer 3 kiểu khung, rate, ga, deadband, phép quay của hình 3D), mẫu âm của còi |
-| `test_gui_i18n.py` | 5 | mọi chuỗi của trang có bản tiếng Anh (hoặc nằm trong `SAME`), không có mục thừa, `{giá trị}` khớp, không chuỗi tiếng Việt nào nằm ngoài `tr()`; **mọi blocker / nguyên nhân failsafe / trạng thái driver mà firmware có thể báo đều có chữ** |
-| `test_gui_browser.py` | 25 | trang thật trong Chromium không đầu + firmware thật trong `wb_sim`: kết nối, sửa / kẹp / lưu / mất điện / khởi động lại / bỏ thay đổi, tab Mode, test motor (đo ở ESC ảo), đồ thị rung, hiệu chuẩn accelerometer + level + la bàn, tab chân, khóa khi ARM, mất cổng, khôi phục / mặc định; **trang tiếng Anh: cả 13 tab và các trạng thái đặc biệt không còn chữ Việt nào**, đổi ngôn ngữ được nhớ; kết nối qua cổng serial từ trang, giải thích khi cổng không trả lời; tab Pin và còi (ngưỡng, hiệu chỉnh ADC, còi đo ở chân GPIO ảo); **tab Blackbox**: cấu hình → bay → tải → đồ thị, giá trị ở con trỏ và vị trí nét vẽ so với log, thu phóng, sự kiện, xuất, xoá, ghi trực tiếp, xem log không nối mạch; **tab Vị trí**: báo cáo của firmware về cảm biến, mũi tên tốc độ khi cầm máy đi (đo bằng điểm ảnh), sửa hướng lắp không cần khởi động lại, Position Hold trong gió, rescue bị từ chối khi không có la bàn, chân của cảm biến flow |
+| `test_framing.py`, `test_e2e.py` | 29 | framing and parser (noise, fake headers, bit errors), json matching the C++ header, **every field's default = the firmware's**, end-to-end scenarios of the library and CLI with the real firmware in `wb_sim`; battery (ADC, live thresholds), buzzer and silence on the bench; since 0.7.0: optical flow sensor (carrying the craft around, orientation, Position Hold in wind) and GPS Rescue from start to landing |
+| `test_blackbox.py` | 8 | `.wblog` reader with logs hand-written byte by byte (clock wraparound, corrupt frames, truncated files), fly → simulated flash → download → decode → compare with the virtual craft, live streaming, foreign data in the partition, CLI |
+| `test_logview.py` | 5 | reading a growing log = reading it in one go; the decimated view keeps every extreme; log directory (safe file names, no overwriting, re-read when a file changes); live recording goes to the file and to the chart at once |
+| `test_gui_api.py` | 18 | the GUI server and the `gui` command: token / Host / Origin, errors as code + values, set + clamp + save + reboot, streams, refusal while ARMED, firmware resetting by itself, cable pulled, backup / restore; **serial through a real OS device** (pseudo-terminal connected to `wb_sim`): baud, telemetry, stray text between frames, cable pulled, port not answering (with / without data) and released afterwards, port held by another program; **blackbox logs**: download from the board with progress, one job at a time, decimated view, CSV, flight settings, delete / add files, live recording with the chart following, refusal while flying |
+| `test_gui_store.py` | 1 | the page's settings store (run with node): two consecutive edits of the same section reach the firmware in the right order, none lost |
+| `test_gui_math.py` | 7 | the page's formulas = the numbers the firmware computes (mixer rows for 3 frame types, rates, throttle, deadband, 3D model rotation), buzzer tone patterns |
+| `test_gui_i18n.py` | 5 | every string on the page has an English version (or is in `SAME`), no extra entries, `{values}` match, no Vietnamese string outside `tr()`; **every blocker / failsafe cause / driver status the firmware can report has text** |
+| `test_gui_browser.py` | 25 | the real page in headless Chromium + the real firmware in `wb_sim`: connect, edit / clamp / save / power loss / reboot / discard changes, Modes tab, motor test (measured at the virtual ESC), vibration chart, accelerometer + level + compass calibration, pins tab, lock while ARMED, port lost, restore / defaults; **English page: all 13 tabs and the special states contain no Vietnamese text**, language change is remembered; connecting through a serial port from the page, explanation when the port does not answer; Battery and buzzer tab (thresholds, ADC calibration, buzzer measured at the virtual GPIO pin); **Blackbox tab**: configure → fly → download → chart, cursor values and line positions versus the log, zoom, events, export, erase, live recording, viewing logs without a board; **Position tab**: the firmware's sensor report, the speed arrow while carrying the craft (measured in pixels), fixing orientation without rebooting, Position Hold in wind, rescue refused without a compass, flow sensor pins |
 
-Mỗi test trình duyệt còn kiểm tra trang không ghi lỗi nào ra console. Mutation test (`python3 tools/mutate_gui.py`): xem con số trong `docs/HANDOFF.md`.
+Every browser test also checks that the page logs no errors to the console. Mutation test (`python3 tools/mutate_gui.py`).
 
-**Chưa kiểm chứng**:
-- Cổng COM trên Windows và mạch ESP32-S3 thật (USB CDC gốc hoặc cầu USB-UART). Đường serial mới được chạy qua pseudo-terminal trên Linux: cùng mã pyserial, nhưng không có driver USB, không có baud thật, không có DTR/RTS. Chế độ độc quyền trên Windows dựa vào hành vi sẵn có của COM, chưa thử. Việc giữ DTR/RTS thấp có ngăn được mạch reset khi mở cổng hay không vẫn chưa biết.
-- Nhận diện cổng theo VID của chip USB (danh sách trong `gui.py`) chưa thử với mạch nào.
-- GUI mới chỉ chạy trong Chromium không đầu trên Linux. Chưa mở bằng Chrome / Edge / Firefox trên Windows; font Bahnschrift (số) chỉ có trên Windows nên ảnh chụp trong lúc phát triển dùng font thay thế.
-- `wb_sim` trên Windows (mã winsock đã viết nhưng chưa biên dịch thử).
+**Not verified**:
+- COM ports on Windows and a real ESP32-S3 board (native USB CDC or a USB-UART bridge). The serial path has only been run through a pseudo-terminal on Linux: same pyserial code, but no USB driver, no real baud, no DTR/RTS. Exclusive mode on Windows relies on COM's built-in behaviour, untested. Whether holding DTR/RTS low prevents the board from resetting when the port opens is still unknown.
+- Port detection by USB chip VID (the list in `gui.py`) has not been tried with any board.
+- The GUI has only run in headless Chromium on Linux. Not yet opened in Chrome / Edge / Firefox on Windows; the Bahnschrift font (digits) only exists on Windows so screenshots during development use a substitute font.
+- `wb_sim` on Windows (the winsock code is written but has not been test-compiled).
 
-## Máy bay xem thử theo cần (0.24.1)
-Tab **Receiver** và tab **Rate** có khối "Máy bay theo cần": hình 3D của máy, chạy theo cần đang gạt trên tay điều khiển (stream `rc`). Đây chỉ là mô phỏng trong app, không gửi gì xuống firmware.
-- **Acro** (mặc định ở tab Rate): máy quay đúng tốc độ mà đường cong rate cho ra với vị trí cần lúc đó. Thả cần thì máy đứng yên ở tư thế đang có. Cách cộng dồn góc giống bộ ước lượng tư thế của firmware khi chỉ dùng gyro (`acroStep`).
-- **Angle** (mặc định ở tab Receiver): góc nghiêng roll / pitch bằng góc đích của `AngleController` (giới hạn góc × rate / max rate). Cần yaw xoay hướng mũi.
-- Nút "Về cân bằng" đặt máy về thăng bằng, mũi hướng ra xa người xem. Khi mất sóng thì máy đứng yên và trang báo "Chưa có tín hiệu".
-- **Kiểm chứng:** `test_gui_math::test_stick_preview_flies_like_the_firmware` so `acroStep` với `Ahrs` của firmware chỉ dùng gyro (6 đoạn quay nối nhau), và so `angleTarget` với `AngleController` (198 trường hợp, có cả độ nhạy giữa lớn hơn max rate). `test_gui_browser::test_stick_preview` đã viết nhưng chưa chạy được ở máy này.
+## Preview craft following the sticks (0.24.1)
+The **Receiver** tab and the **Rates** tab have a "Craft following the sticks" block: a 3D model of the craft that moves with the sticks being moved on the transmitter (stream `rc`). This is only a simulation inside the app; nothing is sent to the firmware.
+- **Acro** (default in the Rates tab): the craft rotates at exactly the rate the rate curve gives for the current stick position. Release the stick and the craft stays in its current attitude. Angles are accumulated the same way as the firmware's attitude estimator when using gyro only (`acroStep`).
+- **Angle** (default in the Receiver tab): the roll / pitch tilt equals `AngleController`'s target angle (angle limit × rate / max rate). The yaw stick turns the nose heading.
+- The "Level" button puts the craft back level, nose pointing away from the viewer. On signal loss the craft stands still and the page says "No signal yet".
+- **Verification:** `test_gui_math::test_stick_preview_flies_like_the_firmware` compares `acroStep` with the firmware's gyro-only `Ahrs` (6 chained rotation segments), and compares `angleTarget` with `AngleController` (198 cases, including center sensitivity larger than max rate). `test_gui_browser::test_stick_preview` is written but could not be run on this machine yet.
 
-## Chương trình chạy riêng (cửa sổ riêng, không mở trình duyệt)
+## Standalone program (its own window, no browser)
 
-`dist/Windburst.exe` (khoảng 14 MB) là một file chạy được ngay. Trong file đã có sẵn Python, wbclient, trang web và schema. Mở lên thì hiện **cửa sổ riêng**, không mở trình duyệt và không có cửa sổ dòng lệnh.
+`dist/Windburst.exe` (about 14 MB) is a single ready-to-run file. It already contains Python, wbclient, the web page and the schema. Opening it shows **its own window**, without opening a browser and without a console window.
 
-- **Bên trong:** cửa sổ dùng Edge WebView2 của Windows (thư viện pywebview). Windows 11 có sẵn WebView2; Windows 10 có nếu đã cập nhật.
-- **Server:** chỉ chạy trên 127.0.0.1, ở một cổng còn trống. Đóng cửa sổ thì server dừng và cổng serial được thả ra.
-- **Lưu cài đặt của trang** (theme, ngôn ngữ, baud): nằm ở `%LOCALAPPDATA%\Windburst\webview`, nên mở lại vẫn còn. Log bay vẫn lưu ở chỗ cũ (`~/Windburst/logs`).
-- **Chạy từ mã nguồn, không cần build:** `python -m wbclient app` (cần `pip install pywebview`). Lệnh `python -m wbclient gui` vẫn mở bằng trình duyệt như trước.
-- **Build lại**, chạy trong thư mục `app`:
+- **Inside:** the window uses Windows' Edge WebView2 (the pywebview library). Windows 11 ships WebView2; Windows 10 has it if updated.
+- **Server:** runs only on 127.0.0.1, on a free port. Closing the window stops the server and releases the serial port.
+- **Page settings** (theme, language, baud): stored in `%LOCALAPPDATA%\Windburst\webview`, so they survive reopening. Flight logs are still stored in the same place (`~/Windburst/logs`).
+- **Run from source, no build needed:** `python -m wbclient app` (needs `pip install pywebview`). The `python -m wbclient gui` command still opens in the browser as before.
+- **Rebuilding**, run in the `app` directory:
   ```
   pip install pywebview pyinstaller pyserial
   python packaging/build_exe.py
   ```
-  Kết quả ra ở `app/dist/Windburst.exe`. `dist/` và `build/` không đưa vào git.
-- **Icon:** `packaging/windburst.ico`, vẽ bằng `packaging/make_icon.py` (cần Pillow).
+  The result goes to `app/dist/Windburst.exe`. `dist/` and `build/` are not committed to git.
+- **Icon:** `packaging/windburst.ico`, drawn by `packaging/make_icon.py` (needs Pillow).

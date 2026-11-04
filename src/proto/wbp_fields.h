@@ -81,6 +81,8 @@ static const char* const kE_nrf_pps[] = {"HZ50", "HZ100", "HZ150"};
 static const char* const kE_bind_state[] = {"IDLE", "LISTEN", "BINDING", "BOUND", "FAILED"};
 static const char* const kE_fly_mode[] = {"ACRO", "ANGLE", "STABILIZE", "ALTHOLD", "POSHOLD", "RESCUE", "MISSION", "LOITER", "CRASHFLIP"};
 static const char* const kE_flow_cal_result[] = {"OK", "TOO_FEW", "SIGN_X", "SIGN_Y", "AXES_DIFFER"};
+static const char* const kE_fly_style[] = {"FPV", "FLYCAM"};
+static const char* const kE_flycam_hold[] = {"LOITER", "POSHOLD"};
 static const char* const kE_tx_throttle[] = {"ALTPOS", "MANUAL"};
 static const char* const kB_arm_blocker[] = {"NO_IMU", "GYRO_NOT_CAL", "RX_LOST", "THROTTLE_HIGH", "ANGLE_TOO_HIGH", "FAILSAFE", "ALTHOLD_NO_BARO", "BATT_LOW", "ARM_SWITCH_ON", "CONFIG_UNSAVED", "CALIBRATING", "POSHOLD_NO_GPS", "MAG_NOT_CALIBRATED", "PIN_CONFLICT", "LOOP_RATE", "RUNAWAY_TAKEOFF", "RESCUE_NO_FIX", "RESCUE_NO_COMPASS", "MOTOR_STALL", "CRASHFLIP"};
 static const char* const kB_health[] = {"IMU", "GYRO_CAL", "BARO", "RANGE", "GPS", "MAG_READY", "MAG_CAL", "RX", "MOTORS", "ESC_TELEMETRY", "ACC_CAL", "BATTERY", "FLOW", "IMU2", "CAN"};
@@ -90,7 +92,7 @@ static const char* const kB_fs_cause[] = {"LINK", "SWITCH", "BATTERY", "BATTERY_
 static const char* const kB_nav_flags[] = {"POSHOLD", "POSHOLD_UNAVAILABLE", "RESCUE", "RESCUE_AVAILABLE", "NAV_LEAN", "POSHOLD_SLOW_GPS", "FENCE", "CRASHFLIP"};
 static const char* const kB_ekf_flags[] = {"ALIGNED", "GPS_AIDING", "HEADING_OK", "USED_FOR_NAV"};
 static const char* const kB_imu_src[] = {"IMU1", "IMU2"};
-constexpr int kFieldCount = 397;
+constexpr int kFieldCount = 399;
 static const FieldInfo kFields[kFieldCount] = {
     {SEC_GENERAL, "loop_hz", 0, FT_U16, 1, FF_RANGE, 1.0f, 500.0f, 8000.0f, nullptr, 0},
     {SEC_GENERAL, "est_hz", 2, FT_U16, 1, FF_RANGE, 1.0f, 100.0f, 1000.0f, nullptr, 0},
@@ -110,6 +112,8 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_GENERAL, "pid_denom", 23, FT_U8, 1, FF_RANGE, 1.0f, 1.0f, 8.0f, nullptr, 0},
     {SEC_GENERAL, "usb_name", 24, FT_U8, 32, FF_TEXT, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_GENERAL, "stick_arm", 56, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_GENERAL, "fly_style", 57, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_fly_style, 2},
+    {SEC_GENERAL, "flycam_hold", 58, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_flycam_hold, 2},
     {SEC_RECEIVER, "protocol", 0, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_rx_protocol, 10},
     {SEC_RECEIVER, "ch_roll", 1, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 15.0f, nullptr, 0},
     {SEC_RECEIVER, "ch_pitch", 2, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 15.0f, nullptr, 0},

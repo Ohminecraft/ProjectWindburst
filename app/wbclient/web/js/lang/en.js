@@ -102,8 +102,8 @@ export const EN = {
     "Unplug the cable, plug it in again, then press \"Find ports\": the port name may have changed.",
   "Chọn đúng cổng của flight controller chưa? Cổng có chip Espressif / CP210x / CH34x được xếp lên đầu danh sách.":
     "Is this the port of the flight controller? Ports with an Espressif / CP210x / CH34x chip are listed first.",
-  "Mạch dùng cầu USB-UART thì baud phải khớp với firmware (mặc định 230400). Thử baud khác ở ô bên cạnh ô cổng.":
-    "With a USB-UART bridge the baud rate must match the firmware (230400 by default). Try another baud rate in the box next to the port.",
+  "Mạch dùng cầu USB-UART thì baud phải khớp với firmware. Thử baud khác ở ô bên cạnh ô cổng.":
+    "With a USB-UART bridge the baud rate must match the firmware. Try another baud rate in the box next to the port.",
   "Mạch đã nạp firmware Windburst chưa? Nếu vừa nạp xong, bấm nút reset rồi kết nối lại.":
     "Has the Windburst firmware been flashed? If you just flashed it, press the reset button and connect again.",
   "Nạp firmware build từ đúng thư mục dự án này (cùng protocol/wbp_schema.json), hoặc dùng app đi kèm bản firmware đó.":
@@ -2811,6 +2811,28 @@ export const EN = {
     "the Y axis (pitch) reads backwards: change the mounting",
   "hai trục lệch nhau quá 30 %: máy bị đưa đi chứ không chỉ xoay, thử lại":
     "the two axes differ by more than 30 %: the craft was carried, not only turned; try again",
+  "Giải thích":
+    "Explanation",
+  "Kiểu bay":
+    "Flying style",
+  "FPV: như Betaflight, mọi mode theo công tắc. Flycam: như máy quay phim thương mại (DJI): luôn tự cân bằng, giữ độ cao và giữ vị trí; cần ga tự về giữa là giữ độ cao.":
+    "FPV: as Betaflight, every mode as its switch says. Flycam: as a commercial camera drone (DJI): always self-levelling, holding its height and place; the throttle stick centred = hold the height.",
+  "Flycam giữ vị trí bằng":
+    "Flycam holds its place with",
+  "Loiter: cần = vận tốc, buông là tự phanh rồi đứng (giống chế độ P của DJI). Position Hold: cần = góc nghiêng như Angle, buông thì phanh và giữ.":
+    "Loiter: the stick = a velocity, let go and it brakes by itself and stands (like DJI's P mode). Position Hold: the stick = a lean as in Angle, let go and it brakes and holds.",
+  "Loiter (khuyên dùng)":
+    "Loiter (recommended)",
+  "Flycam: luôn Angle + Altitude Hold + giữ vị trí; công tắc Acro / Stabilize bị bỏ qua. Cần ga ở giữa = giữ độ cao: arm khi cần ga không cao hơn giữa, đẩy lên để cất cánh, sau khi đáp giữ cần ga ở đáy 3 giây thì motor tắt. Không có GPS / optical flow thì chỉ giữ độ cao (như ATTI của DJI). Cần barometer.":
+    "Flycam: always Angle + Altitude Hold + position hold; the Acro / Stabilize switches are ignored. The throttle stick centred = hold the height: arm with the throttle no higher than the middle, push it up to take off, after landing hold it at the bottom for 3 seconds and the motors stop. Without a GPS / optical flow it only holds its height (like DJI's ATTI). Needs a barometer.",
+  "FPV: mọi mode theo công tắc như bình thường, kể cả Acro.":
+    "FPV: every mode as its switch says, Acro included.",
+  "(firmware này chưa có)":
+    "(not in this firmware)",
+  "Firmware này chưa có chức năng này: cập nhật firmware.":
+    "This firmware does not have this yet: update the firmware.",
+  "Firmware {fw} cũ hơn app: chỉ hiện những cài đặt firmware này có. Nạp firmware mới để dùng các chức năng mới.":
+    "Firmware {fw} is older than this app: only the settings it has are shown. Flash a newer firmware to use the new features.",
   "MSP (MSP_SET_RAW_RC trên cổng MSP)":
     "MSP (MSP_SET_RAW_RC on the MSP port)",
   "Cổng MSP (flow, GPS, la bàn, khí áp kế, receiver)":
@@ -3565,5 +3587,5 @@ export const SAME = [
   "MAVLink 2", "System ID", "Telemetry (MAVLink)", "Telemetry RX", "Telemetry TX",
   "Motor wizard",
   "MSP DisplayPort (DJI, Walksnail, HDZero)", "HD 53 x 20 (DJI, Walksnail)", "HDZero 50 x 18", "SD 30 x 16", "OSD",
-  "SCK", "MISO", "MOSI", "CSN", "CE", "% / s", "Acro", "Alt hold", "Pos hold", "Rescue", "Loiter", "Crash flip", "Crash flip (turtle)", "250 kbps", "1 Mbps", "2 Mbps", "Chip", "(ADC 0..4095)",
+  "SCK", "MISO", "MOSI", "CSN", "CE", "% / s", "Acro", "Alt hold", "Pos hold", "Rescue", "Loiter", "FPV", "Flycam", "Position Hold", "Crash flip", "Crash flip (turtle)", "250 kbps", "1 Mbps", "2 Mbps", "Chip", "(ADC 0..4095)",
 ];

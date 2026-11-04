@@ -1,55 +1,55 @@
-# Dải LED WS2812 / SK6812 (0.16.0)
+# WS2812 / SK6812 LED strip (0.16.0)
 
 Section `led`:
-- `count`: số LED, 0 – 32 (0 = tắt);
+- `count`: number of LEDs, 0 – 32 (0 = off);
 - `brightness`: 5 – 100 %;
-- `layout`: `ALL` (mọi LED cùng màu), `NAV` (đèn hàng không) hoặc `MANUAL` (tự gán từng LED, từ 0.22).
+- `layout`: `ALL` (every LED the same colour), `NAV` (navigation lights) or `MANUAL` (assign each LED yourself, from 0.22).
 
-Chân dữ liệu là `pins.led` (tab Chân, nhóm Khác).
+The data pin is `pins.led` (Pins tab, Other group).
 
-Firmware gửi dữ liệu LED qua chân MOSI của **bus SPI thứ hai** (HSPI) ở 3,2 MHz. Mỗi bit dữ liệu là 4 bit SPI (`1000` = 0, `1110` = 1), nên thời gian chính xác lấy từ xung SPI chứ không phụ thuộc CPU. Lý do không dùng RMT: cả 4 bộ phát RMT của ESP32-S3 đều đã dành cho DShot khi có 4 motor. Hệ quả là LED **không dùng được cùng lúc với thẻ SD kiểu SPI hoặc PMW3901** (hai thứ này cũng dùng bus đó); khi trùng, báo cáo khởi động sẽ nói rõ. Chưa có trên STM32.
+The firmware sends LED data over the MOSI pin of the **second SPI bus** (HSPI) at 3.2 MHz. Each data bit is 4 SPI bits (`1000` = 0, `1110` = 1), so the precise timing comes from the SPI clock and does not depend on the CPU. Why not RMT: all 4 RMT transmitters of the ESP32-S3 are already reserved for DShot when there are 4 motors. As a consequence the LEDs **cannot be used at the same time as an SPI-mode SD card or a PMW3901** (both also use that bus); on a conflict, the boot report says so. Not available on STM32 yet.
 
-Luồng cảm biến vẽ 50 khung hình mỗi giây (`app/led_logic.h`), gửi ngoài lock. Mỗi LED mất khoảng 30 µs trên bus.
+The sensor thread draws 50 frames per second (`app/led_logic.h`), sent outside the lock. Each LED takes about 30 µs on the bus.
 
-| Trạng thái | Màu |
+| State | Colour |
 |---|---|
-| failsafe | đỏ, nháy 5 Hz |
-| pin cạn (critical) | đỏ, nháy đôi mỗi giây |
-| motor dừng / runaway (đã disarm) | đỏ – vàng xen kẽ |
-| đang hiệu chuẩn | xanh lơ, sáng mờ dần lên xuống |
-| chưa arm, còn điều gì chặn arm | vàng, nháy 1 Hz |
-| chưa arm, sẵn sàng | xanh lá |
-| đang bay | màu theo mode: Acro trắng, Angle xanh dương, Stabilize xanh lơ, Altitude Hold tím, Position Hold xanh ngọc, GPS Rescue cam nhấp nháy. Pin yếu (warning): thêm một nháy vàng mỗi 2 s |
-| `NAV`, đang bay | nửa đầu dải đỏ (trái), nửa sau xanh (phải), LED giữa là màu mode, LED cuối chớp trắng |
+| failsafe | red, blinking 5 Hz |
+| battery empty (critical) | red, double blink every second |
+| motor stop / runaway (disarmed) | alternating red – yellow |
+| calibrating | cyan, slowly fading up and down |
+| disarmed, something still blocks arming | yellow, blinking 1 Hz |
+| disarmed, ready | green |
+| flying | colour by mode: Acro white, Angle blue, Stabilize cyan, Altitude Hold purple, Position Hold teal, GPS Rescue blinking orange. Battery low (warning): an extra yellow blink every 2 s |
+| `NAV`, flying | first half of the strip red (left), second half green (right), the middle LED shows the mode colour, the last LED flashes white |
 
-## Kiểu `MANUAL` (0.22)
-Mỗi LED (1 – `count`) một chức năng `led.fn[i]` và một màu `led.color[i]` (0xRRGGBB). Ở app: tab **Pin và còi**, khối Đèn LED, chọn kiểu "Tự gán từng LED"; bảng có một dòng cho mỗi LED, nút "Áp cho mọi LED" gán cùng chức năng và màu cho cả dải, và một dải xem thử chạy đúng công thức của firmware (chọn trạng thái xem thử: chưa arm / đang bay / failsafe).
+## `MANUAL` layout (0.22)
+Each LED (1 – `count`) has a function `led.fn[i]` and a colour `led.color[i]` (0xRRGGBB). In the app: the **Battery and buzzer** tab, LED block, choose the layout "Assign each LED"; the table has one row per LED, the "Apply to every LED" button assigns the same function and colour to the whole strip, and a preview strip runs exactly the firmware's formula (choose the preview state: disarmed / flying / failsafe).
 
-| Chức năng | Hiện gì |
+| Function | What it shows |
 |---|---|
-| `OFF` | tắt |
-| `STATUS` | hình trạng thái như kiểu `ALL` (bảng trên) |
-| `COLOR` | màu của LED, sáng liên tục |
-| `MODE` | màu của mode bay (bảng trên), cả khi chưa arm |
-| `ARMED` | màu của LED khi đã arm, tắt khi chưa arm |
-| `BLINK` | màu của LED, nửa vòng sáng nửa vòng tắt |
-| `STROBE` | chớp 60 ms, hai lần mỗi vòng |
-| `BREATHE` | sáng dần rồi tối dần (không tắt hẳn, thấp nhất 8 %) |
-| `RAINBOW` | cầu vồng chạy; các LED `RAINBOW` chia nhau vòng màu theo thứ tự trên dải |
-| `LARSON` | một điểm sáng quét qua lại trên các LED `LARSON` (LED kề bên sáng 20 %) |
-| `BATTERY` | đầy: xanh lá, cạn: đỏ, ở giữa thì pha (theo % pin còn lại); không có pin: tắt |
-| `THROTTLE` | cần ga thấp: xanh dương, cao: đỏ |
+| `OFF` | off |
+| `STATUS` | the status pattern as in the `ALL` layout (table above) |
+| `COLOR` | the LED's colour, steady |
+| `MODE` | the flight mode colour (table above), even when disarmed |
+| `ARMED` | the LED's colour when armed, off when disarmed |
+| `BLINK` | the LED's colour, on for half a cycle and off for the other half |
+| `STROBE` | 60 ms flash, twice per cycle |
+| `BREATHE` | fades up then down (never fully off, minimum 8 %) |
+| `RAINBOW` | running rainbow; the `RAINBOW` LEDs share the colour wheel in order along the strip |
+| `LARSON` | a light spot sweeping back and forth over the `LARSON` LEDs (neighbouring LEDs at 20 %) |
+| `BATTERY` | full: green, empty: red, mixed in between (by remaining battery %); no battery: off |
+| `THROTTLE` | throttle stick low: blue, high: red |
 
-- `led.speed` 1 – 10: một vòng hiệu ứng dài 10 s / speed (5 = 2 s).
-- `led.warnings` (mặc định bật): khi failsafe, pin cạn (critical) hoặc motor dừng đột ngột, cả dải hiện hình cảnh báo, bất kể LED gán gì. Tắt đi thì chỉ các LED `STATUS` hiện cảnh báo.
-- Mặc định mọi LED là `STATUS` màu trắng, nên chuyển sang `MANUAL` mà chưa gán gì thì giống `ALL`.
-- Bản ghi section led cũ (3 byte, 0.16 – 0.21) vẫn đọc được, các trường mới lấy mặc định.
+- `led.speed` 1 – 10: one effect cycle lasts 10 s / speed (5 = 2 s).
+- `led.warnings` (on by default): on failsafe, battery empty (critical) or a sudden motor stop, the whole strip shows the warning pattern regardless of LED assignments. When off, only the `STATUS` LEDs show warnings.
+- By default every LED is `STATUS` in white, so switching to `MANUAL` without assigning anything looks like `ALL`.
+- Old led section records (3 bytes, 0.16 – 0.21) can still be read; new fields take their defaults.
 
-Kiểm thử:
-- `test_app` nhóm led strip: các hình theo trạng thái; bit WS2812 được mã hoá rồi giải mã ngược lại để so.
-- `test_fw` nhóm `led`: màu theo trạng thái thật của máy (sẵn sàng, Altitude Hold, failsafe); bus bị chiếm; trùng chân.
-- `test_app`: từng chức năng MANUAL, cầu vồng / quét theo thời gian, cảnh báo chiếm dải, độ sáng, tốc độ.
-- `test_fw` nhóm `led`: MANUAL trên mạch ảo (màu cố định, ga lên thì LED ga đỏ dần, failsafe).
-- `test_gui_math`: dải xem thử của app so với firmware ở 288 trường hợp.
-- Mutant: `python3 tools/mutate.py led:` (24).
-- **Chưa thử với dải LED thật.**
+Tests:
+- `test_app` led strip group: patterns by state; WS2812 bits are encoded then decoded back for comparison.
+- `test_fw` group `led`: colours from the craft's real state (ready, Altitude Hold, failsafe); bus taken; pin conflict.
+- `test_app`: each MANUAL function, rainbow / sweep over time, warnings taking over the strip, brightness, speed.
+- `test_fw` group `led`: MANUAL on the virtual board (fixed colour, throttle up turns the throttle LED gradually red, failsafe).
+- `test_gui_math`: the app's preview strip against the firmware in 288 cases.
+- Mutants: `python3 tools/mutate.py led:` (24).
+- **Not tried with a real LED strip yet.**

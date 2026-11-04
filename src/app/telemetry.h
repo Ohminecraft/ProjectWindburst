@@ -71,6 +71,7 @@ struct Telemetry {
     // ---- tuning: live state of the filters and the PID helpers
     float gyro_lpf1_hz = 0, dterm_lpf1_hz = 0, dyn_notch_hz[9] = {}, rpm_notch_hz[8] = {}, tpa = 1, anti_gravity = 0, rc_smoothed_hz = 0, rc_cutoff_hz = 0, pid_sum[3] = {}, hover_throttle = 0; uint8_t air_state = false;
     // ---- a section the firmware changed by itself and wants written to flash (in-flight level trim): the link task saves it when seq changes
+    uint32_t fw_saved_mask = 0;      // (0.43) every section the flight side changed since boot: several between two looks are all kept
     uint8_t fw_saved_seq = 0, fw_saved_section = 0; uint8_t trim_progress = 0;      // trim_progress: % of the in-flight level trim measurement
     // ---- calibration in progress
     uint8_t cal_kind = 0, cal_progress = 0, cal_state = 0, cal_mask = 0, cal_result = 0; float cal_raw[3] = {};

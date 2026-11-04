@@ -1,25 +1,25 @@
-# Disarm khi một motor dừng (0.16.0)
+# Disarm when a motor stalls (0.16.0)
 
-`motors.stall_disarm` (mặc định **tắt**). Khi cánh chạm vật, motor bị kẹt hay ESC mất đồng bộ, firmware tắt hết motor, trước khi các motor còn lại lật máy xuống đất hoặc motor kẹt bị cháy. Cần biết tốc độ của từng motor, lấy từ **DShot hai chiều** hoặc **dây telemetry ESC**. Motor nào không có tốc độ thì không bị xét: thiếu trả lời là lỗi telemetry, không phải motor dừng.
+`motors.stall_disarm` (default **off**). When a prop hits something, a motor jams or an ESC desyncs, the firmware shuts down all motors, before the remaining motors flip the craft into the ground or the jammed motor burns out. It needs each motor's speed, from **bidirectional DShot** or the **ESC telemetry wire**. A motor without a speed reading is not judged: missing replies are a telemetry fault, not a stalled motor.
 
-Khi đang arm, mỗi motor có lệnh ≥ `stall_min_cmd` (mặc định 25 %) được xét hai điều kiện:
-- **dừng**: tốc độ < `stall_min_rpm` (1500 rpm);
-- **tụt**: tốc độ < `stall_drop` (35 %) của tốc độ cao nhất kể từ lần gần nhất lệnh của motor đó giảm. Khi lệnh giảm thì motor chậm lại là chuyện bình thường, nên mốc so sánh được đặt lại.
+While armed, each motor with a command ≥ `stall_min_cmd` (default 25 %) is checked against two conditions:
+- **stopped**: speed < `stall_min_rpm` (1500 rpm);
+- **dropped**: speed < `stall_drop` (35 %) of the highest speed since that motor's command last decreased. When the command decreases the motor naturally slows down, so the reference is reset.
 
-Một trong hai điều kiện kéo dài `stall_ms` (100 ms) thì disarm:
-- blocker `MOTOR_STALL` giữ cho tới khi gạt ARM về OFF;
-- stream `motors` cho biết motor nào (`stall_motor`);
-- tab Motor có khối "Motor dừng giữa chừng".
+Either condition lasting `stall_ms` (100 ms) disarms:
+- the `MOTOR_STALL` blocker holds until ARM is switched OFF;
+- the `motors` stream says which motor (`stall_motor`);
+- the Motor tab has a "Motor stalled mid-flight" block.
 
-Code: `src/core/safety.h` (`StallGuard`), chạy trong `FlightCore` (bước 9b, sau runaway takeoff).
+Code: `src/core/safety.h` (`StallGuard`), running in `FlightCore` (step 9b, after runaway takeoff).
 
-## Kiểm thử
-- `test_core`: các quy tắc (glitch 50 ms không tính; tụt khi lệnh không đổi thì bị bắt; lệnh giảm thì không; idle, thiếu telemetry, disarm, tắt thì không xét).
-- `test_flight`, quad 5 inch với tốc độ từng motor lấy theo lực đẩy:
-  - 6 vòng lật, lăn, xoay yaw, ga max rồi cắt ga: **không lần nào báo nhầm**;
-  - motor 3 dừng giữa không: disarm sau 118 ms.
-- `test_fw` nhóm `stall`, bảng mạch ảo với DShot hai chiều:
-  - đang bay thì motor 2 dừng: disarm trong 250 ms, stream báo motor 2;
-  - khi setting tắt: không có gì disarm.
-- Mutant: `python3 tools/mutate.py stall:` (8).
-- **Chưa thử trên mạch.** Cần thử với cánh thật: chạm nhẹ khi đang hover thấp, và bay mạnh tay để chắc chắn không báo nhầm. Ngưỡng có thể phải chỉnh theo từng máy.
+## Tests
+- `test_core`: the rules (a 50 ms glitch does not count; a drop with an unchanged command is caught; with a decreasing command it is not; idle, missing telemetry, disarmed, disabled are not judged).
+- `test_flight`, 5-inch quad with per-motor speed derived from thrust:
+  - 6 flips, rolls, yaw spins, full throttle then throttle cut: **not a single false alarm**;
+  - motor 3 stopping in mid-air: disarm after 118 ms.
+- `test_fw` group `stall`, virtual board with bidirectional DShot:
+  - motor 2 stopping in flight: disarm within 250 ms, the stream reports motor 2;
+  - with the setting off: nothing disarms.
+- Mutants: `python3 tools/mutate.py stall:` (8).
+- **Not tried on the board yet.** Needs testing with real props: a light touch while hovering low, and aggressive flying to make sure there are no false alarms. Thresholds may need tuning per craft.

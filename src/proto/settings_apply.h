@@ -198,6 +198,7 @@ inline void apply_core(const Settings& s, fc::CoreConfig& c, fc::RcInterpreter& 
     c.stall.enabled = s.motors.stall_disarm != 0; c.stall.min_rpm = s.motors.stall_min_rpm; c.stall.drop_ratio = s.motors.stall_drop * 0.01f;
     c.stall.min_command = s.motors.stall_min_cmd * 0.01f; c.stall.delay_s = s.motors.stall_ms * 0.001f;
     c.stick_arm = s.general.stick_arm != 0;
+    c.flycam = s.general.fly_style == wbp::FLY_STYLE_FLYCAM; c.flycam_loiter = s.general.flycam_hold == wbp::FLYCAM_HOLD_LOITER;      // (0.43: core/flight_core.h CoreConfig::flycam)
     // crash flip (core/crash_flip.h): only DShot can turn a motor round by command
     c.crashflip.available = motor::is_dshot((motor::Protocol)s.motors.protocol); c.crashflip.rate_limit_dps = s.motors.crashflip_rate * 10.0f;
     c.crashflip.motor_pct = s.motors.crashflip_motor_pct; c.crashflip.auto_rearm = s.motors.crashflip_auto_rearm != 0;

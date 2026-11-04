@@ -29,6 +29,7 @@ def main():
         "--paths", APP,
         "--add-data", os.path.join(APP, "wbclient", "web") + SEP + "wbclient/web",
         "--add-data", schema + SEP + "wbclient",                # schema.default_path() looks next to schema.py first
+        "--add-data", os.path.join(APP, "wbclient", "schemas") + SEP + "wbclient/schemas",      # the released firmware's schemas: older firmware works too (0.43)
         "--hidden-import", "serial.tools.list_ports",
         # serial_for_url() imports its URL handlers by name (socket:// = serial.urlhandler.protocol_socket): PyInstaller cannot see them,
         # and without them the simulator and the craft's WiFi fail with "protocol 'socket' not known"

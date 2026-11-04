@@ -338,7 +338,7 @@ function failureHelp(e) {
     tips.push(tr('Rút cáp, cắm lại, rồi bấm "Tìm cổng": tên cổng có thể đã đổi.'));
   } else if (e.code === 'NO_ANSWER') {
     tips.push(tr('Chọn đúng cổng của flight controller chưa? Cổng có chip Espressif / CP210x / CH34x được xếp lên đầu danh sách.'));
-    tips.push(tr('Mạch dùng cầu USB-UART thì baud phải khớp với firmware (mặc định 230400). Thử baud khác ở ô bên cạnh ô cổng.'));
+    tips.push(tr('Mạch dùng cầu USB-UART thì baud phải khớp với firmware. Thử baud khác ở ô bên cạnh ô cổng.'));
     tips.push(tr('Mạch đã nạp firmware Windburst chưa? Nếu vừa nạp xong, bấm nút reset rồi kết nối lại.'));
   } else if (e.code === 'SCHEMA_MISMATCH') {
     tips.push(tr('Nạp firmware build từ đúng thư mục dự án này (cùng protocol/wbp_schema.json), hoặc dùng app đi kèm bản firmware đó.'));
@@ -374,6 +374,9 @@ async function onConn({ before }) {
   paintBar();
   if (before.connected && (c.stalls || 0) > (before.stalls || 0)) toast(noteText(c.note), 'warn');
   if (fresh) {
+    // an older firmware (0.43): the app talks to it with that firmware's own schema - load it before anything is drawn from it
+    if (c.schema_hash && store.schema && c.schema_hash !== store.schema.hash) { await loadSchema(); buildRail(); }
+    if (c.schema_note) toast(tr('Firmware {fw} cũ hơn app: chỉ hiện những cài đặt firmware này có. Nạp firmware mới để dùng các chức năng mới.', { fw: c.info ? c.info.version : '' }), 'warn', 9000);
     if (setRole(c.info && c.info.role === 'TX' ? 'TX' : 'RX')) {           // a transmitter / a flight controller after the other: its own tabs
       buildRail();
       if (!TABS.some((t) => t.id === current)) { current = TABS[0].id; history.replaceState(null, '', '#' + current); }

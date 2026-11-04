@@ -1,51 +1,51 @@
-# Stabilize viết lại theo AC_AttitudeControl (0.30)
+# Stabilize rewritten after AC_AttitudeControl (0.30)
 
-Mới kiểm tra trên PC (unit test + firmware trên mạch ảo). **Chưa bay thật.**
+Only checked on PC so far (unit tests + firmware on the virtual board). **Not flown for real yet.**
 
-## 1. Khác gì so với trước
-- **Trước 0.30:** sai số được tính theo từng góc Euler (roll mục tiêu − roll, pitch mục tiêu − pitch, hướng mục tiêu − hướng), rồi mới đổi sang tốc độ thân máy.
-  - Chỉ đúng khi nghiêng ít.
-  - Khi vừa nghiêng ngang vừa chúi, hoặc nghiêng lớn, các trục lẫn vào nhau.
-  - Sửa hướng có thể kéo lệch độ nghiêng.
-- **Từ 0.30:** dùng bộ điều khiển quaternion của ArduPilot (`AC_AttitudeControl::attitude_controller_run_quat`), xem `src/core/attitude.h`.
+## 1. What changed
+- **Before 0.30:** the error was computed per Euler angle (target roll − roll, target pitch − pitch, target heading − heading), and only then converted to body rates.
+  - Only correct at small tilt.
+  - When rolling and pitching at the same time, or at large tilt, the axes mix.
+  - Correcting heading could pull the tilt off.
+- **From 0.30:** uses ArduPilot's quaternion controller (`AC_AttitudeControl::attitude_controller_run_quat`), see `src/core/attitude.h`.
 
-## 2. Các bước
-1. **Lệnh phi công** (`input_euler_angle_roll_pitch_euler_rate_yaw`), giữ nguyên như trước:
-   - cần roll / pitch cho **góc**, cần yaw cho **tốc độ quay**;
-   - mỗi trục được tạo hình (`attitude_command_model`): gia tốc giới hạn, input time constant;
-   - kết quả là mục tiêu Euler cùng tốc độ và gia tốc của nó.
-2. **Mục tiêu và máy đều là quaternion.** Sai số được tách như `thrust_vector_rotation_angles`:
-   - **trước tiên**: phép quay đưa vector lực đẩy ("hướng lên" của máy) về trùng vector lực đẩy mục tiêu, cho thành phần x / y;
-   - **sau đó**: phần hướng còn lại quanh trục đó, cho thành phần z.
-   - Vì vậy sai số hướng không bao giờ làm lệch độ nghiêng.
-3. **Sai số hướng tối đa 45°.** Máy không theo kịp (bị giữ, bão hoà) thì mục tiêu được kéo theo máy.
-4. **Mỗi trục thân máy:** square-root controller với hệ số Stabilize P và nửa giới hạn gia tốc (`update_ang_vel_target_from_att_error`).
+## 2. Steps
+1. **Pilot command** (`input_euler_angle_roll_pitch_euler_rate_yaw`), unchanged from before:
+   - the roll / pitch sticks give an **angle**, the yaw stick gives a **rotation rate**;
+   - each axis is shaped (`attitude_command_model`): acceleration limit, input time constant;
+   - the result is an Euler target together with its rate and acceleration.
+2. **Both the target and the craft are quaternions.** The error is split like `thrust_vector_rotation_angles`:
+   - **first**: the rotation that brings the thrust vector (the craft's "up") onto the target thrust vector, giving the x / y components;
+   - **then**: the remaining heading part about that axis, giving the z component.
+   - So a heading error never disturbs the tilt.
+3. **Heading error at most 45°.** When the craft cannot keep up (held, saturated), the target is dragged along with the craft.
+4. **Each body axis:** square-root controller with the Stabilize P gain and half the acceleration limit (`update_ang_vel_target_from_att_error`).
 5. **Feed-forward:**
-   - tốc độ Euler của mục tiêu được đổi thành tốc độ thân **tại tư thế mục tiêu** (`euler_rate_to_ang_vel`), rồi quay sang hệ của máy;
-   - khi sai lệch lực đẩy từ 30° đến 60°, feed-forward giảm dần;
-   - trên 60°, yaw được để nguyên theo gyro (như ArduPilot: lấy lại lực đẩy trước).
-6. **Gia tốc mục tiêu** (feed-forward cho vòng rate) cũng được tính trong hệ thân máy.
+   - the target's Euler rates are converted to body rates **at the target attitude** (`euler_rate_to_ang_vel`), then rotated into the craft's frame;
+   - when the thrust error is between 30° and 60°, feed-forward is reduced gradually;
+   - above 60°, yaw is left to follow the gyro (like ArduPilot: recover thrust first).
+6. **Target acceleration** (feed-forward for the rate loop) is also computed in the body frame.
 
-Bên trong code dùng hệ của ArduPilot (pitch + = ngóc mũi). Giao diện ra ngoài vẫn theo quy ước của firmware (pitch + = chúi mũi), nên các phần khác không đổi.
+Internally the code uses ArduPilot's frame (pitch + = nose up). The outward interface still follows the firmware convention (pitch + = nose down), so the other parts are unchanged.
 
-## 3. Cài đặt
-Không đổi: `stab_p` (Roll / Pitch / Yaw P), `stab_accel_rp`, `stab_accel_yaw`, `stab_input_tc`, `stab_rate_ff`. Cùng nghĩa, cùng mặc định như ArduPilot.
+## 3. Settings
+Unchanged: `stab_p` (Roll / Pitch / Yaw P), `stab_accel_rp`, `stab_accel_yaw`, `stab_input_tc`, `stab_rate_ff`. Same meaning, same defaults as ArduPilot.
 
-## 4. Test (`test_control`, nhóm `[stabilize 0.29]`)
-- Hàm tách sai số:
-  - chỉ lệch hướng → toàn bộ sai số nằm ở z;
-  - chỉ lệch roll → chỉ có x;
-  - đúng mục tiêu khi nghiêng và chúi cùng lúc → sai số 0.
-- Nghiêng 40°, lệch hướng 40°: quay về đúng hướng, độ nghiêng thay đổi dưới 3° trong lúc quay.
-- Lệch lớn cả ba trục (60 / 50 / 120°): về thăng bằng; lực đẩy được sửa trước, sau 0,5 s sai lệch lực đẩy còn dưới 20°.
-- Sai lệch lực đẩy trên 60°: yaw để nguyên theo gyro.
-- Ngóc mũi 60°, lệch hướng 10°: phần lớn lệnh là roll, vì máy quay quanh trục thẳng đứng của đất. Bộ cũ tính theo hiệu Euler sẽ dồn hết vào yaw.
-- Mục tiêu chúi 30° và đang quay yaw 60°/s: tốc độ thân máy đúng bằng 60·sin30 cho roll và 60·cos30 cho yaw. Feed-forward gia tốc cũng có phần roll tương ứng.
-- Máy lệch roll 30° so với mục tiêu đang quay: tốc độ quay của mục tiêu được quay sang trục của máy (có phần pitch).
-- Các test bay trên plant vật lý (`test_flight`: bước nghiêng, yaw, gió) vẫn qua không đổi ngưỡng.
-- Có 25 mutant `stab:` viết lại cho code mới, tất cả đều bị test bắt.
+## 4. Tests (`test_control`, group `[stabilize 0.29]`)
+- Error split function:
+  - heading error only → all of the error is in z;
+  - roll error only → x only;
+  - on target while rolled and pitched at once → zero error.
+- Tilted 40°, heading off by 40°: returns to the right heading, tilt changes by less than 3° while turning.
+- Large errors on all three axes (60 / 50 / 120°): returns to level; thrust is corrected first, after 0.5 s the thrust error is below 20°.
+- Thrust error above 60°: yaw left to follow the gyro.
+- Nose up 60°, heading off by 10°: most of the command is roll, because the craft turns about the earth's vertical axis. The old Euler-difference scheme would put it all into yaw.
+- Target pitched down 30° and yawing at 60°/s: body rates exactly 60·sin30 for roll and 60·cos30 for yaw. The acceleration feed-forward has the corresponding roll part too.
+- Craft rolled 30° off a rotating target: the target's rotation rate is rotated into the craft's axes (has a pitch part).
+- The flight tests on the physical plant (`test_flight`: tilt step, yaw, wind) still pass without changing thresholds.
+- 25 `stab:` mutants rewritten for the new code, all caught by the tests.
 
-## 5. Cần thử trên mạch
-1. Stabilize, cần roll hoặc pitch nhanh rồi về giữa: không vọt, cảm giác giống trước.
-2. Nghiêng lớn kèm quay yaw (bay vòng): độ nghiêng giữ đều.
-3. Gió giật làm lệch hướng: quay về hướng mà máy không chao.
+## 5. To try on the board
+1. Stabilize, flick the roll or pitch stick quickly and return to centre: no overshoot, feels the same as before.
+2. Large tilt combined with yaw rotation (flying circles): tilt stays steady.
+3. A gust knocks the heading off: returns to heading without the craft wobbling.

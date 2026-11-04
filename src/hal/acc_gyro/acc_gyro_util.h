@@ -90,12 +90,10 @@ WB_FAST inline void apply_rotation(float v[3], const float m[3][3]) {
 
 // Identify the chip from raw ID reads. r00_dummy_second = byte 2 of a 2-byte read of reg 0x00 (BMI270 has a dummy byte first),
 // r00_first = a plain 1-byte read of reg 0x00 (BMI160, ICM20948 / ICM20649), r72 = reg 0x72 (ICM456xx), r75 = reg 0x75 (MPU family / ICM426xx).
-// The ICM-209xx is looked for last, as Betaflight does: on the MPU family reg 0x00 is a factory self-test value that may be anything.
+// The IDs at reg 0x00 (BMI270, BMI160, ICM-209xx) are looked at last, as Betaflight's gyroSpiDetectFnTable does: on the MPU family
+// regs 0x00 / 0x01 are factory self-test trims and on the ICM-456xx live accel data - any byte, so a 0x24 or 0xD1 there must not
+// hide the chip's own WHO_AM_I (before 0.43 about 1 board in 100 was taken for a BMI and then failed its init).
 inline IMUAccGyroDevice classify_spi(uint8_t r00_dummy_second, uint8_t r00_first, uint8_t r72, uint8_t r75) {
-    if (r00_dummy_second == BMI270_WHO_AM_I) return BMI270_SPI;
-    if (r00_first == BMI160_WHO_AM_I) return BMI160_SPI;
-    if (r72 == ICM45686_WHO_AM_I) return ICM45686_SPI;
-    if (r72 == ICM45605_WHO_AM_I) return ICM45605_SPI;
     switch (r75) {
     case MPU6050_WHO_I_AM:   return MPU6000_SPI;                      // 0x68 (SPI => MPU6000)
     case MPU6500_WHO_I_AM:   return MPU6500_SPI;
@@ -109,6 +107,10 @@ inline IMUAccGyroDevice classify_spi(uint8_t r00_dummy_second, uint8_t r00_first
     case ICM42688P_WHO_AM_I: return ICM42688P_SPI;
     default:                 break;
     }
+    if (r72 == ICM45686_WHO_AM_I) return ICM45686_SPI;
+    if (r72 == ICM45605_WHO_AM_I) return ICM45605_SPI;
+    if (r00_dummy_second == BMI270_WHO_AM_I) return BMI270_SPI;
+    if (r00_first == BMI160_WHO_AM_I) return BMI160_SPI;
     if (r00_first == ICM20948_WHO_AM_I) return ICM20948_SPI;
     if (r00_first == ICM20649_WHO_AM_I) return ICM20649_SPI;
     return NONE;

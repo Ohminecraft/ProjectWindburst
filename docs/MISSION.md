@@ -1,123 +1,123 @@
-# Nhiệm vụ bay (waypoint) — firmware 0.37
+# Flight missions (waypoints) — firmware 0.37
 
-Drone tự bay một kế hoạch đã nạp: cất cánh, bay qua các điểm, ở điểm này đứng yên rồi chạy servo, ở điểm kia hạ cánh, tắt motor chờ người lấy hoặc gắn đồ, rồi tự cất cánh bay tiếp, cuối cùng về nhà hạ cánh. Cách chạy theo chế độ **AUTO của ArduCopter**: đã đọc mã thật (`ArduCopter/mode_auto.cpp`, `libraries/AP_Mission/AP_Mission.cpp`, `ArduCopter/events.cpp`, `AP_ServoRelayEvents`) rồi viết lại, gọn hơn.
+The drone flies a loaded plan by itself: takes off, flies through points, at one point holds still and runs a servo, at another lands, stops the motors and waits for someone to pick up or attach a load, then takes off by itself and continues, finally returns home and lands. It works like **ArduCopter's AUTO mode**: the real code was read (`ArduCopter/mode_auto.cpp`, `libraries/AP_Mission/AP_Mission.cpp`, `ArduCopter/events.cpp`, `AP_ServoRelayEvents`) and then rewritten, more compactly.
 
-**Chưa bay thử trên mạch thật.** Đã kiểm chứng trên PC: unit test bộ chạy, mô phỏng vòng kín (`test_flight`), và firmware thật trên mạch ảo (`test_fw`, nhóm `mission`).
+**Not yet flown on a real board.** Verified on PC: unit tests of the runner, closed-loop simulation (`test_flight`), and the real firmware on a virtual board (`test_fw`, group `mission`).
 
-Thiết kế: `docs/superpowers/specs/2026-10-29-mission-design.md`. Những quyết định đưa ra lúc bạn vắng: `docs/MISSION_WORKLOG.md`.
+Design: `docs/superpowers/specs/2026-10-29-mission-design.md`. Decisions made while you were away: `docs/MISSION_WORKLOG.md`.
 
-## Đã có (phần 1: firmware)
-- Lưu kế hoạch tối đa **32 lệnh** trong cài đặt (section `mission`, lưu flash như mọi cài đặt), nạp và đọc qua WBP: USB / UART hoặc bản mô phỏng.
-- Bắt đầu bằng **công tắc MISSION** (tab Mode) hoặc **lệnh WBP `MISSION`** (`1` = bắt đầu, `0` = dừng).
-- Servo nhiệm vụ: kênh `Nhiệm vụ` ở tab Motor, kèm góc tại xung nhỏ nhất / lớn nhất và xung ban đầu.
-- Còi và motor kêu nhanh trong **10 giây cuối** trước khi drone tự cất cánh lại. Không tắt được.
-- OSD và MAVLink báo chế độ AUTO; stream `nav` có trạng thái nhiệm vụ.
+## Done (part 1: firmware)
+- Stores a plan of up to **32 commands** in the settings (section `mission`, saved to flash like every setting), uploaded and read over WBP: USB / UART or the simulator.
+- Started with the **MISSION switch** (Modes tab) or the **WBP command `MISSION`** (`1` = start, `0` = stop).
+- Mission servo: the `Mission` channel in the Motors tab, with the angle at minimum / maximum pulse and the initial pulse.
+- Beeper and motors beep fast during the **last 10 seconds** before the drone takes off again by itself. Cannot be turned off.
+- OSD and MAVLink report AUTO mode; the `nav` stream carries the mission state.
 
-## Tab "Nhiệm vụ" trong app (phần 2)
-Bố cục C đã chọn: bản đồ chiếm hết tab, các ô nổi bên trên.
+## The "Mission" tab in the app (part 2)
+Chosen layout C: the map fills the whole tab, with floating panels on top.
 
-- **Bản đồ:** ảnh vệ tinh (Esri World Imagery) hoặc bản đồ đường phố (OpenStreetMap). Trên ảnh vệ tinh có lớp tên đường, phường, địa danh như chế độ vệ tinh của Google (Esri `Reference/World_Transportation` và `Reference/World_Boundaries_and_Places`, ảnh PNG trong suốt); nút "Tên đường" bật / tắt lớp này, mặc định bật. Không lấy tile của Google như Betaflight Configurator (`mt1.google.com/vt`): đó không phải API công khai, và điều khoản của Google cấm cả lấy trực tiếp lẫn lưu tile. Ô bản đồ đi qua server `wbclient` (`/api/tile`, `wbclient/maptiles.py`) và được lưu vào `~/Windburst/tiles`. Chỗ đã xem một lần thì lần sau mở được khi không có mạng; chỗ chưa có thì để trống.
-- **Tìm địa chỉ:** gõ rồi bấm Enter (OpenStreetMap Nominatim), bấm vào kết quả là bản đồ nhảy tới đó.
-- **Vị trí của tôi:** bản đồ nhảy tới chỗ đặt laptop, vẽ chấm xanh và vòng sai số.
-  - Vị trí lấy từ dịch vụ vị trí của Windows (GPS của máy nếu có, nếu không thì dò theo các mạng Wi-Fi xung quanh). Lần đầu Windows hỏi quyền.
-  - Cửa sổ app (`desktop.py`) cho trang hỏi thẳng Windows, không hiện thêm hộp hỏi riêng của WebView2. Mở bằng trình duyệt thì trình duyệt hỏi trước.
-  - Bị chặn hoặc không tìm được: trang ghi cần bật gì, và có nút mở trang Cài đặt > Quyền riêng tư và bảo mật > Vị trí của Windows (`/api/location-settings`).
-- **Vẽ kế hoạch:**
-  - Bấm lên bản đồ để thêm điểm, kéo điểm để dời.
-  - Bấm vào một điểm để mở ô sửa: chọn **Bay tới** (giữ N giây), **Đứng yên · servo** (đứng N giây, rồi từng bước: servo 1–4 tới góc tính bằng độ, chờ M giây), hoặc **Hạ cánh · chờ · cất cánh** (chờ N giây dưới đất, cất cánh lại lên độ cao của điểm).
-  - Số mét được ghi trên từng chặng.
-- **Tuỳ chọn chung:** độ cao cất cánh, tốc độ (0 = tốc độ của rescue), về nhà hạ cánh sau điểm cuối, mất sóng thì bay tiếp hay failsafe.
-- **Dòng dưới cùng:** drone đang làm gì (lệnh mấy trên bao nhiêu), còn bao xa tới điểm, còn chờ bao lâu, độ cao, pin, cách nhà, và cả chuyến (số mét, thời gian ước tính, số lệnh / 32). Quá 32 lệnh thì số này chuyển màu đỏ và không cho nạp.
-- **Drone trên bản đồ:** mũi tên đỏ theo GPS và hướng mũi, vệt đỏ là chỗ đã bay qua (từ lúc arm).
-- **Các nút:**
-  - **Nạp vào drone:** ghi section `mission` rồi lưu flash. Phải lúc chưa arm.
-  - **Tải từ drone:** đọc lại kế hoạch đang lưu trong drone.
-  - **Xoá hết điểm** (ô tuỳ chọn): hỏi lại rồi xoá mọi điểm trên bản đồ. Kế hoạch trong drone giữ nguyên tới lần Nạp sau.
-  - **Bắt đầu / Dừng:** gửi lệnh `MISSION`. Drone phải được arm bằng công tắc trước.
-- Độ đổi sang xung theo "góc ở xung nhỏ nhất / lớn nhất" của servo ở tab Motor.
-- Code: `web/js/tabs/mission.js` (giao diện, Leaflet 1.9.4 đóng gói sẵn trong `web/vendor/leaflet`, giấy phép BSD-2), `web/js/mission_plan.js` (đổi kế hoạch qua lại với section `mission`, ước tính quãng đường).
+- **Map:** satellite imagery (Esri World Imagery) or a street map (OpenStreetMap). On the satellite imagery there is a layer of street, ward and place names like Google's satellite mode (Esri `Reference/World_Transportation` and `Reference/World_Boundaries_and_Places`, transparent PNG images); the "Labels" button turns this layer on / off, on by default. Google tiles are not used the way Betaflight Configurator does (`mt1.google.com/vt`): that is not a public API, and Google's terms forbid both fetching tiles directly and storing them. Map tiles go through the `wbclient` server (`/api/tile`, `wbclient/maptiles.py`) and are stored in `~/Windburst/tiles`. Places viewed once can be opened later without a network; places not yet fetched stay blank.
+- **Address search:** type and press Enter (OpenStreetMap Nominatim), click a result and the map jumps there.
+- **My position:** the map jumps to where the laptop is, drawing a blue dot and an accuracy circle.
+  - The position comes from the Windows location service (the machine's GPS if any, otherwise by scanning nearby Wi-Fi networks). The first time, Windows asks for permission.
+  - The app window (`desktop.py`) lets the page ask Windows directly, without an extra WebView2 permission prompt. When opened in a browser, the browser asks first.
+  - Blocked or not found: the page says what needs to be turned on, with a button that opens Windows Settings > Privacy & security > Location (`/api/location-settings`).
+- **Drawing the plan:**
+  - Click on the map to add a point, drag a point to move it.
+  - Click a point to open its edit panel: choose **Fly to** (hold N seconds), **Hold · servo** (hold N seconds, then step by step: servo 1–4 to an angle in degrees, wait M seconds), or **Land · wait · take off** (wait N seconds on the ground, take off again to the point's altitude).
+  - The distance in metres is shown on each leg.
+- **General options:** takeoff altitude, speed (0 = rescue speed), return home and land after the last point, on signal loss continue or failsafe.
+- **Bottom line:** what the drone is doing (command number out of how many), distance left to the point, wait time left, altitude, battery, distance from home, and the whole trip (metres, estimated time, commands / 32). Over 32 commands this number turns red and uploading is refused.
+- **Drone on the map:** a red arrow following GPS and nose heading, the red trail is where it has flown (since arming).
+- **Buttons:**
+  - **Upload to the craft:** writes section `mission` and saves to flash. Must be disarmed.
+  - **Download from the craft:** reads back the plan stored in the drone.
+  - **Delete all points** (options panel): asks for confirmation then deletes every point on the map. The plan in the drone stays until the next Upload.
+  - **Start / Stop:** sends the `MISSION` command. The drone must be armed with the switch first.
+- Degrees are converted to pulses using the servo's "angle at minimum / maximum pulse" in the Motors tab.
+- Code: `web/js/tabs/mission.js` (UI, Leaflet 1.9.4 bundled in `web/vendor/leaflet`, BSD-2 licence), `web/js/mission_plan.js` (converting the plan to and from section `mission`, distance estimate).
 
-**Qua MAVLink (0.40, phần 3):** Mission Planner / QGroundControl nạp và tải kế hoạch, bắt đầu nó (`MISSION_START` hoặc chế độ AUTO), theo dõi lệnh đang bay (`MISSION_CURRENT`, `MISSION_ITEM_REACHED`) qua link ELRS chế độ MAVLink hoặc radio telemetry (`docs/MAVLINK.md`, `docs/ELRS_MAVLINK.md`). Kế hoạch nạp từ ground station nằm cùng section `mission` với kế hoạch của app; app tự tải lại khi firmware lưu nó (lúc đã disarm), tab Nhiệm vụ hiện ngay nếu kế hoạch trên bản đồ không có chỗ sửa dở. App vẫn nối tới drone bằng dây (USB / UART), nên theo dõi khi đang bay thì dùng ground station.
+**Over MAVLink (0.40, part 3):** Mission Planner / QGroundControl upload and download the plan, start it (`MISSION_START` or AUTO mode), follow the command being flown (`MISSION_CURRENT`, `MISSION_ITEM_REACHED`) over an ELRS link in MAVLink mode or a telemetry radio (`docs/MAVLINK.md`, `docs/ELRS_MAVLINK.md`). A plan uploaded from a ground station lives in the same section `mission` as the app's plan; the app reloads it automatically when the firmware saves it (once disarmed), and the Mission tab shows it right away if the plan on the map has no unsaved edits. The app still connects to the drone by wire (USB / UART), so to follow it in flight use a ground station.
 
-## Các lệnh
-| Lệnh | `MAV_CMD` | Dùng | Drone làm gì |
+## Commands
+| Command | `MAV_CMD` | Uses | What the drone does |
 |---|---|---|---|
-| TAKEOFF | 22 | `alt` | Lên thẳng tới `alt` (so với nhà) tại chỗ đang đứng. Altitude Hold tự cất cánh, không cần cần ga |
-| WAYPOINT | 16 | `lat`, `lon`, `alt`, `p` = giây giữ | Bay tới điểm và dừng đúng trên điểm, giữ `p` giây |
-| LOITER_TIME | 19 | `p` = giây (`lat` = `lon` = 0: tại điểm vừa tới) | Đứng yên `p` giây |
-| LAND | 21 | `lat`, `lon` (0 = tại chỗ) | Bay tới điểm, giữ nguyên độ cao, rồi hạ cánh. Chạm đất thì **tắt motor** |
-| DELAY | 93 | `p` = giây | Chờ. Sau LAND là chờ dưới đất với motor tắt |
-| RTL | 20 | — | Bay về nhà và hạ cánh (dùng rescue RTL của 0.36) |
-| SERVO | 183 | `arg` = servo 1..4, `p` = xung µs | Đặt servo (DO_SET_SERVO) |
-| SPEED | 178 | `p` = dm/s | Tốc độ ngang cho các chặng sau (DO_CHANGE_SPEED) |
+| TAKEOFF | 22 | `alt` | Climbs straight up to `alt` (relative to home) where it stands. Altitude Hold takes off by itself, no throttle stick needed |
+| WAYPOINT | 16 | `lat`, `lon`, `alt`, `p` = hold seconds | Flies to the point and stops right over it, holds `p` seconds |
+| LOITER_TIME | 19 | `p` = seconds (`lat` = `lon` = 0: at the point just reached) | Holds still for `p` seconds |
+| LAND | 21 | `lat`, `lon` (0 = where it is) | Flies to the point, keeping its altitude, then lands. On touchdown it **stops the motors** |
+| DELAY | 93 | `p` = seconds | Waits. After LAND it waits on the ground with the motors stopped |
+| RTL | 20 | — | Flies home and lands (uses the 0.36 rescue RTL) |
+| SERVO | 183 | `arg` = servo 1..4, `p` = pulse µs | Sets a servo (DO_SET_SERVO) |
+| SPEED | 178 | `p` = dm/s | Horizontal speed for the following legs (DO_CHANGE_SPEED) |
 
-Độ cao tính so với chỗ arm lần đầu. Toạ độ tính bằng 1e-7 độ. Lệnh SERVO / SPEED (lệnh DO) chạy **khi lệnh bay đứng trước nó bắt đầu**, giống `AP_Mission::update`. Vì vậy một bước "đứng yên rồi chạy servo" được viết là:
+Altitude is relative to where it first armed. Coordinates are in 1e-7 degrees. SERVO / SPEED commands (DO commands) run **when the flight command before them starts**, as in `AP_Mission::update`. So a "hold then run a servo" step is written as:
 
 ```
-WAYPOINT P          bay tới P
-LOITER_TIME 3 s     tới P: ...
-SERVO 2 -> 1800 us  ... servo chạy ngay, rồi chờ 3 s
+WAYPOINT P          fly to P
+LOITER_TIME 3 s     at P: ...
+SERVO 2 -> 1800 us  ... the servo moves immediately, then wait 3 s
 LOITER_TIME 2 s
-SERVO 2 -> 1100 us  bước thứ hai, rồi chờ 2 s
+SERVO 2 -> 1100 us  second step, then wait 2 s
 ```
 
-Một điểm giao hàng là `LAND P`, `DELAY 60`, `TAKEOFF 12`.
+A delivery point is `LAND P`, `DELAY 60`, `TAKEOFF 12`.
 
-Tốc độ mặc định, gia tốc, xích bám, độ cao bắt đầu hạ chậm và tốc độ hạ dùng chung với rescue (tab Vị trí): bay `rescue_ground_speed`, tăng / giảm tốc 2 m/s², dưới `rescue_landing_alt` hạ bằng `rescue_land_speed`. Tới điểm khi cách điểm ngang dưới 2 m và chênh độ cao dưới 1 m (giống `WPNAV_RADIUS` của ArduPilot). Mũi drone quay theo hướng bay.
+Default speed, acceleration, the tracking leash, the altitude where slow descent starts and the descent speed are shared with rescue (Position tab): flies at `rescue_ground_speed`, accelerates / decelerates at 2 m/s², below `rescue_landing_alt` descends at `rescue_land_speed`. A point is reached when the horizontal distance is under 2 m and the altitude difference under 1 m (like ArduPilot's `WPNAV_RADIUS`). The drone's nose turns to the direction of flight.
 
-## Cách bay
-1. Ghi kế hoạch (section `mission`), bấm Lưu.
-2. Đặt drone ở sân, chờ GPS fix.
-3. **Arm bằng công tắc ARM** như thường. Lần arm đầu tiên luôn do người làm.
-4. Bật công tắc **MISSION**, hoặc gửi `MISSION 1` từ app: drone tự cất cánh và bay.
-   - Trên mặt đất, nếu lệnh bay đầu tiên không phải TAKEOFF thì nhiệm vụ bị từ chối (`REFUSED`, như ArduCopter "Missing Takeoff Cmd").
-   - Công tắc MISSION đã bật sẵn từ trước khi arm cũng bị từ chối: gạt tắt rồi bật lại.
-5. Lấy lại quyền điều khiển: tắt công tắc MISSION, hoặc gửi `MISSION 0`. Drone trả về các mode người lái đang chọn ngay lập tức.
+## How to fly
+1. Write the plan (section `mission`), press Save.
+2. Put the drone in the field, wait for a GPS fix.
+3. **Arm with the ARM switch** as usual. The first arm is always done by a person.
+4. Turn on the **MISSION** switch, or send `MISSION 1` from the app: the drone takes off and flies by itself.
+   - On the ground, if the first flight command is not TAKEOFF the mission is refused (`REFUSED`, like ArduCopter's "Missing Takeoff Cmd").
+   - A MISSION switch already on before arming is also refused: flip it off and on again.
+5. Taking control back: turn off the MISSION switch, or send `MISSION 0`. The drone immediately returns to the modes the pilot has selected.
 
-## Ở điểm giao hàng (khác ArduPilot, có chủ ý)
-ArduPilot (`MIS_OPTIONS` CONTINUE_AFTER_LAND) để motor quay ở ga thấp nhất trong lúc chờ. Windburst **tắt hẳn motor** vì có người lại gần:
+## At a delivery point (different from ArduPilot, on purpose)
+ArduPilot (`MIS_OPTIONS` CONTINUE_AFTER_LAND) keeps the motors spinning at minimum throttle while waiting. Windburst **stops the motors completely** because people come close:
 
-- Chạm đất xong thì motor tắt và đếm thời gian `DELAY`.
-- **10 giây cuối** còi kêu nhanh, motor (DShot) kêu bíp, OSD hiện `TAKEOFF 7S`.
-- Hết giờ thì drone tự arm lại và cất cánh. Lần arm này bỏ qua ba điều kiện: cần ga chưa ở thấp, công tắc ARM đang bật, mất sóng RC. Mọi điều kiện khác vẫn chặn: nghiêng, pin, IMU...
-- **Gạt công tắc ARM về OFF trong lúc chờ là drone không tự cất cánh nữa** (nhiệm vụ kết thúc).
-- Điểm home và gốc độ cao được giữ từ lần arm đầu tiên, nên kế hoạch không bị lệch dù chỗ giao hàng cao thấp khác nhà.
-- Nếu sau LAND không còn TAKEOFF nào thì nhiệm vụ kết thúc dưới đất (như ArduCopter `verify_land`).
+- After touchdown the motors stop and the `DELAY` time is counted.
+- In the **last 10 seconds** the beeper beeps fast, the motors (DShot) beep, the OSD shows `TAKEOFF 7S`.
+- When the time is up the drone re-arms by itself and takes off. This arm skips three conditions: throttle stick not low, ARM switch on, RC signal lost. Every other condition still blocks: tilt, battery, IMU...
+- **Flipping the ARM switch to OFF while waiting stops the drone from taking off by itself** (the mission ends).
+- The home point and altitude reference are kept from the first arm, so the plan does not drift even if the delivery spot is higher or lower than home.
+- If there is no TAKEOFF after LAND, the mission ends on the ground (like ArduCopter's `verify_land`).
 
-## Khi trục trặc
-| Chuyện gì | Drone làm gì |
+## When things go wrong
+| What happens | What the drone does |
 |---|---|
-| Mất sóng RC | Bay tiếp nhiệm vụ (ArduPilot `FS_OPTIONS` continue in AUTO). Chọn `mission.rc_lost = RTL` để failsafe chạy như thường |
-| Pin yếu / pin nguy hiểm | Failsafe pin như cũ (RTL hoặc LAND theo tab Vị trí). Nhiệm vụ dừng |
-| Mất vị trí GPS quá 1 s khi đang bay | Bỏ nhiệm vụ (`FAILED`), hạ cánh tại chỗ (rescue LAND) |
-| Người lái disarm | Nhiệm vụ dừng |
-| Hết lệnh khi đang bay | Đứng yên ở điểm cuối (như ArduCopter `exit_mission`) |
-| Hết lệnh dưới đất | Tắt motor một lần |
+| RC signal lost | Continues the mission (ArduPilot `FS_OPTIONS` continue in AUTO). Choose `mission.rc_lost = RTL` to have failsafe run as usual |
+| Low / critical battery | Battery failsafe as before (RTL or LAND per the Position tab). The mission stops |
+| GPS position lost for more than 1 s in flight | Abandons the mission (`FAILED`), lands in place (rescue LAND) |
+| Pilot disarms | The mission stops |
+| Out of commands in flight | Holds still at the last point (like ArduCopter's `exit_mission`) |
+| Out of commands on the ground | Stops the motors once |
 
 ## App, OSD, MAVLink
-- Tab Mode: mode **Nhiệm vụ (AUTO)**. Tab Motor: kênh servo **Nhiệm vụ**, cùng góc ở xung nhỏ nhất / lớn nhất (mặc định 0° và 180°) và xung ban đầu (mặc định 1500 µs). Tab Pin và còi: điều kiện **Nhiệm vụ sắp tự cất cánh**.
-- Stream `nav`: `mission_state`, `mission_index`, `mission_count`, `mission_dist` (m tới điểm hiện tại), `mission_left` (m cả chuyến còn lại), `mission_wait` (giây chờ còn lại).
-- OSD: chế độ `AUTO`, dòng cảnh báo `AUTO 3/9 120M`, `WAIT 45S`, `TAKEOFF 7S`. Lúc nhiệm vụ đang về nhà thì OSD hiện của rescue (`RTL 123M`).
-- MAVLink HEARTBEAT: `custom_mode` AUTO (3), lúc RTL thì RTL (6) (Smart RTL 21 / Land 9 theo kiểu rescue). Từ 0.40: nạp / tải kế hoạch, `MISSION_CURRENT`, `MISSION_ITEM_REACHED`, `MISSION_START`.
+- Modes tab: mode **Mission (AUTO)**. Motors tab: servo channel **Mission**, with the angle at minimum / maximum pulse (default 0° and 180°) and the initial pulse (default 1500 µs). Battery and beeper tab: condition **Mission about to take off by itself**.
+- Stream `nav`: `mission_state`, `mission_index`, `mission_count`, `mission_dist` (m to the current point), `mission_left` (m left in the whole trip), `mission_wait` (seconds of waiting left).
+- OSD: mode `AUTO`, warning lines `AUTO 3/9 120M`, `WAIT 45S`, `TAKEOFF 7S`. While the mission is returning home the OSD shows the rescue display (`RTL 123M`).
+- MAVLink HEARTBEAT: `custom_mode` AUTO (3), during RTL it is RTL (6) (Smart RTL 21 / Land 9 per the rescue type). Since 0.40: plan upload / download, `MISSION_CURRENT`, `MISSION_ITEM_REACHED`, `MISSION_START`.
 
-## Mã
-- `src/core/nav/mission.h`: bộ chạy (portable). Bay theo từng chặng giống đường bay của rescue: điểm đích chạy dọc chặng từ chỗ drone dừng được, rồi phanh để dừng ngay trên điểm.
-- `src/core/flight_core.h`: bật/tắt nhiệm vụ, ưu tiên (rescue > nhiệm vụ > Position Hold), arm/tắt motor ở điểm giao hàng (`Arming::mission_arm` / `mission_disarm`, `safety.h`), cất cánh tự động (`AltInput::auto_takeoff`, `nav/alt_control.h`), servo.
-- `src/proto/settings_apply.h`: `mission_plan_from()` đổi lat/lon sang mét so với home bằng chính `gps::offset_cm` của GPS.
-- `src/app/flight_app.h`: lệnh WBP `MISSION`, giữ home và gốc baro trong lúc chờ, servo, còi, telemetry, OSD.
+## Code
+- `src/core/nav/mission.h`: the runner (portable). Flies leg by leg like the rescue flight path: the target point runs along the leg from where the drone can stop, then it brakes to stop right over the point.
+- `src/core/flight_core.h`: mission on/off, priority (rescue > mission > Position Hold), arming/stopping motors at the delivery point (`Arming::mission_arm` / `mission_disarm`, `safety.h`), automatic takeoff (`AltInput::auto_takeoff`, `nav/alt_control.h`), servo.
+- `src/proto/settings_apply.h`: `mission_plan_from()` converts lat/lon to metres from home using GPS's own `gps::offset_cm`.
+- `src/app/flight_app.h`: the WBP `MISSION` command, keeping home and the baro reference while waiting, servo, beeper, telemetry, OSD.
 
-## Kiểm chứng (trên PC)
-- `test_mission` (41): từng lệnh, thứ tự DO/NAV, từ chối, giữ home ngay từ lúc tắt motor, đếm ngược, mất vị trí, RTL, SPEED.
-- `test_flight` (`t_mission`): cả chuyến giao hàng trên mô phỏng. Hạ cánh 0 m cách điểm giao, chờ 14,9 s (đặt 15), còi đúng 10 s, về cách nhà 0,2 m, nghiêng tối đa 25°. Thêm các trường hợp: mất sóng giữa chặng vẫn bay tiếp; `rc_lost = RTL` thì failsafe như thường; tắt công tắc là lấy lại máy; gạt ARM về OFF lúc chờ thì không tự cất cánh; pin nguy hiểm thì failsafe hạ cánh; kế hoạch bắt đầu bằng WAYPOINT dưới đất bị từ chối; bắt đầu và dừng từ app.
-- `test_fw` (nhóm `mission`, 14): kế hoạch lat/lon trong cài đặt, GPS ảo. Servo ở xung ban đầu rồi lên 1800 µs trên điểm, hạ cánh cách điểm giao dưới 2,5 m, chờ đúng 12 s, còi bíp 80/80 ms trong 10 s cuối. Khoảng cách home trong telemetry khớp khoảng cách thật cả lúc chờ lẫn sau lần arm thứ hai. RTL về đúng chỗ cất cánh. Lệnh `MISSION` bị từ chối khi chưa arm, nhận khi đã arm.
-- Unit: `test_nav_ctl` (cất cánh tự động), `test_core` (arm/disarm do nhiệm vụ), `test_nav` (rescue theo kiểu bộ gọi chỉ định), `test_proto` (schema, đổi lat/lon, cờ còi), `test_osd`, `test_mavlink`.
+## Verification (on PC)
+- `test_mission` (41): each command, DO/NAV order, refusals, keeping home from the moment the motors stop, countdown, position loss, RTL, SPEED.
+- `test_flight` (`t_mission`): a whole delivery trip in simulation. Lands 0 m from the delivery point, waits 14.9 s (set to 15), beeper exactly 10 s, returns to 0.2 m from home, maximum tilt 25°. Additional cases: signal lost mid-leg still continues; `rc_lost = RTL` gives normal failsafe; turning the switch off takes the craft back; flipping ARM to OFF while waiting prevents the automatic takeoff; critical battery gives a failsafe landing; a plan starting with WAYPOINT on the ground is refused; start and stop from the app.
+- `test_fw` (group `mission`, 14): lat/lon plan in the settings, virtual GPS. Servo at the initial pulse then up to 1800 µs over the point, lands less than 2.5 m from the delivery point, waits exactly 12 s, beeper 80/80 ms in the last 10 s. The home distance in telemetry matches the real distance both while waiting and after the second arm. RTL returns exactly to the takeoff spot. The `MISSION` command is refused while disarmed and accepted when armed.
+- Unit: `test_nav_ctl` (automatic takeoff), `test_core` (arm/disarm by the mission), `test_nav` (rescue in the style the caller specifies), `test_proto` (schema, lat/lon conversion, beeper flag), `test_osd`, `test_mavlink`.
 
-## Cần thử trên mạch (xem `todo.txt`)
-Thử từng bước, công tắc trước, gần nhà, có người giữ tay điều khiển:
+## To try on the board (see `todo.txt`)
+Try step by step, the switch first, close to home, with someone holding the transmitter:
 
-1. Gán công tắc MISSION. Kế hoạch: TAKEOFF 5 m rồi một WAYPOINT cách 10 m. Arm, bật công tắc: drone phải tự lên 5 m, bay tới điểm, đứng yên. Tắt công tắc: Altitude Hold / Position Hold của bạn phải lấy lại máy ngay.
-2. Thêm LOITER_TIME + SERVO: servo phải chạy khi drone đứng trên điểm.
-3. Thêm `LAND` + `DELAY 30` + `TAKEOFF`: drone phải hạ cánh, tắt motor, 10 s cuối còi kêu nhanh, rồi tự cất cánh. Thử thêm: gạt ARM về OFF lúc chờ thì drone phải nằm yên.
-4. Thêm RTL ở cuối: drone phải về đúng chỗ arm lần đầu, không phải về chỗ giao hàng.
+1. Assign the MISSION switch. Plan: TAKEOFF 5 m then one WAYPOINT 10 m away. Arm, turn on the switch: the drone must climb to 5 m by itself, fly to the point, hold still. Turn off the switch: your Altitude Hold / Position Hold must take the craft back immediately.
+2. Add LOITER_TIME + SERVO: the servo must move while the drone holds over the point.
+3. Add `LAND` + `DELAY 30` + `TAKEOFF`: the drone must land, stop the motors, beep fast for the last 10 s, then take off by itself. Also try: flip ARM to OFF while waiting and the drone must stay put.
+4. Add RTL at the end: the drone must return to where it first armed, not to the delivery point.
 
-Bật nhóm blackbox **"Dữ liệu dẫn đường chi tiết"** khi thử, và gửi log nếu drone lệch điểm hơn 3 m hoặc lắc khi tự cất cánh.
+Turn on the blackbox group **"Navigation debug data"** when testing, and send the log if the drone misses a point by more than 3 m or wobbles during the automatic takeoff.

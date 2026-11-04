@@ -1,83 +1,83 @@
-# MSP: thiết bị ngoại vi và công cụ cấu hình khác (0.33)
+# MSP: peripherals and other configuration tools (0.33)
 
-Đã kiểm tra trên PC: unit test và firmware chạy trên mạch ảo (`test_fw`). **Chưa thử với thiết bị thật, chưa thử với Betaflight Configurator / SpeedyBee thật.**
+Checked on PC: unit tests and firmware running on the virtual board (`test_fw`). **Not tried with real devices, not tried with a real Betaflight Configurator / SpeedyBee.**
 
-MSP (MultiWii Serial Protocol của Betaflight) được dùng ở hai chỗ:
-1. **Cổng MSP:** một UART mà các thiết bị MSP tự gửi dữ liệu vào.
-2. **Cổng của app:** Betaflight Configurator, app SpeedyBee và các công cụ ESC nói chuyện với firmware qua cổng này.
+MSP (Betaflight's MultiWii Serial Protocol) is used in two places:
+1. **MSP port:** a UART that MSP devices push data into.
+2. **App port:** Betaflight Configurator, the SpeedyBee app and ESC tools talk to the firmware over this port.
 
-## 1. Cổng MSP: thiết bị ngoại vi
+## 1. MSP port: peripherals
 
-Làm theo ArduPilot (`SERIALn_PROTOCOL = MSP`, `AP_MSP`) và các cảm biến MSP của INAV. Một module có thể mang nhiều cảm biến, ví dụ GPS MSP có la bàn, hoặc MTF-01 có flow và lidar. Vì vậy mọi thiết bị MSP dùng **chung một cổng**, và firmware tự chia từng khung tới đúng chỗ (`src/hal/msp_sensors.h`).
+Follows ArduPilot (`SERIALn_PROTOCOL = MSP`, `AP_MSP`) and INAV's MSP sensors. One module can carry several sensors, e.g. an MSP GPS with a compass, or an MTF-01 with flow and lidar. So all MSP devices share **one port**, and the firmware routes each frame to the right place (`src/hal/msp_sensors.h`).
 
-| Khung | Lệnh | Dùng khi | Ghi chú |
+| Frame | Command | Used when | Notes |
 |---|---|---|---|
-| Lidar | `0x1F01` MSP2_SENSOR_RANGEFINDER | optical flow MSP | như trước |
-| Optical flow | `0x1F02` MSP2_SENSOR_OPTIC_FLOW | `flow.type = MSP` | như trước |
-| GPS | `0x1F03` MSP2_SENSOR_GPS | `gps.provider = MSP` | 52 byte. Fix type 2 = 2D, từ 3 trở lên = 3D (như INAV / ArduPilot). Độ chính xác cm -> mm, hướng bay 0,01° -> 0,1° |
-| La bàn | `0x1F04` MSP2_SENSOR_COMPASS | `sensors.mag_model = MSP` (**mới**) | milligauss, trục trước / phải / dưới của module. Hướng module chỉnh bằng `mag_align` như la bàn DroneCAN |
-| Khí áp kế | `0x1F05` MSP2_SENSOR_BARO | `sensors.baro_model = MSP` (**mới**) | Pa (float), 0,01 °C. Áp suất ngoài khoảng 10–120 kPa thì bỏ |
-| Receiver | `200` MSP_SET_RAW_RC (v1 hoặc v2) | `receiver.protocol = MSP` (**mới**) | tối đa 18 kênh, giữ 16. Kênh không gửi thì giữ giá trị cũ. Không có khung nào trong 300 ms thì coi là **mất sóng**, failsafe như receiver khác |
+| Lidar | `0x1F01` MSP2_SENSOR_RANGEFINDER | MSP optical flow | as before |
+| Optical flow | `0x1F02` MSP2_SENSOR_OPTIC_FLOW | `flow.type = MSP` | as before |
+| GPS | `0x1F03` MSP2_SENSOR_GPS | `gps.provider = MSP` | 52 bytes. Fix type 2 = 2D, 3 and above = 3D (like INAV / ArduPilot). Accuracy cm -> mm, course 0.01° -> 0.1° |
+| Compass | `0x1F04` MSP2_SENSOR_COMPASS | `sensors.mag_model = MSP` (**new**) | milligauss, module axes forward / right / down. Module orientation set with `mag_align` like the DroneCAN compass |
+| Barometer | `0x1F05` MSP2_SENSOR_BARO | `sensors.baro_model = MSP` (**new**) | Pa (float), 0.01 °C. Pressure outside 10–120 kPa is dropped |
+| Receiver | `200` MSP_SET_RAW_RC (v1 or v2) | `receiver.protocol = MSP` (**new**) | up to 18 channels, 16 kept. Channels not sent keep their old value. No frame for 300 ms counts as **signal loss**, failsafe like any other receiver |
 
-- **Chân và tốc độ:** dùng chân `flow_rx` / `flow_tx` và `flow.baud` (mặc định 115200). Chỉ cần RX, nối với TX của thiết bị.
-- **Chọn UART:**
-  - AUTO: UART còn trống. UART1 nếu GPS không dùng UART (GPS MSP thì không cần UART riêng); UART2 nếu không có receiver nối tiếp; UART0 khi app nối qua USB của chip.
-  - TABLE: UART có chức năng `FLOW_MSP`. App giờ gọi chức năng này là "Cổng MSP".
-- **Cổng chỉ mở khi có thứ cần nó:** flow MSP, GPS MSP, la bàn MSP, khí áp kế MSP, hoặc receiver MSP.
-- **Báo cáo khởi động:**
-  - mở được: `msp: MSP port on UART1 RX GPIO44 TX -, 115200 baud, for: GPS compass barometer receiver`;
-  - không mở được: `msp: FAILED - <lý do>`, và mục dùng cổng này (gps / rx / flow) cũng báo lý do đó.
-- **Khí áp kế MSP:** không chạy khí áp kế thứ hai.
-- **Parser** đọc cả khung MSP v1 (`$M<`), vì có thiết bị gửi MSP_SET_RAW_RC bằng v1.
+- **Pins and speed:** uses the `flow_rx` / `flow_tx` pins and `flow.baud` (default 115200). Only RX is needed, wired to the device's TX.
+- **UART selection:**
+  - AUTO: a free UART. UART1 if GPS does not use a UART (MSP GPS needs no UART of its own); UART2 if there is no serial receiver; UART0 when the app connects over the chip's USB.
+  - TABLE: the UART with the `FLOW_MSP` function. The app now calls this function "MSP port".
+- **The port only opens when something needs it:** MSP flow, MSP GPS, MSP compass, MSP barometer, or MSP receiver.
+- **Boot report:**
+  - opened: `msp: MSP port on UART1 RX GPIO44 TX -, 115200 baud, for: GPS compass barometer receiver`;
+  - could not open: `msp: FAILED - <reason>`, and the items using this port (gps / rx / flow) report the same reason.
+- **MSP barometer:** no second barometer runs.
+- The **parser** also reads MSP v1 frames (`$M<`), because some devices send MSP_SET_RAW_RC as v1.
 
-## 2. Công cụ cấu hình khác trên cổng của app
+## 2. Other configuration tools on the app port
 
-Section mới **`msp`** (tab Hệ thống, khối "Công cụ khác qua MSP"):
+New section **`msp`** (System tab, "Other tools over MSP" block):
 
-| Trường | Mặc định | Ý nghĩa |
+| Field | Default | Meaning |
 |---|---|---|
-| `identity` | `BETAFLIGHT` | Trả lời như Betaflight 4.5 (`BTFL`, 4.5.0, API 1.46). Betaflight Configurator, SpeedyBee và công cụ ESC chỉ làm việc với firmware mà chúng biết. `WINDBURST`: báo `WBRX` và phiên bản thật; các công cụ trên sẽ từ chối. BOARD_INFO: mã board `WBRX` khi xưng là Betaflight (Betaflight Configurator hiện nó là tên board), mã chip (ví dụ `_S3_`) khi xưng là Windburst |
-| `writes` | bật | Cho các công cụ đó sửa cấu hình và lưu. Tắt thì chỉ đọc được. Đang arm thì không bao giờ cho sửa |
+| `identity` | `BETAFLIGHT` | Answers as Betaflight 4.5 (`BTFL`, 4.5.0, API 1.46). Betaflight Configurator, SpeedyBee and ESC tools only work with firmware they know. `WINDBURST`: reports `WBRX` and the real version; the tools above will refuse. BOARD_INFO: board code `WBRX` when claiming to be Betaflight (Betaflight Configurator shows it as the board name), chip code (e.g. `_S3_`) when claiming to be Windburst |
+| `writes` | on | Lets those tools edit the configuration and save. Off makes it read-only. Never allows edits while armed |
 
-> Bản trước có thay đổi chưa commit làm firmware báo `WBRX` cố định. Giờ việc đó là lựa chọn `identity = WINDBURST`. Mặc định vẫn là Betaflight, để công cụ ESC (ESC passthrough) và Betaflight Configurator dùng được như trước.
+> The previous build had an uncommitted change that made the firmware always report `WBRX`. That is now the `identity = WINDBURST` option. The default is still Betaflight, so ESC tools (ESC passthrough) and Betaflight Configurator work as before.
 
-**Đọc** (đúng cách đóng gói của Betaflight 4.5, `msp.c`):
-- **Trạng thái đang đo:** RC (105), RAW_IMU (102: acc ×512 / g, gyro ×4,1 / °/s, mag ×1090 / G), RAW_GPS (106), COMP_GPS (107), ATTITUDE (108: 0,1°; pitch dương là chúi mũi), ALTITUDE (109), ANALOG (110).
-- **Cấu hình:**
-  - NAME (10): tên máy bay = `osd.name`;
-  - MODE_RANGES (34), MODE_RANGES_EXTRA (238): 20 khoảng; mode STABILIZE không có box trong Betaflight nên không hiện;
+**Reads** (exactly Betaflight 4.5's packing, `msp.c`):
+- **Live state:** RC (105), RAW_IMU (102: acc ×512 / g, gyro ×4.1 / °/s, mag ×1090 / G), RAW_GPS (106), COMP_GPS (107), ATTITUDE (108: 0.1°; positive pitch is nose down), ALTITUDE (109), ANALOG (110).
+- **Configuration:**
+  - NAME (10): craft name = `osd.name`;
+  - MODE_RANGES (34), MODE_RANGES_EXTRA (238): 20 ranges; the STABILIZE mode has no box in Betaflight so it is not shown;
   - RX_MAP (64);
-  - RC_TUNING (111): rate kiểu **Actual**;
+  - RC_TUNING (111): **Actual** rates;
   - PID (112): roll / pitch / yaw, LEVEL = `angle_strength`;
   - BOXNAMES (116), PIDNAMES (117), ACC_TRIM (240).
-- Các lệnh cũ (STATUS, BOXIDS, MOTOR, BATTERY_STATE, ...) giữ nguyên. Lệnh chưa có thì trả `!`; Betaflight Configurator bỏ qua và chạy tiếp.
+- Older commands (STATUS, BOXIDS, MOTOR, BATTERY_STATE, ...) unchanged. Unsupported commands return `!`; Betaflight Configurator skips them and carries on.
 
-**Ghi** (đi qua đúng các bước của app khi sửa một section: kẹp giá trị, áp luật, áp dụng ngay hoặc báo cần khởi động lại):
+**Writes** (go through exactly the app's steps when editing a section: clamp values, apply rules, apply immediately or report that a reboot is needed):
 - SET_NAME (11), SET_MODE_RANGE (35), SET_RX_MAP (65), SET_RC_TUNING (204), SET_PID (202).
-- EEPROM_WRITE (250): lưu.
-- REBOOT (68): trả lời trước, rồi mới khởi động lại.
-- **Rate:** chỉ nhận rate kiểu Actual. Kiểu khác bị từ chối, không tự đoán cách đổi.
-- **PID:** gõ PID khác giá trị cũ thì thanh trượt tinh chỉnh tắt (`pid.slider_mode = OFF`), giống Betaflight Configurator. Ghi lại đúng giá trị vừa đọc thì không đổi gì.
-- **MSP_SET_MOTOR vẫn bị từ chối:** thử motor dùng tab Motor của app, vì ở đó có kiểm tra an toàn.
+- EEPROM_WRITE (250): save.
+- REBOOT (68): replies first, then reboots.
+- **Rates:** only Actual rates are accepted. Other types are rejected, no guessing at a conversion.
+- **PID:** entering PIDs different from the old values turns the tuning sliders off (`pid.slider_mode = OFF`), like Betaflight Configurator. Writing back exactly the values just read changes nothing.
+- **MSP_SET_MOTOR is still rejected:** use the app's Motor tab for motor tests, since it has the safety checks.
 
-**Chưa có:**
-- Các tab Filters, Motors, Ports, Failsafe, OSD, Blackbox của Betaflight Configurator: đọc được một phần hoặc không;
-- calibrate từ công cụ đó;
-- MSP_SET_RAW_RC trên cổng của app;
+**Not yet available:**
+- Betaflight Configurator's Filters, Motors, Ports, Failsafe, OSD, Blackbox tabs: partially readable or not at all;
+- calibration from that tool;
+- MSP_SET_RAW_RC on the app port;
 - MSP2 (MSP2_GET_TEXT, ...).
 
-## 3. Test
-- `test_msp_sensors` (25): khung dựng theo định nghĩa của INAV, không dùng code của driver. Gồm GPS (fix 2D / 3D / RTK, khung bị cắt, tốc độ quá lớn), la bàn, khí áp kế (NaN bị bỏ), RC v1 / v2 (kẹp giá trị, mất sóng sau 300 ms), flow chuyển tiếp, khung hỏng, giới hạn byte mỗi lần đọc.
-- `test_msp_config` (42): identity; từng câu trả lời đọc, so từng byte với cách đóng gói của Betaflight 4.5; từng lệnh ghi; từ chối khi đang arm / khi `writes` tắt / khi rate không phải Actual / khi box không có.
-- `test_flowsensor`: thêm khung MSP v1.
-- `test_fw`, nhóm `msp` (`WB_ONLY=msp`):
-  - GPS + la bàn + khí áp kế + receiver MSP trên UART1: arm bằng công tắc của receiver MSP, cất cánh bằng ga của nó với Altitude Hold trên khí áp kế MSP; receiver ngừng gửi thì failsafe;
-  - flow + GPS chung một cổng;
-  - chưa đặt chân RX thì báo lỗi;
-  - Betaflight Configurator trên cổng app: đọc tư thế, đọc và ghi PID (áp dụng ngay vào flight core), lưu, khởi động lại, `identity` / `writes`.
-- 40 mutant `msp:`.
+## 3. Tests
+- `test_msp_sensors` (25): frames built from INAV's definitions, not using driver code. Covers GPS (2D / 3D / RTK fix, truncated frame, excessive speed), compass, barometer (NaN dropped), RC v1 / v2 (value clamping, signal loss after 300 ms), flow forwarding, corrupt frames, byte limit per read.
+- `test_msp_config` (42): identity; each read reply, compared byte by byte with Betaflight 4.5's packing; each write command; rejections while armed / with `writes` off / when rates are not Actual / when the box does not exist.
+- `test_flowsensor`: adds MSP v1 frames.
+- `test_fw`, group `msp` (`WB_ONLY=msp`):
+  - GPS + compass + barometer + MSP receiver on UART1: arm with the MSP receiver's switch, take off with its throttle in Altitude Hold on the MSP barometer; the receiver stops sending and failsafe triggers;
+  - flow + GPS sharing one port;
+  - RX pin not set reports an error;
+  - Betaflight Configurator on the app port: read attitude, read and write PIDs (applied immediately to the flight core), save, reboot, `identity` / `writes`.
+- 40 `msp:` mutants.
 
-## 4. Cần thử trên mạch
-1. Betaflight Configurator 10.10 nối qua USB: tab Setup (mô hình quay theo máy), Receiver, Modes, PID Tuning, Rates. Sửa PID rồi Save, sau đó mở lại app Windburst xem giá trị.
-2. App SpeedyBee (Bluetooth) nếu có module.
-3. Một module GPS / la bàn MSP (ví dụ Matek M10Q-5883 ở chế độ MSP) và một receiver MSP nếu có.
+## 4. To try on the board
+1. Betaflight Configurator 10.10 over USB: Setup tab (model rotates with the craft), Receiver, Modes, PID Tuning, Rates. Edit PIDs and Save, then reopen the Windburst app and check the values.
+2. SpeedyBee app (Bluetooth) if you have the module.
+3. An MSP GPS / compass module (e.g. Matek M10Q-5883 in MSP mode) and an MSP receiver if available.

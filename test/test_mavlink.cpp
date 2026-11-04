@@ -338,8 +338,22 @@ static void t_heartbeat() {
     CHECK(cdeg360(-90.0f) == 27000 && cdeg360(359.999f) == 0 && cdeg360(720.5f) == 50, "heading in cdeg, 0 .. 35999");
 }
 
+// 0.43: the parameter messages against pymavlink's bytes
+static void t_param_wire() {
+    printf("[params] PARAM_REQUEST_LIST / _READ / SET / VALUE as pymavlink packs them\n");
+    auto frame_of = [](const MavVector& v, Parser::Frame& f) { Parser p; bool ok = false; for (int i = 0; i < v.n; i++) if (p.feed(v.bytes[i])) { ok = true; f = p.frame(); } return ok; };
+    Parser::Frame f; ParamRequestList l; ParamRequestRead r; ParamSet s; ParamValue v;
+    CHECK(frame_of(vec("param_request_list"), f) && unpack(f, l) && l.target_system == 1 && l.target_component == 1, "PARAM_REQUEST_LIST (21) read");
+    CHECK(frame_of(vec("param_request_read"), f) && unpack(f, r) && r.param_index == -1 && !strncmp(r.param_id, "PID_ROLL_P", 16), "PARAM_REQUEST_READ (20): index -1, the name");
+    CHECK(frame_of(vec("param_set"), f) && unpack(f, s) && s.param_value == 50.0f && s.param_type == PARAM_TYPE_REAL32 && !strncmp(s.param_id, "PID_ROLL_P", 16), "PARAM_SET (23): value, type, name");
+    {   const MavVector& want = vec("param_value"); ParamValue o; o.param_value = 45.0f; o.param_count = 120; o.param_index = 0; strncpy(o.param_id, "PID_ROLL_P", 16);
+        Encoder e; e.sysid = 1; e.compid = 1; e.set_seq(want.seq); uint8_t b[kMaxFrame]; const size_t n = pack(e, o, b);
+        CHECK(n == (size_t)want.n && !memcmp(b, want.bytes, n), "PARAM_VALUE (22) packed byte for byte as pymavlink (%zu bytes)", n);
+        CHECK(frame_of(want, f) && unpack(f, v) && v.param_count == 120, "... and read back"); }
+}
+
 int main() {
-    t_vectors(); t_gcs_messages(); t_parser(); t_receive(); t_scheduler(); t_flow(); t_scheduler_gcs(); t_text(); t_heartbeat();
+    t_vectors(); t_gcs_messages(); t_parser(); t_receive(); t_scheduler(); t_flow(); t_scheduler_gcs(); t_text(); t_heartbeat(); t_param_wire();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

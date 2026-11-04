@@ -95,6 +95,11 @@ struct CoreConfig {
     RunawayConfig runaway;
     StallConfig stall;                             // a motor that stops: disarm (needs rpm telemetry)
     CrashFlipConfig crashflip;                     // the CRASHFLIP switch (crash_flip.h); available = the motors can turn round (DShot)
+    // Flycam style (0.43, general.fly_style; FPV = false): self-levelling only - Angle + Altitude Hold always, and Loiter (or Position
+    // Hold) whenever there is a position to hold with; the Acro / Stabilize switches are ignored. The throttle stick centred = hold:
+    // arming wants it no higher than the middle, pushed up from there it takes off, held down for 3 s after the touch-down the motors
+    // stop (DJI). Without a GPS / flow it flies Angle + Altitude Hold (DJI's ATTI) and says so; without a height it does not arm.
+    bool flycam = false, flycam_loiter = true; float flycam_land_disarm_s = 3.0f;
     float max_arm_angle_deg = 25.0f;
     Ahrs::Config ahrs; nav::AltEstConfig alt_est; nav::PosEstConfig pos_est;      // alt_est.gps_delay_s follows pos_est.gps_delay_s
     bool use_mag = false; float declination_deg = 0.0f;
@@ -213,7 +218,7 @@ public:
         ph_.cfg = cfg.poshold; ph_.ctl.cfg = cfg.pos; rctl_.cfg = cfg.pos; rctl_.cfg.angle_max_deg = cfg.poshold.angle_max_deg; rescue_.cfg = cfg.rescue; apply_loiter(); was_loiter_ = false;
         was_poshold_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false; rescue_out_ = RescueOutput(); nav_tgt_[0] = nav_tgt_[1] = 0;
         mission_.cfg = cfg.rescue; mission_.stop(); mission_out_ = MissionOutput(); mission_req_ = mission_app_ = mission_sw_ = mission_fly_ = was_mission_h_ = false; for (auto& u : mission_servo_) u = 0;
-        alt_.cfg = cfg.alt; alt_.init();
+        alt_.cfg = cfg.alt; alt_.cfg.centred_stick = cfg.flycam; alt_.init();
         fs_.cfg = cfg.fs; runaway_.cfg = cfg.runaway; stall_.cfg = cfg.stall; stall_.reset();
         decim_ = (int)(cfg.pid_hz() / cfg.est_hz + 0.5f); if (decim_ < 1) decim_ = 1;
         denom_ = cfg.pid_denom < 1 ? 1 : cfg.pid_denom; pid_n_ = 0; win_dt_ = 0.0f; win_g_ = Vec3(); win_a_ = Vec3(); last_ = CoreOutput();
@@ -226,7 +231,7 @@ public:
     // without touching the attitude or the estimators. Rates and the RC map are read from cfg / rc directly every cycle.
     void apply_tuning() { configure_control(); }
     // Live: what the throttle stick means in Altitude Hold (the hover estimate and the state are kept)
-    void apply_althold() { alt_.cfg = cfg.alt; alt_.apply_config(); }
+    void apply_althold() { alt_.cfg = cfg.alt; alt_.cfg.centred_stick = cfg.flycam; alt_.apply_config(); }
     // The same for the gyro filters (they restart from the current gyro value). Disarmed only.
     void apply_filters() { gf_.configure(cfg.gyro, cfg.loop_hz, mixer_.motor_count()); configure_control(); }
 
@@ -334,9 +339,11 @@ private:
         // ---- 4. pilot command, arming, failsafe
         RcCommand cmd = rc.process(in.rc_us, in.rc_link);
         apply_mode_override(cmd, in.rc_link); o.mode_override = ovr_on_;
+        const uint32_t pilot_modes = cmd.modes;              // (what the pilot / a ground station chose: arming asks it about a position)
+        if (cfg.flycam) cmd.modes = (cmd.modes & ~((1u << M_STABILIZE) | (1u << M_ACRO_TRAINER))) | (1u << M_ANGLE) | (1u << M_ALTHOLD) | (1u << (cfg.flycam_loiter ? M_LOITER : M_POSHOLD));
         o.modes = cmd.modes;
         ArmInput ai;
-        ai.imu_ok = in.health.imu_ok; ai.gyro_calibrated = in.health.gyro_calibrated; ai.rx_ok = in.rc_link; ai.throttle_low = cmd.throttle_low;
+        ai.imu_ok = in.health.imu_ok; ai.gyro_calibrated = in.health.gyro_calibrated; ai.rx_ok = in.rc_link; ai.throttle_low = cfg.flycam ? cmd.throttle_raw <= cfg.alt.mid_stick + cfg.alt.deadband : cmd.throttle_low;      // (Flycam: no higher than the middle)
         ai.tilt_deg = armed_ ? 0.0f : ahrs_.tilt_deg(); ai.max_arm_angle_deg = cfg.max_arm_angle_deg;
         ai.failsafe_active = fs_.get_stage() != FsStage::NONE;
         // (a height for Altitude Hold: the barometer, or - when the GPS height may stand in - a GPS fix; home and with it the GPS height come at arming)
@@ -345,7 +352,7 @@ private:
         const bool compass = cfg.use_mag && in.health.mag_calibrated;
         ai.pos_source = in.health.flow_ok || (in.health.gps_ok && compass);
         ai.rescue_configured = cfg.rescue_configured; ai.rescue_allow_no_fix = cfg.rescue_allow_no_fix; ai.rescue_no_compass = cfg.rescue_configured && !cfg.use_mag;
-        ai.althold_switch = (cmd.modes >> M_ALTHOLD) & 1u; ai.poshold_switch = ((cmd.modes >> M_POSHOLD) | (cmd.modes >> M_LOITER)) & 1u;
+        ai.althold_switch = (cmd.modes >> M_ALTHOLD) & 1u; ai.poshold_switch = ((pilot_modes >> M_POSHOLD) | (pilot_modes >> M_LOITER)) & 1u;
         ai.calibrating = in.health.calibrating; ai.batt_low = in.health.batt_low;
         ai.use_mag = cfg.use_mag; ai.mag_calibrated = in.health.mag_calibrated; ai.pin_conflict = in.health.pin_conflict; ai.loop_slow = in.health.loop_slow;
         const bool flip_sw = (cmd.modes >> M_CRASHFLIP) & 1u;
@@ -645,6 +652,11 @@ private:
           o.stall_motor = (uint8_t)stall_.last(); }
         // a rescue from the switch has brought the craft down: motors off (after a failsafe the failsafe itself does that)
         if (rescue_landed && !fo.rescue) { arming_.force_disarm(); armed_ = false; o.armed = false; for (auto& m : o.motor) m = 0; }
+        // Flycam: standing on the ground with the stick held down -> the motors stop (DJI); the arm switch has to go off and on again
+        if (cfg.flycam && o.armed && alt_.state() == AhState::LANDED_IDLE && cmd.throttle_raw <= cfg.alt.low_stick && !neutral) {
+            fc_land_t_ += dt;
+            if (fc_land_t_ >= cfg.flycam_land_disarm_s) { arming_.force_disarm(); armed_ = false; o.armed = false; for (auto& m : o.motor) m = 0; fc_land_t_ = 0.0f; }
+        } else fc_land_t_ = 0.0f;
         return o;
     }
 
@@ -824,7 +836,8 @@ private:
     void apply_loiter() { lt_.cfg = cfg.loiter; lt_.cfg.fence_radius_m = cfg.poshold.fence_radius_m; lt_.ctl.cfg = cfg.pos; lt_.ctl.cfg.angle_max_deg = cfg.poshold.angle_max_deg; }
     nav::LoiterMode lt_; bool was_loiter_ = false;
     CrashFlip cf_; bool flip_ = false;
-    FlowScaleCal fcal_;                 // armed into crash flip (crash_flip.h)
+    FlowScaleCal fcal_;
+    float fc_land_t_ = 0.0f;                           // Flycam: how long it has stood on the ground with the stick down                 // armed into crash flip (crash_flip.h)
     nav::PosHoldMode ph_; nav::PosController rctl_; Rescue rescue_; RescueOutput rescue_out_; bool was_poshold_ = false, nav_lean_ = false, ph_unavail_ = false, ph_slow_gps_ = false, rescue_ok_ = false; float nav_tgt_[2] = {0, 0};
     EkfNav ekf_; uint32_t ekf_ms_ = 0; bool ekf_in_use_ = false;
     nav::NavRequest req_; uint32_t req_ms_ = 0; bool have_req_ = false, was_req_ = false, req_climb_on_ = false; float req_climb_ = 0.0f;

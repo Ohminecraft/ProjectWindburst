@@ -1,164 +1,164 @@
-# Tune: bộ lọc, PID, Angle / Stabilize, Altitude Hold
+# Tuning: filters, PID, Angle / Stabilize, Altitude Hold
 
-Vòng trong (rate) và chuỗi lọc là bản port của **Betaflight 4.5** (`flight/pid.c`, `sensors/gyro_filter_impl.c`, `flight/dyn_notch_filter.c`, `fc/rc.c`, `config/simplified_tuning.c`): cùng tên, cùng đơn vị, cùng mặc định, nên số từ một bản tune Betaflight dùng được thẳng và kinh nghiệm tune Betaflight áp dụng được nguyên. Stabilize là bản port của **ArduPilot** (`AC_AttitudeControl`, `AP_Math/control.cpp`).
+The inner (rate) loop and the filter chain are a port of **Betaflight 4.5** (`flight/pid.c`, `sensors/gyro_filter_impl.c`, `flight/dyn_notch_filter.c`, `fc/rc.c`, `config/simplified_tuning.c`): same names, same units, same defaults, so the numbers from a Betaflight tune can be used directly and Betaflight tuning experience applies as is. Stabilize is a port of **ArduPilot** (`AC_AttitudeControl`, `AP_Math/control.cpp`).
 
-Mọi thứ ở đây mới được kiểm chứng **trên PC** (mô phỏng). Chưa có số nào đo trên máy thật: xem mục cuối.
+Everything here has only been verified **on the PC** (simulation). No figure has been measured on a real craft yet: see the last section.
 
-## 1. Tín hiệu đi qua những gì
+## 1. What the signal goes through
 
 ```
-gyro thô ─ lowpass 2 ─ RPM notch ─ notch tĩnh 1, 2 ─ lowpass 1 (tĩnh / động theo ga) ─ dynamic notch ─┬─► P, I  (sai lệch = setpoint − gyro)
-                                                                                                      └─ D-term notch ─ D lowpass 1 (tĩnh / động) ─ D lowpass 2 ─► D
-cần ─ rate (Actual) ─┬─ RC smoothing (PT3, cắt theo tốc độ khung đo được) ─► setpoint
-                     └─ feedforward (tốc độ của setpoint, tính theo từng khung) ─ RC smoothing ─► F
-P + I + D + F  ─ giới hạn ±500 (roll, pitch) / ±400 (yaw) ─ /1000 ─► mixer
+raw gyro ─ lowpass 2 ─ RPM notch ─ static notch 1, 2 ─ lowpass 1 (static / dynamic with throttle) ─ dynamic notch ─┬─► P, I  (error = setpoint − gyro)
+                                                                                                                   └─ D-term notch ─ D lowpass 1 (static / dynamic) ─ D lowpass 2 ─► D
+stick ─ rate (Actual) ─┬─ RC smoothing (PT3, cutoff from the measured frame rate) ─► setpoint
+                       └─ feedforward (setpoint speed, computed per frame) ─ RC smoothing ─► F
+P + I + D + F  ─ limit ±500 (roll, pitch) / ±400 (yaw) ─ /1000 ─► mixer
 ```
 
-| Khối | File | Ghi chú |
+| Block | File | Notes |
 |---|---|---|
-| lowpass, notch | `core/filters.h` | PT1 / PT2 / PT3 (cắt −3 dB đúng tại tần số nhập) và BIQUAD (Butterworth bậc 2, dạng state-variable nên đổi tần số lúc đang chạy không giật) |
-| chuỗi lọc gyro | `core/gyro_filter.h` | đúng thứ tự của Betaflight |
-| RPM filter | `core/gyro_filter.h` | 1 notch cho mỗi motor × mỗi hài (tối đa 3), đặt đúng tần số ESC báo về. **Cần DShot hai chiều.** Làm việc theo từng motor: ESC nào mất telemetry thì notch của riêng motor đó tắt dần |
-| dynamic notch | `core/dyn_notch.h` | SDFT 72 mẫu → 36 bin, tìm tối đa 7 đỉnh mỗi trục, mỗi đỉnh một notch. Cần vòng lặp từ 2000 Hz |
-| PID | `core/pid.h` | I-term relax, anti-gravity, D max, TPA (cả phần ga thấp), yaw lowpass |
-| cần → setpoint | `core/setpoint.h` | đo tốc độ khung receiver, RC smoothing, feedforward (jitter, smooth, boost, max rate limit, averaging, yaw hold) |
+| lowpass, notch | `core/filters.h` | PT1 / PT2 / PT3 (−3 dB cutoff exactly at the entered frequency) and BIQUAD (2nd-order Butterworth, state-variable form so changing the frequency while running does not glitch) |
+| gyro filter chain | `core/gyro_filter.h` | exactly Betaflight's order |
+| RPM filter | `core/gyro_filter.h` | 1 notch per motor × per harmonic (up to 3), placed exactly at the frequency the ESC reports. **Needs bidirectional DShot.** Works per motor: an ESC that loses telemetry only fades out its own motor's notches |
+| dynamic notch | `core/dyn_notch.h` | 72-sample SDFT → 36 bins, finds up to 7 peaks per axis, one notch per peak. Needs a loop of 2000 Hz or more |
+| PID | `core/pid.h` | I-term relax, anti-gravity, D max, TPA (including the low-throttle part), yaw lowpass |
+| stick → setpoint | `core/setpoint.h` | measures the receiver frame rate, RC smoothing, feedforward (jitter, smooth, boost, max rate limit, averaging, yaw hold) |
 | Angle, Stabilize | `core/attitude.h` | |
-| thanh trượt | `core/simplified_tuning.h`, `proto/settings_rules.h` | firmware tính, app chỉ hiển thị kết quả |
+| sliders | `core/simplified_tuning.h`, `proto/settings_rules.h` | computed by the firmware, the app only displays the result |
 
-Hệ số: `Kp = 0,032029 × P`, `Ki = 0,244381 × I` (yaw × 2,5), `Kd = 0,000529 × D`, `Kf = 0,013754 × F / 100`. PID sum 1000 = toàn bộ dải motor.
+Gains: `Kp = 0.032029 × P`, `Ki = 0.244381 × I` (yaw × 2.5), `Kd = 0.000529 × D`, `Kf = 0.013754 × F / 100`. PID sum 1000 = the full motor range.
 
-## 2. Mặc định dành cho máy nào
+## 2. Which craft the defaults are for
 
-Bộ số mặc định (P 45/47/45, I 80/84/80, D 30/34/0, D max 40/46/0, F 120/125/120; lowpass gyro 250–500 Hz, D-term 75–150 Hz) là của Betaflight cho **quad 5 inch lực đẩy lớn** (lực đẩy gấp ~7 lần trọng lượng). Trong mô phỏng:
+The default set (P 45/47/45, I 80/84/80, D 30/34/0, D max 40/46/0, F 120/125/120; gyro lowpass 250–500 Hz, D-term 75–150 Hz) is Betaflight's for a **high-thrust 5-inch quad** (thrust ~7 times its weight). In simulation:
 
-| Máy mô phỏng | Bước roll hết cần trong 60 ms | Ghi chú |
+| Simulated craft | Full-stick roll step in 60 ms | Notes |
 |---|---|---|
-| 5 inch, 650 g, 1,2 kg lực đẩy mỗi motor | vọt lố ~4 %, đạt 90 % trong < 110 ms | đúng đối tượng của bộ số |
-| 1 kg, lực đẩy chỉ gấp 2 trọng lượng | vọt lố ~27 % | bay được nhưng mềm: motor cần 140 ms chạy hết vi sai mới tới 670 °/s |
-| như trên, **Master Multiplier 2,0** | vọt lố ~17 % | |
+| 5 inch, 650 g, 1.2 kg thrust per motor | ~4 % overshoot, reaches 90 % in < 110 ms | exactly the target of this set |
+| 1 kg, thrust only 2 times its weight | ~27 % overshoot | flies but soft: the motors need 140 ms of full differential to reach 670 °/s |
+| as above, **Master Multiplier 2.0** | ~17 % overshoot | |
 
-Máy nặng hoặc lực đẩy yếu: tăng **Master Multiplier** từng nấc 0,1 (thường dừng ở 1,3 – 2,0). Sau mỗi lần đổi: bay thử 30 giây rồi **sờ motor**. Motor nóng = D quá cao hoặc lọc quá ít.
+Heavy or low-thrust craft: raise **Master Multiplier** in steps of 0.1 (usually stopping at 1.3 – 2.0). After each change: fly for 30 seconds then **touch the motors**. Hot motors = D too high or too little filtering.
 
-## 3. Thanh trượt (tab PID)
+## 3. Sliders (PID tab)
 
-100 = 1,00 = mặc định; dải 0 – 2,00. Tích được **cắt** thành số nguyên đúng như mã C của Betaflight (ví dụ pitch D max ở Dynamic Damping 2,0 là 57, không phải 58).
+100 = 1.00 = default; range 0 – 2.00. Products are **truncated** to integers exactly as in Betaflight's C code (for example pitch D max at Dynamic Damping 2.0 is 57, not 58).
 
-| Thanh trượt | Field | Tác dụng lên |
+| Slider | Field | Affects |
 |---|---|---|
-| Damping | `slider_d` | D và D max mọi trục |
-| Tracking | `slider_pi` | P và I mọi trục |
+| Damping | `slider_d` | D and D max on all axes |
+| Tracking | `slider_pi` | P and I on all axes |
 | Stick Response | `slider_ff` | feedforward |
-| Dynamic Damping | `slider_d_max` | khoảng cách D max so với D (0: D max = D, không còn boost) |
-| Drift – Wobble | `slider_i` | chỉ I |
-| Pitch Damping | `slider_pitch_d` | D, D max của pitch so với roll |
-| Pitch Tracking | `slider_pitch_pi` | P, I, feedforward của pitch so với roll |
-| Master Multiplier | `slider_master` | tất cả |
+| Dynamic Damping | `slider_d_max` | the gap between D max and D (0: D max = D, no more boost) |
+| Drift – Wobble | `slider_i` | I only |
+| Pitch Damping | `slider_pitch_d` | pitch D, D max relative to roll |
+| Pitch Tracking | `slider_pitch_pi` | pitch P, I, feedforward relative to roll |
+| Master Multiplier | `slider_master` | everything |
 
-`slider_mode`: `RPY` (mặc định, cả ba trục do thanh trượt tính), `RP` (yaw nhập tay), `OFF` (mọi ô nhập tay). Trục nào do thanh trượt tính thì **firmware ghi đè** P/I/D/D max/F của trục đó mỗi khi nhận hoặc nạp section `pid`, và app đọc lại đúng số đang có hiệu lực (ô bị khoá).
+`slider_mode`: `RPY` (default, all three axes computed by the sliders), `RP` (yaw entered by hand), `OFF` (every field entered by hand). For an axis computed by the sliders, **the firmware overwrites** that axis's P/I/D/D max/F whenever it receives or loads the `pid` section, and the app reads back exactly the values in effect (the fields are locked).
 
-Bộ lọc có hai thanh trượt riêng (tab Bộ lọc): `slider_gyro_mult` và `slider_dterm_mult` (0,10 – 2,00) nhân các tần số cắt lowpass; lọc nào đang tắt (0 Hz) thì vẫn tắt; kết quả không vượt 1000 Hz. Notch, dynamic notch, RPM filter không thuộc thanh trượt.
+The filters have two sliders of their own (Filters tab): `slider_gyro_mult` and `slider_dterm_mult` (0.10 – 2.00) multiply the lowpass cutoff frequencies; a filter that is off (0 Hz) stays off; the result does not exceed 1000 Hz. Notches, dynamic notch, and RPM filter are not governed by the sliders.
 
-## 4. Bộ lọc
+## 4. Filters
 
-- **Lowpass 1 động**: tần số cắt chạy từ `dyn_min` (ga 0) lên `dyn_max` (ga đầy) theo đường cong `dyn_expo`; cập nhật nhiều nhất mỗi 5 ms và chỉ khi ga đổi 1 %. `dyn_min = 0` → dùng tần số tĩnh.
-- **RPM filter**: không có DShot hai chiều thì không chạy (tab Bộ lọc ghi rõ). `rpm_min_hz` (100): notch không xuống dưới mức này và mờ dần trong `rpm_fade_range_hz` (50) phía trên nó. Trọng số từng hài 0 – 100 %: cánh 2 lá thường chỉ cần hài 1 và 2.
-- **Dynamic notch**: `count` 0 = tắt. Một đỉnh phải cao gấp đôi nền quanh nó mới được bám; notch được **lái** tới đỉnh (PT1 4 Hz, nhanh gấp tới 10 lần khi đỉnh cao), không nhảy; các notch của một trục luôn xếp theo tần số. Tần số dưới `min_hz` (chuyển động của chính máy) không kéo notch.
-- Tab Bộ lọc vẽ **bản đồ tần số**: từng lowpass (kèm vùng nó trượt), notch tĩnh, vị trí dynamic notch từng trục và RPM notch từng motor **lúc này** (stream `tuning`).
+- **Dynamic lowpass 1**: the cutoff runs from `dyn_min` (throttle 0) up to `dyn_max` (full throttle) along the `dyn_expo` curve; updated at most every 5 ms and only when throttle changes by 1 %. `dyn_min = 0` → use the static frequency.
+- **RPM filter**: does not run without bidirectional DShot (the Filters tab says so). `rpm_min_hz` (100): the notch does not go below this level and fades out over `rpm_fade_range_hz` (50) above it. Per-harmonic weight 0 – 100 %: 2-blade props usually only need harmonics 1 and 2.
+- **Dynamic notch**: `count` 0 = off. A peak must be twice as high as the floor around it to be tracked; the notch is **steered** towards the peak (PT1 4 Hz, up to 10 times faster when the peak is high), it does not jump; the notches of one axis are always ordered by frequency. Frequencies below `min_hz` (the craft's own motion) do not pull a notch.
+- The Filters tab draws a **frequency map**: each lowpass (with the range it slides over), the static notches, the position of the dynamic notches per axis and the RPM notches per motor **right now** (`tuning` stream).
 
-Nguyên tắc: lọc nhiều hơn → motor mát hơn, máy trễ hơn; lọc ít hơn → nhạy hơn, motor dễ nóng. Có RPM filter chạy tốt thì mới nên kéo thanh trượt gyro lên trên 1,0.
+Principle: more filtering → cooler motors, more delay; less filtering → more responsive, motors heat up more easily. Only push the gyro slider above 1.0 when the RPM filter is working well.
 
-## 5. Angle và Stabilize
+## 5. Angle and Stabilize
 
 | | Angle (Betaflight) | Stabilize (ArduPilot) |
 |---|---|---|
-| Góc theo cần | đi theo **đường cong rate**: nửa cần cho ít hơn nửa góc tối đa (0,5 → 12,4° với mặc định) | **tỉ lệ thẳng** (0,5 → 22,5°) |
-| Cảm giác | trực tiếp; `angle_strength` 50 = 5 °/s cho mỗi độ lệch, có feedforward theo cần | mục tiêu được **định hình** (giới hạn gia tốc và jerk, `stab_input_tc` 0,15 s): lướt tới, không vọt lố trên cả hai máy mô phỏng |
-| Yaw | theo rate; `angle_earth_ref` 100 %: đang nghiêng mà gạt yaw thì máy quay quanh trục thẳng đứng | **giữ hướng mũi** khi cần yaw ở giữa (bị gió xoay thì quay về); mục tiêu không chạy trước máy quá 45° |
-| Hệ số | `angle_strength`, `angle_feedforward`, `angle_ff_smoothing`, `angle_earth_ref` | `stab_p[3]` (ATC_ANG_RLL/PIT/YAW_P, mặc định 4,5), `stab_accel_rp` 1100, `stab_accel_yaw` 270 °/s², `stab_rate_ff` |
+| Angle from stick | follows the **rate curve**: half stick gives less than half the maximum angle (0.5 → 12.4° with defaults) | **linear** (0.5 → 22.5°) |
+| Feel | direct; `angle_strength` 50 = 5 °/s per degree of error, with stick feedforward | the target is **shaped** (acceleration and jerk limits, `stab_input_tc` 0.15 s): glides in, no overshoot on either simulated craft |
+| Yaw | rate-based; `angle_earth_ref` 100 %: yawing while tilted makes the craft turn about the vertical axis | **holds the nose heading** with the yaw stick centred (turned by wind, it comes back); the target does not run more than 45° ahead of the craft |
+| Gains | `angle_strength`, `angle_feedforward`, `angle_ff_smoothing`, `angle_earth_ref` | `stab_p[3]` (ATC_ANG_RLL/PIT/YAW_P, default 4.5), `stab_accel_rp` 1100, `stab_accel_yaw` 270 °/s², `stab_rate_ff` |
 
-Góc tối đa chung: `rates.angle_limit`. Altitude Hold, Position Hold và failsafe luôn dùng Angle. Trong hai mode tự cân bằng, I-term relax nhạy gấp 5 (ngưỡng 8 °/s thay vì 40).
+Common maximum angle: `rates.angle_limit`. Altitude Hold, Position Hold and failsafe always use Angle. In the two self-levelling modes, I-term relax is 5 times more sensitive (threshold 8 °/s instead of 40).
 
-### Góc nghiêng mà firmware "tin" khi đang bay (`core/ahrs.h`)
+### The tilt angle the firmware "believes" in flight (`core/ahrs.h`)
 
-Gia tốc kế của một máy đang bay **không chỉ ra phương thẳng đứng**: nó cảm nhận lực đẩy (luôn dọc theo trục đứng của chính máy, nghiêng bao nhiêu cũng vậy) và lực cản không khí, không cảm nhận trọng lực. Máy vừa nghiêng vừa tăng tốc thì gia tốc kế vẫn báo "đang cân bằng"; phải vài giây sau, khi lực cản đã lớn bằng lực kéo ngang, nó mới cho thấy góc nghiêng. Vì vậy khi bay, gyro giữ tư thế, gia tốc kế chỉ được kéo chậm:
+The accelerometer of a flying craft **does not point to the vertical**: it senses thrust (always along the craft's own vertical axis, however much it tilts) and air drag, not gravity. A craft that tilts and accelerates still reads "level" on the accelerometer; only a few seconds later, when drag has grown as large as the horizontal pull, does it reveal the tilt. So in flight the gyro holds the attitude, and the accelerometer is only allowed to pull slowly:
 
-| | Giá trị | Ghi chú |
+| | Value | Notes |
 |---|---|---|
-| Gain gia tốc kế khi đã arm | 0,25 /s (hằng số thời gian 4 s) | số của Betaflight (`dcm_kp`); ArduPilot DCM và PX4 dùng 0,2 |
-| Khi disarm, nằm yên | × 10 | lúc này số đọc đúng là trọng lực |
-| Vừa đặt xuống / vừa cấp điện | × 100 trong 0,5 s (sau 0,25 s yên) | đường chân trời được đặt lại sau va chạm, lật máy. Đang bị cầm xoay (> 15 °/s): × 1 |
-| Lọc trước khi dùng | thông thấp bậc 2 ở 10 Hz | rung motor 100 Hz trở lên còn dưới 1 % |
-| Độ lớn số đọc lệch khỏi lúc nằm yên | trọng số giảm dần, **0 từ 0,1 g** | nghiêng giữ độ cao 25° đã là 1,1 g; leo, rơi, va chạm đều bị bỏ qua. "Lúc nằm yên" được học khi disarm, nên gia tốc kế chưa hiệu chuẩn (ví dụ đọc 1,08 g) vẫn dùng được |
-| Học bias gyro | `ki` 0,01; tối đa 0,5 °/s mỗi phút, không quá 3 °/s | vài giây tăng tốc không dạy được một bias không có thật |
-| La bàn (chỉ sửa yaw) | 0,5 /s; nhân cùng hệ số × 10 / × 100 khi disarm | đặt máy xuống, hướng mũi đúng lại trong khoảng một giây |
+| Accelerometer gain when armed | 0.25 /s (4 s time constant) | Betaflight's number (`dcm_kp`); ArduPilot DCM and PX4 use 0.2 |
+| When disarmed, resting | × 10 | at this point the reading really is gravity |
+| Just set down / just powered up | × 100 for 0.5 s (after 0.25 s at rest) | the horizon is reset after crashes, flips. While being turned by hand (> 15 °/s): × 1 |
+| Filtering before use | 2nd-order lowpass at 10 Hz | motor vibration at 100 Hz and above stays below 1 % |
+| Reading magnitude deviating from the resting value | weight decreases, **0 from 0.1 g** | a 25° altitude-holding tilt is already 1.1 g; climbs, falls, crashes are all ignored. The "resting value" is learned while disarmed, so an uncalibrated accelerometer (e.g. reading 1.08 g) still works |
+| Gyro bias learning | `ki` 0.01; at most 0.5 °/s per minute, no more than 3 °/s | a few seconds of acceleration cannot teach a bias that does not exist |
+| Compass (corrects yaw only) | 0.5 /s; multiplied by the same × 10 / × 100 factors when disarmed | set the craft down and the nose heading is correct again within about a second |
 
-Hệ quả người bay cần biết (đo trên mô phỏng có lực cản, máy 5 inch):
-- Giữ **nửa cần 2 giây** (lệnh 12,4°): firmware giữ đúng 12° theo ước lượng, máy nghiêng thật tới ~15° (lệch 3,4°). Thả cần, 3 giây sau cân lại trong 0,5°.
-- Giữ **0,8 cần 4 giây** (lệnh 30°, tới 13 m/s): nghiêng thật tới ~34°.
-- Sau một quãng bay nhanh rồi dừng, đường chân trời có thể lệch 2 – 4° trong vài giây rồi tự về. Đây là giới hạn chung của mọi bộ ước lượng chỉ có gyro + gia tốc kế (Betaflight cũng vậy); khi có GPS hoặc optical flow, gia tốc thật sẽ được bù (đợt Position Hold).
-- Bản 0.5.0 trở về trước dùng gain 2 /s: cùng bài thử, máy nghiêng **27° cho lệnh 12°** và lắc ngược 14° sau khi thả cần. **Đừng bay Angle / Altitude Hold với firmware cũ hơn 0.6.0.**
+Consequences the pilot needs to know (measured in a simulation with drag, 5-inch craft):
+- Holding **half stick for 2 seconds** (12.4° command): the firmware holds exactly 12° by its estimate, the craft really tilts to ~15° (3.4° off). Release the stick and 3 seconds later it is level again within 0.5°.
+- Holding **0.8 stick for 4 seconds** (30° command, reaching 13 m/s): it really tilts to ~34°.
+- After a fast stretch followed by a stop, the horizon may be 2 – 4° off for a few seconds and then recover by itself. This is a common limit of every estimator with only gyro + accelerometer (Betaflight too); with GPS or optical flow the real acceleration will be compensated (the Position Hold round).
+- Version 0.5.0 and earlier used a gain of 2 /s: in the same test, the craft tilted **27° for a 12° command** and swung back 14° after the stick was released. **Do not fly Angle / Altitude Hold with firmware older than 0.6.0.**
 
-## 6. Altitude Hold: ga treo tự đo
+## 6. Altitude Hold: self-measured hover throttle
 
-Ga treo (đúng ra: **mức ra motor** mà tại đó máy treo) khác nhau tới 5 lần giữa máy nặng (≈ 50 %) và quad đua (≈ 13 %), nên **không phải là một setting**:
+Hover throttle (strictly: the **motor output level** at which the craft hovers) differs by up to 5 times between a heavy craft (≈ 50 %) and a racing quad (≈ 13 %), so **it is not a setting**:
 
-- `HoverEstimator` (`core/althold.h`) đo liên tục trong **mọi mode bay**: `mức ra × cos(nghiêng) / (1 + gia tốc lên / g)`. Bỏ qua lúc nghiêng quá 45°, motor gần như tắt, hoặc tăng / giảm tốc mạnh. Hội tụ trong ~2,5 s bay tay.
-- **Cất cánh trong Altitude Hold**: ga tăng dần 40 %/s cho tới khi máy rời đất (đang lên > 0,15 m/s hoặc cao hơn chỗ đứng 8 cm). Mức ga lúc đó, sau khi trừ phần gia tốc đang có, là ga treo. Tới 90 % mà vẫn chưa rời đất (thiếu cánh, bị giữ): về idle, phải hạ cần ga rồi mới thử lại.
-- **Failsafe không có độ cao** (không baro, không lidar): motor về `fs_fallback_throttle` % của **lực treo đã đo**, nên máy chắc chắn đi xuống. Bản 0.5.0 trở về trước dùng số đoán 40 %: máy treo ở dưới ~16 % sẽ bay vọt lên. **Đừng bay Altitude Hold / dựa vào failsafe với firmware cũ hơn 0.6.0 trên máy lực đẩy lớn.**
-- Giảm ga mạnh nhất mà Altitude Hold yêu cầu là 0,8 g, để vòng tư thế còn motor mà điều khiển.
-- **Mất độ cao giữa chừng** (barometer ngừng trả lời quá 1 s): công tắc Altitude Hold vẫn bật thì cần ga được đọc quanh ga treo đã đo: giữa cần = treo, đáy = 0, đỉnh = 100 %. Ga không nhảy; có độ cao lại thì Altitude Hold tiếp tục từ mức ga đang có. Tab Tổng quan báo "chưa hợp lệ" ở dòng độ cao.
-- **Kéo cần xuống ngay sau khi rời đất** = lệnh đi xuống (hạ có lực tới khi đứng yên), không phải tắt motor. **Mất sóng lúc ga đang tăng để cất cánh**: về idle ngay; muốn cất cánh lại phải hạ cần trước.
-- Ga do Altitude Hold / failsafe điều khiển không đi qua throttle boost và không kích anti-gravity (hai thứ đó chỉ theo tay bạn).
-- Lidar: có barometer thì lidar không còn "kéo" độ cao theo mặt đất bên dưới. Bay qua bàn, bậc thềm: máy giữ độ cao theo barometer, không nhảy theo vật cản.
-- Tab PID hiện "Ga treo đo được" (trước chuyến bay đầu là số đoán).
+- `HoverEstimator` (`core/althold.h`) measures continuously in **every flight mode**: `output level × cos(tilt) / (1 + upward acceleration / g)`. Skipped when tilted beyond 45°, with motors nearly off, or during strong acceleration / deceleration. Converges in ~2.5 s of manual flight.
+- **Takeoff in Altitude Hold**: throttle ramps up at 40 %/s until the craft leaves the ground (climbing > 0.15 m/s or 8 cm above where it stood). The throttle level at that moment, after subtracting the current acceleration part, is the hover throttle. Reaching 90 % without leaving the ground (missing props, held down): back to idle, the throttle stick must be lowered before trying again.
+- **Failsafe without altitude** (no baro, no lidar): the motors go to `fs_fallback_throttle` % of the **measured hover thrust**, so the craft surely descends. Version 0.5.0 and earlier used a guessed 40 %: a craft hovering below ~16 % would shoot upward. **Do not fly Altitude Hold / rely on failsafe with firmware older than 0.6.0 on a high-thrust craft.**
+- The strongest throttle reduction Altitude Hold requests is 0.8 g, so the attitude loop still has motor authority to work with.
+- **Altitude lost midway** (barometer not replying for more than 1 s): if the Altitude Hold switch is still on, the throttle stick is read around the measured hover throttle: mid stick = hover, bottom = 0, top = 100 %. Throttle does not jump; when altitude comes back, Altitude Hold continues from the current throttle level. The Overview tab reports "not valid" on the altitude line.
+- **Pulling the stick down right after leaving the ground** = a descend command (powered descent until standing still), not motor cut. **Signal lost while throttle is rising for takeoff**: back to idle immediately; to take off again the stick must be lowered first.
+- Throttle controlled by Altitude Hold / failsafe does not go through throttle boost and does not trigger anti-gravity (those two only follow your hand).
+- Lidar: with a barometer, the lidar no longer "drags" the altitude along with the ground below. Flying over a table, a step: the craft holds altitude by the barometer, it does not jump with the obstacle.
+- The PID tab shows "Measured hover throttle" (a guess before the first flight).
 
-## 7. Level trim khi bay
+## 7. In-flight level trim
 
-Máy vẫn trôi khi cần ở giữa trong Angle / Stabilize: gán mode **CALIB** ("Level trim khi bay") cho một công tắc.
-1. Bay ở chỗ **lặng gió**, giữ máy **đứng yên một chỗ** bằng cần (không phải chỉ giữ cho nó "trông cân bằng": nó phải hết trôi).
-2. Bật công tắc ít nhất 2 giây rồi tắt: hai tiếng bíp ngắn = đã đo (tiếng khác = bị từ chối: chưa đủ 2 giây treo yên).
-3. Hạ cánh, disarm: kết quả thành "cân bằng" mới, firmware **tự ghi flash** (không cần app).
+The craft still drifts with sticks centred in Angle / Stabilize: assign the **CALIB** mode ("In-flight level trim") to a switch.
+1. Fly in a **windless** spot, hold the craft **stationary in one place** with the sticks (not just keep it "looking level": it must stop drifting).
+2. Turn the switch on for at least 2 seconds then off: two short beeps = measured (a different sound = rejected: not 2 seconds of steady hover yet).
+3. Land, disarm: the result becomes the new "level", and the firmware **writes it to flash by itself** (no app needed).
 
-Thứ được đo là **gia tốc kế lúc treo**: máy đang treo yên thì gia tốc kế chỉ cảm nhận lực đẩy, nên số đọc của nó cho biết lực đẩy lệch bao nhiêu so với mạch — đúng bằng sai số cân bằng cần sửa (cách Betaflight / MultiWii làm với "in-flight ACC calibration"). Kết quả không phụ thuộc đường chân trời mà firmware đang tin, nên đo ngay sau một cú cơ động vẫn đúng. Hai thứ làm sai:
-- **Máy còn đang trôi**: lực cản lọt vào số đọc, khoảng 2° cho mỗi 1 m/s. Trôi 0,25 m/s → sai 0,5°.
-- **Gió**: đứng yên trong gió nghĩa là đang nghiêng vào gió. Đo trong nhà hoặc lúc lặng gió.
+What is measured is **the accelerometer during the hover**: when the craft is hovering steadily the accelerometer only senses thrust, so its reading tells how far the thrust is tilted relative to the board — exactly the level error to correct (the way Betaflight / MultiWii do "in-flight ACC calibration"). The result does not depend on the horizon the firmware currently believes, so measuring right after a manoeuvre is still correct. Two things spoil it:
+- **The craft is still drifting**: drag leaks into the reading, about 2° per 1 m/s. A 0.25 m/s drift → 0.5° error.
+- **Wind**: standing still in wind means leaning into the wind. Measure indoors or when there is no wind.
 
-Chỉ tính thời gian đang arm, firmware thấy máy **đang trên không** (không phải "cần ga trên 15 %": quad lực đẩy lớn treo ở dưới mức đó), quay chậm hơn 15 °/s, nghiêng dưới 10°. Không gì thay đổi lúc đang bay. Lần đo quá ngắn không xoá lần đo tốt trước đó.
+Only time while armed counts, with the firmware seeing the craft **airborne** (not "throttle stick above 15 %": a high-thrust quad hovers below that level), rotating slower than 15 °/s, tilted below 10°. Nothing changes in flight. A measurement that is too short does not erase an earlier good measurement.
 
-## 7b. Ga ở thấp nhất, mặt đất, an toàn lúc cất cánh
+## 7b. Minimum throttle, the ground, safety at takeoff
 
-- **Airmode** (tab Cảm biến). "Khi đang bay" (mặc định): trên không thì máy vẫn được giữ ổn định đầy đủ khi cần ga ở thấp nhất; đứng yên trên mặt đất 1 giây thì mọi motor về idle và I-term về 0, nên máy đặt trên bàn không tự tăng tốc. "Luôn bật tới khi disarm" là hành vi của Betaflight: dùng khi bạn tắt ga để rơi tự do rất lâu rồi bắt lại (máy rơi phẳng ở tốc độ tới hạn đọc gia tốc 1 g y như đang đứng yên, không có độ cao thì firmware không phân biệt được).
-- **Chặn runaway lúc cất cánh** (tab Hệ thống, mặc định bật): lắp sai gì đó làm PID đẩy máy lật thì motor tắt sau 75 ms, lý do hiện ở "Vì sao chưa arm được". Trên bàn không cánh nó không kích (PID dồn lực nhưng máy không quay).
-- Arm chỉ được bằng cách **gạt công tắc từ OFF sang ON khi đang có sóng**.
+- **Airmode** (Sensors tab). "While flying" (default): in the air the craft is still fully stabilised with the throttle stick at minimum; standing still on the ground for 1 second brings every motor to idle and the I-term to 0, so a craft placed on a bench does not spin up by itself. "Always on until disarm" is Betaflight's behaviour: use it when you cut throttle to free-fall for a long time and then catch it (a craft falling flat at terminal velocity reads 1 g on the accelerometer exactly as if standing still; without altitude the firmware cannot tell the difference).
+- **Runaway takeoff prevention** (System tab, on by default): if something mounted wrong makes the PID flip the craft, the motors cut after 75 ms, and the reason appears under "Why it cannot arm". On a bench without props it does not trigger (the PID pushes but the craft does not rotate).
+- Arming only works by **flipping the switch from OFF to ON while there is a signal**.
 
-Chi tiết và lý do: `docs/HARDWARE_FEEDBACK_1.md` mục 5 – 6.
+Details and reasons: `docs/HARDWARE_FEEDBACK_1.md` sections 5 – 6.
 
-## 7c. Thử trên bàn, không cánh: motor không đều là bình thường
+## 7c. Bench test without props: uneven motors are normal
 
-Máy không quay được thì vòng PID không có phản hồi. Chỉ cần lệch 0,2° ở chế độ Angle là có sai số 1 °/s không bao giờ hết; I-term cộng dồn khoảng 20 đơn vị mỗi giây, sau 10 – 15 giây ở ga cao các motor lệch nhau vài chục phần trăm. Gạt một cần rồi thả ra: I-term của trục đó chạm trần và **giữ nguyên**, nên máy như "nhớ" lệnh vừa rồi. Sau lần đầu ga vượt 25 %, airmode cho PID toàn quyền cả ở ga rất thấp: gạt yaw ở ga 5 % có thể đưa hai motor lên 80 %. Để cần ga ở đáy 1 giây thì mọi thứ về idle và I-term về 0. Betaflight và ArduPilot cũng vậy; khi bay, máy quay theo lệnh và I-term tự xả.
+If the craft cannot rotate, the PID loop gets no feedback. Just 0.2° off in Angle mode gives a 1 °/s error that never goes away; the I-term accumulates about 20 units per second, and after 10 – 15 seconds at high throttle the motors differ by tens of percent. Move a stick and release it: that axis's I-term hits its ceiling and **stays there**, so the craft seems to "remember" the last command. After throttle first exceeds 25 %, airmode gives the PID full authority even at very low throttle: moving yaw at 5 % throttle can push two motors to 80 %. Leaving the throttle stick at the bottom for 1 second brings everything to idle and the I-term to 0. Betaflight and ArduPilot behave the same; in flight, the craft rotates as commanded and the I-term unwinds by itself.
 
-- Kiểm tra motor: tab Motor, không arm.
-- Kiểm tra chiều phản ứng: arm, ga 10 – 15 %, nghiêng máy bằng tay vài giây; motor phía bị hạ thấp phải tăng.
-- Muốn motor trở về đều nhau khi thả cần: tạm đặt I = 0 cho ba trục, và trả lại trước khi bay.
+- Motor check: Motor tab, not armed.
+- Reaction direction check: arm, 10 – 15 % throttle, tilt the craft by hand for a few seconds; the motors on the lowered side must speed up.
+- To get the motors back to even when the stick is released: temporarily set I = 0 on all three axes, and restore it before flying.
 
-Phân tích một log thật với số liệu: `docs/HARDWARE_FEEDBACK_2.md` mục 1.
+Analysis of a real log with figures: `docs/HARDWARE_FEEDBACK_2.md` section 1.
 
-## 8. Thứ tự tune đề nghị trên máy thật
+## 8. Suggested tuning order on a real craft
 
-0. Tab Tổng quan: "Chu kỳ điều khiển thực tế" phải bằng tần số đặt, "bỏ lỡ 0 chu kỳ". Không đạt thì đừng tune: mọi tần số cắt và hệ số đang lệch theo.
-1. Tháo cánh: kiểm tra chiều motor (tab Motor), hướng gyro (hình 3D), bật DShot hai chiều nếu ESC hỗ trợ.
-2. Lắp cánh, bay Angle ngắn với mặc định. Ghi blackbox (nhóm gyro + gyro thô + PID + motor).
-3. Xem motor có nóng không và phổ gyro (tab Blackbox). Có đỉnh cố định → notch tĩnh; nhiễu theo ga mà không có RPM filter → giữ dynamic notch 3 – 5.
-4. Máy mềm, vọt lố → Master Multiplier lên từng 0,1. Rung nhanh sau cú đạp ga → Damping lên hoặc Dynamic Damping lên. Trôi chậm sau khi lật → Drift – Wobble.
-5. Level trim khi bay, rồi mới thử Altitude Hold.
+0. Overview tab: "Actual control cycle" must equal the set rate, "0 cycles missed". If not, do not tune: every cutoff frequency and gain is off accordingly.
+1. Props off: check motor direction (Motor tab), gyro orientation (3D view), enable bidirectional DShot if the ESC supports it.
+2. Props on, a short Angle flight with defaults. Record blackbox (gyro + raw gyro + PID + motor groups).
+3. Check whether the motors are hot and look at the gyro spectrum (Blackbox tab). A fixed peak → static notch; throttle-dependent noise without RPM filter → keep the dynamic notch at 3 – 5.
+4. Soft craft, overshoot → raise Master Multiplier by 0.1 at a time. Fast oscillation after a throttle punch → raise Damping or Dynamic Damping. Slow drift after a flip → Drift – Wobble.
+5. In-flight level trim, and only then try Altitude Hold.
 
-## 9. Đã kiểm chứng trên PC / chưa kiểm chứng
+## 9. Verified on the PC / not verified
 
-Đã có (`make test`): từng khối đối chiếu với công thức (`test/test_control.cpp`), bay vòng kín trên hai máy mô phỏng (`test/test_flight.cpp`), chạy trong firmware thật trên mạch ảo kể cả ESC trả lời DShot hai chiều (`test/test_fw.cpp`); lỗi cố ý (mutation) cho mọi dòng có ý nghĩa của các file trên.
+Done (`make test`): each block checked against its formula (`test/test_control.cpp`), closed-loop flight on two simulated craft (`test/test_flight.cpp`), running inside the real firmware on the virtual board including ESCs replying with bidirectional DShot (`test/test_fw.cpp`); deliberate faults (mutation) for every meaningful line of the files above.
 
-**Cần mạch thật, chưa có số nào:**
-- Thời gian một vòng lặp với cả chuỗi lọc + dynamic notch + PID ở 4 kHz trên ESP32-S3: tab Tổng quan, "Thời gian từng khâu" (khâu "tính toán"). Bản 0.5 không giữ được 4 kHz trên mạch thật; bản này đã đổi cấu trúc vòng lặp (`docs/HARDWARE_FEEDBACK_1.md` mục 1 – 2) nhưng **chưa có số đo**. Nếu vẫn không kịp: giảm `dyn_notch_count`, giảm số hài RPM, hoặc hạ `loop_hz` xuống 2000.
-- RPM filter với telemetry thật (tỉ lệ lỗi khung, độ trễ).
-- Bộ số mặc định trên khung của bạn; ga treo đo bằng đường cong lực đẩy thật (lực đẩy không tỉ lệ thẳng với mức ra như mô hình).
-- Baro bị gió cánh quạt thổi lúc sát đất có làm việc phát hiện rời đất sớm / muộn không.
-- Bộ ước lượng tư thế với gia tốc kế thật: mức rung của khung, hệ số lực cản thật của máy (mô phỏng dùng 0,35 /s: nghiêng 30° thì đạt 16 m/s). Các con số "lệch 3,4°" ở mục 5 là của mô hình đó.
+**Needs a real board, no figures yet:**
+- The time of one loop with the full filter chain + dynamic notch + PID at 4 kHz on the ESP32-S3: Overview tab, "Per-stage timing" (the "computation" stage). Version 0.5 could not hold 4 kHz on a real board; this version has changed the loop structure (`docs/HARDWARE_FEEDBACK_1.md` sections 1 – 2) but **there are no measurements yet**. If it still cannot keep up: reduce `dyn_notch_count`, reduce the number of RPM harmonics, or lower `loop_hz` to 2000.
+- RPM filter with real telemetry (frame error rate, latency).
+- The default set on your frame; hover throttle measured with a real thrust curve (thrust is not linear in the output level as in the model).
+- Whether prop wash blowing on the baro close to the ground makes takeoff detection early / late.
+- The attitude estimator with a real accelerometer: the frame's vibration level, the craft's real drag coefficient (the simulation uses 0.35 /s: a 30° tilt reaches 16 m/s). The "3.4° off" figures in section 5 come from that model.

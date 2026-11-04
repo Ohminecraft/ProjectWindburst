@@ -1,81 +1,81 @@
-# Flight core (viết lại từ đầu) — `src/core`, namespace `fc`
+# Flight core (rewritten from scratch) — `src/core`, namespace `fc`
 
-## Vì sao viết lại
-Core cũ (`wb::FlightController`) được viết trước khi có driver; sau khi có driver thật nó lệch ở nhiều chỗ:
-| Vấn đề của core cũ | Core mới |
+## Why it was rewritten
+The old core (`wb::FlightController`) was written before the drivers existed; once real drivers were in place it diverged in many places:
+| Problem with the old core | New core |
 |---|---|
-| Mixer có `idle`/`output_limit` riêng, trùng với `MotorOutputManager` (hai nơi sở hữu idle, dynamic idle không có đường vào) | Mixer chỉ nhận `MotorLimits{idle, limit}` **mỗi vòng** từ lớp motor; xuất giá trị **tuyệt đối** 0..1 nằm trong [idle, limit] |
-| `FcInput.rpm` là con trỏ tùy chọn, cố định 4 motor | `MotorFeedback.rpm[8]` + `rpm_valid`; bộ lọc notch RPM tới 8 motor × 3 hài |
-| Cảm biến gọi thẳng `kf.update_*` bất cứ lúc nào, không tuổi/độ tin cậy | `on_baro/on_range/on_gps/on_mag(giá trị, sigma, thời gian)`; estimator tự kiểm tra **độ cũ**, dùng sigma do driver đo |
-| Chỉ có Kalman độ cao | + Kalman ngang (GPS vị trí/vận tốc, bù trễ GPS 150 ms) sẵn cho Position Hold / RTH |
-| La bàn chỉ là hàm rời | La bàn tích hợp: seed yaw lúc disarm, chỉ sửa yaw, chỉ dùng khi `use_mag` + đã hiệu chuẩn + từ trường đúng cường độ |
-| Arming/failsafe rải rác, không biết sức khỏe từng driver | `Health` lấy thẳng từ `valid()/usable()` của driver; `Arming` (cạnh lên của công tắc, công tắc bật lúc khởi động bị chặn, cần bật-tắt lại sau failsafe), blocker mới `AB_MAG_NOT_CALIBRATED` |
-| Mixer gõ bảng tay | Hàng mixer **suy ra từ hình học** (góc motor, chiều quay): QUAD_X và QUAD_PLUS đúng **số motor và chiều quay mặc định của Betaflight** (props in: QUAD_X 1 sau-phải CW, 2 trước-phải CCW, 3 sau-trái CCW, 4 trước-trái CW), HEX_X; kiểm tra bằng plant vật lý độc lập. `props_out` = "motor direction reversed" của Betaflight |
-| Mọi thứ chạy ở 4 kHz | Vòng nhanh: gyro → lọc → AHRS → rate PID → mixer; estimator chạy `est_hz` (500) trên accel trung bình |
+| Mixer had its own `idle`/`output_limit`, duplicating `MotorOutputManager` (two owners of idle, no path in for dynamic idle) | Mixer only receives `MotorLimits{idle, limit}` **every loop** from the motor layer; outputs **absolute** values 0..1 within [idle, limit] |
+| `FcInput.rpm` was an optional pointer, fixed at 4 motors | `MotorFeedback.rpm[8]` + `rpm_valid`; RPM notch filter for up to 8 motors × 3 harmonics |
+| Sensors called `kf.update_*` directly at any time, with no age/confidence | `on_baro/on_range/on_gps/on_mag(value, sigma, time)`; the estimator checks **staleness** itself and uses the sigma measured by the driver |
+| Only an altitude Kalman | + horizontal Kalman (GPS position/velocity, 150 ms GPS delay compensation) ready for Position Hold / RTH |
+| Compass was only a loose function | Integrated compass: seeds yaw while disarmed, only corrects yaw, only used when `use_mag` + calibrated + field strength is right |
+| Arming/failsafe scattered, unaware of each driver's health | `Health` taken directly from the drivers' `valid()/usable()`; `Arming` (rising edge of the switch, switch on at startup is blocked, needs an on-off cycle after failsafe), new blocker `AB_MAG_NOT_CALIBRATED` |
+| Mixer table typed by hand | Mixer rows **derived from geometry** (motor angle, spin direction): QUAD_X and QUAD_PLUS match **Betaflight's default motor numbering and spin directions** (props in: QUAD_X 1 rear-right CW, 2 front-right CCW, 3 rear-left CCW, 4 front-left CW), HEX_X; checked against an independent physical plant. `props_out` = Betaflight's "motor direction reversed" |
+| Everything ran at 4 kHz | Fast loop: gyro → filters → AHRS → rate PID → mixer; the estimator runs at `est_hz` (500) on averaged accel |
 
-## Luồng dữ liệu
+## Data flow
 ```
 IMUAccGyro::read ─┐                                         ┌─ MotorSystem::update(out.motor, out.armed)
 Baro/Range/GPS/Mag ┼─ FlightCore::on_*  ─┐                  │
-RC (1000..2000us) ─┴─ FlightCore::update(FastInput) ─► CoreOutput ─┘  (motor[8] tuyệt đối, armed, blockers, failsafe, estimate, debug)
-MotorSystem::idleFraction / cfg().output_limit ──► FastInput.limits (vòng sau)
-MotorSystem::manager().rpm_array ───────────────► FastInput.motors (lọc RPM)
+RC (1000..2000us) ─┴─ FlightCore::update(FastInput) ─► CoreOutput ─┘  (motor[8] absolute, armed, blockers, failsafe, estimate, debug)
+MotorSystem::idleFraction / cfg().output_limit ──► FastInput.limits (next loop)
+MotorSystem::manager().rpm_array ───────────────► FastInput.motors (RPM filter)
 ```
-`src/app/flight_app.h` (`FlightApp`) là lớp keo tương ứng, chỉ chuyển tiếp, không có logic bay (xem `docs/FIRMWARE.md`).
+`src/app/flight_app.h` (`FlightApp`) is the corresponding glue layer; it only forwards and has no flight logic (see `docs/FIRMWARE.md`).
 
-Các hàm thêm khi ghép firmware:
-- `apply_tuning()` — app đổi PID / rate / Angle / Stabilize lúc disarm: đẩy `cfg` vào các bộ điều khiển mà **không** reset AHRS / estimator (`configure()` thì reset hết).
-- `apply_filters()` — app đổi bộ lọc lúc disarm: dựng lại chuỗi lọc gyro và lọc D-term.
-- `emergency_disarm()` — IMU mất hẳn: disarm, phải gạt lại công tắc arm.
-- `pid()`, `gyro_filter()`, `setpoints()`, `angle_ctl()`, `stabilize()`, `althold()` — chỉ đọc: trạng thái đang chạy cho stream `tuning` và cho test.
+Functions added when integrating the firmware:
+- `apply_tuning()` — the app changes PID / rate / Angle / Stabilize while disarmed: pushes `cfg` into the controllers **without** resetting AHRS / estimator (`configure()` resets everything).
+- `apply_filters()` — the app changes filters while disarmed: rebuilds the gyro filter chain and the D-term filter.
+- `emergency_disarm()` — IMU lost entirely: disarm, the arm switch must be flipped again.
+- `pid()`, `gyro_filter()`, `setpoints()`, `angle_ctl()`, `stabilize()`, `althold()` — read only: the running state for the `tuning` stream and for tests.
 
-`FastInput.rc_seq` đổi mỗi khi có **khung receiver mới**: feedforward và RC smoothing làm việc theo khung, không theo chu kỳ vòng lặp. `FastInput.motors.rpm[]` là tốc độ từng motor (0 = motor đó không có telemetry).
+`FastInput.rc_seq` changes on every **new receiver frame**: feedforward and RC smoothing work per frame, not per loop cycle. `FastInput.motors.rpm[]` is each motor's speed (0 = that motor has no telemetry).
 
-## Các file
-`types.h` (quy ước dấu — đọc phần đầu file) · `filters.h` (PT1/2/3, BIQUAD và notch dạng state-variable) · `gyro_filter.h` (chuỗi lọc gyro, RPM filter) · `dyn_notch.h` (SDFT + dynamic notch) · `pid.h` (rate PID của Betaflight, throttle boost) · `setpoint.h` (tốc độ khung, RC smoothing, feedforward) · `attitude.h` (Angle của Betaflight, Stabilize của ArduPilot) · `simplified_tuning.h` (thanh trượt) · `inflight_trim.h` (level trim khi bay) · `ahrs.h` (Mahony + la bàn; gia tốc kế được tin tới đâu khi bay / khi nằm yên: `AccelGainSchedule`) · `vertical_est.h` (Kalman 4 trạng thái: z, v, bias accel, offset baro) · `horizontal_est.h` · `rc.h` (rates Actual, `RcInterpreter`, `ModeMap`) · `mixer.h` · `althold.h` (máy trạng thái 5 trạng thái kiểu ArduCopter, `HoverEstimator`) · `safety.h` (arm blockers, `Arming`, `Failsafe`, `RunawayTakeoff`, `LandDetector`) · `flight_core.h`.
+## Files
+`types.h` (sign conventions — read the top of the file) · `filters.h` (PT1/2/3, BIQUAD and state-variable notch) · `gyro_filter.h` (gyro filter chain, RPM filter) · `dyn_notch.h` (SDFT + dynamic notch) · `pid.h` (Betaflight rate PID, throttle boost) · `setpoint.h` (frame rate, RC smoothing, feedforward) · `attitude.h` (Betaflight's Angle, ArduPilot's Stabilize) · `simplified_tuning.h` (sliders) · `inflight_trim.h` (in-flight level trim) · `ahrs.h` (Mahony + compass; how far the accelerometer is trusted in flight / at rest: `AccelGainSchedule`) · `vertical_est.h` (4-state Kalman: z, v, accel bias, baro offset) · `horizontal_est.h` · `rc.h` (Actual rates, `RcInterpreter`, `ModeMap`) · `mixer.h` · `althold.h` (ArduCopter-style 5-state machine, `HoverEstimator`) · `safety.h` (arm blockers, `Arming`, `Failsafe`, `RunawayTakeoff`, `LandDetector`) · `flight_core.h`.
 
-Bộ ước lượng độ cao (`vertical_est.h`): barometer giữ `z`; lidar đo **so với một mốc mặt đất** khi có barometer (10 số đo liền ngoài cổng, hoặc số đo đầu tiên sau 0,5 s vắng: mốc dời, `z` không nhảy), và là độ cao tuyệt đối khi không có barometer; sigma của barometer kẹp trong 0,3 … 1,0 m, ×2 khi vừa arm / vừa rời đất (1,5 s). GPS (0.8.3, chi tiết ở `docs/GPS.md`, mục "Độ cao GPS"): vận tốc đứng của u-blox luôn được trộn vào `v` (đưa tới hiện tại bằng gia tốc đo trong 0,15 s trễ); độ cao GPS theo `nav.gps_alt` — `FALLBACK` (mặc định): là độ cao khi không có barometer lẫn lidar, `BLEND`: thêm vào đó sửa trôi barometer qua trạng thái offset `o` (so với một mốc lấy từ 20 số đo đầu, nên chỉ phần *thay đổi* của độ cao GPS có tác dụng), `OFF`: không dùng. Bước dự đoán dùng thời gian thật, mỗi mẫu gia tốc kế tính theo khoảng thời gian nó đại diện.
+Altitude estimator (`vertical_est.h`): the barometer holds `z`; the lidar measures **relative to a ground reference** when there is a barometer (10 consecutive readings outside the gate, or the first reading after 0.5 s of absence: the reference moves, `z` does not jump), and is the absolute altitude when there is no barometer; barometer sigma is clamped to 0.3 … 1.0 m, ×2 right after arming / leaving the ground (1.5 s). GPS (0.8.3, details in `docs/GPS.md`, section "GPS altitude"): the u-blox vertical velocity is always blended into `v` (brought to the present using the acceleration measured over the 0.15 s delay); GPS altitude per `nav.gps_alt` — `FALLBACK` (default): it is the altitude when there is neither barometer nor lidar, `BLEND`: additionally corrects barometer drift through the offset state `o` (relative to a reference taken from the first 20 readings, so only the *change* in GPS altitude has an effect), `OFF`: not used. The prediction step uses real time; each accelerometer sample is weighted by the time span it represents.
 
-Chi tiết vòng rate, bộ lọc, hai mode tự cân bằng, ga treo: **`docs/TUNING.md`**.
+Details on the rate loop, filters, the two self-levelling modes, hover throttle: **`docs/TUNING.md`**.
 
-## Chế độ
-- **Acro**: cần → rate (Actual) → RC smoothing + feedforward → PID.
-- **Angle** (Betaflight): cần cho góc nghiêng theo đường cong rate; `ModeMap` tự bật Angle khi bật Altitude Hold / Position Hold, và failsafe cũng ép Angle.
-- **Stabilize** (ArduPilot): mục tiêu tư thế được định hình, giữ hướng mũi. Vào mode lúc đang bay thì bắt đầu từ tư thế hiện tại; đứng dưới đất với motor idle thì hướng mục tiêu bám theo máy.
-- **Altitude Hold** (cần baro, lidar, hoặc — từ 0.8.3, `nav.gps_alt` khác `OFF` — độ cao GPS): ga treo tự đo, cất cánh bằng cách tăng ga dần tới khi rời đất. Mất độ cao trong chuyến bay → cờ `althold_unavailable`, cần ga được đọc **quanh ga treo đã đo** (giữa cần = treo), có độ cao lại thì tiếp tục từ mức ga đó. Kéo cần xuống sau khi rời đất = hạ xuống có lực. Ga kịch trần / đáy: bộ tích phân không dồn. Nghiêng quá 84°: giảm lực đẩy về 0.
-- **Failsafe** (`safety.h`): có **nguyên nhân** (LINK / SWITCH / BATTERY, xuất ở `CoreOutput.fs_cause`). GUARD (0,5 s; hết nguyên nhân thì hết ngay; thời gian đã dùng chỉ "nguội" dần nên sóng chập chờn vẫn dẫn tới hạ cánh) → DESCENT (có độ cao: hạ có kiểm soát; không có: một phần của lực treo đã đo, và trong lúc đó không "học" ga treo) → LANDED. Trong DESCENT: sóng trở lại liên tục `fs_recover_ms` thì trả quyền; công tắc tắt là hết; pin thì không huỷ được nhưng người lái vẫn giữ roll / pitch / yaw. Đứng trên mặt đất khi hết GUARD: tắt motor luôn. Giới hạn `fs_max_descent_s` chỉ đếm khi máy không đi xuống hoặc không có độ cao. Trong cả GUARD lẫn DESCENT vì mất sóng, cần ga của kênh cũ **không** được Altitude Hold dùng.
-- **Runaway lúc cất cánh** (`RunawayTakeoff`, port của Betaflight): PID sum ≥ 600 **cùng lúc** với tốc độ quay > 15 °/s (roll, pitch) hoặc 50 °/s (yaw) suốt 75 ms → disarm, blocker `RUNAWAY_TAKEOFF` hiện tới khi công tắc ARM về OFF. Hết hiệu lực (tới lần cấp nguồn sau) khi đã thấy 0,5 s bay bình thường: ga ≥ 20 % kèm một cần ≥ 15 %, hoặc ga ≥ 40 %, mọi PID sum < 100. Không xét khi motor đang ở idle mặt đất.
-- **Mặt đất / trên không**: `airborne` = ga đã lên (25 % ngay, hoặc trên "thấp" 1 s), hoặc Altitude Hold đã nhấc máy; kết thúc khi `LandDetector` thấy máy đứng yên 1 s với ga ở thấp nhất. Ở **idle mặt đất** mọi motor bằng nhau, I-term = 0, runaway không xét.
-- **CALIB**: level trim khi bay, đo từ gia tốc kế lúc treo (`inflight_trim.h`; `FlightApp` áp dụng sau khi disarm và nhờ link task ghi flash).
-- **Airmode** (`general.airmode`): `AUTO` (mặc định) = ổn định đầy đủ ở ga thấp nhất **chỉ khi đang trên không**; `ALWAYS` = từ lần đầu ga vượt `airmode_start_throttle` tới khi disarm (Betaflight: trên bàn motor sẽ tự tăng tốc); `OFF`.
-- Position Hold: công tắc có, **chưa có bộ điều khiển XY** (estimator ngang đã có).
+## Modes
+- **Acro**: stick → rate (Actual) → RC smoothing + feedforward → PID.
+- **Angle** (Betaflight): the stick gives the tilt angle along the rate curve; `ModeMap` turns Angle on automatically when Altitude Hold / Position Hold is on, and failsafe also forces Angle.
+- **Stabilize** (ArduPilot): the attitude target is shaped, the nose heading is held. Entering the mode in flight starts from the current attitude; standing on the ground with motors at idle, the target heading follows the craft.
+- **Altitude Hold** (needs baro, lidar, or — since 0.8.3, `nav.gps_alt` not `OFF` — GPS altitude): hover throttle is measured automatically, takeoff by raising throttle gradually until leaving the ground. Altitude lost in flight → flag `althold_unavailable`, the throttle stick is read **around the measured hover throttle** (mid stick = hover), and when altitude returns it continues from that throttle level. Pulling the stick down after leaving the ground = powered descent. Throttle at the top / bottom limit: the integrator does not wind up. Tilt beyond 84°: thrust reduced to 0.
+- **Failsafe** (`safety.h`): has a **cause** (LINK / SWITCH / BATTERY, output in `CoreOutput.fs_cause`). GUARD (0.5 s; ends immediately when the cause goes away; the time used only "cools down" gradually, so a flickering link still leads to a landing) → DESCENT (with altitude: controlled descent; without: a fraction of the measured hover thrust, and hover throttle is not "learned" meanwhile) → LANDED. During DESCENT: link back continuously for `fs_recover_ms` hands control back; the switch turned off ends it; battery cannot be cancelled but the pilot still keeps roll / pitch / yaw. On the ground when GUARD ends: motors off immediately. The `fs_max_descent_s` limit only counts while the craft is not descending or has no altitude. In both GUARD and DESCENT due to link loss, the old channel's throttle stick is **not** used by Altitude Hold.
+- **Runaway on takeoff** (`RunawayTakeoff`, Betaflight port): PID sum ≥ 600 **together with** rotation rate > 15 °/s (roll, pitch) or 50 °/s (yaw) for 75 ms → disarm, blocker `RUNAWAY_TAKEOFF` shown until the ARM switch goes back to OFF. Deactivated (until the next power-up) after 0.5 s of normal flight has been seen: throttle ≥ 20 % with a stick ≥ 15 %, or throttle ≥ 40 %, all PID sums < 100. Not evaluated while motors are at ground idle.
+- **Ground / airborne**: `airborne` = throttle has gone up (25 % immediately, or above "low" for 1 s), or Altitude Hold has lifted the craft; ends when `LandDetector` sees the craft still for 1 s with throttle at the lowest. At **ground idle** all motors are equal, I-term = 0, runaway is not evaluated.
+- **CALIB**: in-flight level trim, measured from the accelerometer while hovering (`inflight_trim.h`; `FlightApp` applies it after disarm and asks the link task to write flash).
+- **Airmode** (`general.airmode`): `AUTO` (default) = full stabilization at lowest throttle **only while airborne**; `ALWAYS` = from the first time throttle passes `airmode_start_throttle` until disarm (Betaflight: on the bench the motors will spin up by themselves); `OFF`.
+- Position Hold: the switch exists, **no XY controller yet** (the horizontal estimator exists).
 
-Disarm xoá hết trạng thái của PID, Angle và throttle boost; low-throttle TPA được nạp lại.
+Disarm clears all PID, Angle and throttle boost state; low-throttle TPA is reloaded.
 
-## Đã kiểm chứng (trên PC)
-- `test/test_core.cpp` (296): AHRS, estimator dọc (kể cả mốc lidar, sigma barometer) / ngang, RC, mixer so với vật lý (3 layout), failsafe (nguyên nhân, trả quyền, giới hạn), runaway, arming, Altitude Hold (máy trạng thái, `HoverEstimator`, cất cánh, bỏ cuộc, không có người cầm cần, ga kịch giới hạn, lật ngửa).
-- `test/test_control.cpp` (269): từng khối của vòng rate đối chiếu **với công thức của nó**: bộ lọc, chuỗi lọc gyro, RPM filter, dynamic notch, PID và các phụ trợ, đường cần (kể cả khung bị mất), Angle, Stabilize, thanh trượt, level trim khi bay.
-- `test/test_nav.cpp` (130, 0.7.0): optical flow → vận tốc, góc nghiêng chỉnh theo gia tốc đo được (`tilt_aid.h`), bộ điều khiển vị trí, Position Hold, GPS Rescue — từng khối với mô hình vật lý viết riêng trong test; xem `docs/NAV.md`.
-- `test/test_flight.cpp` (251): toàn bộ `FlightCore` với plant 6-DOF độc lập trên hai máy (5 inch lực đẩy lớn; 1 kg lực đẩy yếu): dấu roll / pitch / yaw, bước rate, feedforward, bộ lọc trong vòng kín, throttle boost, Angle so với Stabilize, chuyển mode, airmode và idle mặt đất, la bàn, Altitude Hold (mất độ cao, cái bàn dưới lidar, GPS lệch 3 m, gió cánh quạt sát đất), failsafe, **chu kỳ không đều**, **runaway với hai dây motor cắm nhầm**, bàn giao cho `MotorOutputManager`; từ 0.7.0 cả Position Hold (GPS + la bàn, flow + lidar), GPS Rescue và góc nghiêng chỉnh theo vận tốc đo được.
-- Lỗi cố ý (mutation): hơn 660 lỗi cho riêng các file của vòng rate / bộ lọc / mode / Altitude Hold / an toàn (`tools/mutate.py`); kết quả lượt chạy cuối ở `docs/HANDOFF.md`.
-- `test/test_fw.cpp`: core chạy **bên trong firmware thật** trên mạch ảo: dữ liệu đi qua driver IMU (SPI), baro (I2C), decoder CRSF, khung DShot (kể cả ESC trả lời rpm) rồi mới tới plant.
+## Verified (on PC)
+- `test/test_core.cpp` (296): AHRS, vertical (including lidar reference, barometer sigma) / horizontal estimator, RC, mixer against physics (3 layouts), failsafe (cause, handing back control, limits), runaway, arming, Altitude Hold (state machine, `HoverEstimator`, takeoff, giving up, nobody on the sticks, throttle at the limit, upside down).
+- `test/test_control.cpp` (269): each block of the rate loop checked **against its formula**: filters, gyro filter chain, RPM filter, dynamic notch, PID and helpers, stick path (including lost frames), Angle, Stabilize, sliders, in-flight level trim.
+- `test/test_nav.cpp` (130, 0.7.0): optical flow → velocity, tilt angle corrected by measured acceleration (`tilt_aid.h`), position controller, Position Hold, GPS Rescue — each block with a physical model written separately in the test; see `docs/NAV.md`.
+- `test/test_flight.cpp` (251): the whole `FlightCore` with an independent 6-DOF plant on two craft (5 inch high thrust; 1 kg low thrust): roll / pitch / yaw signs, rate steps, feedforward, filters in closed loop, throttle boost, Angle vs Stabilize, mode switching, airmode and ground idle, compass, Altitude Hold (altitude loss, a table under the lidar, GPS off by 3 m, prop wash near the ground), failsafe, **irregular cycle times**, **runaway with two motor wires swapped**, handover to `MotorOutputManager`; since 0.7.0 also Position Hold (GPS + compass, flow + lidar), GPS Rescue and tilt angle corrected by measured velocity.
+- Deliberate faults (mutation): more than 660 faults for the rate loop / filter / mode / Altitude Hold / safety files alone (`tools/mutate.py`).
+- `test/test_fw.cpp`: the core runs **inside the real firmware** on a virtual board: data goes through the IMU (SPI), baro (I2C) drivers, the CRSF decoder, DShot frames (including ESC rpm replies) before reaching the plant.
 
-## Chưa kiểm chứng / giới hạn
-- Bản 0.5 đã bay thử trên bàn (không cánh) trên mạch thật; những gì lộ ra và cách sửa: `docs/HARDWARE_FEEDBACK_1.md`. **Thời gian một lần `update()` trên S3 của bản này vẫn chưa có số** (tab Tổng quan nay hiện riêng khâu "tính toán"). Cách giảm tải: `docs/TUNING.md` mục 9.
-- Những khác biệt với Betaflight / ArduPilot đã biết mà chưa làm: `docs/HARDWARE_FEEDBACK_1.md` mục 6, phần "Biết nhưng chưa làm".
-- Mặc định là bộ số của Betaflight cho quad 5 inch; máy khác phải tune (Master Multiplier).
-- Plant mô phỏng: lực đẩy tỉ lệ thẳng với lệnh; chuyển động ngang có lực cản tuyến tính 0,35 /s; gia tốc kế **đúng vật lý** (lực đẩy + lực cản, không có trọng lực khi bay). Vài test về hình dạng đáp ứng của bộ điều khiển và về blackbox dùng "cảm biến nghiêng lý tưởng" (`true_accel = false`) và ghi rõ lý do. Không thay thế việc tune trên máy thật.
-- Bộ ước lượng tư thế với gyro + gia tốc kế lệch vài độ khi tăng tốc kéo dài (số đo ở `docs/TUNING.md` mục 5). Từ 0.7.0, khi có vận tốc đo được (GPS + la bàn, hoặc optical flow) và máy đang arm, `core/tilt_aid.h` thay gia tốc kế bằng phép so lực riêng với gia tốc thật (cách của ArduPilot DCM / PX4): mô phỏng cho dưới 1° trong cả lần nghiêng 25° kéo dài 4 giây. Không có GPS / flow thì vẫn như cũ.
-- Chưa có: bù điện áp pin cho throttle, crash-flip, thrust linearisation, I-term rotation, waypoint / mission. Position Hold, GPS Rescue, optical flow: từ 0.7.0 (`docs/NAV.md`), **chưa bay thật**.
+## Not verified / limits
+- Version 0.5 was bench-tested (no props) on a real board; what showed up and how it was fixed: `docs/HARDWARE_FEEDBACK_1.md`. **The time of one `update()` on the S3 for this version still has no number** (the Overview tab now shows the "compute" stage separately). How to reduce load: `docs/TUNING.md` section 9.
+- Known differences from Betaflight / ArduPilot not yet addressed: `docs/HARDWARE_FEEDBACK_1.md` section 6, part "Known but not done".
+- Defaults are Betaflight's numbers for a 5 inch quad; other craft must be tuned (Master Multiplier).
+- Simulated plant: thrust proportional to command; horizontal motion has linear drag 0.35 /s; the accelerometer is **physically correct** (thrust + drag, no gravity in flight). A few tests on controller response shape and on blackbox use an "ideal tilt sensor" (`true_accel = false`) and state the reason. It does not replace tuning on a real craft.
+- The attitude estimator with gyro + accelerometer is off by a few degrees during sustained acceleration (numbers in `docs/TUNING.md` section 5). Since 0.7.0, when there is a measured velocity (GPS + compass, or optical flow) and the craft is armed, `core/tilt_aid.h` replaces the accelerometer with a comparison of specific force against true acceleration (the ArduPilot DCM / PX4 approach): simulation gives under 1° throughout a 25° tilt held for 4 seconds. Without GPS / flow it is as before.
+- Not yet: battery voltage compensation for throttle, crash-flip, thrust linearisation, I-term rotation, waypoint / mission. Position Hold, GPS Rescue, optical flow: since 0.7.0 (`docs/NAV.md`), **not yet flown for real**.
 
-## Lỗi đã sửa (0.6.0): bộ ước lượng tư thế tin gia tốc kế quá nhiều
-Tới 0.5.0, gain gia tốc kế của AHRS là 2 /s (hằng số thời gian 0,5 s) và plant mô phỏng cho gia tốc kế luôn chỉ đúng phương thẳng đứng. Trên máy thật điều đó sai: khi bay, gia tốc kế cảm nhận lực đẩy chứ không phải trọng lực. Khi plant được sửa cho đúng vật lý (để làm Position Hold), lỗi lộ ra ngay: giữ nửa cần roll 2 giây trong Angle, lệnh 12°, máy nghiêng thật 27° và lắc ngược 14° sau khi thả cần.
+## Bug fixed (0.6.0): the attitude estimator trusted the accelerometer too much
+Up to 0.5.0, the AHRS accelerometer gain was 2 /s (0.5 s time constant) and the simulated plant made the accelerometer always point exactly vertical. On a real craft that is wrong: in flight the accelerometer senses thrust, not gravity. When the plant was made physically correct (for Position Hold), the bug showed up immediately: holding half roll stick for 2 seconds in Angle, commanded 12°, the craft actually tilted 27° and swung back 14° after the stick was released.
 
-Đã sửa trong `core/ahrs.h` theo cách Betaflight làm (`imu.c`), có đối chiếu ArduPilot: gain 0,25 /s khi arm, × 10 khi disarm nằm yên, × 100 nửa giây sau khi vừa nằm yên; lọc thông thấp bậc 2 ở 10 Hz; trọng số giảm về 0 khi độ lớn lệch 0,1 g so với lúc nằm yên (học khi disarm); bias gyro học không quá 0,5 °/s mỗi phút. Level trim khi bay chuyển sang đo thẳng từ gia tốc kế. Bảng số và hệ quả cho người bay: `docs/TUNING.md` mục 5 và 7. Test: `t_ahrs_trust` (`test_core.cpp`), `t_estimator_in_flight` (`test_flight.cpp`), `t_inflight_trim` (`test_fw.cpp`).
+Fixed in `core/ahrs.h` the way Betaflight does it (`imu.c`), cross-checked with ArduPilot: gain 0.25 /s when armed, × 10 when disarmed at rest, × 100 for half a second right after coming to rest; 2nd-order low-pass at 10 Hz; weight drops to 0 when the magnitude is off by 0.1 g from the at-rest value (learned while disarmed); gyro bias learned at no more than 0.5 °/s per minute. In-flight level trim switched to measuring directly from the accelerometer. Numbers and consequences for pilots: `docs/TUNING.md` sections 5 and 7. Tests: `t_ahrs_trust` (`test_core.cpp`), `t_estimator_in_flight` (`test_flight.cpp`), `t_inflight_trim` (`test_fw.cpp`).
 
-Bài học về cách thử: mô phỏng "lý tưởng hoá" một cảm biến sẽ che đúng những lỗi nằm ở chỗ dùng cảm biến đó. Plant bây giờ mặc định dùng gia tốc kế đúng vật lý.
+Lesson about testing: a simulation that "idealises" a sensor hides exactly the bugs that live where that sensor is used. The plant now uses a physically correct accelerometer by default.
 
-## Lỗi đã sửa: chiều quay mặc định của quad bị ngược so với Betaflight
-Bản trước ghi "đúng số motor BF" nhưng bảng chiều quay của QUAD_X / QUAD_PLUS lại là bản đảo (`{+1,-1,-1,+1}`): với `props_out = false` firmware coi motor 1 (sau-phải) quay CCW, tức là kiểu **props out** của Betaflight. Ai lắp cánh theo hình mặc định của Betaflight thì vòng yaw thành hồi tiếp dương (máy xoay tít khi cất cánh). Nguyên nhân: Betaflight đổi dấu yaw hai lần (cần yaw trong `rc.c`, và `-scaledAxisPidYaw` trong `mixer.c`), lần đọc đầu chỉ tính một. Test cũ không bắt được vì plant mô phỏng dùng cùng bảng sai đó (đúng loại lỗi "simulator và code cùng hiểu sai").
-Nay: `quad_x_spin = quad_p_spin = {-1,+1,+1,-1}` (+1 = cánh CCW), bảng mixer **bằng đúng từng số** `mixerQuadX` / `mixerQuadP` của Betaflight (có test so từng hệ số), plant mô phỏng là một quad lắp kiểu Betaflight. HEX_X vốn đã đúng chiều theo vị trí, không đổi.
-**Vẫn phải kiểm tra trên mạch** (tháo cánh): tab Motor của GUI vẽ chiều mỗi motor phải quay; chạy từng motor và so.
+## Bug fixed: default quad spin direction was reversed relative to Betaflight
+The previous version said "matches BF motor numbering" but the spin direction table for QUAD_X / QUAD_PLUS was the inverted one (`{+1,-1,-1,+1}`): with `props_out = false` the firmware treated motor 1 (rear-right) as spinning CCW, i.e. Betaflight's **props out** layout. Anyone mounting props per Betaflight's default diagram got a positive-feedback yaw loop (the craft spins wildly on takeoff). Cause: Betaflight flips the yaw sign twice (the yaw stick in `rc.c`, and `-scaledAxisPidYaw` in `mixer.c`), and the first reading only counted one. The old tests did not catch it because the simulated plant used the same wrong table (exactly the "simulator and code share the same misunderstanding" kind of bug).
+Now: `quad_x_spin = quad_p_spin = {-1,+1,+1,-1}` (+1 = CCW prop), the mixer table **equals number for number** Betaflight's `mixerQuadX` / `mixerQuadP` (with a test comparing each coefficient), the simulated plant is a quad built the Betaflight way. HEX_X already had the right directions by position, unchanged.
+**Still must be checked on the board** (props off): the GUI's Motors tab draws the direction each motor must spin; run each motor and compare.

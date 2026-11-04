@@ -1,0 +1,74 @@
+[
+ {
+  "fw": "0.11.0",
+  "hash": "0xCCF703C7",
+  "protocol": 1,
+  "file": "0.11.0.json"
+ },
+ {
+  "fw": "0.17.0",
+  "hash": "0xA457F6F5",
+  "protocol": 1,
+  "file": "0.17.0.json"
+ },
+ {
+  "fw": "0.18.0",
+  "hash": "0xA8C528D6",
+  "protocol": 1,
+  "file": "0.18.0.json"
+ },
+ {
+  "fw": "0.26.0",
+  "hash": "0x944FD130",
+  "protocol": 1,
+  "file": "0.26.0.json"
+ },
+ {
+  "fw": "0.33.0",
+  "hash": "0xA48C55FA",
+  "protocol": 1,
+  "file": "0.33.0.json"
+ },
+ {
+  "fw": "0.33.4",
+  "hash": "0xCB86B504",
+  "protocol": 1,
+  "file": "0.33.4.json"
+ },
+ {
+  "fw": "0.36.0",
+  "hash": "0xBC5CB67F",
+  "protocol": 1,
+  "file": "0.36.0.json"
+ },
+ {
+  "fw": "0.37.2",
+  "hash": "0xB91CB124",
+  "protocol": 1,
+  "file": "0.37.2.json"
+ },
+ {
+  "fw": "0.41.0",
+  "hash": "0xCAF05FD1",
+  "protocol": 1,
+  "file": "0.41.0.json"
+ },
+ {
+  "fw": "0.42.0",
+  "hash": "0x622BBE0D",
+  "protocol": 1,
+  "file": "0.42.0.json"
+ },
+ {
+  "fw": "0.42.1",
+  "hash": "0x8FE0C8EE",
+  "protocol": 1,
+  "file": "0.42.1.json"
+ },
+ {
+  "fw": "0.43.0",
+  "hash": "0x5ACBE279",
+  "protocol": 1,
+  "file": "0.43.0.json"
+ }
+]

@@ -1,119 +1,119 @@
 # Motor output
 
-## Cấu trúc
-| File | Vai trò | Kiểm chứng |
+## Structure
+| File | Role | Verification |
 |---|---|---|
-| `hal/motor/motor_protocol.h` | Khung DShot + CRC, sóng RMT, GCR/eRPM/EDT, độ rộng xung PWM/Oneshot/Multishot, endpoints | 164 test PC, đối chiếu công thức Betaflight |
-| `hal/motor/motor_output.h` | `MotorOutputManager`: disarm/idle/limit, reorder, lệnh DShot (đảo chiều, save, beacon), test slider, telemetry, dynamic idle | test PC + 12 lỗi cố ý đều bị bắt |
-| `hal/motor/dshot_direct.h` | `DshotDirect<Port>`: DShot một chiều / hai chiều trên bộ nhớ và thanh ghi của RMT, không phụ thuộc phần cứng (mô phỏng được) | `test_dshot`: mô hình dây tín hiệu, 91 kiểm tra |
-| `hal/motor/dshot.h` | `RmtDirectPort` (ESP32-S3: thanh ghi RMT, GPIO, một gptimer) + `DshotHw` (lối lùi qua driver ESP-IDF đã bỏ ở 0.12) | **biên dịch + link cho ESP32-S3**; chưa chạy trên mạch |
-| `hal/motor/pwm_oneshot.h` | PWM / Oneshot125 / Oneshot42 / Multishot trên LEDC (tối đa 8 motor) | biên dịch + link S3; chưa chạy trên mạch |
-| `hal/motor/motor.h` | `MotorSystem`: ghép manager + backend theo protocol | biên dịch S3 |
+| `hal/motor/motor_protocol.h` | DShot frame + CRC, RMT waveform, GCR/eRPM/EDT, PWM/Oneshot/Multishot pulse widths, endpoints | 164 PC tests, checked against Betaflight's formulas |
+| `hal/motor/motor_output.h` | `MotorOutputManager`: disarm/idle/limit, reorder, DShot commands (reverse, save, beacon), test slider, telemetry, dynamic idle | PC tests + 12 deliberate faults, all caught |
+| `hal/motor/dshot_direct.h` | `DshotDirect<Port>`: one-way / bidirectional DShot on the RMT memory and registers, hardware-independent (can be simulated) | `test_dshot`: signal-wire model, 91 checks |
+| `hal/motor/dshot.h` | `RmtDirectPort` (ESP32-S3: RMT registers, GPIO, one gptimer) + `DshotHw` (fallback via the ESP-IDF driver, removed in 0.12) | **compiles + links for ESP32-S3**; not yet run on a board |
+| `hal/motor/pwm_oneshot.h` | PWM / Oneshot125 / Oneshot42 / Multishot on LEDC (up to 8 motors) | compiles + links on S3; not yet run on a board |
+| `hal/motor/motor.h` | `MotorSystem`: combines manager + backend according to the protocol | compiles on S3 |
 
-## Quy ước quan trọng
-- Mixer xuất giá trị **tuyệt đối 0..1** (đã gồm idle). Đặt `mixer.idle = motors.idleFraction(...)` mỗi vòng và `mixer.output_limit = cfg.output_limit`. Manager là nơi duy nhất sở hữu motor idle (tĩnh + động).
-- Đang arm thì motor **không bao giờ xuống dưới idle** (mixer lỡ ra 0 cũng không dừng motor giữa không trung). Disarm: DShot = 0, xung = giá trị "không arm" trong app (mặc định 0 = không phát xung).
-- `reversed[]` không đổi mixer (giống Betaflight): nó gửi lệnh đảo chiều cho ESC, **luôn là 7/8 + save 12** (ESC lưu vào flash; AM32, BLHeli_S, Bluejay, BLHeli_32 đều nhận). Từ 0.18.1 không dùng 20/21 nữa (`dir_cmd_extended` bị bỏ qua): hai lệnh đó không được lưu và còn là chiều so với chiều đã lưu, nên AM32 quên đảo chiều sau mỗi lần FC khởi động lại (`docs/HARDWARE_FEEDBACK_4.md`). Chỉ gửi khi **disarm**, đúng nhịp Betaflight (chờ 10 ms, lặp 10 lần cách 1 ms). Arm thì mọi lệnh đang chờ bị huỷ.
-- Motor reorder: `order[logical] = slot phần cứng`, sai hoán vị thì tự về mặc định. Chân của slot k = `HardwareConfig::getMotorPins()[k]`: chân app gửi (tab Chân và cổng), hoặc mặc định ghi trong `hardware_config.h`.
-- Slider test: chỉ khi disarm, tự tắt sau 0,5 s nếu app ngừng refresh (app gửi ~10 Hz).
-- Mất telemetry ≠ mất motor: rpm quá 100 ms thì RPM notch của **motor đó** mờ đi, dynamic idle về idle tĩnh.
+## Important conventions
+- The mixer outputs **absolute 0..1** values (idle included). Set `mixer.idle = motors.idleFraction(...)` every loop and `mixer.output_limit = cfg.output_limit`. The manager is the only owner of motor idle (static + dynamic).
+- While armed, the motors **never go below idle** (even if the mixer slips to 0, a motor does not stop in mid-air). Disarm: DShot = 0, pulse = the "disarmed" value in the app (default 0 = no pulse).
+- `reversed[]` does not change the mixer (like Betaflight): it sends a reverse command to the ESC, **always 7/8 + save 12** (the ESC stores it in flash; AM32, BLHeli_S, Bluejay, BLHeli_32 all accept it). Since 0.18.1, 20/21 are no longer used (`dir_cmd_extended` is ignored): those two commands are not saved and are also relative to the saved direction, so AM32 forgot the reversal after every FC reboot (`docs/HARDWARE_FEEDBACK_4.md`). Only sent while **disarmed**, at Betaflight's exact rhythm (wait 10 ms, repeat 10 times 1 ms apart). Arming cancels every pending command.
+- Motor reorder: `order[logical] = hardware slot`, an invalid permutation falls back to the default. The pin of slot k = `HardwareConfig::getMotorPins()[k]`: the pin sent by the app (Pins and ports tab), or the default in `hardware_config.h`.
+- Test slider: only while disarmed, turns itself off after 0.5 s if the app stops refreshing (the app sends ~10 Hz).
+- Losing telemetry ≠ losing the motor: rpm older than 100 ms fades out the RPM notch of **that motor**, dynamic idle falls back to static idle.
 
-## DShot trên ESP32-S3: driver "trực tiếp" (từ 0.6.0)
+## DShot on the ESP32-S3: the "direct" driver (since 0.6.0)
 
-Bản 0.5 trên mạch thật: bật DShot hai chiều thì **motor không nhận lệnh nữa**. Hai nguyên nhân, cả hai đã tái hiện bằng mô hình:
-1. Sau mỗi khung, mã gọi `pinMode(pin, INPUT_PULLUP)` để nghe ESC. Trên ESP-IDF 5.5, `gpio_output_disable()` đặt `oen_sel = 1` và xoá bit enable: chân bị **tách khỏi bộ phát RMT**, từ khung thứ hai không còn gì đi ra.
-2. Bộ giải mã (`runs_to_gcr`) đòi 20 bit. Trả lời kết thúc bằng mức cao thì đoạn cuối lẫn vào đường dây rảnh và bộ thu báo "hết" không kèm độ dài: ~37 % trả lời hợp lệ bị loại. Nay nhận từ 18 bit (Betaflight).
+Version 0.5 on a real board: enabling bidirectional DShot made **the motors stop accepting commands**. Two causes, both reproduced with the model:
+1. After each frame, the code called `pinMode(pin, INPUT_PULLUP)` to listen to the ESC. On ESP-IDF 5.5, `gpio_output_disable()` sets `oen_sel = 1` and clears the enable bit: the pin is **detached from the RMT transmitter**, from the second frame on nothing goes out.
+2. The decoder (`runs_to_gcr`) required 20 bits. A reply ending at a high level has its last segment merge into the idle line and the receiver reports "done" without a length: ~37 % of valid replies were rejected. Now accepted from 18 bits (Betaflight).
 
-Cách làm mới (`dshot_direct.h`), một chu kỳ gọi `send()`:
+The new approach (`dshot_direct.h`), one cycle calls `send()`:
 ```
-send():   thu hoạch trả lời của khung trước (đọc bộ nhớ RX của RMT → độ dài từng mức, tính bằng tick → GCR 20 bit)
-          ghi 16 ký hiệu + dấu kết thúc vào bộ nhớ TX, chân ở chế độ đẩy-kéo, bắt đầu phát cả 4 kênh
-          hai chiều: hẹn timer sau (thời gian khung + 3 µs)
-ngắt timer (IRAM): nhả chân (ESC kéo đường dây), bật thu
+send():   harvest the previous frame's reply (read RMT RX memory → length of each level, in ticks → 20-bit GCR)
+          write 16 symbols + end marker into TX memory, pin in push-pull mode, start transmitting on all 4 channels
+          bidirectional: schedule the timer after (frame time + 3 µs)
+timer ISR (IRAM): release the pin (the ESC drives the line), enable receiving
 ```
-| | Khung | Chu kỳ một chiều | Chu kỳ hai chiều (khung + 30 µs + trả lời + khoảng rảnh) |
+| | Frame | One-way cycle | Bidirectional cycle (frame + 30 µs + reply + idle gap) |
 |---|---|---|---|
 | DShot150 | 107 µs | 137 µs | 312 µs |
 | DShot300 | 54 µs | 84 µs | **182 µs** |
 | DShot600 | 27 µs | 57 µs | **116 µs** |
 
-`send()` được gọi sớm hơn một chu kỳ thì khung đó bị **bỏ qua** (đếm ở `stats().skipped`), không bao giờ ghi đè lên khung đang phát. Vòng 4 kHz (250 µs) hợp với DShot300 và DShot600 hai chiều; DShot150 hai chiều thì không.
-Ngắt đến trễ (khung sau đã tới hạn mà chân chưa được nhả): trả lời đó bị bỏ, đếm ở `late_switch`. ESC không trả lời 20 khung liền: `rx_responsive(slot) = false`.
+If `send()` is called sooner than one cycle, that frame is **skipped** (counted in `stats().skipped`), never overwriting a frame being transmitted. A 4 kHz loop (250 µs) fits bidirectional DShot300 and DShot600; bidirectional DShot150 does not.
+Late interrupt (the next frame is already due and the pin has not been released): that reply is dropped, counted in `late_switch`. An ESC not replying for 20 frames in a row: `rx_responsive(slot) = false`.
 
-**0.12:** lối lùi qua `rmt_transmit` của ESP-IDF (`motors.dshot_driver = IDF`, chỉ một chiều, ~130 µs mỗi chu kỳ cho 4 motor) đã bị bỏ theo yêu cầu: tốn tài nguyên và không cần nữa. Byte đó trong settings giờ là `reserved1` để các trường sau giữ nguyên vị trí. Settings cũ đặt IDF thì nay chạy cách trực tiếp.
+**0.12:** the fallback through ESP-IDF's `rmt_transmit` (`motors.dshot_driver = IDF`, one-way only, ~130 µs per cycle for 4 motors) was removed on request: it cost resources and is no longer needed. That byte in the settings is now `reserved1` so the following fields keep their positions. Old settings that chose IDF now run the direct method.
 
-**Motor idle với giao thức analog (0.12):** PWM / Oneshot / Multishot / brushed không có "Motor idle" (giống Betaflight): ga thấp nhất khi đã arm là `pulse_armed` (min_throttle của Betaflight). Firmware bỏ qua `idle_x10` với các giao thức này, tab Motor ẩn ô đó. Trước 0.12 idle được cộng thêm trên `pulse_armed`, nên một máy analog cũ giờ idle thấp hơn: nếu motor dừng hoặc mất đồng bộ ở ga thấp, tăng `pulse_armed`.
+**Motor idle with analog protocols (0.12):** PWM / Oneshot / Multishot / brushed have no "Motor idle" (like Betaflight): the lowest throttle when armed is `pulse_armed` (Betaflight's min_throttle). The firmware ignores `idle_x10` for these protocols, and the Motor tab hides that field. Before 0.12 idle was added on top of `pulse_armed`, so an old analog craft now idles lower: if the motors stop or desync at low throttle, raise `pulse_armed`.
 
-Số liệu lên app (stream `motors`): `bidir` (OFF / ACTIVE / UNAVAILABLE), `answers` (bit i = ESC của motor i đang trả lời), `skipped`, `late` (trong giây vừa rồi).
+Figures sent to the app (`motors` stream): `bidir` (OFF / ACTIVE / UNAVAILABLE), `answers` (bit i = the ESC of motor i is replying), `skipped`, `late` (in the last second).
 
-**Chưa kiểm trên chip.** Mô hình (`test/test_dshot.cpp`) có ESC giải mã khung như ESC thật (độ rộng xung, khoảng lặng giữa hai khung, CRC đảo), trả lời GCR sau 30 µs, bộ thu có lọc nhiễu và ngưỡng rảnh, hai thiết bị cùng kéo đường dây thì bị bắt. Thứ mô hình không biết: điện trở kéo, độ trễ thật của ngắt timer trên core đang chạy vòng bay, ESC lệch nhịp.
+**Not yet checked on the chip.** The model (`test/test_dshot.cpp`) has an ESC that decodes frames like a real ESC (pulse width, gap between two frames, inverted CRC), replies in GCR after 30 µs, a receiver with noise filtering and an idle threshold, and catches two devices driving the line at once. What the model does not know: pull resistors, the real latency of the timer interrupt on the core running the flight loop, ESCs drifting off timing.
 
-## Kiểm tra lúc khởi động của DShot hai chiều (0.8.1)
+## Start-up check of bidirectional DShot (0.8.1)
 
-Bản 0.8.0 trên mạch thật (ESC Aikon AK32, BLHeli_32): bật DShot hai chiều thì **không có telemetry và motor cũng không nhận lệnh**. Trên PC (mô hình dây tín hiệu, `test_dshot`) cả chuỗi chạy đúng, nên phần hỏng nằm ở thứ PC không mô phỏng được: định tuyến chân của bộ phát / bộ thu RMT qua GPIO matrix trên ESP-IDF 5.5, hoặc thời điểm của ngắt timer. Để tìm ra trên chính mạch đó:
+Version 0.8.0 on a real board (Aikon AK32 ESCs, BLHeli_32): enabling bidirectional DShot gave **no telemetry and the motors did not accept commands either**. On the PC (signal-wire model, `test_dshot`) the whole chain works, so the broken part lies in something the PC cannot simulate: the routing of the RMT transmitter / receiver pins through the GPIO matrix on ESP-IDF 5.5, or the timing of the timer interrupt. To find it on that very board:
 
-- Lúc khởi động, với từng motor, firmware cho bộ thu nghe chân trong lúc bộ phát gửi một khung "0" (chân ESP32 đọc lại được mức nó đang phát), rồi nhả chân như lúc bay và giải mã 16 bit thu được. Đúng từng bit trên mọi chân → `motors: DShot/RMT direct, bidirectional (start-up check OK on 4 pins) x4`.
-- Sai → **tự chuyển về DShot một chiều** (motor vẫn quay, vẫn kêu được) và dòng `motors:` ghi lý do: `bidirectional OFF: start-up check, the receiver of motor N heard nothing (k words)` (bộ phát không ra tới chân hoặc bộ thu không nghe được chân), `... not a DShot frame`, `... sent 0x...., heard 0x....`, hoặc `bidirectional OFF: <hàm ESP-IDF> failed (<mã lỗi>)` khi tạo kênh / timer bị lỗi.
-- Tab Motor thêm "Trả lời nhận được / hỏng mỗi giây". Đọc cùng dòng trạng thái: kiểm tra khởi động OK nhưng **0 trả lời** → ESC không trả lời (firmware ESC, hoặc ESC chưa nhận ra tín hiệu đảo); nhiều trả lời **hỏng** → thời điểm / bộ lọc của bộ thu; kiểm tra OK, có trả lời mà motor không quay → báo lại kèm hai dòng đó.
-- Kiểm chứng trên PC: `test_dshot` `[start-up check]` (4 tốc độ DShot × 2 độ phân giải: đọc lại đúng từng bit trên mọi chân; ESC trả lời khung kiểm tra khi chân đã nhả, không giành dây; bộ phát không ra chân / bộ thu điếc → "heard nothing"). **Kết quả trên mạch thật: chưa có.**
+- At boot, for each motor, the firmware has the receiver listen to the pin while the transmitter sends a "0" frame (an ESP32 pin can read back the level it is driving), then releases the pin as in flight and decodes the 16 bits received. Every bit correct on every pin → `motors: DShot/RMT direct, bidirectional (start-up check OK on 4 pins) x4`.
+- Wrong → **falls back to one-way DShot by itself** (the motors still spin, can still beep) and the `motors:` line gives the reason: `bidirectional OFF: start-up check, the receiver of motor N heard nothing (k words)` (the transmitter does not reach the pin or the receiver cannot hear the pin), `... not a DShot frame`, `... sent 0x...., heard 0x....`, or `bidirectional OFF: <ESP-IDF function> failed (<error code>)` when creating a channel / timer fails.
+- The Motor tab adds "Replies received / corrupt per second". Read together with the status line: start-up check OK but **0 replies** → the ESC is not replying (ESC firmware, or the ESC has not recognised the inverted signal); many **corrupt** replies → receiver timing / filter; check OK, replies coming but motors not spinning → report back with those two lines.
+- PC verification: `test_dshot` `[start-up check]` (4 DShot speeds × 2 resolutions: every bit read back correctly on every pin; the ESC replies to the check frame once the pin is released, no fighting over the line; transmitter not reaching the pin / deaf receiver → "heard nothing"). **Result on a real board: not available yet.**
 
-### 0.8.2: đổi chân kiểu esp-fc
-So với driver ESC của esp-fc (`lib/EscDriver/src/EscDriverEsp32.cpp`, chạy được DShot hai chiều trên ESP32-S3), khác biệt chính là cách đổi chiều chân. esp-fc **nối lại tín hiệu qua GPIO matrix mỗi lần đổi**: khi phát thì tắt đường vào, nối tín hiệu của bộ phát RMT, bật output (`enableTx`); khi nghe thì tắt output, bật đường vào, nối tín hiệu của bộ thu (`enableRx`). Bản 0.6 - 0.8.1 để cả hai tín hiệu nối thường trực và chỉ bật / tắt output enable. Từ 0.8.2 `RmtDirectPort::drive()` / `release()` làm đúng như esp-fc (thêm: output enable lấy từ bit GPIO_ENABLE, `OEN_SEL = 1`, để tắt output chắc chắn nhả dây). DShot **một chiều giữ nguyên** như cũ (đường đã chạy được trên mạch). Các thứ khác của esp-fc mình đã có tương đương: khung đảo + checksum đảo, chân kéo lên khi ESC nói, bộ lọc / ngưỡng rảnh của bộ thu, giải mã GCR (`value ^ (value >> 1)`). Khác còn lại: esp-fc bật bộ thu từ ngắt "phát xong" của RMT (driver cũ `driver/rmt.h`, không dùng chung được với driver mới mà Arduino-ESP32 3.x dùng); ở đây là một timer bắn 3 µs sau khung.
+### 0.8.2: esp-fc-style pin switching
+Compared with esp-fc's ESC driver (`lib/EscDriver/src/EscDriverEsp32.cpp`, which runs bidirectional DShot on the ESP32-S3), the main difference is how the pin direction is switched. esp-fc **re-routes the signal through the GPIO matrix on every switch**: when transmitting it disables the input path, connects the RMT transmitter's signal, enables output (`enableTx`); when listening it disables output, enables the input path, connects the receiver's signal (`enableRx`). Versions 0.6 - 0.8.1 left both signals permanently connected and only toggled output enable. Since 0.8.2 `RmtDirectPort::drive()` / `release()` do exactly what esp-fc does (plus: output enable taken from the GPIO_ENABLE bit, `OEN_SEL = 1`, so disabling the output surely releases the line). **One-way** DShot **stays as before** (the path already works on the board). The other esp-fc pieces already have equivalents here: inverted frame + inverted checksum, pin pulled up while the ESC talks, receiver filter / idle threshold, GCR decoding (`value ^ (value >> 1)`). The remaining difference: esp-fc enables the receiver from the RMT "transmit done" interrupt (old driver `driver/rmt.h`, which cannot be shared with the new driver that Arduino-ESP32 3.x uses); here it is a timer firing 3 µs after the frame.
 
-### 0.8.4 (đã gỡ ở 0.8.6)
-0.8.4 thêm một ngắt thứ hai mỗi khung để đẩy chân lên cao lại sau cửa sổ trả lời, đo mức dây và đọc lại khung khi đang chạy (theo `docs/HARDWARE_FEEDBACK_3.md`). Trên mạch, vòng lặp tụt từ ~5000 xuống ~4300 Hz, nên **0.8.6 trả `dshot_direct.h` về trình tự của 0.8.2 / 0.8.3** (đổi chân kiểu esp-fc, một ngắt mỗi khung, nhả chân tới khung sau); các trường `line_low` / `rb_ok` / `rb_bad` và hai dòng chẩn đoán ở tab Motor cũng gỡ theo. Thay cho việc giữ dây cao bằng phần mềm: điện trở kéo lên ngoài (mục dưới), dây nhả ra là lên cao ngay.
+### 0.8.4 (removed in 0.8.6)
+0.8.4 added a second interrupt per frame to drive the pin high again after the reply window, measure the line level and read back the frame while running (following `docs/HARDWARE_FEEDBACK_3.md`). On the board the loop dropped from ~5000 to ~4300 Hz, so **0.8.6 returned `dshot_direct.h` to the sequence of 0.8.2 / 0.8.3** (esp-fc-style pin switching, one interrupt per frame, pin released until the next frame); the `line_low` / `rb_ok` / `rb_bad` fields and the two diagnostic lines in the Motor tab were removed with it. Instead of holding the line high in software: an external pull-up resistor (section below), so the line goes high as soon as it is released.
 
-### 0.8.5: điện trở kéo lên ngoài
-`motors.ext_pullup` (tab Motor, "Có điện trở kéo lên ngoài"; lưu và khởi động lại): mạch đã có điện trở kéo dây tín hiệu lên 3,3 V (thường 1 – 4,7 kΩ), firmware **tắt** pull-up nội (~45 kΩ) của chân motor khi chạy DShot hai chiều. Dòng `motors:` của báo cáo khởi động ghi "internal / external pull-up". Với 2 kΩ: kéo dây xuống thấp tốn 1,65 mA, ESC kéo được dễ dàng; và dây nhả ra lên mức cao trong khoảng một phần mười micro giây thay vì vài micro giây. Kiểm chứng: `test_fw` nhóm `rxdiag` (cài đặt tới được driver). **Chưa thử trên mạch.**
+### 0.8.5: external pull-up resistor
+`motors.ext_pullup` (Motor tab, "External pull-up resistor fitted"; save and reboot): the board already has a resistor pulling the signal wire up to 3.3 V (typically 1 – 4.7 kΩ), and the firmware **disables** the internal pull-up (~45 kΩ) of the motor pins when running bidirectional DShot. The `motors:` line of the boot report says "internal / external pull-up". With 2 kΩ: pulling the line low costs 1.65 mA, which the ESC drives easily; and a released line rises to high in about a tenth of a microsecond instead of a few microseconds. Verification: `test_fw` group `rxdiag` (the setting reaches the driver). **Not yet tried on a board.**
 
-### 0.18.2: bộ thu không được thấy cạnh nào trước bit start
-Hiện tượng trên mạch (AM32): điện áp / dòng từ EDT vẫn có, rpm hầu như luôn 0, thỉnh thoảng mới có số. Điện áp được giữ 1 s, nhiệt độ giữ mãi, còn rpm chỉ hợp lệ 100 ms sau lần nhận cuối: chỉ cần vài phần trăm reply nhận đúng là điện áp vẫn hiện, còn rpm thì tắt liên tục. Vậy phần lớn reply bị mất, eRPM và EDT như nhau.
+### 0.18.2: the receiver must not see any edge before the start bit
+Symptom on the board (AM32): voltage / current from EDT still present, rpm almost always 0, only occasionally a number. Voltage is held for 1 s, temperature held forever, while rpm is only valid for 100 ms after the last reception: just a few percent of replies received correctly keep the voltage showing, while rpm keeps dropping out. So most replies are lost, eRPM and EDT alike.
 
-Nguyên nhân tìm được khi đọc lại trình tự (chưa đo trên mạch): đến 0.18.1, đường vào của chân bị tắt lúc phát (`PIN_INPUT_DISABLE`, chân đọc ra 0) và bật lại lúc nhả chân, rồi bộ thu khởi động ngay sau đó. Bước 0 → 1 đó đi qua bộ lọc nhiễu của RMT (¼ bit trả lời, 333 – 667 ns) nên tới bộ thu **sau** khi nó đã chạy, nhất là ở các kênh khởi động sau cùng. Bộ thu coi đó là cạnh đầu tiên, đo mức cao 27 µs trước reply, dài hơn ngưỡng rảnh (8 bit = 10,7 µs ở DShot600), và **dừng trước khi ESC kịp trả lời**. esp-fc cũng làm theo kiểu này; có thể nó chạy được nhờ ngưỡng rảnh khác, nhưng không chắc.
+Cause found while re-reading the sequence (not yet measured on a board): up to 0.18.1, the pin's input path was disabled while transmitting (`PIN_INPUT_DISABLE`, the pin reads 0) and re-enabled when the pin was released, with the receiver starting right after. That 0 → 1 step goes through the RMT noise filter (¼ of a reply bit, 333 – 667 ns) and so reaches the receiver **after** it has started, especially on the channels started last. The receiver takes it as the first edge, measures a 27 µs high level before the reply, longer than the idle threshold (8 bits = 10.7 µs at DShot600), and **stops before the ESC has a chance to reply**. esp-fc also works this way; it may get away with it thanks to a different idle threshold, but that is not certain.
 
-Sửa (khâu thu viết lại theo cách Betaflight làm trên STM32: thu cả cửa sổ, tìm bit start trong đó):
-- Đường vào của chân bật **một lần** ở `begin()` (`listen()`) và để nguyên. Chân ESP32 đọc lại mức nó đang phát; bộ thu dừng trong lúc mình phát nên không ảnh hưởng. `drive()` vẫn nối lại tín hiệu phát và bật output như esp-fc (bài học 0.8.2), `release()` chỉ tắt output.
-- Bộ thu khởi động **trước** khi nhả chân, lúc dây vẫn đang được giữ ở mức cao: lúc nhả chân cũng không có cạnh nào.
-- Giải mã `reply_from_runs()` (`motor_protocol.h`), theo `dshot_bitbang_decode.c` / `pwm_output_dshot_shared.c`: bỏ qua mọi thứ trước bit start (mức rảnh, xung nhiễu ngắn hơn nửa bit), các đoạn phải cộng lại 18 – 21 bit; chỉ đoạn mức **cao** được vượt bit 21 (đó là dây rảnh sau reply), đoạn mức thấp vượt bit 21 thì không phải reply (Betaflight: `bits != 21`). Một reply đúng luôn kết thúc ở mức cao (checksum cố định số lần đổi mức).
-- Đếm riêng lý do hỏng, gửi lên app mỗi giây (stream `motors`): `no_start` (cửa sổ không có bit start: vấn đề thời gian / đổi chân), `bad_bits` (có bit start nhưng số bit sai: nhiễu, cạnh chậm), `bad_crc` (bit sạch, checksum sai). Một lần thu không có bit start không tính là ESC trả lời.
-- App: cột RPM hiện "–" khi rpm cũ hơn 100 ms (`rpm_ok`), không hiện 0 nữa (0 dễ đọc thành "motor đứng").
+Fix (the receive stage rewritten the way Betaflight does it on STM32: capture the whole window, find the start bit in it):
+- The pin's input path is enabled **once** in `begin()` (`listen()`) and left alone. An ESP32 pin reads back the level it drives; the receiver is stopped while we transmit, so it has no effect. `drive()` still re-routes the transmit signal and enables output like esp-fc (the 0.8.2 lesson), `release()` only disables output.
+- The receiver starts **before** the pin is released, while the line is still held high: releasing the pin produces no edge either.
+- Decoding in `reply_from_runs()` (`motor_protocol.h`), following `dshot_bitbang_decode.c` / `pwm_output_dshot_shared.c`: ignore everything before the start bit (idle level, glitches shorter than half a bit), the segments must add up to 18 – 21 bits; only a **high** segment may run past bit 21 (that is the idle line after the reply), a low segment running past bit 21 is not a reply (Betaflight: `bits != 21`). A valid reply always ends at a high level (the checksum fixes the number of level changes).
+- Failure reasons are counted separately and sent to the app every second (`motors` stream): `no_start` (window has no start bit: a timing / pin switching problem), `bad_bits` (start bit present but wrong number of bits: noise, slow edges), `bad_crc` (clean bits, wrong checksum). A capture without a start bit does not count as the ESC replying.
+- App: the RPM column shows "–" when rpm is older than 100 ms (`rpm_ok`), no longer showing 0 (0 is easily read as "motor stopped").
 
-Rủi ro cần thử trên mạch: đường vào bật cả lúc phát là khác với esp-fc. Về điện thì nó chỉ bật bộ đệm vào, và kiểm tra lúc khởi động (`loopback()`) đã phát với đường vào bật từ 0.8.1. Nếu ESC không nhận khung nữa khi bật DShot hai chiều (motor không quay, không kêu) thì nguyên nhân là thay đổi này.
+Risk to try on the board: keeping the input path enabled while transmitting differs from esp-fc. Electrically it only enables the input buffer, and the start-up check (`loopback()`) has transmitted with the input path enabled since 0.8.1. If the ESCs stop accepting frames when bidirectional DShot is enabled (motors do not spin, do not beep), this change is the cause.
 
-## Motor wizard (0.20, như Betaflight Configurator 4.3+)
-Tab Motor, khối "Motor wizard": thứ tự motor và chiều quay được tìm bằng cách nhìn motor quay, không phải gõ số slot. Cột "Slot phần cứng" và công tắc "Đảo chiều" trong bảng "Từng motor" vẫn còn để sửa tay.
+## Motor wizard (0.20, like Betaflight Configurator 4.3+)
+Motor tab, "Motor wizard" block: motor order and spin direction are found by watching the motors spin, not by typing slot numbers. The "Hardware slot" column and the "Reverse" switch in the "Per motor" table are still there for manual editing.
 
-- **Điều kiện**: đã kết nối, chưa arm, đã đánh dấu "Đã tháo hết cánh quạt", và không có cài đặt nào đang chờ khởi động lại. Wizard chạy trên cấu hình motor đang chạy; đổi giao thức hay kiểu khung thì phải lưu và khởi động lại trước.
-- **Sắp xếp lại thứ tự**: lần lượt từng đầu ra quay chậm (ga đặt được, mặc định 8 %). Bạn bấm vào vị trí của motor đang quay trên hình. Sau motor cuối, app ghi `motors.order` mới. Firmware dùng thứ tự đó **ngay**, không cần khởi động lại; bấm "Lưu" để giữ.
-- **Chiều quay** (chỉ DShot): bấm vào một motor để nó quay (hoặc chọn "Quay tất cả"), rồi so với mũi tên trên hình. Quay ngược thì bấm "Đảo chiều motor này" (ở chế độ "Quay tất cả" thì bấm thẳng vào motor). App gửi lệnh 7 / 8 + 12 cho ESC và đặt `motors.reversed_mask`.
-- **An toàn**: lệnh test được làm mới mỗi 200 ms, firmware tự dừng motor nếu 0,5 s không được làm mới. Motor dừng khi bấm "Dừng", khi rời tab, khi cửa sổ bị ẩn, hoặc khi máy arm.
+- **Conditions**: connected, not armed, "All propellers removed" ticked, and no setting waiting for a reboot. The wizard works on the running motor configuration; changing the protocol or frame type requires saving and rebooting first.
+- **Reorder**: each output in turn spins slowly (adjustable throttle, default 8 %). You click the position of the spinning motor in the picture. After the last motor, the app writes the new `motors.order`. The firmware uses that order **immediately**, no reboot needed; press "Save" to keep it.
+- **Spin direction** (DShot only): click a motor to spin it (or choose "Spin all"), then compare with the arrow in the picture. If it spins the wrong way, press "Reverse this motor" (in "Spin all" mode, click the motor directly). The app sends commands 7 / 8 + 12 to the ESC and sets `motors.reversed_mask`.
+- **Safety**: the test command is refreshed every 200 ms, and the firmware stops the motor by itself if it is not refreshed for 0.5 s. The motor stops when "Stop" is pressed, when leaving the tab, when the window is hidden, or when the craft arms.
 
-Firmware: `FlightApp::apply_motor_order()`. Khi section `motors` được ghi, nếu so với lúc khởi động chỉ có `order` / `reversed_mask` đổi, thì thứ tự và chiều được áp ngay (`MotorOutputManager::set_order()`). Thứ tự phải là hoán vị của các motor, nếu không thì giữ thứ tự cũ. Có field khác đổi thì không áp gì cả và báo cần khởi động lại, như trước. Khi thứ tự thật sự đổi, lệnh test và lệnh DShot đang chờ (nhắm vào slot cũ) bị bỏ.
-Kiểm chứng: `test_motor` (`set_order`), `test_fw` nhóm motor test (thứ tự mới chạy ngay, slot đúng quay, thứ tự sai bị từ chối, đổi giao thức thì không áp), 7 mutant `wizard:`. Trang thật: `test_gui_browser.py::test_motor_wizard` (viết nhưng chưa chạy được trên máy này). **Chưa thử trên mạch.**
+Firmware: `FlightApp::apply_motor_order()`. When the `motors` section is written, if compared with boot only `order` / `reversed_mask` changed, the order and direction are applied immediately (`MotorOutputManager::set_order()`). The order must be a permutation of the motors, otherwise the old order is kept. If another field changed, nothing is applied and a reboot is reported as required, as before. When the order really changes, pending test commands and DShot commands (aimed at the old slots) are dropped.
+Verification: `test_motor` (`set_order`), `test_fw` motor-test group (new order takes effect immediately, the right slot spins, a wrong order is rejected, a protocol change is not applied), 7 `wizard:` mutants. Real page: `test_gui_browser.py::test_motor_wizard` (written but cannot run on this machine yet). **Not yet tried on a board.**
 
 ### Crash flip (0.42)
-Lúc arm vào crash flip, `MotorOutputManager` gửi DShot 21 cho mọi motor (10 lần), lúc hết thì gửi DShot 20. Các lệnh này quay motor so với chiều đã lưu trong ESC và không được lưu. Đây là trường hợp duy nhất có lệnh DShot gửi đi khi máy đang arm. Trong lúc lệnh chưa đi hết thì motor không nhận gì khác. Khi đang crash flip, motor có lệnh 0 thì đứng yên chứ không chạy idle. Xem `docs/MODES.md`, mục Crash flip.
+When arming into crash flip, `MotorOutputManager` sends DShot 21 to every motor (10 times), and DShot 20 when it ends. These commands spin the motors relative to the direction saved in the ESC and are not saved. This is the only case where DShot commands are sent while the craft is armed. Until the commands have all gone out, the motors receive nothing else. During crash flip, a motor commanded to 0 stands still rather than running at idle. See `docs/MODES.md`, Crash flip section.
 
-## Giao thức (0.8.2)
-- **ProShot1000** (Betaflight `loadDmaBufferProshot`): cùng gói 16 bit như DShot, gửi thành 4 xung nibble (nibble cao trước), mỗi xung trong ô 4 µs, mức cao 1 µs + nibble × 125 ns; 16 µs một khung. Chỉ một chiều. Mang được lệnh DShot (beacon, chiều quay...), như Betaflight coi ProShot là một giao thức DShot. Cần ESC hỗ trợ (BLHeli_32 có; BLHeli_S / Bluejay không).
-- **Brushed**: motor chổi than qua MOSFET, LEDC 16 kHz, 1000..2000 = 0..100 % duty.
-- DShot / ProShot: tối đa **4 motor** (4 bộ phát RMT của ESP32-S3), kể cả trên PC (`MotorSystem::kMaxDigitalMotors`); khung 6 / 8 motor dùng PWM / Oneshot / Multishot (LEDC, 8 kênh). Báo cáo khởi động nói rõ lý do.
+## Protocols (0.8.2)
+- **ProShot1000** (Betaflight `loadDmaBufferProshot`): the same 16-bit packet as DShot, sent as 4 nibble pulses (high nibble first), each pulse in a 4 µs slot, high level 1 µs + nibble × 125 ns; 16 µs per frame. One-way only. Can carry DShot commands (beacon, spin direction...), as Betaflight treats ProShot as a DShot protocol. Needs ESC support (BLHeli_32 has it; BLHeli_S / Bluejay do not).
+- **Brushed**: brushed motors through a MOSFET, LEDC 16 kHz, 1000..2000 = 0..100 % duty.
+- DShot / ProShot: up to **4 motors** (the ESP32-S3's 4 RMT transmitters), also on the PC (`MotorSystem::kMaxDigitalMotors`); 6 / 8 motor frames use PWM / Oneshot / Multishot (LEDC, 8 channels). The boot report states the reason.
 
-## Khung (layout, 0.8.2)
-Ngoài Quad X, Quad +, Hexa X (của bản này): các bảng của Betaflight (`mixer_init.c`, thứ tự motor và chiều cánh như Betaflight): Hexa + (HEX6), Hexa X thứ tự Betaflight (HEX6X), Hexa H, Y6, Y4, Octo X8, Octo phẳng + / X, V-tail, A-tail, và Quad X thứ tự 1234 (esp-fc). Mỗi trục chuẩn hoá để hệ số lớn nhất = 1 như ba khung cũ. `test_core` kiểm từng khung có hình học (không có V-tail / A-tail: motor nghiêng) với mô hình vật lý dựng từ vị trí motor và chiều cánh: lệnh roll / pitch / yaw quay đúng chiều, không lẫn sang trục khác, không đổi tổng lực đẩy (Y4: Betaflight để lẫn một chút sang yaw, chỉ kiểm chiều và tổng lực). Sơ đồ ở tab Motor vẽ motor dưới của cặp đồng trục lệch vào trong, có dấu ↓. **Chưa bay thử khung nào ngoài quad.**
+## Frames (layout, 0.8.2)
+Besides Quad X, Quad +, Hexa X (this project's own): Betaflight's tables (`mixer_init.c`, motor order and prop direction as in Betaflight): Hexa + (HEX6), Hexa X in Betaflight order (HEX6X), Hexa H, Y6, Y4, Octo X8, flat Octo + / X, V-tail, A-tail, and Quad X in 1234 order (esp-fc). Each axis is normalised so the largest coefficient = 1, like the three old frames. `test_core` checks every frame with a geometry (not V-tail / A-tail: tilted motors) against a physical model built from motor positions and prop directions: roll / pitch / yaw commands rotate the right way, do not leak into another axis, do not change total thrust (Y4: Betaflight leaks a little into yaw, only direction and total thrust are checked). The diagram in the Motor tab draws the lower motor of a coaxial pair offset inwards, with a ↓ mark. **No frame other than a quad has been test-flown.**
 
-## Giới hạn hiện tại (nói thẳng)
-1. **DShot tối đa 4 motor** trên S3 (RMT có 4 kênh TX, 4 kênh RX). Hexa / octo cần backend xuất song song (I2S / LCD-CAM), chưa làm. Xung PWM / Oneshot / Multishot (LEDC) tới 8 motor.
-2. **DShot hai chiều chưa được thử trên silicon** với driver mới (xem trên). Nếu không ra rpm, motor vẫn chạy; nếu motor không chạy, chọn driver ESP-IDF.
-3. Multishot 5 – 25 µs, Oneshot42 = giá trị / 24 là định nghĩa giao thức phổ biến; file pwm_output của Betaflight trong zip không có hằng số này để đối chiếu.
-4. Pin qua ESC (EDT voltage) cần ESC hỗ trợ và bật "Extended DShot telemetry".
-5. DShot300 là mặc định (dễ tính hơn 600 với dây dài).
-6. Xung lúc chưa arm của PWM / Oneshot / Multishot: `pulse_disarmed`, **0 = 1000 µs** (từ 0.18.1, `mincommand` của Betaflight; thấp hơn nếu `pulse_armed` < 1000). Không bao giờ "không phát": ESC chỉ arm sau khi thấy xung ga 0, và AM32 thấy ga cao trước (motor test) thì vào hiệu chuẩn ga.
-7. **AM32 chỉ nhận DShot và Servo PWM** (800 – 2200 µs), không nhận Oneshot125 / Oneshot42 / Multishot (`signal.c: detectInput`). Các giao thức đó dùng với BLHeli_S / BLHeli_32 / KISS.
-8. LEDC ghi thẳng thanh ghi (`port/pwm.h`, `hal/ledc_ll.h`, 0.18.1) thay vì `ledcAttach` / `ledcWrite` của Arduino: không còn gọi hàm trong flash mỗi chu kỳ. Các đầu ra cùng tần số + độ phân giải dùng chung một trong 4 timer.
+## Current limitations (frankly)
+1. **DShot up to 4 motors** on the S3 (RMT has 4 TX channels, 4 RX channels). Hexa / octo need a parallel output backend (I2S / LCD-CAM), not done yet. PWM / Oneshot / Multishot pulses (LEDC) up to 8 motors.
+2. **Bidirectional DShot has not been tried on silicon** with the new driver (see above). If no rpm comes out, the motors still run; if the motors do not run, choose the ESP-IDF driver.
+3. Multishot 5 – 25 µs, Oneshot42 = value / 24 are the common protocol definitions; the Betaflight pwm_output file in the zip does not have these constants to compare against.
+4. Battery via ESC (EDT voltage) needs ESC support and "Extended DShot telemetry" enabled.
+5. DShot300 is the default (more forgiving than 600 with long wires).
+6. Disarmed pulse for PWM / Oneshot / Multishot: `pulse_disarmed`, **0 = 1000 µs** (since 0.18.1, Betaflight's `mincommand`; lower if `pulse_armed` < 1000). Never "no output": an ESC only arms after seeing a zero-throttle pulse, and an AM32 that sees high throttle first (motor test) enters throttle calibration.
+7. **AM32 only accepts DShot and Servo PWM** (800 – 2200 µs), not Oneshot125 / Oneshot42 / Multishot (`signal.c: detectInput`). Those protocols are for BLHeli_S / BLHeli_32 / KISS.
+8. LEDC writes registers directly (`port/pwm.h`, `hal/ledc_ll.h`, 0.18.1) instead of Arduino's `ledcAttach` / `ledcWrite`: no more calls into flash functions every cycle. Outputs with the same frequency + resolution share one of the 4 timers.
 
-## Kiểm tra trên mạch (theo thứ tự, không lắp cánh)
-1. Tab Tổng quan, dòng Motor / ESC: `DShot/RMT direct` hay `DShot/RMT idf` hay `Pulse/LEDC`.
-2. Test từng motor ở ~5 %: đúng motor, đúng chiều? Nút "Kêu" cho biết motor nào là slot nào.
-3. Đảo chiều bằng công tắc "Đảo chiều" (lệnh DShot, chỉ khi chưa arm): BLHeli_S / Bluejay / BLHeli_32 dùng lệnh 7 / 8, AM32 dùng được cả 20 / 21.
-4. Bật DShot hai chiều, lưu, khởi động lại: dòng trạng thái dưới bảng motor ghi gì; cột RPM và "Lỗi telemetry"; "Khung bỏ qua", "Lượt trả lời bị lỡ". Gửi lại các số đó nếu không phải "đang chạy, mọi ESC đều trả lời".
+## Checks on the board (in order, props off)
+1. Overview tab, Motor / ESC line: `DShot/RMT direct` or `DShot/RMT idf` or `Pulse/LEDC`.
+2. Test each motor at ~5 %: right motor, right direction? The "Beep" button tells which motor is which slot.
+3. Reverse with the "Reverse" switch (DShot command, only while disarmed): BLHeli_S / Bluejay / BLHeli_32 use commands 7 / 8, AM32 accepts 20 / 21 as well.
+4. Enable bidirectional DShot, save, reboot: what does the status line under the motor table say; the RPM column and "Telemetry errors"; "Skipped frames", "Missed replies". Send those numbers back if it is not "running, every ESC replying".

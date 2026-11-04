@@ -1,57 +1,107 @@
-# Windburst Reworked
+# Windburst
 
-Firmware flight controller cho ESP32-S3 (RX/FC) + lớp giao tiếp với app. Tài liệu: `docs/ARCHITECTURE.md` (mục lục).
+[![CI](https://github.com/Ohminecraft/ProjectWindburst_Re/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohminecraft/ProjectWindburst_Re/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Ohminecraft/ProjectWindburst_Re?include_prereleases)](https://github.com/Ohminecraft/ProjectWindburst_Re/releases)
+[![Stars](https://img.shields.io/github/stars/Ohminecraft/ProjectWindburst_Re?style=flat)](https://github.com/Ohminecraft/ProjectWindburst_Re/stargazers)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![PlatformIO](https://img.shields.io/badge/PlatformIO-compatible-orange?logo=platformio)](https://platformio.org)
+[![Arduino framework](https://img.shields.io/badge/Arduino-framework-00979D?logo=arduino)](https://github.com/espressif/arduino-esp32)
+[![ESP32](https://img.shields.io/badge/ESP32-S3%20%7C%20classic%20%7C%20C5-E7352C?logo=espressif)](https://www.espressif.com)
 
-## Dùng nhanh
+**A modern flight controller firmware for the ESP32.** Windburst brings what the established open-source flight stacks do best -
+[Betaflight](https://github.com/betaflight/betaflight)'s rate loop and filters, [ArduPilot](https://github.com/ArduPilot/ardupilot)'s
+navigation modes, [PX4](https://github.com/PX4/PX4-Autopilot)'s failsafe design - to the ESP32-S3, ported from their real sources
+and tested against them, with a configurator that runs in your browser.
+
+[Tiếng Việt](README.vi.md) · [Documents](docs/ARCHITECTURE.md) · [Web flasher](https://ohminecraft.github.io/ProjectWindburst_Re/) · [Releases](https://github.com/Ohminecraft/ProjectWindburst_Re/releases)
+
+> **Status: experimental.** Everything below is tested on a PC (unit tests, closed-loop flight simulation, firmware-in-the-loop
+> against register-level sensor simulators, mutation testing) and compiles for every target. Hardware runs so far: ESP32-S3,
+> props off. **It has not flown yet.** Read the "Not verified" part of each document before you put propellers on.
+
+## What it does
+
+| | |
+|---|---|
+| **Flight core** | Betaflight's rate PID (feedforward, I-term relax, anti-gravity, TPA, throttle boost, simplified tuning sliders), gyro filters (dynamic lowpass, RPM filter, dynamic notch), RC smoothing; Angle (Betaflight), Stabilize (ArduPilot), Acro trainer, Airmode; runaway take-off prevention, motor stall detection |
+| **Flying styles** | **FPV** - every mode on a switch, Acro included. **Flycam** - like a commercial camera drone: always self-leveling, height and position held, throttle stick centred = hover |
+| **Navigation** | Altitude Hold (baro / lidar / GPS, ArduPilot-style controller, learned hover throttle), Position Hold, **Loiter** (ArduCopter), GPS Rescue / RTL / Smart RTL / Land, missions (waypoints, deliveries with servo drops), geofence, optical flow (PMW3901, MicoAir MTF-01) |
+| **Safety** | PX4-style failsafe framework (link, switch, battery warning / critical: hold, RTL, land, drop), arming checks with a reason for every refusal, **crash flip** (Betaflight turtle mode) |
+| **Sensors** | 14 IMUs (ICM-426xx/456xx, BMI270, MPU6xxx ...; dual IMU), BMP280 / BMP388 / MS5611 barometers, QMC5883 / HMC5883 / RM3100 / AK8963 compasses with automatic calibration, VL53L0X / L1X lidars, u-blox / NMEA GPS, DroneCAN sensors |
+| **Motors** | DShot 150 - 1200 (bidirectional, extended telemetry), ProShot, PWM / Oneshot / Multishot, DroneCAN ESCs; 14 frame layouts; ESC passthrough for BLHeliSuite / ESC Configurator |
+| **Radio** | CRSF / ELRS (with telemetry, and ELRS MAVLink mode), SBUS, IBUS, Spektrum, PPM, PWM; a DIY ESP32-C5 transmitter with nRF24 |
+| **Ground station** | MAVLink 2 telemetry and control (missions, modes, arm / disarm, PID / rate / filter tuning as parameters) - works with Mission Planner and QGroundControl; MSP DisplayPort OSD; CRSF telemetry |
+| **Logging** | Blackbox to internal flash or SD card, live log streaming, PID step-response analysis in the app |
+| **Configurator** | A browser app (English / Vietnamese): every setting, live sensor views, motor test and wizard, calibrations, mission planner on a map, log viewer. It talks to the firmware it is built with **and to every older release** |
+
+## Get started
+
+**Flash** - from the browser: the [web flasher](https://ohminecraft.github.io/ProjectWindburst_Re/) (ESP32 boards), or with PlatformIO:
 
 ```
-# 1. Nạp firmware (PlatformIO). rx_s3 = module ESP32-S3 N16R8, app qua cầu USB-UART; rx_s3_usb = cùng module, app qua cổng USB của chính
-#    ESP32-S3 (nhanh hơn nhiều); module N8 không PSRAM: -e rx_s3_n8. Xem docs/BOARD_N16R8.md
-pio run -e rx_s3 -t upload
+pio run -e rx_esp32_s3 -t upload        # ESP32-S3 N16R8 flight controller (rx_esp32: classic ESP32, tx_c5: the DIY transmitter)
+```
 
-# 2. Configurator đồ họa (liên kết là NHỊ PHÂN - đóng serial monitor trước)
+**Configure** - the configurator (Python 3, pyserial):
+
+```
 cd app && pip install -r requirements.txt
-python -m wbclient gui                                   # mở trình duyệt; chọn cổng COM và baud trong trang (giao diện Việt / Anh)
-
-# 3. Hoặc dòng lệnh, cùng các thao tác đó
-python -m wbclient --port COM5 info                      # cảm biến nào tìm thấy / vì sao không
-python -m wbclient --port COM5 set pins imu_cs=10 imu_miso=13 imu_mosi=11 imu_sck=12 i2c_sda=8 i2c_scl=9 rx_rx=16 gps_rx=17 gps_tx=18
-python -m wbclient --port COM5 set pins motor[0]=4 motor[1]=5 motor[2]=6 motor[3]=7
-python -m wbclient --port COM5 set modes mode[0]=ARM aux[0]=0 lo[0]=1700 hi[0]=2100
-python -m wbclient --port COM5 save
-python -m wbclient --port COM5 reboot
-python -m wbclient --port COM5 monitor status,attitude,rc   # hoặc: monitor nav,estimate (optical flow, Position Hold, GPS Rescue)
-python -m wbclient --port COM5 calibrate acc             # rồi: calibrate level, calibrate mag
-python -m wbclient --port COM5 blackbox download         # log chuyến bay (.wblog) về máy; xem bằng tab Blackbox của GUI
-```
-(Số chân ở trên chỉ là ví dụ — nhập chân thật của mạch bạn. Tab "Chân và cổng" có nút "Điền bộ chân gợi ý" cho DevKitC N16R8.)
-
-## Không có mạch
-
-```
-make test        # toàn bộ test firmware trên PC (g++), kể cả firmware-in-the-loop
-make sim         # build/wb_sim: firmware thật trên mạch ảo
-build/wb_sim &
-cd app && python -m wbclient gui                          # bấm "Tìm cổng", chọn "Mô phỏng wb_sim"
-cd app && python -m wbclient --port socket://127.0.0.1:5760 info
-make apptest     # client Python <-> wb_sim (cần pyserial, pytest)
+python -m wbclient gui                   # opens the page; pick the port and the baud rate there
+python -m wbclient --port COM5 info      # or the command line: the same operations
 ```
 
-## Trạng thái
+The link is binary: close any serial monitor first. The pin map is set in the "Pins and ports" tab (there is a suggested set for the DevKitC N16R8).
 
-Có: lõi bay với vòng rate và chuỗi lọc của Betaflight (PID đầy đủ, thanh trượt tune, lowpass động, RPM filter, dynamic notch, feedforward, RC smoothing), Angle (Betaflight) và Stabilize (ArduPilot), Altitude Hold tự đo ga treo, failsafe có nguyên nhân và trả quyền, chặn runaway lúc cất cánh, level trim khi bay, 14 loại IMU, motor (DShot một / hai chiều, PWM), baro, lidar, GPS, la bàn, receiver CRSF / SBUS / IBUS / Spektrum / PPM / PWM (bản 0.8.0), telemetry CRSF về tay phát (0.8.0), đo pin, đo dòng / mAh (0.8.0), servo theo kênh RC (0.7.1, `docs/SERVO.md`), bảng cổng UART (0.8.0, `docs/PORTS.md`), tiếng báo bằng còi hoặc bằng motor, blackbox ra flash hoặc thẻ SD, vòng điều khiển trong task riêng với số đo thời gian từng khâu, **optical flow (PMW3901, cảm biến MSP như MTF-01), Position Hold (flow + lidar, hoặc GPS + la bàn) và GPS Rescue (bản 0.7.0, xem `docs/NAV.md`)**, configurator 13 tab. Cách tune: `docs/TUNING.md`. Tay phát DIY ESP32-C5 + receiver nRF24 trên bus SPI thứ hai (0.38, `docs/TX.md`, chưa thử trên mạch). Chưa có: bind Spektrum, receiver nRF24 trên STM32.
-
-Bản 0.5 đã chạy trên mạch thật (ESP32-S3 N16R8, không cánh); các lỗi lộ ra ở lần đó và cách bản 0.6 xử lý: **`docs/HARDWARE_FEEDBACK_1.md`** (đọc mục 8 trước khi nạp: hai mục cấu hình phải nhập lại). Log đầu tiên của bản 0.6.1 trên mạch (thử không cánh: vì sao motor lệch nhau, và hai lỗi nó làm lộ ra): **`docs/HARDWARE_FEEDBACK_2.md`**. Bản 0.6.1 đã chạy trên mạch đó (không cánh): arm, receiver CRSF, DShot600 ra bốn motor và ghi log trực tiếp qua USB hoạt động; vòng lặp đo được khoảng 3300 Hz trên 4000. Những gì 0.6.2 đổi sau log đó, toàn bộ bản 0.7.0 (optical flow, Position Hold, GPS Rescue), servo (0.7.1 / 0.7.2), toàn bộ 0.8.0 (đo dòng, receiver Spektrum / PPM / PWM, telemetry CRSF, bảng cổng), và mọi thứ chưa được nhắc ở đây (DShot hai chiều, ghi log vào flash / thẻ SD, Altitude Hold, failsafe, **bay thật**), mới được kiểm chứng trên PC và biên dịch cho ESP32-S3. Xem `docs/HANDOFF.md` (bảng tiến trình) và mục "Chưa kiểm chứng" trong từng tài liệu trước khi lắp cánh.
-
-## English (short)
-
-Windburst is a flight controller firmware for the ESP32-S3 with a configurator that runs in your browser (Vietnamese / English).
+**No board?** The real firmware runs on a simulated board:
 
 ```
-pio run -e rx_s3 -t upload                 # flash the firmware (ESP32-S3 N16R8 module; -e rx_s3_usb = app over the chip's own USB; -e rx_s3_n8 = 8 MB module without PSRAM)
-cd app && pip install -r requirements.txt   # pyserial
-python -m wbclient gui                      # opens the configurator; pick the COM port and baud rate in the page
+make sim && build/wb_sim                 # then choose "Simulator wb_sim" in the configurator's port list
+make test                                # every firmware test on the PC (g++), firmware-in-the-loop included
 ```
-No board: `make sim && build/wb_sim`, then choose "Simulator wb_sim" in the port list. The link is binary: close any serial monitor first.
-Tests: `make test` (firmware on the PC), `make apptest` (app and GUI against the simulated firmware). The documents in `docs/` are in Vietnamese.
-Status: version 0.5 has run on a real ESP32-S3 board (props off); what that showed and what 0.6 changed is in `docs/HARDWARE_FEEDBACK_1.md`. The first log from 0.6.1 on the board is analysed in `docs/HARDWARE_FEEDBACK_2.md`. Version 0.6.1 has run on that board with the props off (arming, CRSF receiver, DShot600 output, live logging over USB; the loop reached about 3300 Hz of 4000). What 0.6.2 changed after that log, all of 0.7.0 (optical flow, Position Hold, GPS Rescue: `docs/NAV.md`), the servos (0.7.1 / 0.7.2) and all of 0.8.0 (current sensing, Spektrum / PPM / PWM receivers, CRSF telemetry, the serial port table), and everything else (bidirectional DShot, logging to flash / SD card, Altitude Hold, failsafe, **actual flight**), is tested on the PC and compiled for the ESP32-S3 only.
+
+## Targets
+
+| Board | Status |
+|---|---|
+| ESP32-S3 (N16R8 / N8) | **main target** |
+| ESP32 classic (4 MB) | builds; fewer features fit |
+| ESP32-C5 | the DIY transmitter |
+| STM32 F405 / F412 / G4 / H5 / C5 | ⚠️ **experimental** |
+
+> ⚠️ **STM32 is experimental.** The STM32 builds exist so the code stays portable; they have seen far less testing than the ESP32-S3
+> build. For an STM32 flight controller you intend to fly, use a firmware with years of flight history:
+> [Betaflight](https://betaflight.com), [ArduPilot](https://ardupilot.org), [INAV](https://github.com/iNavFlight/inav) or [PX4](https://px4.io).
+
+## Documents
+
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is the table of contents. The documents are in English; the Vietnamese originals are in [docs/vi](docs/vi).
+Each feature's document ends with what has been verified and what has not.
+
+## Contributing
+
+Interested? Help is welcome - flight tests and logs, a board you can test on, reviews against the reference firmware, drivers,
+documents and translations. Open an issue or a pull request. The ground rules:
+
+- every change comes with its tests (`make test`; the app's tests: `make apptest`), and a feature's document says what is verified;
+- algorithms follow a named reference (Betaflight, ArduPilot, PX4, INAV) - say which file you read;
+- the protocol has one source: `protocol/wbp_schema.json` (`python tools/gen_proto.py` writes the firmware's and the app's side).
+
+## Credits
+
+Windburst stands on the work of these projects. Where code was ported, the file says from where.
+
+- [Betaflight](https://github.com/betaflight/betaflight) - rate loop, PID, filters, mixer, DShot, RC smoothing, MSP, crash flip, CRSF, OSD (GPL-3.0)
+- [ArduPilot](https://github.com/ArduPilot/ardupilot) - Altitude Hold, Loiter, Position Hold, land detector, baro altitude, EKF3 optical flow, missions (GPL-3.0)
+- [PX4 Autopilot](https://github.com/PX4/PX4-Autopilot) - failsafe framework, EKF2 optical flow, sensor drivers (BSD-3-Clause)
+- [INAV](https://github.com/iNavFlight/inav) - optical flow calibration, MSP sensors, navigation (GPL-3.0)
+- [ExpressLRS](https://github.com/ExpressLRS/ExpressLRS) - CRSF and the MAVLink link mode (GPL-3.0)
+- [MAVLink](https://github.com/mavlink/mavlink) and [pymavlink](https://github.com/ArduPilot/pymavlink) - the protocol and its test vectors
+- [DroneCAN](https://dronecan.github.io) - CAN sensors and ESCs
+- [esp-fc](https://github.com/rtlopez/esp-fc) - ESP32 flight controller ideas and pin layouts
+- [Bitcraze Crazyflie firmware](https://github.com/bitcraze/crazyflie-firmware) - PMW3901 handling
+- [Bluejay](https://github.com/bird-sanctuary/bluejay), [AM32](https://github.com/am32-firmware/AM32), BLHeli - the ESC side of DShot
+- [ESP Web Tools](https://github.com/esphome/esp-web-tools) - the web flasher
+
+## License
+
+[GPL-3.0](LICENSE). Windburst contains code ported from GPL-3.0 projects (Betaflight, ArduPilot, INAV), so the whole firmware is GPL-3.0.

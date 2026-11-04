@@ -35,6 +35,7 @@
 #include "../telemetry/mavlink_gcs.h"
 #include "../osd/osd.h"
 #include "../proto/wbp_fields.h"
+#include "../proto/wbp_params.h"
 #include "exchange.h"
 #include "sync.h"
 #include "link_host.h"
@@ -153,6 +154,10 @@ public:
             HardwareConfig::setAppPins(hp);
         }
         check_pins();
+
+        init_msg = true;
+        say(true, "", "================ Start Initialization ================", "", "");
+        init_msg = false;
 
         // ---- IMU: SPI when a chip-select pin exists, otherwise I2C on the shared sensor bus
         uint8_t spi[4]; hw.getSPIAccGyroSensorPins(spi);
@@ -1559,7 +1564,9 @@ private:
     void say(bool ok, const char* what, const char* name, const char* why, const char* fmt, ...) {
         if (n_report_ >= kReportLines) return;
         char* line = report_[n_report_]; report_ptr_[n_report_] = line; n_report_++;
-        int n = snprintf(line, kReportLen, "%s: ", what);
+        int n;
+        if (!init_msg) n = snprintf(line, kReportLen, "%s: ", what);
+        else n = snprintf(line, kReportLen, "%s", name);
         if (!ok) { snprintf(line + n, kReportLen - n, "FAILED - %s", (why && *why) ? why : "not detected"); return; }
         va_list ap; va_start(ap, fmt); vsnprintf(line + n, kReportLen - n, fmt, ap); va_end(ap);
         (void)name;
@@ -1651,6 +1658,58 @@ private:
             a.tel_.fw_saved_section = wbp::SEC_MISSION; a.tel_.fw_saved_seq++;
             return true;
         }
+        // 0.43: the tuning as MAVLink parameters (wbp_params.h: the sections pid, rates, filters), in the units the app shows. A set
+        // value takes effect at once (the sections are live) and is kept in the flash once disarmed (flash writes stall the flight).
+        int param_count() const override { return wbp::kParamCount; }
+        bool param_get(int i, char id[17], float& v) const override {
+            if (i < 0 || i >= wbp::kParamCount) return false;
+            const wbp::ParamInfo& p = wbp::kParams[i]; strncpy(id, p.name, 16); id[16] = 0;
+            app::Guard g(*a.sync_); v = raw_of(p) * p.scale; return true;
+        }
+        bool param_set(int i, float v) override {
+            if (i < 0 || i >= wbp::kParamCount || !isfinite(v)) return false;
+            const wbp::ParamInfo& p = wbp::kParams[i];
+            double r = (double)v / (double)p.scale;
+            if (p.type != wbp::PT_F32) r = floor(r + 0.5);
+            double lo, hi;
+            switch (p.type) { case wbp::PT_BOOL: lo = 0; hi = 1; break; case wbp::PT_U8: lo = 0; hi = 255; break; case wbp::PT_U16: lo = 0; hi = 65535; break;
+                              case wbp::PT_I16: lo = -32768; hi = 32767; break; case wbp::PT_U32: lo = 0; hi = 4294967295.0; break; case wbp::PT_I32: lo = -2147483648.0; hi = 2147483647.0; break;
+                              default: lo = -3.4e38; hi = 3.4e38; break; }
+            if (p.min <= p.max) { lo = lo > p.min ? lo : p.min; hi = hi < p.max ? hi : p.max; }
+            r = r < lo ? lo : (r > hi ? hi : r);
+            app::Guard g(*a.sync_);
+            // a gain / a filter set by hand: the slider that computes it lets go (Betaflight Configurator does the same), or it would
+            // overwrite the value at once (settings_rules.h)
+            if (p.section == wbp::SEC_PID && p.offset >= offsetof(wbp::S_pid, p) && p.offset < offsetof(wbp::S_pid, iterm_relax)) a.s_->pid.slider_mode = wbp::SLIDER_MODE_OFF;
+            if (p.section == wbp::SEC_FILTERS) {
+                if (p.offset >= offsetof(wbp::S_filters, gyro_lpf1_static_hz) && p.offset <= offsetof(wbp::S_filters, gyro_lpf2_hz)) a.s_->filters.slider_gyro = 0;
+                if (p.offset >= offsetof(wbp::S_filters, dterm_lpf1_static_hz) && p.offset <= offsetof(wbp::S_filters, dterm_lpf2_hz)) a.s_->filters.slider_dterm = 0;
+            }
+            uint8_t* b = wbp::section_ptr(*a.s_, p.section) + p.offset;
+            switch (p.type) {
+            case wbp::PT_U8: case wbp::PT_BOOL: { const uint8_t x = (uint8_t)r; memcpy(b, &x, 1); break; }
+            case wbp::PT_U16: { const uint16_t x = (uint16_t)r; memcpy(b, &x, 2); break; }
+            case wbp::PT_I16: { const int16_t x = (int16_t)r; memcpy(b, &x, 2); break; }
+            case wbp::PT_U32: { const uint32_t x = (uint32_t)r; memcpy(b, &x, 4); break; }
+            case wbp::PT_I32: { const int32_t x = (int32_t)r; memcpy(b, &x, 4); break; }
+            default: { const float x = (float)r; memcpy(b, &x, 4); break; }
+            }
+            wbp::validate_section(*a.s_, p.section); wbp::apply_rules(*a.s_, p.section);      // (the section's own rules, as for the app's writes and the next boot)
+            a.apply_live(p.section);
+            a.tel_.fw_saved_mask |= 1u << p.section; a.tel_.fw_saved_section = p.section; a.tel_.fw_saved_seq++;
+            return true;
+        }
+        float raw_of(const wbp::ParamInfo& p) const {
+            const uint8_t* b = wbp::section_ptr(*a.s_, p.section) + p.offset;
+            switch (p.type) {
+            case wbp::PT_U8: case wbp::PT_BOOL: return (float)b[0];
+            case wbp::PT_U16: { uint16_t x; memcpy(&x, b, 2); return (float)x; }
+            case wbp::PT_I16: { int16_t x; memcpy(&x, b, 2); return (float)x; }
+            case wbp::PT_U32: { uint32_t x; memcpy(&x, b, 4); return (float)x; }
+            case wbp::PT_I32: { int32_t x; memcpy(&x, b, 4); return (float)x; }
+            default: { float x; memcpy(&x, b, 4); return x; }
+            }
+        }
     };
     MavVehicle mav_vehicle_{*this}; mav::Gcs gcs_; mav::Parser gcs_parser_;
     uint8_t mav_rseq_want_ = 0, mav_rseq_ = 0, mav_rres_ = 0; bool mav_rwait_ = false; uint32_t mav_rwait_ms_ = 0;      // a ground station's arm / disarm on its way through the flight loop
@@ -1727,4 +1786,6 @@ private:
     escs::Poller esc_poll_; port::SerialPort* esc_uart_ = nullptr; uint32_t esc_mark_[3] = {};      // ESC telemetry wire
     fc::CoreOutput last_out_;
     uint32_t trim_ms_ = 0;
+
+    bool init_msg = false;
 };

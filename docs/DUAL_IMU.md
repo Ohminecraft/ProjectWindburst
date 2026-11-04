@@ -1,34 +1,34 @@
-# Hai IMU (0.14.0)
+# Two IMUs (0.14.0)
 
-Mạch có hai chip IMU, giống `gyro_to_use` của Betaflight. Chip thứ hai nằm **trên cùng bus SPI** với chip đầu (chung SCK / MISO / MOSI) và có chân CS riêng.
+The board has two IMU chips, like Betaflight's `gyro_to_use`. The second chip sits **on the same SPI bus** as the first (shared SCK / MISO / MOSI) and has its own CS pin.
 
-| Setting | Ý nghĩa |
+| Setting | Meaning |
 |---|---|
-| `pins.imu2_cs` | CS của IMU thứ hai (tab Chân, nhóm "IMU thứ hai"). Để 255 nghĩa là không có IMU thứ hai |
-| `sensors.gyro_use` | `FIRST` (mặc định): bay bằng IMU 1, IMU 2 dự phòng. `SECOND`: bay bằng gyro của IMU 2. `BOTH`: lấy trung bình hai gyro (nhiễu không tương quan, còn khoảng 1/√2) |
-| `sensors.imu2_align` | hướng chip thứ hai trên mạch (Betaflight `gyro_2_sensor_align`). Phần chỉnh tinh của mạch (`board_trim_*`) áp dụng cho cả hai chip |
+| `pins.imu2_cs` | CS of the second IMU (Pins tab, "Second IMU" group). 255 means there is no second IMU |
+| `sensors.gyro_use` | `FIRST` (default): fly on IMU 1, IMU 2 as backup. `SECOND`: fly on IMU 2's gyro. `BOTH`: average the two gyros (uncorrelated noise, reduced to about 1/√2) |
+| `sensors.imu2_align` | orientation of the second chip on the board (Betaflight `gyro_2_sensor_align`). The board fine trim (`board_trim_*`) applies to both chips |
 
-## Cách chạy (`src/hal/acc_gyro/imu_select.h`, `imusel::Selector`)
-- **FIRST**: mỗi chu kỳ đọc IMU 1. IMU 2 được đọc mỗi 8 chu kỳ để biết nó còn sống và để hiệu chuẩn bias gyro của nó. Chu kỳ nào IMU 1 không trả lời thì đọc IMU 2 ngay trong chu kỳ đó.
-- **SECOND / BOTH**: đọc cả hai chip mỗi chu kỳ. Thời gian bus SPI tăng gấp đôi (xem "đọc IMU" ở tab Tổng quan).
-- **Gia tốc kế** luôn lấy từ IMU 1, là chip được hiệu chuẩn 6 mặt. Gia tốc của IMU 2 chỉ dùng khi IMU 1 không trả lời; lúc đó nó không có hiệu chuẩn riêng (offset 0, scale 1).
-- **Chip hỏng**: thiếu một mẫu thì chu kỳ đó lấy từ chip kia. Thiếu 20 mẫu liên tiếp thì chip bị đánh dấu **LOST** và không được đọc lại chừng nào chip kia còn chạy, để tránh nhảy qua lại giữa hai chip lệch nhau. Chỉ khi không còn chip nào thì chip LOST mới được thử lại. Cả hai cùng im 20 chu kỳ thì disarm khẩn cấp, giống khi chỉ có một IMU.
-- **Hiệu chuẩn gyro** lúc khởi động và lệnh từ app chạy trên cả hai chip. Arm chỉ cần các chip mà mode đang bay đã hiệu chuẩn xong.
-- Tần số gyro: với `SECOND` / `BOTH`, `loop_hz` bị giới hạn theo chip chậm hơn.
+## How it runs (`src/hal/acc_gyro/imu_select.h`, `imusel::Selector`)
+- **FIRST**: every cycle reads IMU 1. IMU 2 is read every 8 cycles to know it is still alive and to calibrate its gyro bias. In any cycle where IMU 1 does not answer, IMU 2 is read within that same cycle.
+- **SECOND / BOTH**: both chips are read every cycle. SPI bus time doubles (see "IMU read" in the Overview tab).
+- The **accelerometer** always comes from IMU 1, the chip that has the 6-face calibration. IMU 2's accelerometer is only used when IMU 1 does not answer; it then has no calibration of its own (offset 0, scale 1).
+- **Failed chip**: a missing sample means that cycle takes the other chip's. 20 missing samples in a row mark the chip **LOST**, and it is not read again as long as the other chip keeps running, to avoid flipping between two chips that disagree. Only when no chip is left is a LOST chip retried. Both silent for 20 cycles triggers an emergency disarm, as with a single IMU.
+- **Gyro calibration** at startup and the command from the app run on both chips. Arming only requires the chips the current flight mode uses to have finished calibrating.
+- Gyro rate: with `SECOND` / `BOTH`, `loop_hz` is limited by the slower chip.
 
-## Giới hạn
-- Chỉ hỗ trợ SPI dùng chung bus. Không hỗ trợ IMU thứ hai trên I2C hoặc trên bus SPI riêng.
-- IMU 1 không có hoặc chạy I2C thì IMU 2 không chạy (báo trong báo cáo khởi động).
-- Không so hai gyro để tự phát hiện chip "nói sai" (chip vẫn trả lời nhưng số sai). Chỉ phát hiện chip ngừng trả lời hoặc bị đơ.
-- `bus_spi.h` thêm `SPIInitShared()`: thiết bị thứ hai dùng lại `SPIClass` của thiết bị đầu và không gắn lại chân. Trên ESP32, tạo `SPIClass` thứ hai cho cùng host sẽ giành chân của cái đầu.
-- Settings: section `pins` thêm 1 byte. Pin map của 0.11 (47 byte), 0.8 – 0.10 (46) và 0.7.1 (37) vẫn nạp được. Pin map của 0.7.0 trở về trước (33 byte) **không còn nạp được** (mỗi section chỉ giữ ba kích thước cũ). Section `sensors` 16 byte cũ nạp được.
+## Limitations
+- Only a shared SPI bus is supported. A second IMU on I2C or on a separate SPI bus is not supported.
+- If IMU 1 is absent or runs on I2C, IMU 2 does not run (reported in the boot report).
+- The two gyros are not compared to detect a chip that "lies" (still answers but with wrong numbers). Only a chip that stops answering or freezes is detected.
+- `bus_spi.h` adds `SPIInitShared()`: the second device reuses the first device's `SPIClass` and does not re-attach the pins. On the ESP32, creating a second `SPIClass` for the same host steals the first one's pins.
+- Settings: the `pins` section gains 1 byte. Pin maps from 0.11 (47 bytes), 0.8 – 0.10 (46) and 0.7.1 (37) still load. Pin maps from 0.7.0 and earlier (33 bytes) **no longer load** (each section only keeps three old sizes). The old 16-byte `sensors` section loads.
 
 ## App
-- Tab Chân: nhóm "IMU thứ hai" (CS). Có cảnh báo khi IMU 1 không ở SPI.
-- Tab Cảm biến: "Dùng gyro nào", "Hướng chip IMU thứ hai", và dòng "IMU thứ hai". Dòng này cho biết trạng thái, chip mà vòng bay đang dùng, và gyro IMU 2 cạnh gyro IMU 1. Xoay máy bằng tay: hai bộ số phải giống nhau, nếu khác là sai hướng chip.
-- Stream `sensors`: `gyro2[3]`, `imu2` (NONE / OK / FAILED / LOST), `gyro_src` (IMU1 / IMU2). Health thêm bit `IMU2`.
+- Pins tab: "Second IMU" group (CS). Warns when IMU 1 is not on SPI.
+- Sensors tab: "Which gyro to use", "Second IMU chip orientation", and the "Second IMU" line. This line shows the status, the chip the flight loop is using, and IMU 2's gyro next to IMU 1's gyro. Rotate the craft by hand: the two sets of numbers must match; if they differ, the chip orientation is wrong.
+- Stream `sensors`: `gyro2[3]`, `imu2` (NONE / OK / FAILED / LOST), `gyro_src` (IMU1 / IMU2). Health gains the `IMU2` bit.
 
-## Kiểm thử
-- `test_accgyro` nhóm "two IMUs": `Selector` với hai chip giả lập (chọn chip, dự phòng, LOST, quay lại).
-- `test_fw` nhóm `dualimu` (`WB_ONLY=dualimu`): chip thứ hai xoay 90° trên bảng mạch ảo. Kiểm báo cáo khởi động, bias, IMU 2 khớp IMU 1 khi lăn, IMU 1 chết giữa chuyến bay mà vẫn bay thăng bằng bằng IMU 2, BOTH / SECOND, CS không có chip, CS trùng.
-- `test_proto`: kích thước cũ của `pins` / `sensors`. Mutant: `python3 tools/mutate.py imu2` (12 mutant).
+## Tests
+- `test_accgyro` group "two IMUs": `Selector` with two simulated chips (chip selection, backup, LOST, return).
+- `test_fw` group `dualimu` (`WB_ONLY=dualimu`): the second chip rotated 90° on the virtual board. Checks the boot report, bias, IMU 2 matching IMU 1 when rolling, IMU 1 dying mid-flight while still flying level on IMU 2, BOTH / SECOND, CS with no chip, duplicate CS.
+- `test_proto`: old sizes of `pins` / `sensors`. Mutants: `python3 tools/mutate.py imu2` (12 mutants).

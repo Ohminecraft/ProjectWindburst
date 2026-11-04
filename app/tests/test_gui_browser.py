@@ -1,6 +1,7 @@
 """The configurator page in a real (headless) browser, talking to the real firmware in wb_sim.
 Needs the optional `playwright` package with a Chromium (pip install playwright && playwright install chromium); skipped otherwise."""
 import json
+import os
 import re
 import time
 
@@ -110,6 +111,19 @@ def sim_stm32(tmp_path):
 @pytest.fixture
 def gui_stm32(browser, sim_stm32):
     yield from _gui(browser, sim_stm32, "vi-VN")
+
+
+@pytest.fixture
+def gui_old(browser, tmp_path):
+    """0.43: the page against an OLDER firmware - the simulator of the firmware version in WB_OLD_SIM (build it from that version's
+    sources: `git worktree add <dir> <commit>` + `make sim` there; the test is skipped without it)."""
+    from conftest import Sim
+    exe = os.environ.get("WB_OLD_SIM")
+    if not exe:
+        pytest.skip("WB_OLD_SIM not set (an older firmware's wb_sim)")
+    s = Sim(tmp_path, speed=1.0, exe=exe)
+    yield from _gui(browser, s, "vi-VN")
+    s.stop()
 
 
 @pytest.fixture
@@ -227,12 +241,61 @@ def test_loiter_on_the_page(gui):
     gui.tab("modes")
     lo = pg.locator('[data-mode="LOITER"]')
     lo.wait_for(timeout=8000)
-    assert "Loiter" in lo.inner_text() and "Altitude Hold" in lo.inner_text()
+    assert "Loiter" in lo.inner_text() and "Altitude Hold" in lo.text_content()
     gui.tab("nav")
     pg.wait_for_selector('[data-field="nav.loiter_speed"]', timeout=8000)
     assert gui.setting("nav", "loiter_speed") == 12.5
     gui.type_into("nav.loiter_speed", "4")
     gui.wait(lambda: gui.setting("nav", "loiter_speed") == 4.0, what="loiter_speed stored: %s" % gui.setting("nav", "loiter_speed"))
+
+
+def test_long_help_behind_a_question_mark(gui):
+    # a long help text sits behind a "?" next to the control and shows on hover / keyboard focus / tap; a short one stays under it
+    pg = gui.connect().page
+    gui.tab("motors")
+    tip = pg.locator('[data-help-for="motors.crashflip_auto_rearm"]')
+    tip.wait_for(timeout=8000)
+    pop = tip.locator(".help-pop")
+    assert not pop.is_visible() and "auto_rearm" in pop.text_content()
+    tip.locator("button.help-tip").hover()
+    pop.wait_for(state="visible", timeout=3000)
+    box = pop.bounding_box(); vw = pg.evaluate("innerWidth")
+    assert box["x"] >= 0 and box["x"] + box["width"] <= vw, "the bubble stays inside the window"
+    pg.mouse.move(0, 0)
+    pop.wait_for(state="hidden", timeout=3000)
+    tip.locator("button.help-tip").focus()
+    pop.wait_for(state="visible", timeout=3000)
+    pg.keyboard.press("Escape")
+    pop.wait_for(state="hidden", timeout=3000)
+    short = pg.locator('[data-help-for="motors.stall_min_cmd"]')
+    assert short.count() == 1 and short.evaluate("e => e.tagName") == "P" and short.is_visible()
+    gui.tab("modes")
+    lo = pg.locator('[data-mode="LOITER"] [data-help-for="mode.LOITER"]')
+    lo.wait_for(timeout=8000)
+    assert "Altitude Hold" in lo.locator(".help-pop").text_content()
+
+
+def test_an_older_firmware(gui_old):
+    # 0.43: the app talks to the firmware 0.41.0 with that firmware's own schema: every tab builds, what 0.41.0 lacks is left out,
+    # what it has can be set
+    g = gui_old; pg = g.connect().page
+    assert g.hub.schema.raw["hash"] != g.hub.own_schema.raw["hash"] and g.hub.schema_note, "the hub uses the firmware's own schema"
+    pg.wait_for_selector("#toasts .toast", timeout=8000)
+    assert "cũ hơn app" in pg.inner_text("#toasts")
+    for tab in [a.get_attribute("data-tab") for a in pg.query_selector_all("#rail a.tab")]:
+        g.tab(tab)
+        pg.wait_for_timeout(300)
+        assert "Lỗi khi dựng tab" not in pg.inner_text("#view"), "tab %s did not build" % tab
+    g.tab("modes")
+    assert pg.locator('[data-field="general.fly_style"]').count() == 0 and pg.locator('[data-mode="CRASHFLIP"]').count() == 0, "0.41.0 had no Flycam, no crash flip"
+    assert pg.locator('[data-mode="LOITER"]').count() == 1
+    g.tab("motors")
+    assert pg.locator('[data-field="motors.crashflip_rate"]').count() == 0
+    g.tab("nav")
+    assert pg.is_disabled("#flow-cal-start"), "FLOW_CAL (0.42.1) is greyed out"
+    pg.wait_for_selector('[data-field="nav.loiter_speed"]', timeout=8000)
+    g.type_into("nav.loiter_speed", "6")
+    g.wait(lambda: g.setting("nav", "loiter_speed") == 6.0, what="a setting 0.41.0 has: written")
 
 
 def test_flow_calibration_on_the_page(gui):
@@ -252,7 +315,7 @@ def test_crash_flip_on_the_page(gui):
     gui.tab("modes")
     cf = pg.locator('[data-mode="CRASHFLIP"]')
     cf.wait_for(timeout=8000)
-    assert "Crash flip" in cf.inner_text() and "DShot" in cf.inner_text()
+    assert "Crash flip" in cf.inner_text() and "DShot" in cf.text_content()
     gui.tab("motors")
     pg.wait_for_selector('[data-field="motors.crashflip_rate"]', timeout=8000)
     assert gui.setting("motors", "crashflip_rate") == 0 and gui.setting("motors", "crashflip_motor_pct") == 0
@@ -325,6 +388,19 @@ def test_stick_arm_setting(gui):
     pg.check('[data-field="general.stick_arm"]')
     gui.wait(lambda: gui.setting("general", "stick_arm") in (1, True), what="stick_arm on")
     pg.wait_for_function("!document.getElementById('no-arm-switch').classList.contains('bad')")
+
+
+def test_fly_style_setting(gui):
+    # 0.43: FPV / Flycam in the Modes tab; the hold choice only matters for Flycam
+    pg = gui.connect().page
+    gui.tab("modes")
+    pg.wait_for_selector('[data-field="general.fly_style"]', timeout=8000)
+    assert gui.setting("general", "fly_style") == "FPV"
+    assert pg.is_disabled('[data-field="general.flycam_hold"]'), "FPV: the hold choice is greyed out"
+    pg.select_option('[data-field="general.fly_style"]', "FLYCAM")
+    gui.wait(lambda: gui.setting("general", "fly_style") == "FLYCAM", what="fly_style FLYCAM")
+    pg.wait_for_function("!document.querySelector('[data-field=\"general.flycam_hold\"]').disabled", timeout=5000)
+    assert "Acro" in pg.inner_text("#fly-style-note")
 
 
 def test_stick_preview(gui):

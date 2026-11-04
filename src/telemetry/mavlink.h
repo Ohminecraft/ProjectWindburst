@@ -33,6 +33,7 @@ enum : uint32_t {
     // 0.40: the ground station's commands and the mission protocol (mavlink_gcs.h)
     MSG_MISSION_SET_CURRENT = 41, MSG_MISSION_CURRENT = 42, MSG_MISSION_REQUEST_LIST = 43, MSG_MISSION_COUNT = 44, MSG_MISSION_CLEAR_ALL = 45,
     MSG_MISSION_ITEM_REACHED = 46, MSG_MISSION_ACK = 47, MSG_GPS_GLOBAL_ORIGIN = 49, MSG_MISSION_REQUEST_INT = 51, MSG_MISSION_ITEM_INT = 73,
+    MSG_PARAM_REQUEST_READ = 20, MSG_PARAM_REQUEST_LIST = 21, MSG_PARAM_VALUE = 22, MSG_PARAM_SET = 23,
     MSG_COMMAND_INT = 75, MSG_COMMAND_LONG = 76, MSG_COMMAND_ACK = 77, MSG_TIMESYNC = 111, MSG_AUTOPILOT_VERSION = 148, MSG_HOME_POSITION = 242,
     MSG_AVAILABLE_MODES = 435, MSG_AVAILABLE_MODES_MONITOR = 437,
     MSG_MISSION_ITEM = 39, MSG_MISSION_REQUEST = 40,          // (0.40.1: the float forms Mission Planner falls back to)
@@ -46,7 +47,7 @@ inline uint8_t crc_extra(uint32_t id) {
     case MSG_MISSION_SET_CURRENT: return 28; case MSG_MISSION_CURRENT: return 28; case MSG_MISSION_REQUEST_LIST: return 132; case MSG_MISSION_COUNT: return 221;
     case MSG_MISSION_CLEAR_ALL: return 232; case MSG_MISSION_ITEM_REACHED: return 11; case MSG_MISSION_ACK: return 153; case MSG_GPS_GLOBAL_ORIGIN: return 39;
     case MSG_MISSION_REQUEST_INT: return 196; case MSG_MISSION_ITEM_INT: return 38; case MSG_COMMAND_INT: return 158; case MSG_COMMAND_LONG: return 152;
-    case MSG_COMMAND_ACK: return 143; case MSG_TIMESYNC: return 34; case MSG_AUTOPILOT_VERSION: return 178; case MSG_HOME_POSITION: return 104;
+    case MSG_COMMAND_ACK: return 143; case MSG_TIMESYNC: return 34; case MSG_PARAM_REQUEST_READ: return 214; case MSG_PARAM_REQUEST_LIST: return 159; case MSG_PARAM_VALUE: return 220; case MSG_PARAM_SET: return 168; case MSG_AUTOPILOT_VERSION: return 178; case MSG_HOME_POSITION: return 104;
     case MSG_AVAILABLE_MODES: return 134; case MSG_AVAILABLE_MODES_MONITOR: return 30; case MSG_MISSION_ITEM: return 254; case MSG_MISSION_REQUEST: return 230;
     default: return 0;
     }
@@ -368,6 +369,29 @@ struct MissionItemReached {
     static constexpr uint32_t kId = MSG_MISSION_ITEM_REACHED;
     uint16_t seq = 0;
     template <class V> void wire(V& v) { v(seq); }
+};
+// 0.43: the parameter protocol (pymavlink 2.4.50: CRC_EXTRA 214 / 159 / 220 / 168). param_id: 16 characters, NUL-padded (no NUL when
+// all 16 are used). The values travel as REAL32 (MAV_PARAM_TYPE 9) in the units the app shows.
+constexpr uint8_t PARAM_TYPE_REAL32 = 9;
+struct ParamRequestRead {
+    static constexpr uint32_t kId = MSG_PARAM_REQUEST_READ;
+    int16_t param_index = -1; uint8_t target_system = 0, target_component = 0; char param_id[16] = {};
+    template <class V> void wire(V& v) { v(param_index); v(target_system); v(target_component); v(param_id); }
+};
+struct ParamRequestList {
+    static constexpr uint32_t kId = MSG_PARAM_REQUEST_LIST;
+    uint8_t target_system = 0, target_component = 0;
+    template <class V> void wire(V& v) { v(target_system); v(target_component); }
+};
+struct ParamValue {
+    static constexpr uint32_t kId = MSG_PARAM_VALUE;
+    float param_value = 0; uint16_t param_count = 0, param_index = 0; char param_id[16] = {}; uint8_t param_type = PARAM_TYPE_REAL32;
+    template <class V> void wire(V& v) { v(param_value); v(param_count); v(param_index); v(param_id); v(param_type); }
+};
+struct ParamSet {
+    static constexpr uint32_t kId = MSG_PARAM_SET;
+    float param_value = 0; uint8_t target_system = 0, target_component = 0; char param_id[16] = {}; uint8_t param_type = PARAM_TYPE_REAL32;
+    template <class V> void wire(V& v) { v(param_value); v(target_system); v(target_component); v(param_id); v(param_type); }
 };
 struct Timesync {                                       // ns
     static constexpr uint32_t kId = MSG_TIMESYNC;

@@ -1,6 +1,6 @@
 // Small DOM helpers and the settings widgets. A widget is bound to one field of the store: it shows what the firmware holds
 // and writes the user's edit back through setField().
-import { store, on, fieldDef, fieldRange, setField, command } from './store.js';
+import { store, on, fieldDef, fieldRange, setField, command, hasField } from './store.js';
 import { FIELDS, ENUM_LABELS, NOT_IMPLEMENTED, ERRORS } from './labels.js';
 import { tr } from './i18n.js';
 import { decodeText } from './anim.js';
@@ -68,6 +68,7 @@ function fieldText(f, v) {
 // control(): the bare input for one field. opts: index (array element), empty (numeric value shown as an empty box, e.g. 255 for pins),
 //            labels (enum value -> text), choices (a number field shown as a list of these values), width, onchange(value)
 export function control(section, name, opts = {}) {
+  if (!hasField(section, name)) return h('span', { class: 'unit', 'data-missing': `${section}.${name}` }, tr('(firmware này chưa có)'));      // (an older firmware)
   const f = fieldDef(section, name);
   const idx = opts.index;
   const get = () => { const v = (store.settings[section] || {})[name]; return idx === undefined ? v : (v ? v[idx] : undefined); };
@@ -131,8 +132,8 @@ export function control(section, name, opts = {}) {
   if (opts.width) el.style.width = opts.width;
   if (opts.id) el.id = opts.id;
   el.dataset.field = `${section}.${name}` + (idx === undefined ? '' : `[${idx}]`);
-  const lock = () => { el.disabled = store.armed; };
-  listen('settings:' + section, () => sync());
+  const lock = () => { el.disabled = store.armed || (opts.enabled ? !opts.enabled() : false); };      // opts.enabled() -> false greys it out
+  listen('settings:' + section, () => { sync(); lock(); });
   listen('armed', lock);
   sync(); lock();
   return el;
@@ -161,18 +162,52 @@ export function slider(section, name, opts = {}) {
   if (opts.mark !== undefined && r.max > r.min) { box.dataset.mark = opts.mark; box.style.setProperty('--mark-f', String((opts.mark - r.min) / (r.max - r.min))); }
   return box;
 }
+// A field's help text. A short one stays under the control; a long one (more than kHelpInline characters) sits behind a "?"
+// next to it and shows in a bubble on hover, keyboard focus or a tap - the page stays short, the text is one move away.
+// key: what it explains ("section.field", "mode.NAME"), for the tests. long: true when it became a "?".
+export const kHelpInline = 140;
+export function isLongHelp(text) { return !!text && text.length > kHelpInline; }
+export function helpTip(text, key) {
+  const pop = h('span', { class: 'help-pop', role: 'tooltip', id: 'tip' + (++uid) }, text);
+  const btn = h('button', { type: 'button', class: 'help-tip', 'aria-label': tr('Giải thích'), 'aria-describedby': pop.id }, '?');
+  const wrap = h('span', { class: 'help-wrap' }, btn, pop);
+  if (key) wrap.dataset.helpFor = key;
+  const place = () => {                                  // fixed, below the "?" (above when there is no room), inside the window
+    const r = btn.getBoundingClientRect(), w = pop.offsetWidth, ht = pop.offsetHeight, m = 8;
+    const left = Math.min(Math.max(r.left + r.width / 2 - w / 2, m), window.innerWidth - w - m);
+    const below = r.bottom + 6, top = below + ht + m > window.innerHeight && r.top - 6 - ht >= m ? r.top - 6 - ht : below;
+    pop.style.left = Math.max(left, m) + 'px'; pop.style.top = top + 'px';
+  };
+  const show = () => { wrap.classList.add('open'); place(); };
+  const hide = () => wrap.classList.remove('open');
+  btn.addEventListener('mouseenter', show); wrap.addEventListener('mouseleave', () => { if (document.activeElement !== btn) hide(); });
+  btn.addEventListener('focus', show); btn.addEventListener('blur', hide);
+  btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (wrap.classList.contains('open') && document.activeElement !== btn) hide(); else show(); });
+  btn.addEventListener('keydown', (e) => { if (e.key === 'Escape') { hide(); btn.blur(); } });
+  return wrap;
+}
+export function helpFor(text, key) {
+  if (!text) return null;
+  if (isLongHelp(text)) return helpTip(text, key);
+  const p = h('p', { class: 'help' }, text); if (key) p.dataset.helpFor = key; return p;
+}
+
 // The labelled form row of a slider (texts from labels.js).
 export function sliderRow(section, name, opts = {}) {
+  if (!hasField(section, name)) return [];                 // (a setting an older firmware does not have: no row at all)
   const meta = FIELDS[`${section}.${name}`] || {};
   const id = 'f' + (++uid);
+  const help = meta.help ? tr(meta.help) : '', key = `${section}.${name}`;
   return [
     h('label', { for: id }, opts.label || (meta.label ? tr(meta.label) : name)),
-    h('div', { class: 'ctl' }, slider(section, name, { ...opts, id }), meta.help ? h('p', { class: 'help' }, tr(meta.help)) : null),
+    h('div', { class: 'ctl' }, isLongHelp(help) ? h('div', { class: 'ctl-line' }, slider(section, name, { ...opts, id }), helpFor(help, key)) : slider(section, name, { ...opts, id }),
+      isLongHelp(help) ? null : helpFor(help, key)),
   ];
 }
 
 // One labelled row for a form: [label, control + unit + help]. Text comes from labels.js, falling back to the schema.
 export function row(section, name, opts = {}) {
+  if (!hasField(section, name)) return [];                 // (a setting an older firmware does not have: no row at all)
   const f = fieldDef(section, name);
   const meta = FIELDS[`${section}.${name}`] || {};
   const id = 'f' + (++uid);
@@ -182,11 +217,12 @@ export function row(section, name, opts = {}) {
   const unit = opts.unit !== undefined ? opts.unit : (meta.unit ? tr(meta.unit) : meta.unit);
   const help = opts.help !== undefined ? opts.help : (meta.help ? tr(meta.help) : (meta.label || opts.label ? '' : f.desc));
   const needsReboot = !store.schema.sectionByName[section].live;
+  const long = isLongHelp(help), key = `${section}.${name}`;
   return [
     h('label', { for: id }, label),
     h('div', { class: 'ctl' },
-      h('div', { class: 'ctl-line' }, input, unit ? h('span', { class: 'unit' }, unit) : null, opts.after || null),
-      help ? h('p', { class: 'help' }, help) : null,
+      h('div', { class: 'ctl-line' }, input, unit ? h('span', { class: 'unit' }, unit) : null, opts.after || null, long ? helpFor(help, key) : null),
+      long ? null : helpFor(help, key),
       needsReboot && opts.rebootNote ? h('p', { class: 'help' }, tr('Có hiệu lực sau khi lưu và khởi động lại.')) : null),
   ];
 }
@@ -203,6 +239,7 @@ export function cmdButton(label, name, args, opts = {}) {
   const def = store.schema.commandByName[name];
   const btn = h('button', { type: 'button', class: 'btn ' + (opts.class || '') }, label);
   btn.dataset.cmd = name;
+  if (!def) { btn.disabled = true; btn.title = tr('Firmware này chưa có chức năng này: cập nhật firmware.'); btn.dataset.missing = '1'; return btn; }      // (an older firmware)
   btn.addEventListener('click', async () => {
     btn.disabled = true;
     try {

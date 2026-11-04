@@ -84,7 +84,7 @@ public:
         tick_seen_ = true; last_tick_ms_ = now_ms;
         if ((uint32_t)(now_ms - win_ms_) >= 1000u) { win_ms_ = now_ms; gap_last_ = gap_cur_; gap_cur_ = 0; cmd_last_ = cmd_cur_; cmd_cur_ = 0; }
         x_.snapshot(tel_);
-        if (tel_.fw_saved_seq != saved_seq_) { saved_seq_ = tel_.fw_saved_seq; autosave_ = tel_.fw_saved_section; }       // the flight loop changed a section and wants it kept
+        if (tel_.fw_saved_seq != saved_seq_) { saved_seq_ = tel_.fw_saved_seq; autosave_ |= (1u << tel_.fw_saved_section) | tel_.fw_saved_mask; }       // the flight loop changed a section (or several, 0.43: MAVLink parameters) and wants it kept
         if (!bb_) return;
         bb::Inputs in; in.now_ms = now_ms; in.armed = tel_.armed; in.switch_on = ((tel_.modes >> wbp::MODE_BLACKBOX) & 1u) != 0; in.app_active = x_.link_active(now_ms);
         in.erase_switch = ((tel_.modes >> wbp::MODE_BLACKBOX_ERASE) & 1u) != 0;
@@ -135,7 +135,11 @@ public:
     }
     bool take_settings_changed() override { const bool c = changed_; changed_ = false; return c; }
     // flash writes stall the flight loop for milliseconds: the section waits here until the craft is disarmed
-    uint8_t take_autosave() override { if (!autosave_ || tel_.armed) return 0; const uint8_t s = autosave_; autosave_ = 0; return s; }
+    uint8_t take_autosave() override {
+        if (!autosave_ || tel_.armed) return 0;
+        for (uint8_t s = 1; s < 32; s++) if (autosave_ & (1u << s)) { autosave_ &= ~(1u << s); return s; }      // (one section a call; bit 0: no section 0)
+        autosave_ = 0; return 0;
+    }
     void reboot() override { Request r; r.cmd = REQ_REBOOT; timed_call(r); }
     // ESC passthrough: the flight side stops the motor output for good. Returns the number of ESCs, 0 = refused (armed, no motors).
     uint8_t esc_passthrough() { Request r; r.cmd = REQ_ESC_PASSTHROUGH; const Reply rep = timed_call(r); return rep.err == wbp::ERR_OK && rep.n ? rep.data[0] : 0; }
@@ -171,7 +175,7 @@ private:
     const QueuedTransport* tx_ = nullptr; const volatile uint32_t* kicks_ = nullptr; uint32_t boot_ms_ = 0, boot_id_ = 0;
     bool tick_seen_ = false; uint32_t last_tick_ms_ = 0, win_ms_ = 0, gap_cur_ = 0, gap_last_ = 0, cmd_cur_ = 0, cmd_last_ = 0;
     Exchange& x_; Exchange::WaitFn wait_; void* ctx_; NowFn now_;
-    wbp::Server* srv_ = nullptr; Telemetry tel_; bool changed_ = false; uint8_t saved_seq_ = 0, autosave_ = 0;
+    wbp::Server* srv_ = nullptr; Telemetry tel_; bool changed_ = false; uint8_t saved_seq_ = 0; uint32_t autosave_ = 0;      // autosave_: a bit per section to keep
     const char* const* report_ = nullptr; int report_n_ = 0;
     bb::Service* bb_ = nullptr; const wbp::Settings* settings_ = nullptr;
 };

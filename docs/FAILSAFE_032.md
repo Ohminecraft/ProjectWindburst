@@ -1,71 +1,71 @@
-# Failsafe viết lại theo PX4 / ArduPilot (0.32)
+# Failsafe rewritten after PX4 / ArduPilot (0.32)
 
-Đã kiểm tra trên PC: unit test (`test_core`) và firmware chạy trên mạch ảo (`test_fw`). **Chưa bay thật.**
+Checked on PC: unit tests (`test_core`) and firmware running on the virtual board (`test_fw`). **Not flown for real yet.**
 
-## 1. Cách làm
-Theo khung failsafe của PX4 (Commander/failsafe) và các failsafe của ArduCopter. Code ở `src/core/safety.h`.
-- **Mỗi tình huống chọn một hành động.** Nhiều tình huống cùng lúc thì làm hành động **nặng nhất**.
-- **Không bao giờ nhẹ đi** khi nguyên nhân vẫn còn.
-- **Có đường lui:** hành động không làm được thì chuyển sang hành động làm được.
+## 1. Approach
+Follows PX4's failsafe framework (Commander/failsafe) and ArduCopter's failsafes. Code in `src/core/safety.h`.
+- **Each situation selects one action.** With several situations at once, the **most severe** action is taken.
+- **Never becomes less severe** while the cause is still present.
+- **Has a fallback:** if an action cannot be carried out, switch to one that can.
 
-### Tình huống và cài đặt tương ứng
-| Tình huống | Cài đặt | Mặc định |
+### Situations and corresponding settings
+| Situation | Setting | Default |
 |---|---|---|
-| Mất sóng (LINK) | `nav.fs_procedure` | LAND |
-| Công tắc Failsafe (SWITCH) | `nav.fs_procedure` | LAND |
-| Pin ở mức cảnh báo (BATTERY_LOW, **mới**) | `nav.batt_low_action`: WARN / RTL / LAND (ArduPilot BATT_FS_LOW_ACT, PX4 COM_LOW_BAT_ACT) | WARN |
-| Pin ở mức tối thiểu (BATTERY) | `nav.batt_crit_action`: LAND / RTL (ArduPilot BATT_FS_CRT_ACT) | LAND |
+| Signal loss (LINK) | `nav.fs_procedure` | LAND |
+| Failsafe switch (SWITCH) | `nav.fs_procedure` | LAND |
+| Battery at warning level (BATTERY_LOW, **new**) | `nav.batt_low_action`: WARN / RTL / LAND (ArduPilot BATT_FS_LOW_ACT, PX4 COM_LOW_BAT_ACT) | WARN |
+| Battery at minimum level (BATTERY) | `nav.batt_crit_action`: LAND / RTL (ArduPilot BATT_FS_CRT_ACT) | LAND |
 
-`fs_procedure` có thêm hai lựa chọn mới (enum chỉ nối thêm ở cuối):
-- **HOLD**: giữ vị trí, xem bảng hành động bên dưới. Thời gian giữ là `nav.fs_hold_s` (mặc định 30 s).
-- **DROP**: tắt motor (procedure DROP của Betaflight).
+`fs_procedure` gains two new options (the enum is only appended at the end):
+- **HOLD**: hold position, see the action table below. The hold time is `nav.fs_hold_s` (default 30 s).
+- **DROP**: motors off (Betaflight's DROP procedure).
 
-### Hành động (từ nhẹ tới nặng)
-| Hành động | Máy làm gì |
+### Actions (from least to most severe)
+| Action | What the craft does |
 |---|---|
-| WARN | Không bay gì, chỉ báo (còi / OSD, `fs_cause` = BATTERY_LOW). Giai đoạn vẫn là NONE |
-| HOLD | Giữ độ cao bằng Altitude Hold; giữ vị trí bằng Position Hold nếu có vị trí (GPS + la bàn, hoặc optical flow). Cần để giữa. Hết `fs_hold_s` thì chuyển sang LAND. Không có độ cao thì LAND ngay |
-| RTL | GPS Rescue bay về rồi hạ cánh. Không bay được (không fix / home / la bàn) thì hạ cánh tại chỗ |
-| LAND | Hạ cánh tại chỗ như trước. Với LINK / SWITCH: tự cân bằng, cần để giữa. Với BATTERY: phi công vẫn lái roll / pitch / yaw |
-| DROP | Tắt motor, sau thời gian chờ (guard) |
+| WARN | No flight action, only warns (buzzer / OSD, `fs_cause` = BATTERY_LOW). The phase stays NONE |
+| HOLD | Holds altitude with Altitude Hold; holds position with Position Hold if position is available (GPS + compass, or optical flow). Sticks centred. After `fs_hold_s` it switches to LAND. Without altitude it LANDs immediately |
+| RTL | GPS Rescue flies home then lands. If it cannot fly (no fix / home / compass) it lands in place |
+| LAND | Lands in place as before. With LINK / SWITCH: self-levelling, sticks centred. With BATTERY: the pilot still controls roll / pitch / yaw |
+| DROP | Motors off, after the guard time |
 
-## 2. Các quy tắc giữ nguyên từ trước
-- Thời gian chờ (`fs_guard_ms`) áp dụng cho LINK / SWITCH / BATTERY. Các lần mất sóng ngắn được cộng dồn.
-- Sóng về phải liền `fs_recover_ms` mới trả máy cho phi công. Nếu Rescue đang bay về, phi công phải đánh cần mới lấy lại máy.
-- Hạ cánh vì pin tối thiểu không bị huỷ.
-- Lưới thời gian `fs_max_descent_s` chỉ đếm khi **đang hạ cánh** mà không xuống. Khi đang giữ vị trí, hoặc khi Rescue đang bay về, thì không đếm.
-- Đứng dưới đất khi hết thời gian chờ thì tắt motor.
+## 2. Rules kept from before
+- The guard time (`fs_guard_ms`) applies to LINK / SWITCH / BATTERY. Short signal losses accumulate.
+- The signal must be back continuously for `fs_recover_ms` before the craft is handed back to the pilot. If Rescue is flying home, the pilot must move the sticks to take the craft back.
+- A landing because of minimum battery is not cancelled.
+- The `fs_max_descent_s` timeout only counts while **landing** without descending. While holding position, or while Rescue is flying home, it does not count.
+- On the ground when the guard time expires, the motors are turned off.
 
-## 3. Mới
-- **BATTERY_LOW không cần thời gian chờ**, vì bộ theo dõi pin đã có độ trễ riêng: hành động bắt đầu ngay.
-- **Phi công lấy lại máy (user takeover của PX4):**
-  - Với hành động do pin cảnh báo (RTL / LAND), khi sóng vẫn tốt, phi công đánh cần quá 0,30 là lấy lại máy.
-  - Hành động đó không lặp lại cho tới khi pin xuống mức tối thiểu.
-  - Pin tối thiểu thì không lấy lại được.
-- **Chọn hành động RTL cho pin** thì firmware coi như đã cài Rescue: GPS phải fix mới arm được.
+## 3. New
+- **BATTERY_LOW needs no guard time**, since the battery monitor already has its own delay: the action starts immediately.
+- **Pilot takeover (PX4's user takeover):**
+  - For actions caused by the battery warning (RTL / LAND), while the signal is still good, moving a stick beyond 0.30 takes the craft back.
+  - That action is not repeated until the battery reaches the minimum level.
+  - At minimum battery takeover is not possible.
+- **Choosing the RTL action for the battery** makes the firmware treat Rescue as configured: GPS must have a fix to arm.
 - **Telemetry:**
-  - stream `status` có thêm trường `fs_action`;
-  - `fs_cause` có thêm bit BATTERY_LOW;
-  - thanh trạng thái hiện thêm hành động, ví dụ "Failsafe: đang tự hạ cánh - giữ vị trí (mất sóng)".
-- **App:** tab Vị trí có thêm "Thời gian giữ", "Khi pin xuống mức cảnh báo", "Khi pin xuống mức tối thiểu".
-- **Settings:** nav compat là [31, 30, 29]. Bản nav 27 byte của các bản rất cũ không còn được nhận.
+  - the `status` stream gains the field `fs_action`;
+  - `fs_cause` gains the BATTERY_LOW bit;
+  - the status bar also shows the action, e.g. "Failsafe: auto landing - holding position (signal lost)".
+- **App:** the Position tab gains "Hold time", "When the battery reaches the warning level", "When the battery reaches the minimum level".
+- **Settings:** nav compat is [31, 30, 29]. The 27-byte nav of very old versions is no longer accepted.
 
-## 4. Test
-- `test_core` nhóm `[failsafe 0.32]`:
-  - thứ tự mức nặng;
-  - pin cảnh báo với WARN / RTL / LAND;
-  - phi công lấy lại máy, và việc đó không lặp lại;
-  - chuyển sang LAND khi pin xuống tối thiểu;
-  - không nhẹ đi khi mất sóng thêm;
-  - RTL không bay được thì hạ cánh tại chỗ;
-  - HOLD rồi LAND, HOLD khi không có độ cao;
-  - DROP sau thời gian chờ.
-- `test_fw` nhóm `[failsafe 0.32]`:
-  - mất sóng với HOLD: trong 5 s máy giữ chỗ trong vòng 4 m và giữ độ cao trong vòng 0,8 m, sau 8 s thì hạ cánh và tắt motor;
-  - pin cảnh báo với RTL: bay về; phi công đánh cần thì lấy lại máy, và Rescue không tự chạy lại.
-- Các test failsafe cũ đều qua mà không phải sửa gì.
+## 4. Tests
+- `test_core` group `[failsafe 0.32]`:
+  - severity order;
+  - battery warning with WARN / RTL / LAND;
+  - pilot takeover, and it not repeating;
+  - switching to LAND when the battery reaches the minimum;
+  - not becoming less severe on further signal loss;
+  - RTL unable to fly lands in place;
+  - HOLD then LAND, HOLD without altitude;
+  - DROP after the guard time.
+- `test_fw` group `[failsafe 0.32]`:
+  - signal loss with HOLD: for 5 s the craft holds position within 4 m and altitude within 0.8 m, after 8 s it lands and turns the motors off;
+  - battery warning with RTL: flies home; the pilot moves the sticks and takes the craft back, and Rescue does not restart by itself.
+- All the old failsafe tests pass without any changes.
 
-## 5. Cần thử trên mạch
-1. Công tắc Failsafe với `fs_procedure = HOLD`, có GPS + la bàn: máy đứng yên, hết thời gian giữ thì hạ cánh.
-2. `batt_low_action = RTL`: cho pin xuống mức cảnh báo khi đang bay xa. Kiểm tra máy bay về, và đánh cần thì lấy lại được máy.
-3. `fs_procedure = DROP`: chỉ thử khi máy ở độ cao an toàn trên nệm, hoặc thử trên bàn, không gắn cánh.
+## 5. To try on the board
+1. Failsafe switch with `fs_procedure = HOLD`, with GPS + compass: the craft stays put, and lands when the hold time runs out.
+2. `batt_low_action = RTL`: let the battery reach the warning level while flying far away. Check that the craft flies home, and that moving the sticks takes it back.
+3. `fs_procedure = DROP`: only test with the craft at a safe height over a mattress, or on the bench without props.
