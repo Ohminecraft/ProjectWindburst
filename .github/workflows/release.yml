@@ -59,7 +59,7 @@ jobs:
         run: pip install platformio esptool
       - name: Build
         run: pio run -e ${{ matrix.env }}
-      - name: One image to flash at 0x0 (ESP32: bootloader + partition table + boot_app0 + app)
+      - name: One image to flash at 0x0 (ESP32 bootloader + partition table + boot_app0 + app)
         if: matrix.chip != 'stm32'
         run: |
           b=.pio/build/${{ matrix.env }}
@@ -123,7 +123,7 @@ jobs:
           path: bins
           pattern: bin-*
           merge-multiple: true
-      - name: The flasher and its firmware (the same origin: the browser reads the images from the page's own site)
+      - name: The flasher and its firmware (the same origin the browser reads the images from the page's own site)
         run: |
           mkdir -p site/firmware
           cp web-flasher/* site/

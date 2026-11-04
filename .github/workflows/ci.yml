@@ -31,7 +31,7 @@ jobs:
         run: make -j"$(nproc)" sim
       - name: Python dependencies
         run: pip install -r app/requirements.txt pytest
-      - name: Client, protocol and end-to-end tests (the browser tests need Chromium: run locally with playwright)
+      - name: Client, protocol and end-to-end tests (the browser tests need Chromium run locally with playwright)
         run: cd app && python -m pytest -q tests --ignore=tests/test_gui_browser.py
 
   firmware:
