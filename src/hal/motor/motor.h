@@ -47,7 +47,10 @@ public:
     bool begin(float dt_s) {
         uint8_t pins[8];
         hw_cfg_.getMotorPins(pins);
-        for (int i = 0; i < 8; i++) if (pins_[i] != GPIO_UNUSED) pins[i] = pins_[i];
+        for (int i = 0; i < 8; i++) { 
+            if (pins_[i] != GPIO_UNUSED) pins[i] = pins_[i]; 
+            else if (pins[i] == GPIO_UNUSED) { ok_ = false; return false; }      // a motor pin is missing
+        }
         for (int i = 0; i < 8; i++) used_[i] = pins[i];
         const motor::MotorConfig& c = mgr_.cfg;
         mgr_.begin(dt_s);
