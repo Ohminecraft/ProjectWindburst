@@ -1,4 +1,5 @@
-# Windburst
+<img width="2358" height="600" alt="windburst-logo-dark" src="https://github.com/user-attachments/assets/1e601fd5-5c6c-48c4-8e2b-622c0c928d50" />
+
 
 [![CI](https://github.com/Ohminecraft/ProjectWindburst_Re/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohminecraft/ProjectWindburst_Re/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Ohminecraft/ProjectWindburst_Re?include_prereleases)](https://github.com/Ohminecraft/ProjectWindburst_Re/releases)
