@@ -47,9 +47,6 @@ jobs:
           - { env: rx_h562, chip: stm32 }
           - { env: rx_h523, chip: stm32 }
           - { env: rx_g473, chip: stm32 }
-          - { env: rx_g491, chip: stm32 }
-          - { env: rx_g431, chip: stm32 }
-          - { env: rx_c552, chip: stm32 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

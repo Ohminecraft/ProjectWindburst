@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [rx_esp32_s3, rx_esp32, rx_f405, rx_f412, rx_h563, rx_h562, rx_h523, rx_g473, rx_g491, rx_g431, rx_c552]
+        env: [rx_esp32_s3, rx_esp32, rx_f405, rx_f412, rx_h563, rx_h562, rx_h523, rx_g473]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

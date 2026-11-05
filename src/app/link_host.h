@@ -201,7 +201,7 @@ public:
         if (cli_) {
             if (c == 0x03) { cli_ = false; cli_buf_[cli_n_] = 0; run_cli(); return 0; }
             if (c == 0x0A || c == 0x0D) return 0;
-            if (cli_n_ >= sizeof(cli_buf_) - 1) { cli_ = false; return 0; }       // (not a command line: dropped)
+            if (c < 0x20 || c > 0x7E || cli_n_ >= sizeof(cli_buf_) - 1) { cli_ = false; return 0; }       // (not a command line: dropped)
             cli_buf_[cli_n_++] = (char)c; return 0;
         }
         if (c == 0x02 && settings_ && h_.server() && !br_.mid_frame() && !h_.server()->rx_mid_frame()) { cli_ = true; cli_n_ = 0; return 0; }
