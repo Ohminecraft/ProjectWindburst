@@ -19,7 +19,7 @@ static std::mt19937 rng(99); static std::normal_distribution<float> g_norm(0, 1)
 // it see stays what it was.
 struct KeepNoise { std::mt19937 e = rng; std::normal_distribution<float> d = g_norm; ~KeepNoise() { rng = e; g_norm = d; } };
 
-struct Pilot { float roll = 0, pitch = 0, yaw = 0, thr = 0; bool arm = false; int mode = 0; bool althold = false, fs_sw = false, link = true, poshold = false, rescue = false; uint16_t aux7 = 1000; };      // aux7: free for a test's own switch
+struct Pilot { float roll = 0, pitch = 0, yaw = 0, thr = 0; bool arm = false; int mode = 0; bool althold = false, fs_sw = false, link = true, poshold = false, rescue = false; uint16_t aux7 = 1000; uint16_t thr_us = 0; };      // aux7: free for a test's own switch; thr_us: the throttle channel as it is (0: from thr)
 
 // Pilot::thr is the throttle the pilot ASKS FOR in the direct-throttle modes (0 = stick at the bottom, below min_check) and the
 // stick's POSITION in Altitude Hold (0.5 = hold).
@@ -56,7 +56,7 @@ struct Rig {
     void run(float dur, const Pilot& p) {
         FastInput in; in.dt = dt; in.limits = lim; in.rc_link = p.link; h.baro_ok = baro; in.health = h;
         uint16_t ch[16]; for (int i = 0; i < 16; i++) ch[i] = 1500;
-        ch[0] = (uint16_t)(1500 + 500 * p.roll); ch[1] = (uint16_t)(1500 + 500 * p.pitch); ch[2] = p.althold ? (uint16_t)(1000 + 1000 * p.thr) : throttle_us(p.thr); ch[3] = (uint16_t)(1500 + 500 * p.yaw);
+        ch[0] = (uint16_t)(1500 + 500 * p.roll); ch[1] = (uint16_t)(1500 + 500 * p.pitch); ch[2] = p.thr_us ? p.thr_us : p.althold ? (uint16_t)(1000 + 1000 * p.thr) : throttle_us(p.thr); ch[3] = (uint16_t)(1500 + 500 * p.yaw);
         ch[4] = p.arm ? 2000 : 1000; ch[5] = p.mode == 1 ? 1500 : 1000; ch[6] = p.mode == 2 ? 1500 : 1000; ch[7] = p.althold ? 1500 : 1000; ch[8] = p.fs_sw ? 1500 : 1000; ch[9] = p.poshold ? 1500 : 1000; ch[10] = p.rescue ? 1500 : 1000; ch[11] = p.aux7;
         const int steps = (int)(dur / dt + 0.5f);          // (+0.5: 0.001 / 0.00025 is 3.9999 in float)
         for (int i = 0; i < steps;) {
@@ -669,7 +669,9 @@ static void t_failsafe() {
       CHECK(r.out.failsafe == FsStage::DESCENT && r.out.armed && r.pl.z > 0.3f, "failsafe in the air without any altitude source: descent"); float low = 1; for (int i = 0; i < 100 && !r.pl.ground; i++) { r.run(0.05f, q); for (int k = 0; k < 4; k++) low = fminf(low, r.out.motor[k]); }
       CHECK(low > r.lim.idle + 0.1f, "the fallback is a throttle descent, never a motor cut (lowest motor %.2f on the way down)", low); }
     // ... and that descent is a DESCENT on every craft: the hover throttle it starts from was measured while the pilot flew by hand
-    for (int racer = 0; racer < 2; racer++) { Rig r; if (racer) r.pl.make_five_inch(); Pilot p; p.mode = 1; r.run(0.3f, p); p.arm = true; r.run(0.2f, p);
+    // (0.44: general.fs_throttle in us, Betaflight's failsafe_throttle - never above 85 % of the hover; here set to 2000 us: the
+    //  ceiling decides, on both craft)
+    for (int racer = 0; racer < 2; racer++) { Rig r; if (racer) r.pl.make_five_inch(); r.core.cfg.fs.fallback_throttle = 1.0f; Pilot p; p.mode = 1; r.run(0.3f, p); p.arm = true; r.run(0.2f, p);
       const float hover_thr = (r.pl.hover_cmd() - 0.055f) / 0.945f;
       p.thr = hover_thr * 1.15f; r.run(0.7f, p); p.thr = hover_thr; r.run(2.5f, p); const float z0 = r.pl.z;                // a manual take-off and a hover: no barometer, no lidar
       CHECK(z0 > 0.2f && fabsf(r.core.alt_hold().hover() - r.pl.hover_cmd()) < 0.015f, "[%s] flown by hand for 3 s: hover output measured as %.3f (true %.3f)", racer ? "5-inch" : "heavy", r.core.alt_hold().hover(), r.pl.hover_cmd());
@@ -678,6 +680,13 @@ static void t_failsafe() {
       const float want = r.core.cfg.fs.fallback_throttle_scale * r.pl.hover_cmd(), dv = r.pl.vz - v0, dv_want = -(1 - r.core.cfg.fs.fallback_throttle_scale) * kG0 * 1.5f;
       CHECK(fabsf(0.055f + r.out.throttle * 0.945f - want) < 0.015f && fabsf(dv - dv_want) < 0.5f, "[%s] failsafe without an altitude estimate: the motors go to %.0f %% of the hover output (%.3f) and the craft sinks - %.1f m/s gained downwards in 1.5 s (%.1f expected). It does not climb away",
             racer ? "5-inch" : "heavy", 100 * r.core.cfg.fs.fallback_throttle_scale, 0.055f + r.out.throttle * 0.945f, -dv, -dv_want); }
+    // ... and a fs_throttle below that ceiling is what it gets (1200 us = 0.2: a faster descent the pilot chose)
+    { Rig r; r.core.cfg.fs.fallback_throttle = 0.2f; Pilot p; p.mode = 1; r.run(0.3f, p); p.arm = true; r.run(0.2f, p);
+      const float hover_thr = (r.pl.hover_cmd() - 0.055f) / 0.945f;
+      p.thr = hover_thr * 1.15f; r.run(0.7f, p); p.thr = hover_thr; r.run(2.5f, p);
+      p.link = false; r.run(0.8f, p); r.run(0.3f, p);
+      CHECK(r.out.failsafe == FsStage::DESCENT && fabsf(r.out.throttle - 0.2f) < 0.01f && r.out.throttle < r.core.alt_hold().hover_throttle(0.85f),
+            "fs_throttle 1200 us, below 85 %% of the hover (%.3f): the throttle is 0.2 (%.3f)", r.core.alt_hold().hover_throttle(0.85f), r.out.throttle); }
 }
 
 // The control cycles are not all the same length: one in eight takes seven times as long (the flight loop waited for something).
@@ -1305,9 +1314,9 @@ static void t_crash_flip_core() {
 // it takes off, held down after the touch-down for 3 s the motors stop. FPV (the default): everything as before.
 static void t_flycam() {
     printf("[flycam] Angle + Altitude Hold + Loiter always; the throttle stick centred; FPV untouched\n");
-    auto rig = [](bool flycam, bool loiter = true, bool flow = true) { Rig* r = new Rig(); r->pl.make_five_inch(); r->baro = true; r->h.baro_ok = true;
+    auto rig = [](bool flycam, bool loiter = true, bool flow = true, bool stab = false) { Rig* r = new Rig(); r->pl.make_five_inch(); r->baro = true; r->h.baro_ok = true;
         if (flow) { r->flow = true; r->range = true; r->h.flow_ok = true; }
-        r->core.cfg.flycam = flycam; r->core.cfg.flycam_loiter = loiter; r->core.configure(); return std::unique_ptr<Rig>(r); };
+        r->core.cfg.flycam = flycam; r->core.cfg.flycam_loiter = loiter; r->core.cfg.flycam_stabilize = stab; r->core.configure(); return std::unique_ptr<Rig>(r); };
     const uint32_t ah = 1u << M_ALTHOLD, ang = 1u << M_ANGLE, lt = 1u << M_LOITER, ph = 1u << M_POSHOLD, st = 1u << M_STABILIZE;
     {   auto r = rig(true); Pilot p; p.althold = false; p.thr = 0.5f; p.mode = 0; r->run(1.0f, p);           // (mode 0: no ANGLE switch = Acro)
         const uint32_t m = r->out.modes;
@@ -1327,6 +1336,22 @@ static void t_flycam() {
         CHECK(still && !r->out.armed && r->out.motor[0] == 0, "held down 3 s after the touch-down: the motors stop (DJI)"); }
     {   auto r = rig(true, false); Pilot p; p.althold = true; p.thr = 0.5f; r->run(1.0f, p);
         CHECK((r->out.modes & ph) && !(r->out.modes & lt), "flycam_hold POSHOLD: Position Hold instead of Loiter"); }
+    // 0.44 flycam_attitude STABILIZE: every self-levelling mode on ArduPilot's attitude controller (as ArduCopter's Loiter / AltHold)
+    for (const bool loiter : {true, false}) {
+        auto r = rig(true, loiter, true, true); Pilot p; p.althold = true; p.thr = 0.5f; p.mode = 1; r->run(1.0f, p);    // (mode 1: the ANGLE switch on)
+        const uint32_t m = r->out.modes;
+        CHECK((m & st) && !(m & ang) && (m & ah) && (m & (loiter ? lt : ph)), "Flycam on Stabilize (%s): Stabilize + Altitude Hold + the hold, the Angle switch ignored (0x%x)", loiter ? "Loiter" : "Position Hold", m);
+        p.arm = true; r->run(0.3f, p); p.thr = 0.85f; for (int i = 0; i < 80 && r->pl.z < 1.5f; i++) r->run(0.05f, p);
+        p.thr = 0.5f; r->run(4.0f, p); const float z0 = r->pl.z, n0 = r->pl.pn, e0 = r->pl.pe; float far = 0;
+        for (int i = 0; i < 30; i++) { r->run(0.1f, p); far = fmaxf(far, hypotf(r->pl.pn - n0, r->pl.pe - e0)); }
+        CHECK(r->out.armed && r->pl.z > 1.0f && fabsf(r->pl.z - z0) < 0.3f && far < 0.3f && fabsf(r->core.stabilize().target_deg(ROLL)) < 5.0f,
+              "it takes off and holds height (%.2f m off) and place (%.2f m) on the Stabilize controller", fabsf(r->pl.z - z0), far);
+        p.pitch = 0.6f; r->run(2.0f, p); const float v = hypotf(r->pl.vn, r->pl.ve); p.pitch = 0.0f; r->run(7.0f, p);
+        // (Position Hold stops a little later on Stabilize than on Angle - the shaped target, as ArduCopter's: 0.3 m/s left after 4 s, nothing after 7)
+        CHECK(v > 1.0f && hypotf(r->pl.vn, r->pl.ve) < 0.15f && fabsf(r->pl.z - z0) < 0.6f, "stick forwards: it flies (%.1f m/s); let go: it stops (%.2f m/s after 7 s)", v, hypotf(r->pl.vn, r->pl.ve));
+    }
+    {   auto r = rig(false, true, true, true); Pilot p; p.althold = true; p.thr = 0.5f; p.mode = 1; r->run(1.0f, p);
+        CHECK((r->out.modes & ang) && !(r->out.modes & st), "FPV: flycam_attitude does nothing - the hold modes stay on Angle"); }
     {   auto r = rig(true, true, false); Pilot p; p.althold = true; p.thr = 0.5f; r->run(1.0f, p); p.arm = true; r->run(0.3f, p);
         CHECK(r->out.armed && r->out.poshold_unavailable, "nothing to hold the place with: it arms all the same and says so (Angle + Altitude Hold, DJI's ATTI)"); }
     {   auto r = rig(true); r->baro = false; r->h.baro_ok = false; Pilot p; p.althold = true; p.thr = 0.5f; r->run(1.0f, p); p.arm = true; r->run(0.3f, p);
@@ -1336,8 +1361,98 @@ static void t_flycam() {
         p.thr = 0.5f; p.arm = true; r->run(0.3f, p); CHECK(!r->out.armed && (r->out.arm_blockers & AB_THROTTLE_HIGH), "FPV: the throttle must be down to arm, as before"); }
 }
 
+// 0.44 the in-flight autotune (autotune.h) in the flight core: the AUTOTUNE switch (aux 8 here) while hovering in Altitude Hold
+static void t_autotune_core() {
+    printf("[autotune] the AUTOTUNE switch in Altitude Hold: twitches, pauses for the pilot, saves at the disarm\n");
+    auto rig = [](uint8_t axes) { Rig* r = new Rig(); r->pl.make_five_inch(); r->pl.delay_s = 0.005f; r->baro = true; r->h.baro_ok = true;     // (5 ms: filters, ESC, motor)
+        r->core.rc.modes.add(M_AUTOTUNE, 7, 1700, 2100); r->core.cfg.autotune.axes = axes; r->core.configure(); return std::unique_ptr<Rig>(r); };
+    auto takeoff = [](Rig& r, Pilot& p) { p.mode = 1; p.althold = true; p.thr = 0.0f; r.run(0.3f, p); p.arm = true; r.run(0.2f, p);
+        p.thr = 0.85f; for (int i = 0; i < 100 && r.pl.z < 2.0f; i++) r.run(0.05f, p); p.thr = 0.5f; r.run(3.0f, p); };
+    {   auto r = rig(1); Pilot p; p.aux7 = 2000; p.mode = 1; p.althold = true; p.thr = 0.5f; r->run(0.5f, p);
+        CHECK(r->out.at_state == 1, "switch on, on the ground: NOT_FLYING (%u)", r->out.at_state);
+        p.aux7 = 1000; takeoff(*r, p); const float z0 = r->pl.z;
+        CHECK(r->out.armed && r->out.althold_active && z0 > 1.5f && r->out.at_state == 0, "hovering in Altitude Hold, switch off: OFF");
+        p.aux7 = 2000; bool levelling = false, twitching = false; float zdev = 0, tilt = 0, p_seen = r->core.cfg.pid.p[0]; bool p_changed = false;
+        int i = 0;
+        for (; i < 6000 && r->out.at_state != 5 && r->out.at_state != 6; i++) {
+            r->run(0.05f, p); levelling |= r->out.at_state == 2; twitching |= r->out.at_state == 3;
+            zdev = fmaxf(zdev, fabsf(r->pl.z - z0)); tilt = fmaxf(tilt, fmaxf(fabsf(r->out.est.att.roll), fabsf(r->out.est.att.pitch)));
+            if (r->out.at_axis == 0 && fabsf(r->out.at_p - p_seen) > 0.5f) p_changed = true;
+        }
+        CHECK(levelling && twitching && r->out.at_state == 5 && (r->out.at_done & 1u), "switch on in flight: levelling, twitching, roll done after %.0f s (state %u)", i * 0.05f, r->out.at_state);
+        CHECK(zdev < 1.5f && tilt < 26.0f && r->out.armed, "the height held all along (%.2f m off), never beyond 5/6 of the 30 deg limit (%.1f deg)", zdev, tilt);
+        CHECK(p_changed, "the P it flies the twitches with moved (telemetry at_p)");
+        const float p_before = r->core.cfg.pid.p[0];
+        p.thr = 0.0f; bool saved = false; TuneGains res;
+        const uint8_t seq0 = r->out.at_save_seq; int saves = 0; auto look = [&]() { saves = (uint8_t)(r->out.at_save_seq - seq0); if (saves) { saved = true; res = r->out.at_result; } };
+        for (int k = 0; k < 400 && r->out.armed; k++) { r->run(0.05f, p); look(); }          // (it lands and disarms by itself, the switch still on)
+        p.arm = false; for (int k = 0; k < 10; k++) { r->run(0.02f, p); look(); }
+        CHECK(!r->out.armed && saved && res.p[0] != p_before && res.p[1] == r->core.cfg.pid.p[1], "landed, disarmed with the switch on: the result is handed out once (roll P %.0f -> %.0f, pitch untouched)", p_before, res.p[0]);
+        CHECK(saves == 1, "... only once (%d)", saves); }
+    {   auto r = rig(1); Pilot p; takeoff(*r, p); p.aux7 = 2000;
+        for (int i = 0; i < 60 && r->out.at_state != 3; i++) r->run(0.05f, p);
+        const bool tw = r->out.at_state == 3; p.roll = 0.3f; r->run(0.2f, p);
+        CHECK(tw && r->out.at_state == 4, "a stick moved: PILOT - the twitches stop, the pilot flies (%u)", r->out.at_state);
+        p.roll = 0.0f; r->run(0.3f, p); const bool still = r->out.at_state == 4; r->run(1.5f, p);
+        CHECK(still && (r->out.at_state == 2 || r->out.at_state == 3), "the stick back: after half a second it levels and carries on (%u)", r->out.at_state);
+        p.aux7 = 1000; r->run(0.1f, p);
+        CHECK(r->out.at_state == 0, "switch off in flight: OFF, the original gains");
+        p.thr = 0.0f; for (int k = 0; k < 400 && r->out.armed; k++) r->run(0.05f, p);
+        const uint8_t seq1 = r->out.at_save_seq; p.arm = false; for (int k = 0; k < 10; k++) r->run(0.02f, p); const bool saved = r->out.at_save_seq != seq1;
+        CHECK(!saved, "nothing saved after the switch went off"); }
+    // a craft too sluggish for the twitches (the default plant: 1 kg, thrust : weight 2, no bounce even at the highest D): every
+    // twitch leans to the abort angle before it reaches its rate - FAILED, says why, flies on with the original gains, saves nothing
+    {   Rig* rp = new Rig(); rp->pl.delay_s = 0.005f; rp->baro = true; rp->h.baro_ok = true; rp->core.rc.modes.add(M_AUTOTUNE, 7, 1700, 2100); rp->core.cfg.autotune.axes = 1; rp->core.configure();
+        std::unique_ptr<Rig> r(rp); Pilot p; takeoff(*r, p); const float z0 = r->pl.z; p.aux7 = 2000; float tilt = 0;
+        for (int i = 0; i < 4000 && r->out.at_state != 5 && r->out.at_state != 6; i++) { r->run(0.05f, p); tilt = fmaxf(tilt, fabsf(r->out.est.att.roll)); }
+        CHECK(r->out.at_state == 6 && r->core.autotune().fail_reason() == AutoTune::FAIL_LEAN && tilt < 26.0f && fabsf(r->pl.z - z0) < 1.5f,
+              "a sluggish craft: FAILED (reason %d = every twitch leaned too far), never beyond 26 deg (%.1f), the height held", (int)r->core.autotune().fail_reason(), tilt);
+        p.thr = 0.0f; const uint8_t seq = r->out.at_save_seq; for (int k = 0; k < 400 && r->out.armed; k++) r->run(0.05f, p); p.arm = false; r->run(0.5f, p);
+        CHECK(r->out.at_save_seq == seq && r->core.cfg.pid.p[0] == 45, "landed and disarmed: nothing to save, the gains as they were"); }
+}
+
+// 0.44: 3D (Betaflight's feature 3D): reversible motors, the throttle stick centre stops them, below reverses them
+static void t_mode3d() {
+    printf("[3D] reversible motors (Betaflight feature 3D)\n");
+    auto rel = [](const CoreOutput& o) { return (o.motor[2] + o.motor[3] - o.motor[0] - o.motor[1]) * o.u[ROLL]; };   // > 0: the mix pushes as the roll asks
+    Rig r; r.core.cfg.mode3d.enabled = true; r.core.rc.modes.add(M_3D, 7, 1300, 2100); r.core.configure();
+    Pilot p; p.mode = 1; p.thr_us = 1800; r.run(0.3f, p); p.arm = true; r.run(0.3f, p);
+    CHECK(!r.out.armed && (r.out.arm_blockers & AB_THROTTLE_HIGH), "stick at 1800: arming refused (throttle high)");
+    p.arm = false; r.run(0.2f, p); p.thr_us = 1500; r.run(0.2f, p); p.arm = true; r.run(0.3f, p);
+    CHECK(r.out.armed && !r.out.reversed3d && r.out.throttle_low, "stick centred: it arms, forward, throttle low");
+    p.thr_us = 1800; r.run(0.2f, p);
+    CHECK(!r.out.reversed3d && fabsf(r.out.throttle - 250.0f / 450.0f) < 0.03f, "1800: forward, throttle %.3f", r.out.throttle);
+    p.roll = 0.5f; r.run(0.02f, p); const float fwd = rel(r.out);
+    p.roll = 0; p.thr_us = 1200; r.run(0.2f, p);
+    CHECK(r.out.reversed3d && fabsf(r.out.throttle - 250.0f / 450.0f) < 0.03f, "1200: reversed, throttle %.3f", r.out.throttle);
+    float imax = 0; for (int k = 0; k < 8; k++) { r.run(0.02f, p); for (int a = 0; a < 3; a++) imax = fmaxf(imax, fabsf(r.out.pid_i[a])); }
+    p.thr_us = 1800; r.run(0.02f, p); float ihold = 0; for (int k = 0; k < 10; k++) { r.run(0.02f, p); for (int a = 0; a < 3; a++) ihold = fmaxf(ihold, fabsf(r.out.pid_i[a])); }
+    CHECK(!r.out.reversed3d && ihold == 0.0f, "a reversal: the I-terms held at zero for the next 200 ms (%.4f)", ihold);
+    p.thr_us = 1200; r.run(0.3f, p); p.roll = 0.5f; r.run(0.02f, p); const float rev = rel(r.out);
+    CHECK(fwd > 0.0f && rev < 0.0f, "reversed thrust: the whole mix turned round (Betaflight motorOutputMixSign) (%.4f / %.4f)", fwd, rev);
+    p.roll = 0; p.thr_us = 1500; r.run(0.2f, p);
+    CHECK(r.out.reversed3d && r.out.throttle < 0.02f, "back to the centre from below: still reversed, at zero (%.3f, the RC smoothing on its way)", r.out.throttle);
+    p.althold = true; p.poshold = true; p.rescue = true; r.run(0.3f, p);
+    CHECK(!r.out.althold_active && !r.out.poshold_active && !((r.out.modes >> M_ALTHOLD) & 1u) && !((r.out.modes >> M_RESCUE) & 1u), "3D: Altitude Hold, Position Hold, Rescue switches do nothing");
+    p.althold = p.poshold = p.rescue = false;
+    p.aux7 = 2000; p.thr_us = 1200; r.run(0.3f, p);
+    CHECK(!r.out.reversed3d && fabsf(r.out.throttle - 150.0f / 950.0f) < 0.03f, "the 3D switch on: 3D off, the stick as usual (1200 -> %.3f forward)", r.out.throttle);
+    p.aux7 = 1000; p.thr_us = 1700; r.run(0.3f, p); p.link = false; r.run(2.0f, p);
+    CHECK(!r.out.armed, "3D: a lost link cuts the motors (Betaflight's advice for 3D: DROP) - no descent on a thrust that may be reversed");
+    // switched: the switch reverses, the stick keeps its full travel
+    Rig s; s.core.cfg.mode3d.enabled = true; s.core.cfg.mode3d.switched = true; s.core.rc.modes.add(M_3D, 7, 1300, 2100); s.core.configure();
+    Pilot q; q.mode = 1; q.thr_us = 1000; s.run(0.3f, q); q.arm = true; s.run(0.3f, q);
+    CHECK(s.out.armed && s.out.throttle_low, "3d_switched_mode: arms with the stick at the bottom");
+    q.thr_us = 1600; s.run(0.2f, q); const bool f1 = !s.out.reversed3d; q.aux7 = 2000; s.run(0.2f, q);
+    CHECK(f1 && s.out.reversed3d && fabsf(s.out.throttle - 550.0f / 950.0f) < 0.03f, "the switch reverses the motors, the same stick (%.3f)", s.out.throttle);
+    // off: nothing changes
+    Rig n; Pilot m; m.mode = 1; m.thr_us = 1500; n.run(0.3f, m); m.arm = true; n.run(0.3f, m);
+    CHECK(!n.out.armed && !n.out.reversed3d, "3D off: the stick at its centre is throttle high (no arming)");
+}
+
 int main() {
+    t_mode3d();
     t_arming(); t_attitude_modes(); t_rate_loop(); t_filters_in_the_loop(); t_throttle_boost(); t_level_modes(); t_mode_details(); t_airmode(); t_compass(); t_althold(); t_failsafe(); t_uneven_cycles(); t_pid_denom(); t_stall(); t_runaway(); t_motor_layer(); t_estimator_in_flight();
-    t_position_hold(); t_nav_fence(); t_nav_request(); t_gps_rescue(); t_switch_modes(); t_stick_arm(); t_mission(); t_ground_station(); t_loiter_flight(); t_crash_flip_core(); t_flycam();
+    t_position_hold(); t_nav_fence(); t_nav_request(); t_gps_rescue(); t_switch_modes(); t_stick_arm(); t_mission(); t_ground_station(); t_loiter_flight(); t_crash_flip_core(); t_flycam(); t_autotune_core();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

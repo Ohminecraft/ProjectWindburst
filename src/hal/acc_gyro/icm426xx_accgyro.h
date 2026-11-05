@@ -86,6 +86,8 @@ public:
     WB_FAST bool read(AgSample& out) override {
         uint8_t b[12];
         if (!bus_.read(ACCEL_DATA_X1, b, 12)) return false;      // accel X1..Z0 then gyro X1..Z0
+        // -32768 on any axis = no valid data yet (Invensense v3, as Betaflight / ArduPilot treat it): drop the whole sample
+        for (int i = 0; i < 6; i++) if (be16(b + 2 * i) == INT16_MIN) return false;
         for (int i = 0; i < 3; i++) {
             out.acc_g[i] = be16(b + 2 * i) * (1.0f / 2048.0f);
             out.gyro_dps[i] = be16(b + 6 + 2 * i) * (1.0f / 16.384f);

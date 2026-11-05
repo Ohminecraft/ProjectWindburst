@@ -55,6 +55,16 @@ int main() {
         const RcCommand c = rc.process(ch, true);
         printf("%s\n  [%d, %d, %.6f, %.6f]", first ? "" : ",", us, db[d], (double)c.roll, (double)c.throttle_raw); first = false;
     }
+    // the stick centre (receiver.mid_rc, Betaflight's mid_rc), deadband 0
+    printf("\n ],\n \"stick_mid\": ["); first = true;
+    const int mids[] = {1480, 1500, 1530};
+    for (int m = 0; m < 3; m++) for (int us = 900; us <= 2100; us += 53) {
+        wbp::Settings s; wbp::defaults(s); CoreConfig cfg; RcInterpreter rc;
+        s.receiver.deadband = 0; s.receiver.mid_rc = (uint16_t)mids[m];
+        wbp::apply_core(s, cfg, rc);
+        uint16_t ch[16]; for (int i = 0; i < 16; i++) ch[i] = 1500; ch[0] = (uint16_t)us;
+        printf("%s\n  [%d, %d, %.6f]", first ? "" : ",", us, mids[m], (double)rc.process(ch, true).roll); first = false;
+    }
     // attitude: for a spread of orientations, the angles the telemetry would report and the true body->world rotation (rows: north, east, down)
     printf("\n ],\n \"attitude\": ["); first = true;
     uint32_t seed = 12345;

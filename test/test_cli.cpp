@@ -93,7 +93,7 @@ static void t_cli() {
     { // 0.38: the transmitter's settings are not the flight controller's: not listed, not settable, not reset here
       Rig r; r.run("get tx_sticks"); CHECK(r.has("Nothing matches"), "get: no transmitter fields on the flight controller");
       r.run("dump"); CHECK(!r.has("tx_sticks") && !r.has("tx_radio") && r.has("receiver.nrf_channel"), "dump: its own sections only (the nRF24 receiver fields are there)");
-      r.run("set tx_sticks.deadband = 9"); CHECK(r.s.tx_sticks.deadband == 3, "set: a transmitter field is unknown here");
+      r.run("set tx_sticks.deadband = 9"); CHECK(r.s.tx_sticks.deadband == 15, "set: a transmitter field is unknown here (the default 15 us stays)");
       r.s.tx_sticks.deadband = 7; r.run("defaults"); CHECK(r.s.tx_sticks.deadband == 7 && r.s.rates.max_rate[0] != 0, "defaults: the transmitter's section is not touched"); }
     { Rig r; r.run("set rates.max_rate = 800,800,500");
       CHECK(r.host.applied.size() == 1 && r.host.applied[0] == SEC_RATES && !(r.srv.flags() & SF_REBOOT_REQUIRED), "a live section: applied at once, no reboot needed");

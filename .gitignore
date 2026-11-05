@@ -9,6 +9,7 @@ compile_commands.json
 external_source
 app/wbclient/__pycache__
 app/tests/__pycache__
+app/packaging/__pycache__
 build
 app/dist
 app/build

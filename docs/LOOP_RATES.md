@@ -67,3 +67,9 @@ The boot report states the reason: `imu: SPI ICM42688P (20 MHz direct), gyro 400
 - `test_proto`: layout and loading of old `general` sections. `test_core` group fast trigonometry.
 - Mutants: `python3 tools/mutate.py denom`, `python3 tools/mutate.py fastmath`.
 - `test_app` group `loop rate`: the `loop_rate_for` table. `test_fw` group `loop`: 6000 Hz on an 8000 Hz chip runs at 4000 Hz and the report gives the reason; the IMU's SPI clock in the report (there is no direct read path on the PC).
+
+## IMU chip details (0.44.0)
+- **Detection order** (`classify_spi`, as Betaflight's `gyroSpiDetectFnTable`): WHO_AM_I at 0x75 first (MPU family, ICM-2060x, ICM-426xx), then 0x72 (ICM-456xx), the IDs at 0x00 (BMI270, BMI160, ICM-209xx) last. On the MPU family reg 0x00 holds factory trim bytes and on the ICM-456xx accelerometer data, so any value can show up there.
+- **ICM-426xx / ICM-456xx: −32768 is "no valid data"** (the chip's own marker, e.g. right after start-up). A sample with that value on any axis is dropped; the loop treats it like a missed read.
+- **ICM-456xx gyro low-pass inside the chip** is chosen by bandwidth, not as a fixed divider of the rate: about 200 Hz at every gyro rate (6400 Hz: ODR/32, 3200 Hz: ODR/16, 1600 Hz: ODR/8, 800 Hz: ODR/4). Betaflight always runs this chip at 6400 Hz with ODR/32 = 200 Hz; before 0.44.0 a lower rate kept ODR/32 and so had 100 Hz (3200) down to 25 Hz (800) and much more delay.
+- Tests: `test_accgyro` (`[detect]`, the −32768 group, the ICM-456xx low-pass table). Mutants: `python3 tools/mutate.py audit043`.

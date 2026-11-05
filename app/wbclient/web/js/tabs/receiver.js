@@ -100,7 +100,7 @@ export default {
         block(tr('Máy bay theo cần'), stickPreview('ANGLE'))),
       h('div', {},
         block(tr('Giao thức'),
-          fields('receiver', ['protocol', 'rx_timeout_ms', 'deadband', 'telemetry']),
+          fields('receiver', ['protocol', 'rx_timeout_ms', 'deadband', 'yaw_deadband', 'deadband3d_throttle', 'min_check', 'mid_rc', 'max_check', 'telemetry']),
           note(tr('CRSF dùng cho mọi receiver ELRS và Crossfire nối qua UART. Chân UART của receiver đặt ở tab Chân và cổng. Có chân TX (nối vào RX của receiver) thì firmware gửi telemetry CRSF về tay phát: pin, dòng, mAh, tư thế, chế độ bay, GPS, vario. Đổi giao thức cần lưu và khởi động lại.')),
           protoHelp()),
         nrfBlock(),

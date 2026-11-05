@@ -68,7 +68,7 @@ struct VirtualBoard {
     bool has_baro2 = false, has_spi_baro = false, has_spi_mag = false;
     double baro2_offset_pa = 0;                                     // the second barometer reads this much more (its own error)
     static constexpr uint8_t kBaroCs = 35, kMagCs = 36;
-    SimGps gps;
+    SimGps gps; double gps_jump_n = 0;              // (m: added to what the GPS reports - a jump of the receiver's solution, not of the craft)
     FlowTruth flow_truth; Pmw3901Sim pmw; MspFlowSim mtf;          // what a downward camera sees; the two kinds of sensor that report it (fitted or not: has_pmw / mtf.present)
     bool has_pmw = false;
     bool has_imu = true, has_baro = true, has_mag = true, has_rc = true;
@@ -89,6 +89,8 @@ struct VirtualBoard {
     // The IMU and the compass sit on this board the way Betaflight calls CW0: chip X to the nose, chip Y to the LEFT, chip Z UP.
     // The plant works in the firmware's frame (x forward, y right, z down), so what a chip reads is that with y and z negated.
     static constexpr float kChip[3] = {1.0f, -1.0f, -1.0f};
+    // ... unless imu_align says the (first) IMU chip is turned (the firmware's AccGyroAlign, as general.board_align should then say)
+    uint8_t imu_align = 0;
 
     // ---- sensor imperfections (what the calibrations have to find; offsets, scales and the gyro bias are the CHIP's, per chip axis)
     float acc_offset[3] = {0, 0, 0}, acc_scale[3] = {1, 1, 1};     // chip reading = true / scale + offset   (so calibrated = (raw - offset) * scale)
@@ -218,7 +220,8 @@ struct VirtualBoard {
         const Vec3 a = plant.acc(), g = plant.gyro_dps();
         const float ab[3] = {a.x, a.y, a.z}, gb[3] = {g.x, g.y, g.z}; float ac[3], gc[3];
         mount(ab, ac); mount(gb, gc);
-        for (int k = 0; k < 3; k++) { imu.ta[k] = kChip[k] * ac[k] / acc_scale[k] + acc_offset[k] + acc_noise * n(r); imu.tg[k] = kChip[k] * gc[k] + gyro_bias[k] + gyro_noise * n(r); }
+        float ta[3], tg[3]; chip1(ac, ta); chip1(gc, tg);
+        for (int k = 0; k < 3; k++) { imu.ta[k] = ta[k] / acc_scale[k] + acc_offset[k] + acc_noise * n(r); imu.tg[k] = tg[k] + gyro_bias[k] + gyro_noise * n(r); }
         if (has_imu2) { float c[3], d[3]; chip2(ac, c); chip2(gc, d); for (int k = 0; k < 3; k++) { imu2.ta[k] = c[k] + acc_noise * n(r); imu2.tg[k] = d[k] + gyro2_bias[k] + gyro2_dps_err[k] + gyro_noise * n(r); } }
     }
     void refresh_slow(uint32_t now_ms) {
@@ -280,6 +283,10 @@ struct VirtualBoard {
         return 0xFF;
     }
     // the board frame -> what the second chip reads: align_chip (firmware) maps chip -> board with a signed permutation, this is its transpose
+    // the board frame -> what the first chip reads (align_chip's transpose; CW0 = kChip)
+    void chip1(const float b[3], float c[3]) const {
+        for (int j = 0; j < 3; j++) { float e[3] = {0, 0, 0}; e[j] = 1.0f; accgyro::align_chip(e, (AccGyroAlign)imu_align); c[j] = e[0] * b[0] + e[1] * b[1] + e[2] * b[2]; }
+    }
     void chip2(const float b[3], float c[3]) const {
         for (int j = 0; j < 3; j++) { float e[3] = {0, 0, 0}; e[j] = 1.0f; accgyro::align_chip(e, (AccGyroAlign)imu2_align); c[j] = e[0] * b[0] + e[1] * b[1] + e[2] * b[2]; }
     }
@@ -376,7 +383,8 @@ private:
         if (shaking) { for (int k = 0; k < 3; k++) { ab[k] += noise(0.15f); gb[k] += noise(25.0f); } }
         for (int k = 0; k < 3; k++) if (vib_dps[k] > 0) gb[k] += vib_dps[k] * sinf(6.2831853f * vib_hz[k] * (float)(g_stub_us % 1000000u) * 1e-6f);
         mount(ab, ac); mount(gb, gc);
-        for (int k = 0; k < 3; k++) { imu.ta[k] = kChip[k] * ac[k] / acc_scale[k] + acc_offset[k] + noise(acc_noise); imu.tg[k] = kChip[k] * gc[k] + gyro_bias[k] + noise(gyro_noise); }
+        float ta[3], tg[3]; chip1(ac, ta); chip1(gc, tg);
+        for (int k = 0; k < 3; k++) { imu.ta[k] = ta[k] / acc_scale[k] + acc_offset[k] + noise(acc_noise); imu.tg[k] = tg[k] + gyro_bias[k] + noise(gyro_noise); }
         if (has_imu2) { float c[3], d[3]; chip2(ac, c); chip2(gc, d); for (int k = 0; k < 3; k++) { imu2.ta[k] = c[k] + noise(acc_noise); imu2.tg[k] = d[k] + gyro2_bias[k] + gyro2_dps_err[k] + noise(gyro_noise); } }
         set_baros(ground_pa * pow(1.0 - plant.z / 44330.0, 5.255));
         const double B[3] = {0.30, 0.0, 0.38}; double bb[3]; plant.body_from_world(B, bb);              // earth field: north + down (northern hemisphere)
@@ -392,7 +400,7 @@ private:
         { const bool on = buzzer_on(); if (buzz.empty() ? on : buzz.back().on != on) buzz.push_back({now_ms, on}); }
         gps.truth.alt_m = 488.2 + plant.z; gps.truth.vd = -plant.vz;
         // the module sits on the craft: it goes where the plant goes (Betaflight's metres per degree, as the firmware's own maths uses)
-        gps.truth.lat = kLat0 + plant.pn / 111319.5; gps.truth.lon = kLon0 + plant.pe / (111319.5 * cos(kLat0 * M_PI / 180.0));
+        gps.truth.lat = kLat0 + (plant.pn + gps_jump_n) / 111319.5; gps.truth.lon = kLon0 + plant.pe / (111319.5 * cos(kLat0 * M_PI / 180.0));
         gps.truth.vn = plant.vn; gps.truth.ve = plant.ve;
         // the camera under the craft (rates in rad/s about the board's X / Y; the lidar next to it sees the same ground)
         flow_truth.push(plant.w[0], plant.w[1], plant.v_board_x(), plant.v_board_y(), plant.z, plant.R22());

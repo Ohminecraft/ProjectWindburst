@@ -235,13 +235,15 @@ static void t_msp() {
     uint8_t out[256]; size_t n = 0;
     auto v1 = [](uint8_t cmd, std::vector<uint8_t> p = {}) { std::vector<uint8_t> f = {'$', 'M', '<', (uint8_t)p.size(), cmd}; uint8_t ck = (uint8_t)(p.size() ^ cmd); for (uint8_t b : p) { f.push_back(b); ck ^= b; } f.push_back(ck); return f; };
     auto run = [&](const std::vector<uint8_t>& f) { msp::Bridge::Result r = msp::Bridge::NONE; for (uint8_t c : f) { msp::Bridge::Result x = br.feed(c, in, out, sizeof(out), n); if (x != msp::Bridge::NONE) r = x; } return r; };
-    CHECK(run(v1(msp::API_VERSION)) == msp::Bridge::REPLY && n == 9 && out[2] == '>' && out[3] == 3 && out[4] == 1 && out[6] == 1 && out[7] == 46, "API_VERSION: $M> 1.46");
+    CHECK(run(v1(msp::API_VERSION)) == msp::Bridge::REPLY && n == 9 && out[2] == '>' && out[3] == 3 && out[4] == 1 && out[6] == 1 && out[7] == 49, "API_VERSION: $M> 1.49 (Betaflight master)");
     { uint8_t ck = 0; for (size_t i = 3; i < n - 1; i++) ck ^= out[i]; CHECK(ck == out[n - 1], "reply checksum"); }
     CHECK(run(v1(msp::FC_VARIANT)) == msp::Bridge::REPLY && memcmp(out + 5, "BTFL", 4) == 0, "FC_VARIANT BTFL (the tools only talk to firmwares they know)");
     CHECK(run(v1(msp::BATTERY_STATE)) == msp::Bridge::REPLY && out[5] == 4 && out[8] == 164 && out[9] == 120 && (out[11] | out[12] << 8) == 125 && (out[14] | out[15] << 8) == 1640, "BATTERY_STATE: 4 cells, 16.4 V, 120 mAh, 1.25 A");
     in.fw_major = 0; in.fw_minor = 10; in.fw_patch = 3;
-    CHECK(run(v1(msp::BUILD_INFO)) == msp::Bridge::REPLY && out[3] == 26 && memcmp(out + 5 + 19, "w01003x", 7) == 0, "BUILD_INFO: date, time, and the version as w + major + 2-digit minor + 2-digit patch");
+    CHECK(run(v1(msp::BUILD_INFO)) == msp::Bridge::REPLY && out[3] == 26 + 2 * (int)(sizeof(msp::kBuildOptions) / 2) && memcmp(out + 5 + 19, "w01003x", 7) == 0, "BUILD_INFO: date, time, and the version as w + major + 2-digit minor + 2-digit patch");
     CHECK(run(v1(msp::MOTOR_CONFIG)) == msp::Bridge::REPLY && out[11] == 4, "MOTOR_CONFIG: 4 motors");
+    { msp::Frame f; f.cmd = msp::FC_VERSION; n = br.reply(f, in, out, sizeof(out));
+      CHECK(n == 9 && out[3] == 3, "FC_VERSION on the OSD / VTX port: 3 bytes, no version text (goggles read a fixed length)"); }
     CHECK(run(v1(msp::SET_MOTOR, {0xE8, 0x03, 0xE8, 0x03})) == msp::Bridge::REPLY && out[2] == '!' && out[3] == 0, "SET_MOTOR (spin a motor from the ESC tool): refused with $M!");
     CHECK(run(v1(77)) == msp::Bridge::REPLY && out[2] == '!', "an unknown request: $M!, as Betaflight");
     in.bf_motor_protocol = 7; in.pwm_rate = 480; in.idle_x100 = 550;
@@ -252,29 +254,40 @@ static void t_msp() {
     CHECK(run(v1(msp::BOXIDS)) == msp::Bridge::REPLY && out[3] == 4 && out[5] == 0 && out[6] == 1 && out[7] == 3 && out[8] == 46,
           "BOXIDS (119): ARM always, then the modes that have a switch - ANGLE 1, ALTHOLD 3, GPS RESCUE 46 (STABILIZE has no Betaflight box)");
     in.armed = true; in.modes_on = (1u << 0) | (1u << 3); in.health = 1u | (1u << 2) | (1u << 4); in.cpu_pct = 37; in.cycle_us = 250;
-    CHECK(run(v1(msp::STATUS)) == msp::Bridge::REPLY && out[3] == 22 && (out[9] | out[10] << 8) == (1 | 2 | 8 | 32) && out[11] == (1 | 4) && (out[16] | out[17] << 8) == 37,
-          "STATUS: sensors ACC + GYRO + BARO + GPS, flight modes ARM + ALTHOLD (bits 0 and 2 of BOXIDS), load 37 %% (%u bytes)", (unsigned)out[3]);
+    CHECK(run(v1(msp::STATUS)) == msp::Bridge::REPLY && out[3] == 27 && (out[9] | out[10] << 8) == (1 | 2 | 8 | 32) && out[11] == (1 | 4) && (out[16] | out[17] << 8) == 37 && (out[18] | out[19] << 8) == 0,
+          "STATUS (master, 27 bytes): sensors ACC + GYRO + BARO + GPS, flight modes ARM + ALTHOLD (bits 0 and 2 of BOXIDS), load 37 %%, gyro cycle 0 (%u bytes)", (unsigned)out[3]);
+    in.health |= 1u << 12;   // HEALTH_FLOW
+    CHECK(run(v1(msp::STATUS)) == msp::Bridge::REPLY && (out[9] | out[10] << 8) == (1 | 2 | 8 | 32 | 64), "an optical flow sensor: sensor bit 6 (master)");
+    in.health &= ~(1u << 12);
     { const uint32_t ms0 = in.modes_set, mo0 = in.modes_on;      // the switch modes of 0.23: ACRO_TRAINER 10, AIRMODE 11, ANTI_GRAVITY 12, BLACKBOX_ERASE 13
       in.modes_set = (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13); in.modes_on = (1u << 10) | (1u << 12);
       CHECK(run(v1(msp::BOXIDS)) == msp::Bridge::REPLY && out[3] == 5 && out[5] == 0 && out[6] == 4 && out[7] == 28 && out[8] == 31 && out[9] == 47,
             "BOXIDS: ANTI GRAVITY 4, AIR MODE 28, BLACKBOX ERASE 31, ACRO TRAINER 47 (Betaflight's permanent ids)");
       CHECK(run(v1(msp::STATUS)) == msp::Bridge::REPLY && out[11] == (1 | 2 | 16), "STATUS: ARM + ANTI GRAVITY + ACRO TRAINER (bits 0, 1, 4 of BOXIDS) (0x%x)", out[11]);
+      // 0.44: the later modes - MISSION (14) as Betaflight's AUTOPILOT 56, CRASHFLIP (16) as FLIP OVER AFTER CRASH 35; LOITER (15) and
+      // AUTOTUNE (17) have no Betaflight box
+      in.modes_set = (1u << 14) | (1u << 15) | (1u << 16) | (1u << 17);
+      CHECK(run(v1(msp::BOXIDS)) == msp::Bridge::REPLY && out[3] == 3 && out[5] == 0 && out[6] == 35 && out[7] == 56,
+            "BOXIDS: FLIP OVER AFTER CRASH 35, AUTOPILOT 56 (the mission); no box for Loiter and the autotune");
       in.modes_set = ms0; in.modes_on = mo0; }
     in.armed = false; in.blockers = (1u << 2) | (1u << 3) | (1u << 7);   // RX_LOST, THROTTLE_HIGH, BATT_LOW (none in Betaflight)
-    CHECK(run(v1(msp::STATUS_EX)) == msp::Bridge::REPLY && out[3] == 22 && out[5 + 16] == 30 && (uint32_t)(out[22] | out[23] << 8 | out[24] << 16 | out[25] << 24) == ((1u << 2) | (1u << 7)),
+    CHECK(run(v1(msp::STATUS_EX)) == msp::Bridge::REPLY && out[3] == 27 && out[5 + 16] == 30 && (uint32_t)(out[22] | out[23] << 8 | out[24] << 16 | out[25] << 24) == ((1u << 2) | (1u << 7)),
           "STATUS_EX: why it will not arm, as Betaflight's flags (RX_FAILSAFE, THROTTLE)");
+    CHECK(out[5 + 13] == 1 && out[5 + 14] == 0 && out[5 + 22] == 0 && out[5 + 23] == 0 && out[5 + 24] == 1 && out[5 + 25] == 1 && out[5 + 26] == 0,
+          "STATUS_EX tail (1.46 / 1.48): one PID profile, rate profile 0; CPU temperature 0; one rate profile; one battery profile, the first");
     in.motor_out[0] = 0.5f; in.motor_out[1] = 1.2f;
     CHECK(run(v1(msp::MOTOR)) == msp::Bridge::REPLY && (out[5] | out[6] << 8) == 1000, "MOTOR disarmed: 1000");
     in.armed = true; CHECK(run(v1(msp::MOTOR)) == msp::Bridge::REPLY && (out[5] | out[6] << 8) == 1500 && (out[7] | out[8] << 8) == 2000 && (out[13] | out[14] << 8) == 0, "MOTOR armed: the outputs, 1000 .. 2000 (motors that do not exist: 0)");
     in.armed = false; in.rx_kind = 1; in.gps = true; in.airmode = true;
     CHECK(run(v1(msp::FEATURE_CONFIG)) == msp::Bridge::REPLY && (uint32_t)(out[5] | out[6] << 8 | out[7] << 16 | out[8] << 24) == ((1u << 0) | (1u << 7) | (1u << 22)), "FEATURE_CONFIG: RX_PPM, GPS, AIRMODE from the settings");
     in.pulse_armed = 1050; in.pole_count = 12; in.bidir = true;
-    CHECK(run(v1(msp::MOTOR_CONFIG)) == msp::Bridge::REPLY && (out[5] | out[6] << 8) == 1050 && out[12] == 12 && out[13] == 1, "MOTOR_CONFIG: min throttle, poles, bidirectional DShot from the settings");
+    CHECK(run(v1(msp::MOTOR_CONFIG)) == msp::Bridge::REPLY && out[3] == 12 && (out[5] | out[6] << 8) == 0 && (out[7] | out[8] << 8) == 2000 && out[12] == 12 && out[13] == 1 && (out[15] | out[16] << 8) == 1960,
+          "MOTOR_CONFIG (master): min throttle 0 (gone after 4.5), max, poles, bidirectional DShot from the settings, motor KV 1960 at the end (1.49)");
     { std::vector<uint8_t> f = v1(msp::API_VERSION); f.back() ^= 0x5A; CHECK(run(f) == msp::Bridge::NONE && br.parser().bad() == 1, "a broken checksum: no answer"); }
     { std::vector<uint8_t> noise = {0x7E, 0x24, 0x10, 0x24, 0x4D, 0x00}; std::vector<uint8_t> f = v1(msp::API_VERSION); noise.insert(noise.end(), f.begin(), f.end());
-      CHECK(run(noise) == msp::Bridge::REPLY && out[7] == 46, "a frame right after noise that contained '$' and '$M'"); }
+      CHECK(run(noise) == msp::Bridge::REPLY && out[7] == 49, "a frame right after noise that contained '$' and '$M'"); }
     {   std::vector<uint8_t> f = {'$', 'X', '<', 0, (uint8_t)msp::API_VERSION, 0, 0, 0}; uint8_t c = 0; for (size_t i = 3; i < f.size(); i++) c = msp::crc8_dvb_s2(c, f[i]); f.push_back(c);
-        CHECK(run(f) == msp::Bridge::REPLY && out[1] == 'X' && out[2] == '>' && out[6] == 3 && out[10] == 46, "MSP v2 request: a v2 answer"); }
+        CHECK(run(f) == msp::Bridge::REPLY && out[1] == 'X' && out[2] == '>' && out[6] == 3 && out[10] == 49, "MSP v2 request: a v2 answer"); }
     CHECK(run(v1(msp::SET_PASSTHROUGH)) == msp::Bridge::PASSTHROUGH, "SET_PASSTHROUGH (legacy, no payload): the caller is asked to open the 4-way interface");
     { const size_t k = br.passthrough_reply(4, out, sizeof(out)); CHECK(k == 7 && out[3] == 1 && out[4] == msp::SET_PASSTHROUGH && out[5] == 4, "... and answers with the number of ESCs"); }
     CHECK(run(v1(msp::SET_PASSTHROUGH, {0xFF, 0})) == msp::Bridge::PASSTHROUGH, "SET_PASSTHROUGH mode 0xFF (4-way)");

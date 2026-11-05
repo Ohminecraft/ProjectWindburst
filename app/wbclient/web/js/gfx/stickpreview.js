@@ -15,7 +15,7 @@ export function stickPreview(mode0 = 'ACRO', height = 240) {
   const sticks = () => {
     const rc = store.streams.rc, rx = store.settings.receiver;
     if (!rc || !rx || !rc.link) return [0, 0, 0];
-    return [rx.ch_roll, rx.ch_pitch, rx.ch_yaw].map((c) => stick(rc.ch[c], rx.deadband));
+    return [rx.ch_roll, rx.ch_pitch, rx.ch_yaw].map((c, i) => stick(rc.ch[c], i === 2 ? rx.yaw_deadband : rx.deadband, rx.mid_rc || 1500));
   };
   const step = () => {
     const now = performance.now(), dt = last ? Math.min(0.05, (now - last) / 1000) : 0; last = now;

@@ -336,6 +336,7 @@ static void t_heartbeat() {
     State g; CHECK(gps_fix_of(g) == GPS_FIX_NO_GPS, "no GPS: NO_GPS"); g.have_gps = true; g.gps_fix = 0; CHECK(gps_fix_of(g) == GPS_FIX_NONE, "GPS without a fix: NO_FIX");
     g.gps_fix = 2; CHECK(gps_fix_of(g) == GPS_FIX_2D, "2D"); g.gps_fix = 4; CHECK(gps_fix_of(g) == GPS_FIX_3D, "GNSS + dead reckoning counts as 3D");
     CHECK(cdeg360(-90.0f) == 27000 && cdeg360(359.999f) == 0 && cdeg360(720.5f) == 50, "heading in cdeg, 0 .. 35999");
+    CHECK(cdeg360(INFINITY) == 0 && cdeg360(NAN) == 0 && cdeg360(-1e30f) < 36000, "Inf / NaN / 1e30 heading: 0, no endless loop in the telemetry task");
 }
 
 // 0.43: the parameter messages against pymavlink's bytes

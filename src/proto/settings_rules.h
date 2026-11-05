@@ -10,6 +10,7 @@
 //   pid      while an axis is under the tuning sliders its p / i / d / d_max / f are COMPUTED from the sliders (what the app wrote
 //            into those fields is replaced) - Betaflight's simplified tuning, config/simplified_tuning.c
 //   filters  while a filter slider is on, the low-pass cutoffs it owns are computed from its multiplier
+//   motors   3D needs a protocol that carries a reversed range (DShot, PWM / Oneshot / Multishot): off for DroneCAN and brushed
 // ============================================================================
 namespace wbp {
 
@@ -36,9 +37,14 @@ inline void apply_rules(S_filters& f) {
     }
 }
 
+inline void apply_rules(S_motors& m) {
+    if (m.protocol == ESC_PROTOCOL_DRONECAN || m.protocol == ESC_PROTOCOL_BRUSHED) m.mode3d = 0;
+}
+
 inline void apply_rules(Settings& s, uint8_t section) {
     if (section == SEC_PID) apply_rules(s.pid);
     else if (section == SEC_FILTERS) apply_rules(s.filters);
+    else if (section == SEC_MOTORS) apply_rules(s.motors);
 }
 
 } // namespace wbp

@@ -16,7 +16,7 @@
 - 15 error states: angle (3, earth frame), NED velocity (3), NED position (3), gyro bias (3), accel bias (3).
 - Prediction from the gyro / accel sums of **every IMU sample** (accumulated by the flight task, ~4 kHz), every 4 ms (250 Hz).
 - Measurements:
-  - GPS N/E position and N/E velocity (D if u-blox), compared against the state from `gps_delay_s` earlier (0.5 s of history kept);
+  - GPS N/E position and N/E velocity (D if u-blox), compared against the state from `gps_delay_s` earlier (0.5 s of history kept; every correction and every reset moves that history with the state, so the next fix does not see the same jump again - 0.44.0);
   - baro (altitude);
   - compass: **heading only**, Jacobian with respect to the angle of the horizontal magnetic field (not the Euler yaw angle: when the craft is tilted the two differ). At most 10 Hz, sigma 0.5 rad like ArduPilot's EK3_YAW_M_NSE: compass error near the motors is a slow offset, not white noise;
   - no GPS for more than 1 s: "stationary in place" (sigma 10 m, EK3_NOAID_M_NSE) so tilt does not drift;
@@ -48,6 +48,8 @@ The prediction step only multiplies the ~40 non-zero elements of F (≈ 1000 mul
 `test_fw` group `ekf` (real firmware on the virtual board):
 - SHADOW: aligns correctly to a 60° heading on the ground; flying legs with Position Hold, EKF heading off from truth ≤ 4°, position ≤ 1.5 m, tilt ≤ 3°.
 - NAV: Position Hold holds within 0.8 m for 10 s, pushing the stick moves exactly along the nose.
+- NAV, **position resets** (0.44.0): when the GPS solution jumps (multipath, a new satellite set) the EKF is reset to it after 5 s of rejections; Position Hold and Loiter move their target by the same step, so the craft stays where it is (12 m jump: within 0.06 m; before 0.44.0 it ended 2 m off, because the target was moved by the old estimator's step). A switch between the EKF and the old estimator (the EKF starts or stops aiding) is handled the same way, with the difference between the two positions as the step (`src/core/nav/nav_source.h`, as ArduPilot reports a lane switch).
+- **NaN / Inf measurements** (0.44.0): a GPS fix, a baro height or a compass reading with a NaN / Inf is never fused (a NaN innovation passes every gate) and never reset to - before, 5 s of a NaN GPS would have reset the state to NaN. A NaN vertical speed alone only drops the vertical part. Every variance stays above zero and no correlation above 1 under a minute of 'exact' (1e-6) measurements (`test_ekf` covariance group).
 - NAV, **no compass**: at first Position Hold is refused (the old estimator does not know heading); after a few accelerations in Altitude Hold the EKF gets heading from GPS velocity (0.5° off), Position Hold can be engaged and holds within 0.19 m for 8 s. This is where the EKF does something the old estimator cannot.
 - OFF: does not run.
 - `test_threads` (ThreadSanitizer) running with the EKF: no access outside the lock.

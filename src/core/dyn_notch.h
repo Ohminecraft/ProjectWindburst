@@ -110,6 +110,7 @@ public:
 
     int count() const { return count_; }
     float center_hz(int axis, int p) const { return center_[axis][p]; }
+    float noise_threshold() const { return noise_threshold_; }   // (between the steps it holds the running sum: read it for tests / debug only)
     void push(int axis, float sample) { acc_[axis] += sample; }
     float apply(int axis, float v) { for (int p = 0; p < count_; p++) v = notch_[axis][p].apply(v); return v; }
 
@@ -162,7 +163,7 @@ private:
         case 2: {                                  // noise floor without the peaks; centre frequencies follow the peaks above it
             int peaks = 0;
             for (int p = 0; p < count_; p++) {
-                if (peak_bin_[p] >= floor_start_) {
+                if (peak_bin_[p] > floor_start_) {     // (on the floor's first bin its lower neighbour is not in the sum: Betaflight master)
                     noise_threshold_ -= 0.75f * data_[peak_bin_[p] - 1] + data_[peak_bin_[p]] + 0.75f * data_[peak_bin_[p] + 1];
                     peaks++;
                 }

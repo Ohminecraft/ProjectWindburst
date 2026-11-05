@@ -29,6 +29,8 @@ arm.range_ok = sonar.valid(millis());
 - `setModel(AUTO|VL53L1X|VL53L0X)`, `setL1xMode(0 short | 1 medium | 2 long)` (mặc định long = 4 m; ngoài nắng gắt hãy thử medium/short), `setEnabled(false)` cho công tắc trong app.
 - Altitude Hold **không phụ thuộc** sonar: ngoài tầm đo / nghiêng quá 30° / mất tín hiệu thì Kalman bỏ qua và baro tiếp tục.
 
+**Watchdog** (0.44.0, `RangeFinder`): cảm biến ngừng trả mẫu (chip tự reset sau một lần sụt nguồn, mất chế độ đo liên tục) được khởi động lại bằng `init()` sau 0,5 s (hoặc 10 chu kỳ) im lặng, sau đó tối đa mỗi giây một lần - **chỉ khi disarm**: khởi động lại chặn bus I2C vài chục ms. Khi bay nó chỉ bị coi là cũ (`valid()` false, độ cao lùi về baro), như ArduPilot đánh dấu NoData. `restarts()` đếm số lần khởi động lại.
+
 ## Xử lý (range_height.h)
 - Độ cao = khoảng cách × cos(nghiêng); nghiêng > 30° thì bỏ mẫu. Chỉ dùng tới 90% tầm tối đa (VL53L1X long 4 m → 3,6 m; VL53L0X 1,2 m → 1,08 m).
 - Nhảy bất khả thi (> 8 m/s + 0,3 m) bị loại; 3 mẫu liên tiếp nhất quán thì chấp nhận mức mới (mái nhà, bậc thang). Tay chặn dưới drone chỉ 1–2 mẫu nên bị loại.

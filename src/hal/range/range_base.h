@@ -67,13 +67,15 @@ public:
         return true;
     }
     // Test hook / other sensor types: use any RangeDriver (must already be init()-ed).
-    bool useDriver(RangeDriver* d) { if (!d) return false; drv_ = d; height_.begin(d->min_range_m(), d->max_range_m()); fail_ = ""; return true; }
+    bool useDriver(RangeDriver* d) { if (!d) return false; drv_ = d; height_.begin(d->min_range_m(), d->max_range_m()); fail_ = ""; seen_ = false; return true; }
 
     // Returns true when a NEW tilt-corrected height was produced.
     bool update(uint32_t now_us, uint32_t now_ms, float up_cos, bool armed) {
         if (!drv_) return false;
+        if (!seen_) { seen_ = true; last_new_ms_ = last_try_ms_ = now_ms; }
         RangeReading r;
-        if (!drv_->update(now_us, r)) return false;
+        if (!drv_->update(now_us, r)) { watchdog(now_ms, armed); return false; }
+        last_new_ms_ = now_ms;
         raw_ = r;
         return height_.update(r, up_cos, now_ms, armed);
     }
@@ -89,6 +91,7 @@ public:
     const char* name() const { return drv_ ? drv_->name() : "none"; }
     const char* failReason() const { return fail_; }
     RangeHeight& height() { return height_; }
+    uint32_t restarts() const { return restarts_; }                     // how often the watchdog started the sensor again
 
 private:
 #ifdef WB_HAS_VL53L1X
@@ -107,4 +110,14 @@ private:
     bool pins_set_ = false, enabled_ = true;
     Model model_ = Model::AUTO;
     const char* fail_ = "";
+    // A chip that stopped answering (its own reset after a supply dip, continuous mode lost) gets init() again - only while
+    // disarmed: a restart blocks the I2C bus for tens of ms. In flight it is only stale (valid() false), as ArduPilot marks it NoData.
+    void watchdog(uint32_t now_ms, bool armed) {
+        const float period_ms = drv_->nominal_rate_hz() > 0.0f ? 1000.0f / drv_->nominal_rate_hz() : 100.0f;
+        const uint32_t silent_ms = (uint32_t)(10.0f * period_ms) > 500u ? (uint32_t)(10.0f * period_ms) : 500u;
+        if (armed || now_ms - last_new_ms_ < silent_ms || now_ms - last_try_ms_ < (restarts_ ? 1000u : silent_ms)) return;
+        last_try_ms_ = now_ms; restarts_++;
+        drv_->init();
+    }
+    uint32_t last_new_ms_ = 0, last_try_ms_ = 0, restarts_ = 0; bool seen_ = false;
 };

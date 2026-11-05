@@ -27,6 +27,7 @@ out.yaw_response.props_out = [0, 1, 2, 3].map((i) => m.mixerRow('QUAD_X', i, tru
 out.rate = ref.rate.map(([c, mx, e, s]) => m.actualRate(c, mx, e, s));
 out.throttle = ref.throttle.map(([mid, e, lim, t]) => m.throttleCurve(mid, e, lim, t));
 out.stick = ref.stick.map(([us, db]) => [m.stick(us, db), m.throttle01(us)]);
+out.stick_mid = ref.stick_mid.map(([us, mid]) => m.stick(us, 0, mid));
 out.attitude = ref.attitude.map(([r, p, y]) => m.rotation(r, p, y).flat());
 out.beeper = m.BEEP_PATTERNS;
 out.motor_never = m.MOTOR_NEVER;
@@ -78,6 +79,14 @@ def test_throttle_curve_matches(both):
     assert len(ref["throttle"]) > 150
     for row, v in zip(ref["throttle"], js["throttle"]):
         assert v == pytest.approx(row[4], abs=1e-4), "mid %d expo %d limit %d stick %.1f: firmware %.4f, page %.4f" % (*row, v)
+
+
+def test_stick_centre_matches(both):
+    """0.44: receiver.mid_rc (Betaflight's mid_rc) moves the centre; the travel stays 500 us either side."""
+    ref, js = both
+    assert len(ref["stick_mid"]) > 60
+    for row, v in zip(ref["stick_mid"], js["stick_mid"]):
+        assert v == pytest.approx(row[2], abs=1e-5), "us %d mid_rc %d: firmware %.4f, page %.4f" % (row[0], row[1], row[2], v)
 
 
 def test_stick_deadband_matches(both):

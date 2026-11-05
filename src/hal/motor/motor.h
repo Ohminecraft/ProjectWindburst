@@ -73,10 +73,10 @@ public:
 
     // now_us from micros(). cmd[] = mixer output for logical motors, absolute 0..1.
     // flip: armed into crash flip (fc::CoreOutput::crashflip) - the motors turn the other way (MotorOutputManager::update)
-    WB_FAST void update(uint32_t now_us, const float cmd[], bool armed, bool flip = false) {
+    WB_FAST void update(uint32_t now_us, const float cmd[], bool armed, bool flip = false, bool reversed3d = false) {
         if (!ok_) return;
         motor::Frame f;
-        mgr_.update(now_us, cmd, armed, f, flip);
+        mgr_.update(now_us, cmd, armed, f, flip, reversed3d);
         hw_->write(f);
     }
     WB_FAST void pollTelemetry(uint32_t now_ms) {

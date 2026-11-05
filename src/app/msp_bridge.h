@@ -24,7 +24,8 @@
 //   v2  '$' 'X' '<' flag cmd_lo cmd_hi len_lo len_hi payload crc8_dvb_s2(flag .. payload)
 //
 // Identification (settings msp.identity): the tools accept only flight controllers they know, so by default the MSP side answers
-// as Betaflight 4.5 does (variant "BTFL", 4.5.0, API 1.46) - for compatibility, like other non-Betaflight firmwares (esp-fc)
+// as Betaflight master does (0.44: variant "BTFL", 2026.12.0, API 1.49 - msp.c of today; the Betaflight App takes 1.44 .. 1.49)
+// - for compatibility, like other non-Betaflight firmwares (esp-fc)
 // do; the board info says what it really is. WINDBURST: variant "WBRX" and this firmware's own version.
 // Settings and live values for the configurators (Betaflight Configurator, the SpeedyBee app) are answered by a handler that
 // knows the settings (app/msp_config.h, set_handler()); this file answers the rest. MSP_SET_MOTOR (spinning a motor from a
@@ -46,7 +47,7 @@ inline uint8_t crc8_dvb_s2(uint8_t crc, uint8_t b) {
 }
 
 struct Frame { uint8_t version = 1; uint16_t cmd = 0; uint16_t len = 0; uint8_t payload[64]; };
-constexpr uint16_t kMaxReply = 256;                  // the longest answer (MSP_BOXNAMES)
+constexpr uint16_t kMaxReply = 288;                  // the longest answer (MSP_OSD_CONFIG: 261 bytes, a v1 jumbo frame)
 
 // One byte at a time; true when a whole frame with a good checksum is in `f`. A request longer than the buffer is dropped.
 class Parser {
@@ -83,8 +84,14 @@ private:
 
 // A reply in the request's own version. error: '!' instead of '>' (Betaflight: unknown command, or refused). Returns its length.
 inline size_t encode(uint8_t version, uint16_t cmd, const uint8_t* p, uint16_t n, bool error, uint8_t* out, size_t cap) {
+    if (version == 1 && n >= 255) {                   // Betaflight's v1 jumbo frame: length 255, the command, the real length (16 bit), the payload
+        if (cap < (size_t)n + 8) return 0;
+        out[0] = '$'; out[1] = 'M'; out[2] = error ? '!' : '>'; out[3] = 255; out[4] = (uint8_t)cmd; out[5] = (uint8_t)n; out[6] = (uint8_t)(n >> 8);
+        uint8_t ck = (uint8_t)(255 ^ (uint8_t)cmd ^ out[5] ^ out[6]); for (uint16_t i = 0; i < n; i++) { out[7 + i] = p[i]; ck ^= p[i]; }
+        out[7 + n] = ck; return (size_t)n + 8;
+    }
     if (version == 1) {
-        if (n > 255 || cap < (size_t)n + 6) return 0;
+        if (cap < (size_t)n + 6) return 0;
         out[0] = '$'; out[1] = 'M'; out[2] = error ? '!' : '>'; out[3] = (uint8_t)n; out[4] = (uint8_t)cmd;
         uint8_t ck = (uint8_t)(n ^ (uint8_t)cmd); for (uint16_t i = 0; i < n; i++) { out[5 + i] = p[i]; ck ^= p[i]; }
         out[5 + n] = ck; return (size_t)n + 6;
@@ -105,6 +112,7 @@ struct Info {
                                                          // DShot150 5, DShot300 6, DShot600 7, ProShot1000 8)
     uint16_t pwm_rate = 480, idle_x100 = 550;           // motor PWM rate (Hz); idle in 0.01 % (Betaflight motorIdle)
     uint8_t fw_major = 0, fw_minor = 0, fw_patch = 0;
+    uint16_t gyro_hz = 4000;                             // the gyro's sample rate (BOARD_INFO: the App's loop-rate list)
     uint8_t identity = 0;                                // msp.identity: 0 BETAFLIGHT, 1 WINDBURST
     const char* build_date = "Jan  1 2026";              // __DATE__ (11 characters)
     const char* build_time = "00:00:00";                 // __TIME__ (8)
@@ -123,12 +131,22 @@ struct Info {
 };
 
 // Our modes (core/rc.h order: ARM, ANGLE, STABILIZE, ALTHOLD, POSHOLD, FAILSAFE, BEEPER, BLACKBOX, CALIB, RESCUE, ACRO_TRAINER,
-// AIRMODE, ANTI_GRAVITY, BLACKBOX_ERASE) as Betaflight's permanent box ids (msp_box.c); 255: Betaflight has none (STABILIZE).
-constexpr int kModeBoxes = 14;
-constexpr uint8_t kBfBox[kModeBoxes] = {0, 1, 255, 3, 11, 27, 13, 26, 17, 46, 47, 28, 4, 31};
+// AIRMODE, ANTI_GRAVITY, BLACKBOX_ERASE, MISSION, LOITER, CRASHFLIP, AUTOTUNE, 3D) as Betaflight's permanent box ids (msp_box.c);
+// 255: Betaflight has none (STABILIZE, LOITER, AUTOTUNE). MISSION is master's AUTOPILOT (56), CRASHFLIP its FLIP OVER AFTER CRASH (35),
+// 3D its 3D DISABLE / SWITCH (29).
+constexpr int kModeBoxes = 19;
+constexpr uint8_t kBfBox[kModeBoxes] = {0, 1, 255, 3, 11, 27, 13, 26, 17, 46, 47, 28, 4, 31, 56, 255, 35, 255, 29};
 // Our ARM_BLOCKER_* bits (wbp_schema.h order) as Betaflight's armingDisableFlags_e bits (runtime_config.h); 255: none there.
-constexpr uint8_t kBfArmBit[18] = {0, 12, 2, 7, 8, 1, 26, 255, 29, 255, 12, 27, 255, 255, 11, 5, 18, 18};
+// 0.44: MOTOR_STALL none there, CRASHFLIP 25, CONFIGURATOR (MSP_SET_ARMING_DISABLED) = ARMING_DISABLED_MSP 16.
+constexpr int kArmBlockers = 21;
+constexpr uint8_t kBfArmBit[kArmBlockers] = {0, 12, 2, 7, 8, 1, 26, 255, 29, 255, 12, 27, 255, 255, 11, 5, 18, 18, 255, 25, 16};
 constexpr uint8_t kBfArmFlagsCount = 30;             // ARMING_DISABLE_FLAGS_COUNT (ARM_SWITCH = bit 29)
+// Betaflight's build options (msp_build_info.h) for what this firmware has: receivers CRSF, IBUS, PPM, SBUS, SPEKTRUM, MAVLINK; MAVLink
+// telemetry; acro trainer, altitude / position hold, DroneCAN, GPS, LED strip, compass, optical flow, HD OSD (MSP DisplayPort),
+// rangefinder; motors brushed, DroneCAN ESC, DShot, Multishot, Oneshot, ProShot, PWM. The App shows its GPS / LED / OSD tabs by them;
+// no servos, VTX or flight-plan options: those tabs are not served.
+constexpr uint16_t kBuildOptions[] = {4097, 4100, 4102, 4103, 4104, 4109, 12305, 16404, 16422, 16425, 16430, 16412, 16413, 16415, 16428, 16417, 16429,
+                                      8230, 8236, 8231, 8232, 8233, 8234, 8235};
 
 class Bridge {
 public:
@@ -158,7 +176,7 @@ public:
     // The answer to a request read elsewhere (the OSD's UART, osd/osd.h): the same answers, ESC passthrough always refused there.
     size_t reply(const Frame& f, const Info& info, uint8_t* out, size_t cap) {
         if (f.cmd == SET_PASSTHROUGH) { const uint8_t zero = 0; refused_++; return encode(f.version, SET_PASSTHROUGH, &zero, 1, false, out, cap); }
-        uint8_t p[kMaxReply]; uint16_t n = 0; const bool ok = respond(f, info, p, n);
+        uint8_t p[kMaxReply]; uint16_t n = 0; vtx_port_ = true; const bool ok = respond(f, info, p, n); vtx_port_ = false;
         if (!ok) unknown_++;
         answered_++;
         return encode(f.version, f.cmd, p, ok ? n : 0, !ok, out, cap);
@@ -183,18 +201,24 @@ private:
     static uint16_t clamp16(float v, float lo, float hi) { return (uint16_t)(v < lo ? lo : v > hi ? hi : v); }
     bool answer(uint16_t cmd, const Info& in, uint8_t* p, uint16_t& n) {
         switch (cmd) {
-        case API_VERSION: p[n++] = 0; p[n++] = 1; p[n++] = 46; return true;
+        case API_VERSION: p[n++] = 0; p[n++] = 1; p[n++] = 49; return true;
         case FC_VARIANT: memcpy(p, in.identity ? "WBRX" : "BTFL", 4); n = 4; return true;
-        case FC_VERSION: if (in.identity) { p[n++] = WB_FW_MAJOR; p[n++] = WB_FW_MINOR; p[n++] = WB_FW_PATCH; } else { p[n++] = 4; p[n++] = 5; p[n++] = 0; } return true;
+        case FC_VERSION:                              // master: year since 2000, month, patch, and (not on a video transmitter's port) the string
+            if (in.identity) { p[n++] = WB_FW_MAJOR; p[n++] = WB_FW_MINOR; p[n++] = WB_FW_PATCH; return true; }
+            p[n++] = 26; p[n++] = 12; p[n++] = 0; if (!vtx_port_) pstr(p, n, "2026.12.0"); return true;
         case BOARD_INFO:
-            memcpy(p, in.identity ? WB_MCU_BOARD_INFO : "WBRX", 4); n = 4; u16(p, n, 0); p[n++] = 0; p[n++] = 0;   // identifier (as Betaflight: WBRX; as Windburst: the chip), hardware revision, "FC", capabilities
+            memcpy(p, WB_MCU_BOARD_INFO, 4); n = 4; u16(p, n, 0); p[n++] = 0; p[n++] = 0;   // identifier, hardware revision, "FC", capabilities
             pstr(p, n, in.target); pstr(p, n, "IN-DEV"); pstr(p, n, "WINDBURST");              // target (the chip), board, manufacturer
             memset(p + n, 0, 32); n += 32;                                                // signature
             p[n++] = 0xFF; p[n++] = 0;                                                     // MCU type (by name), configuration state
+            u16(p, n, in.gyro_hz);                                                         // 1.43: the gyro's rate
+            u32(p, n, (in.health & (1u << 10)) ? 0u : 1u);                                 // problems: bit 0 the accelerometer is not calibrated (HEALTH_ACC_CAL)
+            p[n++] = 0; p[n++] = 0;                                                        // 1.44: SPI / I2C devices registered (not counted here)
             return true;
         case BUILD_INFO: memcpy(p, in.build_date, 11); memcpy(p + 11, in.build_time, 8); n = 19;
             { char rev[8]; rev[0] = 'w'; rev[1] = (char)('0' + in.fw_major % 10); rev[2] = (char)('0' + in.fw_minor / 10 % 10); rev[3] = (char)('0' + in.fw_minor % 10); rev[4] = (char)('0' + in.fw_patch / 10 % 10); rev[5] = (char)('0' + in.fw_patch % 10); rev[6] = 'x';   // 0.10.0: w01000x
               memcpy(p + n, rev, 7); n += 7; }
+            for (uint16_t o : kBuildOptions) u16(p, n, o);                                 // 1.46: the build options (the App shows its tabs by them)
             return true;
         case FEATURE_CONFIG: {                        // Betaflight's feature bits for what this firmware has / is set to (never 3D: the tools ask)
             uint32_t f = 0;
@@ -214,10 +238,12 @@ private:
             u16(p, n, in.cycle_us); u16(p, n, 0);                                          // cycle time, I2C errors
             u16(p, n, sensor_bits(in)); u32(p, n, mode_flags(in)); p[n++] = 0;            // sensors, flight modes (bit = place in BOXIDS), PID profile
             u16(p, n, in.cpu_pct > 100 ? 100 : in.cpu_pct);                               // load, %
-            if (cmd == STATUS) u16(p, n, in.cycle_us);                                     // gyro cycle time
+            if (cmd == STATUS) u16(p, n, 0);                                               // gyro cycle time (master: 0)
             else { p[n++] = 1; p[n++] = 0; }                                               // PID profiles, rate profile
             p[n++] = 0;                                                                    // more mode flag bytes: none
             p[n++] = kBfArmFlagsCount; u32(p, n, arm_flags(in)); p[n++] = 0;               // why it will not arm; reboot needed
+            u16(p, n, 0); p[n++] = 1;                                                      // 1.46: CPU temperature (not measured), rate profiles
+            p[n++] = 1; p[n++] = 0;                                                        // 1.48: battery profiles, the one in use
             return true; }
         case BOXIDS: { uint8_t ids[kModeBoxes]; const int k = boxes(in, ids); for (int i = 0; i < k; i++) p[n++] = ids[i]; return true; }
         case MOTOR:                                   // 1000 .. 2000, as Betaflight shows them (disarmed: 1000)
@@ -225,9 +251,9 @@ private:
                 u16(p, n, i < in.motors ? (uint16_t)(1000.0f + (in.armed ? o : 0.0f) * 1000.0f + 0.5f) : 0); }
             return true;
         case MOTOR_3D_CONFIG: u16(p, n, 1406); u16(p, n, 1514); u16(p, n, 1460); return true;
-        case MOTOR_CONFIG:                            // min throttle, max throttle, min command, motors, poles, DShot telemetry, ESC sensor
-            u16(p, n, in.pulse_armed); u16(p, n, in.pulse_max); u16(p, n, in.pulse_disarmed); p[n++] = in.motors; p[n++] = in.pole_count;
-            p[n++] = in.bidir ? 1 : 0; p[n++] = 0; return true;
+        case MOTOR_CONFIG:                            // master: 0 (min throttle, gone after 4.5), max throttle, min command, motors, poles, DShot telemetry, ESC sensor, KV
+            u16(p, n, 0); u16(p, n, in.pulse_max); u16(p, n, in.pulse_disarmed); p[n++] = in.motors; p[n++] = in.pole_count;
+            p[n++] = in.bidir ? 1 : 0; p[n++] = 0; u16(p, n, 1960); return true;           // (KV: Betaflight's default - not a setting here)
         case BATTERY_STATE:
             p[n++] = in.cells; u16(p, n, 0); p[n++] = (uint8_t)clamp16(in.batt_v * 10.0f + 0.5f, 0, 255); u16(p, n, in.mah);
             u16(p, n, (uint16_t)(int16_t)(in.amps * 100.0f)); p[n++] = 0; u16(p, n, clamp16(in.batt_v * 100.0f + 0.5f, 0, 65535));
@@ -245,6 +271,7 @@ public:
         if (in.health & (1u << 5)) b |= 1u << 2;                                           // HEALTH_MAG_READY
         if (in.health & (1u << 4)) b |= 1u << 3;                                           // HEALTH_GPS
         if (in.health & (1u << 3)) b |= 1u << 4;                                           // HEALTH_RANGE
+        if (in.health & (1u << 12)) b |= 1u << 6;                                          // HEALTH_FLOW: OPTICALFLOW (master)
         return b;
     }
     // The boxes there are, Betaflight permanent ids in increasing order: ARM always, the others when a switch is set for them.
@@ -262,11 +289,11 @@ public:
     }
     static uint32_t arm_flags(const Info& in) {
         uint32_t f = 0;
-        for (int b = 0; b < 18; b++) if (((in.blockers >> b) & 1u) && kBfArmBit[b] != 255) f |= 1u << kBfArmBit[b];
+        for (int b = 0; b < kArmBlockers; b++) if (((in.blockers >> b) & 1u) && kBfArmBit[b] != 255) f |= 1u << kBfArmBit[b];
         return in.armed ? 0u : f;
     }
 private:
-    Parser parser_; Frame f_; uint8_t pending_version_ = 1; uint32_t answered_ = 0, refused_ = 0;
+    Parser parser_; Frame f_; uint8_t pending_version_ = 1; bool vtx_port_ = false; uint32_t answered_ = 0, refused_ = 0;
     Handler handler_ = nullptr; void* handler_ctx_ = nullptr;
     uint16_t cmds_[kCmdRing] = {}; uint32_t cmd_n_ = 0, unknown_ = 0;
 };

@@ -23,7 +23,9 @@ static void t_sticks() {
     in.raw[0] = 4095; in.raw[1] = 0; in.raw[3] = 4095; in.raw[2] = 0; st.update(in, false, 10, ch);
     CHECK(ch[0] == 2000 && ch[1] == 1000 && ch[2] == 2000 && ch[3] == 1000, "full deflection: joy1 X -> roll 2000, joy1 Y -> pitch 1000, joy2 Y -> throttle 2000, joy2 X -> yaw 1000");
     c.invert[0] = 1; st.configure(c); st.update(in, false, 20, ch); CHECK(ch[0] == 1000, "invert reverses roll");
-    c.invert[0] = 0; st.configure(c); in = centred(); in.raw[0] = 2048 + (uint16_t)(2047 * 0.02); st.update(in, false, 30, ch); CHECK(ch[0] == 1500, "inside the 3 %% dead band: exactly 1500");
+    c.invert[0] = 0; st.configure(c); in = centred(); in.raw[0] = 2048 + (uint16_t)(2047 * 0.02); st.update(in, false, 30, ch); CHECK(ch[0] == 1500, "inside the 15 us dead band (2 %%: 10 us): exactly 1500");
+    in.raw[0] = 2048 + (uint16_t)(2047 * 0.06); st.update(in, false, 35, ch); CHECK(ch[0] > 1500 && ch[0] < 1520, "6 %% (30 us): past the 15 us dead band (%d)", ch[0]);
+    in = centred(); in.raw[0] = 2048 + (uint16_t)(2047 * 0.02);
     in.raw[0] = 2048 + 1023; st.update(in, false, 40, ch); const int lin = ch[0];
     c.expo = 50; st.configure(c); st.update(in, false, 50, ch); CHECK(ch[0] < lin && ch[0] > 1500, "expo 50 %% at half stick is gentler than linear (%d < %d)", ch[0], lin);
     c.expo = 0; c.map[0] = 2; c.map[3] = 0; st.configure(c); in = centred(); in.raw[2] = 4095; st.update(in, false, 60, ch); CHECK(ch[0] == 2000 && ch[3] == 1500, "the stick map: roll from joy2 X");

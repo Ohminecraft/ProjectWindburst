@@ -174,8 +174,70 @@ static void t_delayed_history() {
           "one fix 0.6 m off among fixes at 0: the estimate goes out to %.4f, the next fixes bring it back at once (%.4f, %.4f, %.4f)", after[0], after[1], after[2], after[3]);
 }
 
+// A reset moves the history with the state: the next delayed GPS comparison must not see the jump a second time.
+static void t_reset_history() {
+    printf("[ekf] a reset moves the delayed history with it\n");
+    const float dt = 0.004f;
+    // GPS: 5 s of fixes at 0, then the receiver jumps 50 m away, moving north at 5 m/s (rejected 5 s -> the state is set to it)
+    { Ekf e; e.init({0, 0, -1}, 0.0f, true); float t = 0, next = 0; uint32_t resets0 = 0, rej_after = 0; float worst_v = 0, worst_p = 0; bool after = false; float t_jump = 5.0f; float jump_n = 0; uint8_t jumps = 0, first = 0; bool seen_first = false;
+      for (int k = 0; k < 250 * 14; k++) {
+          e.predict({0, 0, 0}, {0, 0, -kG0 * dt}, dt); t += dt;
+          if (t >= next) {
+              next += 0.1f;
+              const bool jumped = t >= t_jump; const float pn = jumped ? 50.0f + 5.0f * (t - t_jump) : 0.0f, vn = jumped ? 5.0f : 0.0f;
+              const uint32_t r0 = e.status().gps_rejects;
+              e.fuse_gps(pn, 0, vn, 0, 0, false, 0.3f, 0.1f);
+              if (!seen_first) { seen_first = true; first = e.pos_reset_count(); }
+              if (!after && e.status().resets > resets0) { after = true; resets0 = e.status().resets; jump_n = e.pos_reset_n(); jumps = e.pos_reset_count(); continue; }
+              if (after) { rej_after += e.status().gps_rejects - r0; worst_v = fmaxf(worst_v, fabsf(e.vel()[0] - 5.0f)); worst_p = fmaxf(worst_p, fabsf(e.pos()[0] - pn)); }
+          }
+      }
+      CHECK(first == 1 && jumps == 2 && jump_n > 50.0f && jump_n < 60.0f && e.pos_reset_count() == 2, "the jumps of the position are counted for the position holders: the first fix, then the reset (%u, %.1f m north: 50 m + the way the receiver went meanwhile)", (unsigned)jumps, jump_n);
+      CHECK(after && rej_after == 0 && worst_v < 0.5f && worst_p < 1.0f, "GPS reset: the fixes after it are taken at once (%u rejected), velocity within %.2f m/s, position within %.2f m", (unsigned)rej_after, worst_v, worst_p); }
+    // baro: rejected 5 s (it jumped 100 m) while the vertical speed drifts to 2.5 m/s; the reset sets the speed to 0. A GPS vertical
+    // speed of 0 right after must agree with that, not with the drift in the history.
+    { Ekf e; e.init({0, 0, -1}, 0.0f, true); float t = 0, next = 0, next_b = 0; bool reset = false; uint32_t rej0 = 0; float vd_after = 0;
+      for (int k = 0; k < 250 * 12 && !(reset && t > next_b + 0.5f); k++) {
+          const bool jumped = t >= 2.0f;
+          e.predict({0, 0, 0}, {0, 0, -(kG0 + (jumped ? 0.5f : 0.0f)) * dt}, dt); t += dt;
+          if (t >= next_b) { next_b += 0.02f; const uint32_t r = e.status().resets; e.fuse_baro(jumped ? 100.0f : 0.0f); if (e.status().resets > r) { reset = true; rej0 = e.status().gps_rejects; next = t; } }
+          if (t >= next) { next += 0.1f; e.fuse_gps(0, 0, 0, 0, 0, reset, 0.3f, 0.1f); if (reset) vd_after = fmaxf(vd_after, fabsf(e.vel()[2])); }
+      }
+      CHECK(reset && e.status().gps_rejects == rej0 && fabsf(vd_after) < 0.3f, "baro reset: the GPS vertical speed after it agrees (%u rejected, vd within %.2f m/s)", (unsigned)(e.status().gps_rejects - rej0), vd_after); }
+}
+
+// The covariance stays a covariance (ArduPilot EKF3 ForceSymmetry / ConstrainVariances, and a fusion that would make a variance
+// negative is not applied), and a NaN measurement is never fused.
+static void t_covariance_health() {
+    printf("[ekf] the covariance stays healthy, a NaN measurement is refused\n");
+    auto worst_corr = [](const Ekf& e, bool& diag_ok) { float w = 0; diag_ok = true;
+        for (int i = 0; i < Ekf::N; i++) { const float pii = e.cov(i, i); diag_ok &= pii > 0.0f && isfinite(pii);
+            for (int j = 0; j < Ekf::N; j++) if (i != j) { const float d = sqrtf(fabsf(pii * e.cov(j, j))); w = fmaxf(w, d > 0 ? fabsf(e.cov(i, j)) / d : (e.cov(i, j) != 0 ? 1e9f : 0.0f)); } }
+        return w; };
+    // a baro that claims to be exact (1 mm), many times a step, for a minute: float rounding drives the height variance to the floor
+    { Ekf e; e.cfg.baro_sigma = 1e-6f; e.cfg.gate_baro = 0; e.cfg.gps_pos_sigma_min = 1e-6f; e.cfg.gps_vel_sigma_min = 1e-6f; e.init({0, 0, -1}, 0.0f, true); const float dt = 0.004f; float worst = 0; bool ok = true;
+      for (int k = 0; k < 250 * 60; k++) { e.predict({0.0001f, -0.0002f, 0.0001f}, {0.001f * dt, 0, -kG0 * dt}, dt); for (int r = 0; r < 4; r++) e.fuse_baro(0.0f);
+          if (k % 25 == 0) e.fuse_gps(0, 0, 0, 0, 0, true, 1e-6f, 1e-6f);
+          bool d; worst = fmaxf(worst, worst_corr(e, d)); ok &= d; }
+      CHECK(ok && worst <= 1.0001f && isfinite(e.pos()[2]) && fabsf(e.pos()[2]) < 0.1f, "an 'exact' baro and GPS for a minute: every variance > 0, no correlation above 1 (%.4f), height %.3f m", worst, e.pos()[2]); }
+    // a NaN measurement: refused, the state stays
+    { Ekf e; e.init({0, 0, -1}, 0.0f, true); const float dt = 0.004f;
+      for (int k = 0; k < 250; k++) { e.predict({0, 0, 0}, {0, 0, -kG0 * dt}, dt); if (k % 25 == 0) e.fuse_gps(0, 0, 0, 0, 0, true, 0.3f, 0.1f); e.fuse_baro(0.0f); }
+      const uint32_t rej0 = e.status().gps_rejects; e.fuse_gps(0, 0, 0, 0, NAN, true, 0.3f, 0.1f); const uint32_t rej_vd = e.status().gps_rejects - rej0;
+      e.fuse_mag({NAN, 0, 0.4f}, 0.0f); e.fuse_gps_vel(NAN, 0, 0, false, 0.1f); e.fuse_gps_vel(0, INFINITY, 0, false, 0.1f);
+      e.fuse_baro(NAN); e.fuse_gps(NAN, 0, 0, 0, 0, true, 0.3f, 0.1f); e.fuse_gps(0, 0, NAN, 0, NAN, true, 0.3f, 0.1f);
+      bool d; const float w = worst_corr(e, d); bool fin = true; for (int i = 0; i < 3; i++) fin &= isfinite(e.pos()[i]) && isfinite(e.vel()[i]);
+      CHECK(fin && d && w <= 1.0001f && isfinite(e.q()[0]), "NaN baro / GPS position / GPS velocity / compass: refused, the state and the covariance stay finite"); 
+      CHECK(rej_vd == 0, "a NaN vertical speed only: the rest of the fix is used, not counted as rejected"); }
+    // NaN for longer than the reset time (5 s): the rejection timer must not reset the state to NaN
+    { Ekf e; e.init({0, 0, -1}, 0.0f, true); const float dt = 0.004f;
+      for (int k = 0; k < 250 * 8; k++) { e.predict({0, 0, 0}, {0, 0, -kG0 * dt}, dt); if (k % 25 == 0) e.fuse_gps(k < 250 ? 0.0f : NAN, 0, 0, 0, 0, true, 0.3f, 0.1f); e.fuse_baro(k < 250 ? 0.0f : NAN); }
+      bool fin = true; for (int i = 0; i < 3; i++) fin &= isfinite(e.pos()[i]) && isfinite(e.vel()[i]);
+      CHECK(fin, "7 s of NaN GPS position and baro: no reset to NaN (pos %.2f %.2f %.2f)", e.pos()[0], e.pos()[1], e.pos()[2]); }
+}
+
 int main() {
-    t_basic(); t_heading(); t_gps_trouble(); t_ground(); t_delayed_history();
+    t_basic(); t_heading(); t_gps_trouble(); t_ground(); t_delayed_history(); t_reset_history(); t_covariance_health();
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

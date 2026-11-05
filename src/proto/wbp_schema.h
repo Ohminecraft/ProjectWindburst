@@ -8,10 +8,10 @@
 // so a struct is its own wire image). The Python client builds the same layouts from the same json.
 namespace wbp {
 constexpr uint8_t kProtocolVersion = 1;
-constexpr uint32_t kSchemaHash = 0x5ACBE279u;
+constexpr uint32_t kSchemaHash = 0x1760AD1Fu;
 
 enum Err : uint8_t { ERR_OK, ERR_UNKNOWN, ERR_BAD_ARG, ERR_ARMED, ERR_BUSY, ERR_NOT_SUPPORTED, ERR_BAD_SECTION, ERR_SIZE_MISMATCH, ERR_STORAGE, ERR_NO_SENSOR, ERR_BAD_STATE, ERR_FAILED };
-enum Cmd : uint8_t { CMD_GYRO_CAL = 1, CMD_ACC_CAL_POINT = 2, CMD_ACC_CAL_FINISH = 3, CMD_LEVEL_TRIM = 4, CMD_MAG_CAL_START = 5, CMD_MAG_CAL_FINISH = 6, CMD_MAG_CAL_CANCEL = 7, CMD_MOTOR_TEST = 8, CMD_MOTOR_STOP = 9, CMD_MOTOR_DIRECTION = 10, CMD_MOTOR_BEACON = 11, CMD_SET_HOME = 12, CMD_ESC_TELEMETRY = 13, CMD_APPLY_SETTINGS = 14, CMD_REPORT = 15, CMD_ACC_CAL_CANCEL = 16, CMD_BEEP = 17, CMD_BLACKBOX_ERASE = 18, CMD_BLACKBOX_STREAM = 19, CMD_BLACKBOX_SESSION = 20, CMD_BLACKBOX_READ = 21, CMD_MAG_AUTOCAL = 22, CMD_MISSION = 23, CMD_BIND = 24, CMD_STICK_CAL = 25, CMD_FLOW_CAL = 26 };
+enum Cmd : uint8_t { CMD_GYRO_CAL = 1, CMD_ACC_CAL_POINT = 2, CMD_ACC_CAL_FINISH = 3, CMD_LEVEL_TRIM = 4, CMD_MAG_CAL_START = 5, CMD_MAG_CAL_FINISH = 6, CMD_MAG_CAL_CANCEL = 7, CMD_MOTOR_TEST = 8, CMD_MOTOR_STOP = 9, CMD_MOTOR_DIRECTION = 10, CMD_MOTOR_BEACON = 11, CMD_SET_HOME = 12, CMD_ESC_TELEMETRY = 13, CMD_APPLY_SETTINGS = 14, CMD_REPORT = 15, CMD_ACC_CAL_CANCEL = 16, CMD_BEEP = 17, CMD_BLACKBOX_ERASE = 18, CMD_BLACKBOX_STREAM = 19, CMD_BLACKBOX_SESSION = 20, CMD_BLACKBOX_READ = 21, CMD_MAG_AUTOCAL = 22, CMD_MISSION = 23, CMD_BIND = 24, CMD_STICK_CAL = 25, CMD_FLOW_CAL = 26, CMD_BOARD_ALIGN = 27 };
 enum SectionId : uint8_t { SEC_GENERAL = 1, SEC_RECEIVER = 2, SEC_MODES = 3, SEC_RATES = 4, SEC_PID = 5, SEC_MOTORS = 6, SEC_SENSORS = 7, SEC_GPS = 8, SEC_BEEPER = 9, SEC_PORTS = 10, SEC_PINS = 11, SEC_CALIBRATION = 12, SEC_BATTERY = 13, SEC_BLACKBOX = 14, SEC_FILTERS = 15, SEC_FLOW = 16, SEC_NAV = 17, SEC_SERVO = 18, SEC_ALTHOLD = 19, SEC_CAN = 21, SEC_LED = 22, SEC_TELEMETRY = 23, SEC_OSD = 24, SEC_MSP = 25, SEC_MISSION = 26, SEC_TX_RADIO = 27, SEC_TX_STICKS = 28 };
 enum StreamId : uint8_t { STR_ATTITUDE = 1, STR_RC = 2, STR_STATUS = 3, STR_MOTORS = 4, STR_SENSORS = 5, STR_GPS = 6, STR_ESTIMATE = 7, STR_GYRO_FAST = 8, STR_CALIBRATION = 9, STR_BATTERY = 10, STR_BLACKBOX = 11, STR_TUNING = 12, STR_NAV = 13, STR_LINK = 14, STR_CAN = 15, STR_SATELLITES = 16, STR_TX = 17 };
 enum LAYOUT_E : uint8_t { LAYOUT_QUAD_X, LAYOUT_QUAD_PLUS, LAYOUT_HEX_X, LAYOUT_HEX_PLUS, LAYOUT_HEX_X_BF, LAYOUT_HEX_H, LAYOUT_Y6, LAYOUT_Y4, LAYOUT_OCTO_X8, LAYOUT_OCTO_FLAT_PLUS, LAYOUT_OCTO_FLAT_X, LAYOUT_VTAIL4, LAYOUT_ATAIL4, LAYOUT_QUAD_X_1234 };
@@ -26,13 +26,13 @@ enum RANGE_MODEL_E : uint8_t { RANGE_MODEL_AUTO, RANGE_MODEL_VL53L1X, RANGE_MODE
 enum MAG_MODEL_E : uint8_t { MAG_MODEL_AUTO, MAG_MODEL_HMC5883L, MAG_MODEL_QMC5883L, MAG_MODEL_QMC5883P, MAG_MODEL_AK8963_MPU9250, MAG_MODEL_DRONECAN, MAG_MODEL_RM3100, MAG_MODEL_MSP };
 enum BARO_MODEL_E : uint8_t { BARO_MODEL_AUTO, BARO_MODEL_DRONECAN, BARO_MODEL_MSP };
 enum PORT_FUNCTION_E : uint8_t { PORT_FUNCTION_NONE, PORT_FUNCTION_SERIAL_RX, PORT_FUNCTION_GPS, PORT_FUNCTION_TELEMETRY, PORT_FUNCTION_FLOW_MSP, PORT_FUNCTION_ESC_SENSOR, PORT_FUNCTION_DISPLAYPORT };
-enum MODE_E : uint8_t { MODE_ARM, MODE_ANGLE, MODE_STABILIZE, MODE_ALTHOLD, MODE_POSHOLD, MODE_FAILSAFE, MODE_BEEPER, MODE_BLACKBOX, MODE_CALIB, MODE_RESCUE, MODE_ACRO_TRAINER, MODE_AIRMODE, MODE_ANTI_GRAVITY, MODE_BLACKBOX_ERASE, MODE_MISSION, MODE_LOITER, MODE_CRASHFLIP };
+enum MODE_E : uint8_t { MODE_ARM, MODE_ANGLE, MODE_STABILIZE, MODE_ALTHOLD, MODE_POSHOLD, MODE_FAILSAFE, MODE_BEEPER, MODE_BLACKBOX, MODE_CALIB, MODE_RESCUE, MODE_ACRO_TRAINER, MODE_AIRMODE, MODE_ANTI_GRAVITY, MODE_BLACKBOX_ERASE, MODE_MISSION, MODE_LOITER, MODE_CRASHFLIP, MODE_AUTOTUNE, MODE_3D };
 enum FAILSAFE_E : uint8_t { FAILSAFE_NONE, FAILSAFE_GUARD, FAILSAFE_DESCENT, FAILSAFE_LANDED };
 enum AH_STATE_E : uint8_t { AH_STATE_STOPPED, AH_STATE_LANDED_IDLE, AH_STATE_LANDED_PRE_TAKEOFF, AH_STATE_TAKEOFF, AH_STATE_FLYING };
 enum GPS_STATE_E : uint8_t { GPS_STATE_UNKNOWN, GPS_STATE_INITIALIZED, GPS_STATE_DETECT_BAUD, GPS_STATE_CHANGE_BAUD, GPS_STATE_CONFIGURE, GPS_STATE_RECEIVING_DATA, GPS_STATE_LOST_COMMUNICATION };
 enum CAL_KIND_E : uint8_t { CAL_KIND_NONE, CAL_KIND_GYRO, CAL_KIND_ACCEL, CAL_KIND_MAG, CAL_KIND_MAG_AUTO };
 enum CAL_STATE_E : uint8_t { CAL_STATE_IDLE, CAL_STATE_RUNNING, CAL_STATE_DONE, CAL_STATE_FAILED };
-enum MAG_CAL_RESULT_E : uint8_t { MAG_CAL_RESULT_OK, MAG_CAL_RESULT_TOO_FEW_SAMPLES, MAG_CAL_RESULT_POOR_COVERAGE, MAG_CAL_RESULT_SINGULAR, MAG_CAL_RESULT_NOT_ELLIPSOID, MAG_CAL_RESULT_TOO_DISTORTED, MAG_CAL_RESULT_BAD_FIELD_STRENGTH, MAG_CAL_RESULT_BAD_FIT, MAG_CAL_RESULT_NO_MOTION };
+enum MAG_CAL_RESULT_E : uint8_t { MAG_CAL_RESULT_OK, MAG_CAL_RESULT_TOO_FEW_SAMPLES, MAG_CAL_RESULT_POOR_COVERAGE, MAG_CAL_RESULT_SINGULAR, MAG_CAL_RESULT_NOT_ELLIPSOID, MAG_CAL_RESULT_TOO_DISTORTED, MAG_CAL_RESULT_BAD_FIELD_STRENGTH, MAG_CAL_RESULT_BAD_FIT, MAG_CAL_RESULT_NO_MOTION, MAG_CAL_RESULT_OFFSET_TOO_LARGE };
 enum BATT_SOURCE_E : uint8_t { BATT_SOURCE_AUTO, BATT_SOURCE_ADC, BATT_SOURCE_ESC, BATT_SOURCE_NONE, BATT_SOURCE_DRONECAN };
 enum BATT_STATE_E : uint8_t { BATT_STATE_NOT_PRESENT, BATT_STATE_OK, BATT_STATE_WARNING, BATT_STATE_CRITICAL };
 enum BUZZER_TYPE_E : uint8_t { BUZZER_TYPE_ACTIVE, BUZZER_TYPE_PASSIVE };
@@ -87,12 +87,16 @@ enum NRF_RATE_E : uint8_t { NRF_RATE_R250K, NRF_RATE_R1M, NRF_RATE_R2M };
 enum NRF_POWER_E : uint8_t { NRF_POWER_MIN, NRF_POWER_LOW, NRF_POWER_HIGH, NRF_POWER_MAX };
 enum NRF_PPS_E : uint8_t { NRF_PPS_HZ50, NRF_PPS_HZ100, NRF_PPS_HZ150 };
 enum BIND_STATE_E : uint8_t { BIND_STATE_IDLE, BIND_STATE_LISTEN, BIND_STATE_BINDING, BIND_STATE_BOUND, BIND_STATE_FAILED };
-enum FLY_MODE_E : uint8_t { FLY_MODE_ACRO, FLY_MODE_ANGLE, FLY_MODE_STABILIZE, FLY_MODE_ALTHOLD, FLY_MODE_POSHOLD, FLY_MODE_RESCUE, FLY_MODE_MISSION, FLY_MODE_LOITER, FLY_MODE_CRASHFLIP };
+enum FLY_MODE_E : uint8_t { FLY_MODE_ACRO, FLY_MODE_ANGLE, FLY_MODE_STABILIZE, FLY_MODE_ALTHOLD, FLY_MODE_POSHOLD, FLY_MODE_RESCUE, FLY_MODE_MISSION, FLY_MODE_LOITER, FLY_MODE_CRASHFLIP, FLY_MODE_AUTOTUNE };
 enum FLOW_CAL_RESULT_E : uint8_t { FLOW_CAL_RESULT_OK, FLOW_CAL_RESULT_TOO_FEW, FLOW_CAL_RESULT_SIGN_X, FLOW_CAL_RESULT_SIGN_Y, FLOW_CAL_RESULT_AXES_DIFFER };
 enum FLY_STYLE_E : uint8_t { FLY_STYLE_FPV, FLY_STYLE_FLYCAM };
 enum FLYCAM_HOLD_E : uint8_t { FLYCAM_HOLD_LOITER, FLYCAM_HOLD_POSHOLD };
+enum FLYCAM_ATTITUDE_E : uint8_t { FLYCAM_ATTITUDE_ANGLE, FLYCAM_ATTITUDE_STABILIZE };
 enum TX_THROTTLE_E : uint8_t { TX_THROTTLE_ALTPOS, TX_THROTTLE_MANUAL };
-enum ARM_BLOCKER_B : uint32_t { ARM_BLOCKER_NO_IMU = 1u << 0, ARM_BLOCKER_GYRO_NOT_CAL = 1u << 1, ARM_BLOCKER_RX_LOST = 1u << 2, ARM_BLOCKER_THROTTLE_HIGH = 1u << 3, ARM_BLOCKER_ANGLE_TOO_HIGH = 1u << 4, ARM_BLOCKER_FAILSAFE = 1u << 5, ARM_BLOCKER_ALTHOLD_NO_BARO = 1u << 6, ARM_BLOCKER_BATT_LOW = 1u << 7, ARM_BLOCKER_ARM_SWITCH_ON = 1u << 8, ARM_BLOCKER_CONFIG_UNSAVED = 1u << 9, ARM_BLOCKER_CALIBRATING = 1u << 10, ARM_BLOCKER_POSHOLD_NO_GPS = 1u << 11, ARM_BLOCKER_MAG_NOT_CALIBRATED = 1u << 12, ARM_BLOCKER_PIN_CONFLICT = 1u << 13, ARM_BLOCKER_LOOP_RATE = 1u << 14, ARM_BLOCKER_RUNAWAY_TAKEOFF = 1u << 15, ARM_BLOCKER_RESCUE_NO_FIX = 1u << 16, ARM_BLOCKER_RESCUE_NO_COMPASS = 1u << 17, ARM_BLOCKER_MOTOR_STALL = 1u << 18, ARM_BLOCKER_CRASHFLIP = 1u << 19 };
+enum AUTOTUNE_STATE_E : uint8_t { AUTOTUNE_STATE_OFF, AUTOTUNE_STATE_NOT_FLYING, AUTOTUNE_STATE_LEVELLING, AUTOTUNE_STATE_TWITCHING, AUTOTUNE_STATE_PILOT, AUTOTUNE_STATE_FINISHED, AUTOTUNE_STATE_FAILED };
+enum AUTOTUNE_STEP_E : uint8_t { AUTOTUNE_STEP_RATE_D_UP, AUTOTUNE_STEP_RATE_D_DOWN, AUTOTUNE_STEP_RATE_P_UP, AUTOTUNE_STEP_ANGLE_P_DOWN, AUTOTUNE_STEP_ANGLE_P_UP, AUTOTUNE_STEP_COMPLETE };
+enum BOARD_ALIGN_RESULT_E : uint8_t { BOARD_ALIGN_RESULT_OK, BOARD_ALIGN_RESULT_NOT_STILL, BOARD_ALIGN_RESULT_NO_GRAVITY, BOARD_ALIGN_RESULT_NO_PITCH, BOARD_ALIGN_RESULT_NO_ROLL, BOARD_ALIGN_RESULT_DIRECTION, BOARD_ALIGN_RESULT_NO_FIT };
+enum ARM_BLOCKER_B : uint32_t { ARM_BLOCKER_NO_IMU = 1u << 0, ARM_BLOCKER_GYRO_NOT_CAL = 1u << 1, ARM_BLOCKER_RX_LOST = 1u << 2, ARM_BLOCKER_THROTTLE_HIGH = 1u << 3, ARM_BLOCKER_ANGLE_TOO_HIGH = 1u << 4, ARM_BLOCKER_FAILSAFE = 1u << 5, ARM_BLOCKER_ALTHOLD_NO_BARO = 1u << 6, ARM_BLOCKER_BATT_LOW = 1u << 7, ARM_BLOCKER_ARM_SWITCH_ON = 1u << 8, ARM_BLOCKER_CONFIG_UNSAVED = 1u << 9, ARM_BLOCKER_CALIBRATING = 1u << 10, ARM_BLOCKER_POSHOLD_NO_GPS = 1u << 11, ARM_BLOCKER_MAG_NOT_CALIBRATED = 1u << 12, ARM_BLOCKER_PIN_CONFLICT = 1u << 13, ARM_BLOCKER_LOOP_RATE = 1u << 14, ARM_BLOCKER_RUNAWAY_TAKEOFF = 1u << 15, ARM_BLOCKER_RESCUE_NO_FIX = 1u << 16, ARM_BLOCKER_RESCUE_NO_COMPASS = 1u << 17, ARM_BLOCKER_MOTOR_STALL = 1u << 18, ARM_BLOCKER_CRASHFLIP = 1u << 19, ARM_BLOCKER_CONFIGURATOR = 1u << 20 };
 enum HEALTH_B : uint32_t { HEALTH_IMU = 1u << 0, HEALTH_GYRO_CAL = 1u << 1, HEALTH_BARO = 1u << 2, HEALTH_RANGE = 1u << 3, HEALTH_GPS = 1u << 4, HEALTH_MAG_READY = 1u << 5, HEALTH_MAG_CAL = 1u << 6, HEALTH_RX = 1u << 7, HEALTH_MOTORS = 1u << 8, HEALTH_ESC_TELEMETRY = 1u << 9, HEALTH_ACC_CAL = 1u << 10, HEALTH_BATTERY = 1u << 11, HEALTH_FLOW = 1u << 12, HEALTH_IMU2 = 1u << 13, HEALTH_CAN = 1u << 14 };
 enum SETTINGS_FLAGS_B : uint32_t { SETTINGS_FLAGS_DIRTY = 1u << 0, SETTINGS_FLAGS_REBOOT_REQUIRED = 1u << 1 };
 enum EST_VALID_B : uint32_t { EST_VALID_ALT = 1u << 0, EST_VALID_POS = 1u << 1, EST_VALID_YAW_FROM_MAG = 1u << 2, EST_VALID_VEL = 1u << 3, EST_VALID_FLOW = 1u << 4, EST_VALID_TILT_AIDED = 1u << 5, EST_VALID_GPS_ALT = 1u << 6, EST_VALID_GPS_VZ = 1u << 7 };
@@ -112,7 +116,7 @@ struct __attribute__((packed)) S_general {
     uint16_t fs_guard_ms;
     uint16_t fs_recover_ms;
     uint16_t fs_max_descent_s;
-    uint8_t fs_fallback_throttle;
+    uint8_t old_fs_fallback;
     uint8_t airmode;
     uint8_t airmode_start_throttle;
     uint8_t runaway_takeoff;
@@ -122,8 +126,10 @@ struct __attribute__((packed)) S_general {
     uint8_t stick_arm;
     uint8_t fly_style;
     uint8_t flycam_hold;
+    uint8_t flycam_attitude;
+    uint16_t fs_throttle;
 };
-static_assert(sizeof(S_general) == 59, "S_general layout");
+static_assert(sizeof(S_general) == 62, "S_general layout");
 inline void defaults(S_general& s) {
     s.loop_hz = 4000;
     s.est_hz = 500;
@@ -135,7 +141,7 @@ inline void defaults(S_general& s) {
     s.fs_guard_ms = 500;
     s.fs_recover_ms = 1000;
     s.fs_max_descent_s = 60;
-    s.fs_fallback_throttle = 85;
+    s.old_fs_fallback = 85;
     s.airmode = 1;
     s.airmode_start_throttle = 25;
     s.runaway_takeoff = 1;
@@ -176,6 +182,8 @@ inline void defaults(S_general& s) {
     s.stick_arm = 0;
     s.fly_style = 0;
     s.flycam_hold = 0;
+    s.flycam_attitude = 0;
+    s.fs_throttle = 1300;
 }
 inline int validate(S_general& s) {
     int fixed = 0; (void)s;
@@ -189,7 +197,7 @@ inline int validate(S_general& s) {
     { if (s.fs_guard_ms < 100) { s.fs_guard_ms = 100; fixed++; } else if (s.fs_guard_ms > 5000) { s.fs_guard_ms = 5000; fixed++; } }
     { if (s.fs_recover_ms < 100) { s.fs_recover_ms = 100; fixed++; } else if (s.fs_recover_ms > 10000) { s.fs_recover_ms = 10000; fixed++; } }
     { if (s.fs_max_descent_s < 5) { s.fs_max_descent_s = 5; fixed++; } else if (s.fs_max_descent_s > 600) { s.fs_max_descent_s = 600; fixed++; } }
-    { if (s.fs_fallback_throttle < 30) { s.fs_fallback_throttle = 30; fixed++; } else if (s.fs_fallback_throttle > 100) { s.fs_fallback_throttle = 100; fixed++; } }
+    { if (s.old_fs_fallback < 30) { s.old_fs_fallback = 30; fixed++; } else if (s.old_fs_fallback > 100) { s.old_fs_fallback = 100; fixed++; } }
     { if (s.airmode > 2) { s.airmode = 2; fixed++; } }
     { if (s.airmode_start_throttle > 100) { s.airmode_start_throttle = 100; fixed++; } }
     { if (s.runaway_takeoff > 1) { s.runaway_takeoff = 1; fixed++; } }
@@ -197,6 +205,8 @@ inline int validate(S_general& s) {
     { if (s.stick_arm > 1) { s.stick_arm = 1; fixed++; } }
     { if (s.fly_style > 1) { s.fly_style = 1; fixed++; } }
     { if (s.flycam_hold > 1) { s.flycam_hold = 1; fixed++; } }
+    { if (s.flycam_attitude > 1) { s.flycam_attitude = 1; fixed++; } }
+    { if (s.fs_throttle < 1000) { s.fs_throttle = 1000; fixed++; } else if (s.fs_throttle > 2000) { s.fs_throttle = 2000; fixed++; } }
     return fixed;
 }
 
@@ -207,7 +217,7 @@ struct __attribute__((packed)) S_receiver {
     uint8_t ch_throttle;
     uint8_t ch_yaw;
     uint8_t ch_aux0;
-    uint8_t deadband;
+    uint8_t old_deadband;
     uint16_t rx_timeout_ms;
     uint8_t rc_smoothing;
     uint8_t rc_smoothing_factor;
@@ -218,8 +228,14 @@ struct __attribute__((packed)) S_receiver {
     uint8_t nrf_rate;
     uint8_t nrf_pps;
     uint8_t nrf_bound;
+    uint8_t deadband;
+    uint8_t yaw_deadband;
+    uint16_t deadband3d_throttle;
+    uint16_t min_check;
+    uint16_t mid_rc;
+    uint16_t max_check;
 };
-static_assert(sizeof(S_receiver) == 22, "S_receiver layout");
+static_assert(sizeof(S_receiver) == 32, "S_receiver layout");
 inline void defaults(S_receiver& s) {
     s.protocol = 0;
     s.ch_roll = 0;
@@ -227,7 +243,7 @@ inline void defaults(S_receiver& s) {
     s.ch_throttle = 2;
     s.ch_yaw = 3;
     s.ch_aux0 = 4;
-    s.deadband = 2;
+    s.old_deadband = 2;
     s.rx_timeout_ms = 500;
     s.rc_smoothing = 1;
     s.rc_smoothing_factor = 30;
@@ -242,6 +258,12 @@ inline void defaults(S_receiver& s) {
     s.nrf_rate = 0;
     s.nrf_pps = 1;
     s.nrf_bound = 0;
+    s.deadband = 10;
+    s.yaw_deadband = 10;
+    s.deadband3d_throttle = 50;
+    s.min_check = 1050;
+    s.mid_rc = 1500;
+    s.max_check = 1900;
 }
 inline int validate(S_receiver& s) {
     int fixed = 0; (void)s;
@@ -251,7 +273,7 @@ inline int validate(S_receiver& s) {
     { if (s.ch_throttle > 15) { s.ch_throttle = 15; fixed++; } }
     { if (s.ch_yaw > 15) { s.ch_yaw = 15; fixed++; } }
     { if (s.ch_aux0 > 8) { s.ch_aux0 = 8; fixed++; } }
-    { if (s.deadband > 20) { s.deadband = 20; fixed++; } }
+    { if (s.old_deadband > 20) { s.old_deadband = 20; fixed++; } }
     { if (s.rx_timeout_ms < 50) { s.rx_timeout_ms = 50; fixed++; } else if (s.rx_timeout_ms > 5000) { s.rx_timeout_ms = 5000; fixed++; } }
     { if (s.rc_smoothing > 1) { s.rc_smoothing = 1; fixed++; } }
     { if (s.rc_smoothing_factor > 250) { s.rc_smoothing_factor = 250; fixed++; } }
@@ -261,6 +283,12 @@ inline int validate(S_receiver& s) {
     { if (s.nrf_rate > 2) { s.nrf_rate = 2; fixed++; } }
     { if (s.nrf_pps > 2) { s.nrf_pps = 2; fixed++; } }
     { if (s.nrf_bound > 1) { s.nrf_bound = 1; fixed++; } }
+    { if (s.deadband > 100) { s.deadband = 100; fixed++; } }
+    { if (s.yaw_deadband > 100) { s.yaw_deadband = 100; fixed++; } }
+    { if (s.deadband3d_throttle < 1) { s.deadband3d_throttle = 1; fixed++; } else if (s.deadband3d_throttle > 100) { s.deadband3d_throttle = 100; fixed++; } }
+    { if (s.min_check < 1000) { s.min_check = 1000; fixed++; } else if (s.min_check > 1450) { s.min_check = 1450; fixed++; } }
+    { if (s.mid_rc < 1200) { s.mid_rc = 1200; fixed++; } else if (s.mid_rc > 1700) { s.mid_rc = 1700; fixed++; } }
+    { if (s.max_check < 1550) { s.max_check = 1550; fixed++; } else if (s.max_check > 2000) { s.max_check = 2000; fixed++; } }
     return fixed;
 }
 
@@ -339,7 +367,7 @@ inline void defaults(S_modes& s) {
 }
 inline int validate(S_modes& s) {
     int fixed = 0; (void)s;
-    for (int i = 0; i < 16; i++) { if (s.mode[i] > 16 && s.mode[i] != 255) { s.mode[i] = 255; fixed++; } }
+    for (int i = 0; i < 16; i++) { if (s.mode[i] > 18 && s.mode[i] != 255) { s.mode[i] = 255; fixed++; } }
     for (int i = 0; i < 16; i++) { if (s.aux[i] > 7) { s.aux[i] = 7; fixed++; } }
     for (int i = 0; i < 16; i++) { if (s.lo[i] < 900) { s.lo[i] = 900; fixed++; } else if (s.lo[i] > 2100) { s.lo[i] = 2100; fixed++; } }
     for (int i = 0; i < 16; i++) { if (s.hi[i] < 900) { s.hi[i] = 900; fixed++; } else if (s.hi[i] > 2100) { s.hi[i] = 2100; fixed++; } }
@@ -436,8 +464,11 @@ struct __attribute__((packed)) S_pid {
     uint8_t acro_trainer_angle_limit;
     uint16_t acro_trainer_lookahead_ms;
     uint8_t acro_trainer_gain;
+    uint8_t autotune_axes;
+    uint8_t autotune_aggr;
+    uint8_t autotune_backoff;
 };
-static_assert(sizeof(S_pid) == 79, "S_pid layout");
+static_assert(sizeof(S_pid) == 82, "S_pid layout");
 inline void defaults(S_pid& s) {
     s.slider_mode = 2;
     s.slider_d = 100;
@@ -503,6 +534,9 @@ inline void defaults(S_pid& s) {
     s.acro_trainer_angle_limit = 20;
     s.acro_trainer_lookahead_ms = 50;
     s.acro_trainer_gain = 75;
+    s.autotune_axes = 7;
+    s.autotune_aggr = 75;
+    s.autotune_backoff = 25;
 }
 inline int validate(S_pid& s) {
     int fixed = 0; (void)s;
@@ -559,6 +593,9 @@ inline int validate(S_pid& s) {
     { if (s.acro_trainer_angle_limit < 10) { s.acro_trainer_angle_limit = 10; fixed++; } else if (s.acro_trainer_angle_limit > 80) { s.acro_trainer_angle_limit = 80; fixed++; } }
     { if (s.acro_trainer_lookahead_ms < 10) { s.acro_trainer_lookahead_ms = 10; fixed++; } else if (s.acro_trainer_lookahead_ms > 200) { s.acro_trainer_lookahead_ms = 200; fixed++; } }
     { if (s.acro_trainer_gain < 25) { s.acro_trainer_gain = 25; fixed++; } }
+    { if (s.autotune_axes > 7) { s.autotune_axes = 7; fixed++; } }
+    { if (s.autotune_aggr < 50) { s.autotune_aggr = 50; fixed++; } else if (s.autotune_aggr > 200) { s.autotune_aggr = 200; fixed++; } }
+    { if (s.autotune_backoff > 50) { s.autotune_backoff = 50; fixed++; } }
     return fixed;
 }
 
@@ -594,8 +631,15 @@ struct __attribute__((packed)) S_motors {
     uint8_t crashflip_rate;
     uint8_t crashflip_motor_pct;
     uint8_t crashflip_auto_rearm;
+    uint8_t mode3d;
+    uint8_t switched_mode3d;
+    uint16_t deadband3d_low;
+    uint16_t deadband3d_high;
+    uint16_t neutral3d;
+    uint16_t limit3d_low;
+    uint16_t limit3d_high;
 };
-static_assert(sizeof(S_motors) == 47, "S_motors layout");
+static_assert(sizeof(S_motors) == 59, "S_motors layout");
 inline void defaults(S_motors& s) {
     s.layout = 0;
     s.props_out = 0;
@@ -635,6 +679,13 @@ inline void defaults(S_motors& s) {
     s.crashflip_rate = 0;
     s.crashflip_motor_pct = 0;
     s.crashflip_auto_rearm = 0;
+    s.mode3d = 0;
+    s.switched_mode3d = 0;
+    s.deadband3d_low = 1406;
+    s.deadband3d_high = 1514;
+    s.neutral3d = 1460;
+    s.limit3d_low = 1000;
+    s.limit3d_high = 2000;
 }
 inline int validate(S_motors& s) {
     int fixed = 0; (void)s;
@@ -667,6 +718,13 @@ inline int validate(S_motors& s) {
     { if (s.crashflip_rate > 250) { s.crashflip_rate = 250; fixed++; } }
     { if (s.crashflip_motor_pct > 100) { s.crashflip_motor_pct = 100; fixed++; } }
     { if (s.crashflip_auto_rearm > 1) { s.crashflip_auto_rearm = 1; fixed++; } }
+    { if (s.mode3d > 1) { s.mode3d = 1; fixed++; } }
+    { if (s.switched_mode3d > 1) { s.switched_mode3d = 1; fixed++; } }
+    { if (s.deadband3d_low < 1000) { s.deadband3d_low = 1000; fixed++; } else if (s.deadband3d_low > 1500) { s.deadband3d_low = 1500; fixed++; } }
+    { if (s.deadband3d_high < 1500) { s.deadband3d_high = 1500; fixed++; } else if (s.deadband3d_high > 2000) { s.deadband3d_high = 2000; fixed++; } }
+    { if (s.neutral3d < 1400) { s.neutral3d = 1400; fixed++; } else if (s.neutral3d > 1600) { s.neutral3d = 1600; fixed++; } }
+    { if (s.limit3d_low < 1000) { s.limit3d_low = 1000; fixed++; } else if (s.limit3d_low > 1500) { s.limit3d_low = 1500; fixed++; } }
+    { if (s.limit3d_high < 1500) { s.limit3d_high = 1500; fixed++; } else if (s.limit3d_high > 2000) { s.limit3d_high = 2000; fixed++; } }
     return fixed;
 }
 
@@ -1392,42 +1450,54 @@ inline int validate(S_servo& s) {
 }
 
 struct __attribute__((packed)) S_althold {
-    uint8_t mid_stick;
-    uint8_t deadband;
-    uint8_t low_stick;
-    uint8_t max_stick;
+    uint8_t old_mid_stick;
+    uint8_t old_deadband;
+    uint8_t old_low_stick;
+    uint8_t old_max_stick;
     uint8_t climb_rate;
     uint8_t descend_rate;
     uint8_t accel_z;
     uint8_t jerk_z;
     uint8_t acc_p;
     uint8_t acc_i;
+    uint16_t mid_stick;
+    uint8_t deadband;
+    uint16_t low_stick;
+    uint16_t max_stick;
 };
-static_assert(sizeof(S_althold) == 10, "S_althold layout");
+static_assert(sizeof(S_althold) == 17, "S_althold layout");
 inline void defaults(S_althold& s) {
-    s.mid_stick = 50;
-    s.deadband = 5;
-    s.low_stick = 6;
-    s.max_stick = 100;
+    s.old_mid_stick = 50;
+    s.old_deadband = 5;
+    s.old_low_stick = 6;
+    s.old_max_stick = 100;
     s.climb_rate = 20;
     s.descend_rate = 12;
     s.accel_z = 25;
     s.jerk_z = 50;
     s.acc_p = 50;
     s.acc_i = 100;
+    s.mid_stick = 1500;
+    s.deadband = 50;
+    s.low_stick = 1060;
+    s.max_stick = 2000;
 }
 inline int validate(S_althold& s) {
     int fixed = 0; (void)s;
-    { if (s.mid_stick < 30) { s.mid_stick = 30; fixed++; } else if (s.mid_stick > 70) { s.mid_stick = 70; fixed++; } }
-    { if (s.deadband > 20) { s.deadband = 20; fixed++; } }
-    { if (s.low_stick < 2) { s.low_stick = 2; fixed++; } else if (s.low_stick > 25) { s.low_stick = 25; fixed++; } }
-    { if (s.max_stick < 70) { s.max_stick = 70; fixed++; } else if (s.max_stick > 100) { s.max_stick = 100; fixed++; } }
+    { if (s.old_mid_stick < 30) { s.old_mid_stick = 30; fixed++; } else if (s.old_mid_stick > 70) { s.old_mid_stick = 70; fixed++; } }
+    { if (s.old_deadband > 20) { s.old_deadband = 20; fixed++; } }
+    { if (s.old_low_stick < 2) { s.old_low_stick = 2; fixed++; } else if (s.old_low_stick > 25) { s.old_low_stick = 25; fixed++; } }
+    { if (s.old_max_stick < 70) { s.old_max_stick = 70; fixed++; } else if (s.old_max_stick > 100) { s.old_max_stick = 100; fixed++; } }
     { if (s.climb_rate < 2) { s.climb_rate = 2; fixed++; } else if (s.climb_rate > 80) { s.climb_rate = 80; fixed++; } }
     { if (s.descend_rate < 2) { s.descend_rate = 2; fixed++; } else if (s.descend_rate > 50) { s.descend_rate = 50; fixed++; } }
     { if (s.accel_z < 5) { s.accel_z = 5; fixed++; } else if (s.accel_z > 80) { s.accel_z = 80; fixed++; } }
     { if (s.jerk_z < 10) { s.jerk_z = 10; fixed++; } else if (s.jerk_z > 200) { s.jerk_z = 200; fixed++; } }
     { if (s.acc_p > 150) { s.acc_p = 150; fixed++; } }
     { if (s.acc_i > 250) { s.acc_i = 250; fixed++; } }
+    { if (s.mid_stick < 1300) { s.mid_stick = 1300; fixed++; } else if (s.mid_stick > 1700) { s.mid_stick = 1700; fixed++; } }
+    { if (s.deadband > 200) { s.deadband = 200; fixed++; } }
+    { if (s.low_stick < 1020) { s.low_stick = 1020; fixed++; } else if (s.low_stick > 1250) { s.low_stick = 1250; fixed++; } }
+    { if (s.max_stick < 1700) { s.max_stick = 1700; fixed++; } else if (s.max_stick > 2000) { s.max_stick = 2000; fixed++; } }
     return fixed;
 }
 
@@ -1950,12 +2020,13 @@ struct __attribute__((packed)) S_tx_sticks {
     uint16_t cal_max[4];
     uint8_t invert[4];
     uint8_t map[4];
-    uint8_t deadband;
+    uint8_t old_deadband;
     uint8_t expo;
     uint8_t throttle_mode;
     uint8_t throttle_rate;
+    uint8_t deadband;
 };
-static_assert(sizeof(S_tx_sticks) == 40, "S_tx_sticks layout");
+static_assert(sizeof(S_tx_sticks) == 41, "S_tx_sticks layout");
 inline void defaults(S_tx_sticks& s) {
     s.adc_pin[0] = 4;
     s.adc_pin[1] = 5;
@@ -1981,10 +2052,11 @@ inline void defaults(S_tx_sticks& s) {
     s.map[1] = 1;
     s.map[2] = 3;
     s.map[3] = 2;
-    s.deadband = 3;
+    s.old_deadband = 3;
     s.expo = 0;
     s.throttle_mode = 1;
     s.throttle_rate = 50;
+    s.deadband = 15;
 }
 inline int validate(S_tx_sticks& s) {
     int fixed = 0; (void)s;
@@ -1993,10 +2065,11 @@ inline int validate(S_tx_sticks& s) {
     for (int i = 0; i < 4; i++) { if (s.cal_max[i] > 4095) { s.cal_max[i] = 4095; fixed++; } }
     for (int i = 0; i < 4; i++) { if (s.invert[i] > 1) { s.invert[i] = 1; fixed++; } }
     for (int i = 0; i < 4; i++) { if (s.map[i] > 3) { s.map[i] = 3; fixed++; } }
-    { if (s.deadband > 20) { s.deadband = 20; fixed++; } }
+    { if (s.old_deadband > 20) { s.old_deadband = 20; fixed++; } }
     { if (s.expo > 100) { s.expo = 100; fixed++; } }
     { if (s.throttle_mode > 1) { s.throttle_mode = 1; fixed++; } }
     { if (s.throttle_rate < 5) { s.throttle_rate = 5; fixed++; } else if (s.throttle_rate > 200) { s.throttle_rate = 200; fixed++; } }
+    { if (s.deadband > 100) { s.deadband = 100; fixed++; } }
     return fixed;
 }
 
@@ -2031,13 +2104,13 @@ struct Settings {
 };
 inline void defaults(Settings& s) { defaults(s.general); defaults(s.receiver); defaults(s.modes); defaults(s.rates); defaults(s.pid); defaults(s.motors); defaults(s.sensors); defaults(s.gps); defaults(s.beeper); defaults(s.ports); defaults(s.pins); defaults(s.calibration); defaults(s.battery); defaults(s.blackbox); defaults(s.filters); defaults(s.flow); defaults(s.nav); defaults(s.servo); defaults(s.althold); defaults(s.can); defaults(s.led); defaults(s.telemetry); defaults(s.osd); defaults(s.msp); defaults(s.mission); defaults(s.tx_radio); defaults(s.tx_sticks); }
 
-// live: applied to the running firmware without a reboot. compat .. compat4: sizes of this section in older firmwares whose layout was the same
+// live: applied to the running firmware without a reboot. compat .. compat8: sizes of this section in older firmwares whose layout was the same
 // up to that size (fields were only appended or cut at the end since): such a stored record is still loaded. 0 = none.
 // role: the device that has the section (ROLE_RX = 0 the flight controller, ROLE_TX = 1 the transmitter; "role" in the schema, absent = rx).
 // One schema for both: a server serves, and a store keeps, only the sections of its own role.
-struct SectionInfo { uint8_t id; const char* name; uint16_t size; bool live; uint16_t compat, compat2, compat3, compat4; uint8_t role; };
+struct SectionInfo { uint8_t id; const char* name; uint16_t size; bool live; uint16_t compat, compat2, compat3, compat4, compat5, compat6, compat7, compat8; uint8_t role; };
 constexpr int kSectionCount = 27;
-constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 59, false, 57, 56, 24, 22, 0}, {SEC_RECEIVER, "receiver", 22, false, 13, 12, 9, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0, 0, 0}, {SEC_PID, "pid", 79, true, 75, 0, 0, 0, 0}, {SEC_MOTORS, "motors", 47, false, 44, 37, 36, 35, 0}, {SEC_SENSORS, "sensors", 21, false, 20, 19, 18, 16, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0, 0, 0}, {SEC_PINS, "pins", 57, false, 52, 50, 48, 47, 0}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0, 0, 0}, {SEC_NAV, "nav", 44, true, 43, 38, 34, 31, 0}, {SEC_SERVO, "servo", 50, true, 26, 0, 0, 0, 0}, {SEC_ALTHOLD, "althold", 10, true, 6, 0, 0, 0, 0}, {SEC_CAN, "can", 4, false, 0, 0, 0, 0, 0}, {SEC_LED, "led", 165, false, 3, 0, 0, 0, 0}, {SEC_TELEMETRY, "telemetry", 16, false, 15, 14, 0, 0, 0}, {SEC_OSD, "osd", 90, false, 73, 0, 0, 0, 0}, {SEC_MSP, "msp", 2, true, 0, 0, 0, 0, 0}, {SEC_MISSION, "mission", 450, true, 0, 0, 0, 0, 0}, {SEC_TX_RADIO, "tx_radio", 15, false, 0, 0, 0, 0, 1}, {SEC_TX_STICKS, "tx_sticks", 40, true, 0, 0, 0, 0, 1}};
+constexpr SectionInfo kSections[kSectionCount] = {{SEC_GENERAL, "general", 62, false, 60, 59, 57, 56, 24, 23, 22, 0, 0}, {SEC_RECEIVER, "receiver", 32, false, 26, 22, 13, 12, 9, 0, 0, 0, 0}, {SEC_MODES, "modes", 96, true, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_RATES, "rates", 19, true, 27, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_PID, "pid", 82, true, 79, 75, 0, 0, 0, 0, 0, 0, 0}, {SEC_MOTORS, "motors", 59, false, 47, 44, 37, 36, 35, 0, 0, 0, 0}, {SEC_SENSORS, "sensors", 21, false, 20, 19, 18, 16, 0, 0, 0, 0, 0}, {SEC_GPS, "gps", 17, false, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_BEEPER, "beeper", 14, true, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_PORTS, "ports", 16, false, 15, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_PINS, "pins", 57, false, 52, 50, 48, 47, 0, 0, 0, 0, 0}, {SEC_CALIBRATION, "calibration", 82, true, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_BATTERY, "battery", 20, true, 13, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_BLACKBOX, "blackbox", 10, true, 8, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_FILTERS, "filters", 58, true, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_FLOW, "flow", 5, false, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_NAV, "nav", 44, true, 43, 38, 34, 31, 0, 0, 0, 0, 0}, {SEC_SERVO, "servo", 50, true, 26, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_ALTHOLD, "althold", 17, true, 10, 6, 0, 0, 0, 0, 0, 0, 0}, {SEC_CAN, "can", 4, false, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_LED, "led", 165, false, 3, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_TELEMETRY, "telemetry", 16, false, 15, 14, 0, 0, 0, 0, 0, 0, 0}, {SEC_OSD, "osd", 90, false, 73, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_MSP, "msp", 2, true, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_MISSION, "mission", 450, true, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {SEC_TX_RADIO, "tx_radio", 15, false, 0, 0, 0, 0, 0, 0, 0, 0, 1}, {SEC_TX_STICKS, "tx_sticks", 41, true, 40, 0, 0, 0, 0, 0, 0, 0, 1}};
 inline const SectionInfo* find_section(uint8_t id) { for (const auto& s : kSections) if (s.id == id) return &s; return nullptr; }
 // pointer to / size of a section inside a Settings object (nullptr if unknown)
 inline uint8_t* section_ptr(Settings& st, uint8_t id) { switch (id) {
@@ -2314,9 +2387,16 @@ struct __attribute__((packed)) T_tuning {
     uint16_t rc_cutoff;
     uint8_t air_state;
     int16_t pid_sum[3];
-    uint8_t hover;
+    uint16_t hover;
+    uint8_t at_state;
+    uint8_t at_axis;
+    uint8_t at_step;
+    uint8_t at_done;
+    uint8_t at_p;
+    uint8_t at_d;
+    uint16_t at_stab_p;
 };
-static_assert(sizeof(T_tuning) == 53, "T_tuning layout");
+static_assert(sizeof(T_tuning) == 62, "T_tuning layout");
 struct __attribute__((packed)) T_nav {
     uint8_t flags;
     uint8_t flow_quality;
@@ -2415,8 +2495,8 @@ struct __attribute__((packed)) T_tx {
 static_assert(sizeof(T_tx) == 37, "T_tx layout");
 // ---- commands ----
 struct CommandInfo { uint8_t id; const char* name; uint8_t arg_bytes; bool armed_ok; uint8_t writes_section; };   // writes_section: section the command changes in RAM (0 = none)
-constexpr int kCommandCount = 26;
-constexpr CommandInfo kCommands[kCommandCount] = {{CMD_GYRO_CAL, "GYRO_CAL", 0, false, 0}, {CMD_ACC_CAL_POINT, "ACC_CAL_POINT", 0, false, 0}, {CMD_ACC_CAL_FINISH, "ACC_CAL_FINISH", 0, false, 12}, {CMD_LEVEL_TRIM, "LEVEL_TRIM", 0, false, 12}, {CMD_MAG_CAL_START, "MAG_CAL_START", 0, false, 0}, {CMD_MAG_CAL_FINISH, "MAG_CAL_FINISH", 0, false, 12}, {CMD_MAG_CAL_CANCEL, "MAG_CAL_CANCEL", 0, true, 0}, {CMD_MOTOR_TEST, "MOTOR_TEST", 3, false, 0}, {CMD_MOTOR_STOP, "MOTOR_STOP", 0, true, 0}, {CMD_MOTOR_DIRECTION, "MOTOR_DIRECTION", 2, false, 0}, {CMD_MOTOR_BEACON, "MOTOR_BEACON", 1, false, 0}, {CMD_SET_HOME, "SET_HOME", 0, true, 0}, {CMD_ESC_TELEMETRY, "ESC_TELEMETRY", 1, false, 0}, {CMD_APPLY_SETTINGS, "APPLY_SETTINGS", 0, false, 0}, {CMD_REPORT, "REPORT", 0, true, 0}, {CMD_ACC_CAL_CANCEL, "ACC_CAL_CANCEL", 0, true, 0}, {CMD_BEEP, "BEEP", 1, false, 0}, {CMD_BLACKBOX_ERASE, "BLACKBOX_ERASE", 0, false, 0}, {CMD_BLACKBOX_STREAM, "BLACKBOX_STREAM", 3, true, 0}, {CMD_BLACKBOX_SESSION, "BLACKBOX_SESSION", 2, true, 0}, {CMD_BLACKBOX_READ, "BLACKBOX_READ", 8, false, 0}, {CMD_MAG_AUTOCAL, "MAG_AUTOCAL", 0, false, 0}, {CMD_MISSION, "MISSION", 1, true, 0}, {CMD_BIND, "BIND", 1, false, 0}, {CMD_STICK_CAL, "STICK_CAL", 1, false, 28}, {CMD_FLOW_CAL, "FLOW_CAL", 1, false, 17}};
+constexpr int kCommandCount = 27;
+constexpr CommandInfo kCommands[kCommandCount] = {{CMD_GYRO_CAL, "GYRO_CAL", 0, false, 0}, {CMD_ACC_CAL_POINT, "ACC_CAL_POINT", 0, false, 0}, {CMD_ACC_CAL_FINISH, "ACC_CAL_FINISH", 0, false, 12}, {CMD_LEVEL_TRIM, "LEVEL_TRIM", 0, false, 12}, {CMD_MAG_CAL_START, "MAG_CAL_START", 0, false, 0}, {CMD_MAG_CAL_FINISH, "MAG_CAL_FINISH", 0, false, 12}, {CMD_MAG_CAL_CANCEL, "MAG_CAL_CANCEL", 0, true, 0}, {CMD_MOTOR_TEST, "MOTOR_TEST", 3, false, 0}, {CMD_MOTOR_STOP, "MOTOR_STOP", 0, true, 0}, {CMD_MOTOR_DIRECTION, "MOTOR_DIRECTION", 2, false, 0}, {CMD_MOTOR_BEACON, "MOTOR_BEACON", 1, false, 0}, {CMD_SET_HOME, "SET_HOME", 0, true, 0}, {CMD_ESC_TELEMETRY, "ESC_TELEMETRY", 1, false, 0}, {CMD_APPLY_SETTINGS, "APPLY_SETTINGS", 0, false, 0}, {CMD_REPORT, "REPORT", 0, true, 0}, {CMD_ACC_CAL_CANCEL, "ACC_CAL_CANCEL", 0, true, 0}, {CMD_BEEP, "BEEP", 1, false, 0}, {CMD_BLACKBOX_ERASE, "BLACKBOX_ERASE", 0, false, 0}, {CMD_BLACKBOX_STREAM, "BLACKBOX_STREAM", 3, true, 0}, {CMD_BLACKBOX_SESSION, "BLACKBOX_SESSION", 2, true, 0}, {CMD_BLACKBOX_READ, "BLACKBOX_READ", 8, false, 0}, {CMD_MAG_AUTOCAL, "MAG_AUTOCAL", 0, false, 0}, {CMD_MISSION, "MISSION", 1, true, 0}, {CMD_BIND, "BIND", 1, false, 0}, {CMD_STICK_CAL, "STICK_CAL", 1, false, 28}, {CMD_FLOW_CAL, "FLOW_CAL", 1, false, 17}, {CMD_BOARD_ALIGN, "BOARD_ALIGN", 1, false, 1}};
 inline const CommandInfo* find_command(uint8_t id) { for (const auto& c : kCommands) if (c.id == id) return &c; return nullptr; }
 // wire value * scale = engineering value (the client applies the same numbers from the json)
 namespace scale {
@@ -2468,6 +2548,7 @@ constexpr float battery_cell = 0.001f;
 constexpr float battery_current = 0.01f;
 constexpr float tuning_anti_gravity = 0.01f;
 constexpr float tuning_pid_sum = 0.1f;
+constexpr float tuning_at_stab_p = 0.01f;
 constexpr float nav_flow_fwd = 0.01f;
 constexpr float nav_flow_right = 0.01f;
 constexpr float nav_lean_roll = 0.1f;
@@ -2484,6 +2565,6 @@ constexpr float link_uptime = 0.001f;
 } // namespace scale
 struct StreamInfo { uint8_t id; const char* name; uint16_t size; uint16_t default_rate; uint16_t max_rate; uint8_t role; };
 constexpr int kStreamCount = 17;
-constexpr StreamInfo kStreams[kStreamCount] = {{STR_ATTITUDE, "attitude", 18, 50, 200, 0}, {STR_RC, "rc", 44, 20, 100, 0}, {STR_STATUS, "status", 54, 10, 50, 0}, {STR_MOTORS, "motors", 100, 20, 100, 0}, {STR_SENSORS, "sensors", 36, 50, 200, 0}, {STR_GPS, "gps", 32, 5, 25, 0}, {STR_ESTIMATE, "estimate", 32, 20, 100, 0}, {STR_GYRO_FAST, "gyro_fast", 12, 0, 1000, 0}, {STR_CALIBRATION, "calibration", 12, 10, 20, 0}, {STR_BATTERY, "battery", 19, 2, 20, 0}, {STR_BLACKBOX, "blackbox", 34, 2, 10, 0}, {STR_TUNING, "tuning", 53, 0, 50, 0}, {STR_NAV, "nav", 38, 10, 50, 0}, {STR_LINK, "link", 32, 1, 10, 0}, {STR_CAN, "can", 211, 2, 10, 0}, {STR_SATELLITES, "satellites", 257, 1, 2, 0}, {STR_TX, "tx", 37, 20, 50, 1}};
+constexpr StreamInfo kStreams[kStreamCount] = {{STR_ATTITUDE, "attitude", 18, 50, 200, 0}, {STR_RC, "rc", 44, 20, 100, 0}, {STR_STATUS, "status", 54, 10, 50, 0}, {STR_MOTORS, "motors", 100, 20, 100, 0}, {STR_SENSORS, "sensors", 36, 50, 200, 0}, {STR_GPS, "gps", 32, 5, 25, 0}, {STR_ESTIMATE, "estimate", 32, 20, 100, 0}, {STR_GYRO_FAST, "gyro_fast", 12, 0, 1000, 0}, {STR_CALIBRATION, "calibration", 12, 10, 20, 0}, {STR_BATTERY, "battery", 19, 2, 20, 0}, {STR_BLACKBOX, "blackbox", 34, 2, 10, 0}, {STR_TUNING, "tuning", 62, 0, 50, 0}, {STR_NAV, "nav", 38, 10, 50, 0}, {STR_LINK, "link", 32, 1, 10, 0}, {STR_CAN, "can", 211, 2, 10, 0}, {STR_SATELLITES, "satellites", 257, 1, 2, 0}, {STR_TX, "tx", 37, 20, 50, 1}};
 inline const StreamInfo* find_stream(uint8_t id) { for (const auto& s : kStreams) if (s.id == id) return &s; return nullptr; }
 } // namespace wbp

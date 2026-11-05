@@ -12,6 +12,7 @@
 #include "../src/core/ahrs.h"
 #include "../src/core/tilt_aid.h"
 #include "../src/core/nav/pos_hold.h"
+#include "../src/core/nav/nav_source.h"
 #include "../src/core/rescue.h"
 #include "../src/core/nav/pos_estimator.h"
 using namespace fc;
@@ -634,8 +635,31 @@ static void t_rescue_kind() {
     { RescSim s(60, 0, 10, 0); s.in.request = true; s.run(0.5f); CHECK(s.r.phase() == RescuePhase::CLIMB, "no kind given (255): the setting's"); }
 }
 
+// Which position the navigation flies on, and one reset counter for the controllers (nav_source.h)
+static void t_nav_source() {
+    printf("[nav source] a source switch and a reset of the source in use are reported as one reset\n");
+    using fc::nav::NavSource; NavSource ns; NavSource::Src est, ekf;
+    est.pos_n = 10; est.pos_e = 5; ekf.pos_n = 12; ekf.pos_e = 4;
+    ns.update(false, est, ekf); ns.update(false, est, ekf);
+    CHECK(ns.count() == 0 && !ns.ekf(), "steady: nothing reported");
+    ns.update(true, est, ekf);
+    CHECK(ns.count() == 1 && ns.ekf() && fabsf(ns.step_n() - 2.0f) < 1e-6f && fabsf(ns.step_e() + 1.0f) < 1e-6f, "switch to the EKF: a reset by the difference (%.1f, %.1f)", ns.step_n(), ns.step_e());
+    est.reset_count = 3; est.reset_n = 50; ns.update(true, est, ekf);
+    CHECK(ns.count() == 1, "a reset of the estimator NOT in use is not reported");
+    ekf.reset_count = 1; ekf.reset_n = -7; ekf.reset_e = 0.5f; ekf.pos_n = 5; ns.update(true, est, ekf);
+    CHECK(ns.count() == 2 && fabsf(ns.step_n() + 7.0f) < 1e-6f && fabsf(ns.step_e() - 0.5f) < 1e-6f, "a reset of the EKF in use: its own step (%.1f, %.1f)", ns.step_n(), ns.step_e());
+    ns.update(false, est, ekf);
+    CHECK(ns.count() == 3 && fabsf(ns.step_n() - 5.0f) < 1e-6f && fabsf(ns.step_e() - 1.0f) < 1e-6f && !ns.ekf(), "back to the estimator: the difference again (%.1f, %.1f)", ns.step_n(), ns.step_e());
+    est.reset_count = 4; est.reset_n = 1.5f; est.reset_e = 0; ns.update(false, est, ekf);
+    CHECK(ns.count() == 4 && fabsf(ns.step_n() - 1.5f) < 1e-6f, "a reset of the estimator in use: its step");
+    ekf.pos_n = NAN; ns.update(true, est, ekf);
+    CHECK(ns.count() == 5 && ns.step_n() == 0.0f && ns.step_e() == 0.0f, "a NaN position: reported with no step (the target is not poisoned)");
+    NavSource fresh; est.reset_count = 9; fresh.update(true, est, ekf);
+    CHECK(fresh.count() == 0, "the first call only takes the state over");
+}
+
 int main() {
-    t_flow(); t_flow_fusion(); t_tilt_aid(); t_poscontrol(); t_poshold(); t_breadcrumbs(); t_rescue(); t_rescue_kind();
+    t_flow(); t_flow_fusion(); t_tilt_aid(); t_poscontrol(); t_poshold(); t_breadcrumbs(); t_rescue(); t_rescue_kind(); t_nav_source();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

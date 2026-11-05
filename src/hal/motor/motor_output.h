@@ -23,6 +23,8 @@
 // ============================================================================
 namespace motor {
 
+constexpr uint16_t kDshot3dForwardMin = 1048;      // DShot 3D: 48..1047 one way, 1048..2047 the other (Betaflight DSHOT_3D_FORWARD_MIN_THROTTLE)
+
 struct DynIdleConfig {            // Betaflight units (pg/pid: dyn_idle_*)
     uint16_t min_rpm_100 = 0;     // in 100 rpm; 0 = off
     uint8_t p_gain = 50, i_gain = 50, d_gain = 50;
@@ -45,6 +47,10 @@ struct MotorConfig {
     float output_limit = 1.0f;
     DynIdleConfig dyn;
     uint16_t telem_timeout_ms = 100;
+    // 3D (motors.mode3d, Betaflight feature 3D): reversible ESCs. DShot: 48..1047 reversed, 1048..2047 forward; PWM-type: the pulses
+    // below (Betaflight 3d_deadband_low / high, 3d_neutral, 3d_limit_low / high)
+    bool mode3d = false;
+    uint16_t db3d_low = 1406, db3d_high = 1514, neutral3d = 1460, limit3d_low = 1000, limit3d_high = 2000;
 };
 
 struct Frame {
@@ -170,7 +176,7 @@ public:
     // (turn the other way than the stored direction - not saved, an ESC restart forgets it) and its end sends 20, each 10 times
     // as Betaflight's setMotorSpinDirection, and only once the motors have run down; until it is out the motors get nothing
     // else, armed or not. While it lasts a motor commanded 0 stands (no idle).
-    WB_FAST void update(uint32_t now_us, const float cmd[], bool armed, Frame& out, bool flip = false) {
+    WB_FAST void update(uint32_t now_us, const float cmd[], bool armed, Frame& out, bool flip = false, bool reversed3d = false) {
         const Endpoints e = endpoints(cfg.protocol, cfg.pulse, cfg.idle, cfg.output_limit);
         out = Frame();
         if (is_dshot(cfg.protocol) && (armed && flip) != dir_rev_) {
@@ -188,7 +194,7 @@ public:
             bool driven = false;
             for (int i = 0; i < cfg.count; i++) {
                 const bool stand = dir_rev_ && cmd[i] <= 0.0f;
-                out.value[cfg.order[i]] = stand ? (uint16_t)round_pos(e.disarm) : to_value(cmd[i], e); driven |= !stand;
+                out.value[cfg.order[i]] = stand ? (uint16_t)round_pos(e.disarm) : use3d() ? to_value3d(cmd[i], reversed3d) : to_value(cmd[i], e); driven |= !stand;
                 out_frac_[i] = cmd[i] < 0 ? 0 : (cmd[i] > 1 ? 1 : cmd[i]);
             }
             if (driven) { spun_ = true; spun_us_ = now_us; }                // (a direction command waits until they have run down)
@@ -200,8 +206,8 @@ public:
         dir_busy_ = false;
         const bool testing = (int32_t)(test_until_us_ - now_us) > 0;
         for (int i = 0; i < cfg.count; i++) {
-            float v = e.disarm;
-            if (testing && test_frac_[i] > 0.0f) { v = to_value(test_frac_[i], e); out_frac_[i] = test_frac_[i]; spun_us_ = now_us; spun_ = true; }
+            float v = use3d() && !is_dshot(cfg.protocol) ? (float)cfg.neutral3d : e.disarm;     // (3D, PWM-type: the stop pulse is the neutral one)
+            if (testing && test_frac_[i] > 0.0f) { v = use3d() ? to_value3d(test_frac_[i], false) : to_value(test_frac_[i], e); out_frac_[i] = test_frac_[i]; spun_us_ = now_us; spun_ = true; }
             out.value[cfg.order[i]] = (uint16_t)round_pos(v);
         }
         ask_telemetry(out);
@@ -324,6 +330,18 @@ private:
         else v = cfg.pulse.armed + f * (cfg.pulse.max - cfg.pulse.armed);
         v = v < e.low ? e.low : (v > e.high ? e.high : v);        // armed motors never fall below idle, never exceed the limit
         return round_pos(v);
+    }
+    // 3D: a protocol that can carry it (DShot / ProShot, PWM / Oneshot / Multishot; not brushed, not the CAN bus)
+    WB_FAST bool use3d() const { return cfg.mode3d && !is_can(cfg.protocol) && cfg.protocol != PROTO_BRUSHED; }
+    // f = magnitude 0..1 (the mixer's output, idle inside) -> the value for a reversible ESC (Betaflight dshotInitEndpoints /
+    // analogInitEndpoints with feature 3D): DShot reversed 48..1047, forward 1048..2047; PWM-type from the deadband edge to the limit
+    WB_FAST uint16_t to_value3d(float f, bool reversed) const {
+        f = f < 0 ? 0 : (f > 1 ? 1 : f);
+        float v;
+        if (is_dshot(cfg.protocol)) v = (reversed ? (float)kDshotMinThrottle : (float)kDshot3dForwardMin) + f * (float)(kDshot3dForwardMin - 1 - kDshotMinThrottle);
+        else if (reversed) v = cfg.db3d_low - f * (float)(cfg.db3d_low - cfg.limit3d_low);
+        else v = cfg.db3d_high + f * (float)(cfg.limit3d_high - cfg.db3d_high);
+        return (uint16_t)round_pos(v);
     }
     WB_FAST void ask_telemetry(Frame& out) {
         const int8_t m = tlm_ask_;

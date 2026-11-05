@@ -75,7 +75,7 @@ export default {
 
     view.append(h('div', { class: 'cols' },
       h('div', {},
-        block(tr('Failsafe và an toàn'), fields('general', ['fs_guard_ms', 'fs_recover_ms', 'fs_max_descent_s', 'fs_fallback_throttle', 'runaway_takeoff']),
+        block(tr('Failsafe và an toàn'), fields('general', ['fs_guard_ms', 'fs_recover_ms', 'fs_max_descent_s', 'fs_throttle', 'runaway_takeoff']),
           h('p', { class: 'help' }, tr('Mất sóng quá thời gian chờ thì máy tự cân bằng và hạ xuống; chạm đất thì tắt motor. Sóng trở lại và giữ ổn định thì bạn lấy lại quyền điều khiển; công tắc Failsafe thì hết ngay khi tắt công tắc.')),
           h('p', { class: 'help' }, tr('Pin dưới mức tối thiểu cũng làm máy tự hạ xuống (tab Pin và còi), nhưng roll, pitch và yaw vẫn theo cần của bạn để chọn chỗ đáp; lần hạ cánh này không huỷ được. Đang đứng trên mặt đất mà mất sóng thì motor tắt luôn.'))),
         hasUsbName ? block(tr('Tên USB'), fields('general', ['usb_name'], { usb_name: { placeholder: usbDefault, ascii: true } }),

@@ -47,6 +47,29 @@ Error codes (`errors` in the json): `OK, UNKNOWN, BAD_ARG, ARMED, BUSY, NOT_SUPP
 
 ## 2. Settings
 
+**0.44.0:** section `general` gains `flycam_attitude` (new enum `flycam_attitude`: ANGLE, STABILIZE) at the end (59 → 60 bytes); `compat` of `general` is now 59, 57, 56, 24, 23, 22 - a section may list **six** older sizes (was four), so the 23-byte records of 0.9.0 – 0.9.4 load again. Enum `mag_cal_result` gains `OFFSET_TOO_LARGE` at the end (a compass calibration with an offset above 1.8 G is refused). Schema hash changes.
+
+**0.44.0, Betaflight's units, 3D, the board wizard:**
+- **Microseconds instead of percent**, as Betaflight. The old field keeps its place, renamed `old_*` and unused; the new one is added at the end of its section. A record of an older firmware is converted when it is loaded (only when it has the old field and not the new one):
+
+| Section | Old (%) | New (us) | Conversion |
+|---|---|---|---|
+| `general` | `old_fs_fallback` (% of hover) | `fs_throttle` (default 1300) | 1000 + % x 3.7 |
+| `receiver` | `old_deadband` | `deadband`, `yaw_deadband` (10), `deadband3d_throttle` (50, new) | % x 5 |
+| `althold` | `old_mid_stick`, `old_deadband`, `old_low_stick`, `old_max_stick` | `mid_stick` (1500), `deadband` (50), `low_stick` (1060), `max_stick` (2000) | 1000 + % x 10; deadband % x 10 |
+| `tx_sticks` | `old_deadband` | `deadband` (15) | % x 5 |
+
+- The `tuning` stream's `hover` is in us (1000 + hover x 1000).
+- `receiver` gains Betaflight's stick thresholds at the end: `min_check` (1050 us: the throttle is "low" below it and starts there; the stick commands' low), `mid_rc` (1500 us: the roll / pitch / yaw centre, and the 3D throttle's), `max_check` (1900 us: the stick commands' high). `compat` of `receiver` is now 26, 22, 13, 12, 9.
+- A section may list **eight** older sizes (was six).
+- `motors` gains `mode3d`, `switched_mode3d`, `deadband3d_low`, `deadband3d_high`, `neutral3d`, `limit3d_low`, `limit3d_high` (docs/MODES.md, 3D). Rule: DroneCAN or brushed ESCs turn `mode3d` off.
+- Enum `mode` gains `3D` at the end.
+- Command **BOARD_ALIGN** (27, writes `general`; `sensors.imu2_align` turns along):
+  - argument `step`: 1 lying flat, 2 nose down, 3 right side down, 0 cancel;
+  - result: `reason` (new enum `board_align_result`: OK, NOT_STILL, NO_GRAVITY, NO_PITCH, NO_ROLL, DIRECTION, NO_FIT), `align`, `trim_roll` / `trim_pitch` / `trim_yaw` (0.1 deg);
+  - FAILED keeps the steps taken; step 2 or 3 before step 1: BAD_STATE.
+- Schema hash changes.
+
 **0.43.0: Flycam / FPV, temperature-compensated baro.** **Backward compatibility:** the app no longer requires the hashes to be equal. It uses the schema of the connected firmware, taken from the `app/wbclient/schemas` library (see docs/APP.md). Nothing changes in the firmware. Section `general` gains `fly_style` (new enum `fly_style`: FPV, FLYCAM) and `flycam_hold` (new enum `flycam_hold`: LOITER, POSHOLD) at the end (57 → 59 bytes). `compat` of `general` is now 57, 56, 24, 22: 23-byte records (0.9.0 – 0.9.4) revert to defaults. Schema hash changes.
 
 **0.42.1: optical flow.** Enum `flow_reject` gains `RATE` at the end. New enum `flow_cal_result`. New command `FLOW_CAL` (26): `step` 1 = start, 2 = done, 0 = cancel. The result contains `reason`, `scale` (%), `scale_x`, `scale_y` (signed %). On OK it writes `nav.flow_scale` (RAM, Save to keep it). Schema hash changes, sections unchanged.
@@ -71,7 +94,7 @@ Error codes (`errors` in the json): `OK, UNKNOWN, BAD_ARG, ARMED, BUSY, NOT_SUPP
 
 | id | section | bytes | applied | content |
 |---|---|---|---|---|
-| 1 | general | 22 | reboot | loop rate, board alignment + trim, failsafe (including `fs_fallback_throttle`: % of hover thrust when there is no altitude), airmode + airmode start throttle threshold |
+| 1 | general | 22 | reboot | loop rate, board alignment + trim, failsafe (including `fs_throttle`: us, the throttle when there is no altitude, at most 85 % of the measured hover), airmode + airmode start throttle threshold |
 | 2 | receiver | 12 | reboot | RX protocol, channel order, deadband, timeout, RC smoothing (enable, factors for sticks and throttle) |
 | 3 | modes | 96 | **live** | 16 slots: mode / aux / µs range (as in Betaflight) |
 | 4 | rates | 19 | **live** | Actual rates, throttle mid/expo/limit, angle limits for Angle / Stabilize |

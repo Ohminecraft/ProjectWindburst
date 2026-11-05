@@ -31,11 +31,16 @@ public:
         float bias_slew_dps_min = 0.5f;       // the learned gyro bias may change this fast at most (0 = no limit)
         float bias_limit_dps = 3.0f;          // and never grows beyond this (0 = no limit)
         float kp_aid = 0.5f;                  // gain of the velocity-aided tilt error (set_aid): it is right in every manoeuvre, so it may pull harder
+        float spin_limit_dps = 20.0f;         // the bias is not learned while turning faster (Betaflight / ArduPilot SPIN_RATE_LIMIT): a gyro scale error looks like a bias then
     } cfg;
 
     // gyro rad/s (FRD), acc g (FRD specific force), mag = calibrated body-frame field (any unit) or nullptr, declination east-positive.
     // at_rest: disarmed and not being moved - the size of the reading is taken as "1 g" for this sensor.
     WB_FAST void update(Vec3 g, Vec3 a, float dt, const Vec3* mag = nullptr, float declination_deg = 0.0f, float kp_scale = 1.0f, bool at_rest = false) {
+        // A NaN / Inf sample (bus glitch, bad calibration) would stay in the quaternion and the integral for good: skip it whole.
+        if (!finite3(g) || !finite3(a) || !(dt > 0.0f && dt < 1e3f)) return;
+        if (mag && !finite3(*mag)) mag = nullptr;
+        const float spin = sqrtf(g.x * g.x + g.y * g.y + g.z * g.z);
         if (mag && cfg.kp_mag > 0.0f) {
             bool ok = false; const float e = mag_error(*mag, declination_deg, ok);
             if (ok) { const float k = -cfg.kp_mag * kp_scale * e; g.x += k * 2 * (q1 * q3 - q0 * q2); g.y += k * 2 * (q2 * q3 + q0 * q1); g.z += k * (1 - 2 * (q1 * q1 + q2 * q2)); }
@@ -65,7 +70,7 @@ public:
             ez = 2 * (q1 * q3 + q0 * q2) * aid_.x + 2 * (q2 * q3 - q0 * q1) * aid_.y + (1 - 2 * (q1 * q1 + q2 * q2)) * aid_.z;
             w = 1.0f; kp = cfg.kp_aid;
         }
-        if (w > 0.0f) {
+        if (w > 0.0f && spin < cfg.spin_limit_dps * kDeg2Rad) {
             const float slew = cfg.bias_slew_dps_min > 0.0f ? cfg.bias_slew_dps_min * kDeg2Rad / 60.0f * dt : 1e9f;
             const float lim = cfg.bias_limit_dps > 0.0f ? cfg.bias_limit_dps * kDeg2Rad : 1e9f;
             ix = clampf(ix + clampf(cfg.ki_acc * w * ex * dt, -slew, slew), -lim, lim);
@@ -147,6 +152,7 @@ public:
         EulerDeg e; e.roll = atan2f(-af_.y, -af_.z) * kRad2Deg; e.pitch = atan2f(af_.x, sqrtf(af_.y * af_.y + af_.z * af_.z)) * kRad2Deg; e.yaw = 0;
         return e;
     }
+    Vec3 acc_filtered() const { return af_; }                                                     // the accelerometer through accel_lpf_hz (g, body frame)
     float rest_g() const { return rest_g_; }                                                     // what this sensor reads lying still (1.0 for a calibrated one)
     float acc_weight() const { return acc_weight_; }                                              // 0..1: how much the accelerometer counted in the last update
     Vec3 gyro_bias_dps() const { return {-ix * kRad2Deg, -iy * kRad2Deg, -iz * kRad2Deg}; }        // what the integral has learned (the gyro reads this much too high)
@@ -156,6 +162,7 @@ private:
         mn = (1 - 2 * (q2 * q2 + q3 * q3)) * m.x + 2 * (q1 * q2 - q0 * q3) * m.y + 2 * (q1 * q3 + q0 * q2) * m.z;
         me = 2 * (q1 * q2 + q0 * q3) * m.x + (1 - 2 * (q1 * q1 + q3 * q3)) * m.y + 2 * (q2 * q3 - q0 * q1) * m.z;
     }
+    static bool finite3(const Vec3& v) { return isfinite(v.x) && isfinite(v.y) && isfinite(v.z); }
     static constexpr float kRestMin = 0.8f, kRestMax = 1.2f;                                      // a reading outside this is never "at rest" (a broken or badly scaled sensor)
     WB_FAST float weight_of(float size_g) const { return clampf(1.0f - fabsf(size_g / rest_g_ - 1.0f) / cfg.accel_gate_g, 0.0f, 1.0f); }
     float ix = 0, iy = 0, iz = 0;

@@ -26,7 +26,7 @@ The compass only corrects **yaw** (rotation about the earth's Down axis), never 
 ## Auto calibration (0.18.0, like Betaflight 4.5)
 - **How to start** (only when disarmed, compass detected):
   - the "Auto calibrate (hand rotation)" button in the Sensors tab (command `MAG_AUTOCAL`);
-  - or in the field, with the sticks: **throttle full up, pitch stick pulled back, roll and yaw centred, hold 1 second** (`app/stick_commands.h`). The same place has the gyro calibration command: throttle low, yaw left, pitch pulled back.
+  - or in the field, with the sticks: **throttle full up (above `receiver.max_check`), pitch stick pulled back (below `min_check`), roll and yaw centred, hold 1 second** (`app/stick_commands.h`). The same place has the gyro calibration command: throttle low, yaw left, pitch pulled back.
   - On start the beeper sounds like for accelerometer calibration.
 - **Then**: pick the craft up and rotate it in every direction. Only gyro rotation above 30 °/s counts as "rotating"; leaving the craft still collects no samples.
 - **Computation** (`hal/mag/mag_autocal.h`):
@@ -44,6 +44,8 @@ The compass only corrects **yaw** (rotation about the earth's Down axis), never 
   - 30 s elapsed without enough: `TOO_FEW_SAMPLES` / `POOR_COVERAGE`;
   - field strength outside 0.15 – 0.9 G: `BAD_FIELD_STRENGTH`;
   - fit error above 8 %: `BAD_FIT`.
+  - an offset above 1.8 G on any axis (a magnet or steel next to the chip; ArduPilot `COMPASS_OFFS_MAX` 1800 mG): `OFFSET_TOO_LARGE` (0.44.0; the full calibration checks the same).
+- **Readings that are not a field** (0.44.0): all zeros (the chip in reset, a dropped bus) or NaN / Inf are ignored, so the compass goes stale instead of steering the heading. Calibrated, a zero reading would have become -offset and could pass the field-strength check.
   - On failure the old calibration is kept, the beeper plays the error pattern.
 - **Done**: the new calibration is used immediately, the beeper sounds 3 tones, and **the firmware writes the `calibration` section to flash by itself** (like in-flight level trim): in the field there is no app to press Save.
 - While it runs, arming is blocked (blocker CALIBRATING) and the LED shows the calibrating colour.

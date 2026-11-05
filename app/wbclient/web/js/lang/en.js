@@ -2,6 +2,46 @@
 // {name} parts are filled in by tr() and must be kept. app/tests/test_gui_i18n.py checks that every string of the page is
 // either translated here or listed in SAME, that no entry is left over, and that the {name} parts match.
 export const EN = {
+  "Tự tune PID khi đang bay (autotune kiểu ArduPilot): bay Altitude Hold ở chỗ thoáng, bật công tắc - máy tự giật từng trục để đo. Đẩy cần là tạm dừng; tắt công tắc là về hệ số cũ. Xong thì hạ cánh và disarm khi công tắc vẫn bật để lưu.":
+    "Tunes the PID in flight (ArduPilot-style autotune): fly Altitude Hold in the open, turn the switch on - the craft twitches each axis to measure it. A stick pauses it; the switch off goes back to the old gains. When done, land and disarm with the switch still on to save.",
+  "Betaflight App (hoặc công cụ MSP khác) đang kết nối và giữ không cho arm - như Betaflight; tự hết khi App ngắt hoặc im lặng 3 giây":
+    "the Betaflight App (or another MSP tool) is connected and holds the arming off - as Betaflight does; released when the App disconnects or is silent for 3 seconds",
+  "Flycam giữ thăng bằng bằng":
+    "Flycam levels itself with",
+  "Angle (Betaflight, mặc định): góc nghiêng theo angle_strength. Stabilize (ArduPilot): mọi mode tự cân bằng của Flycam (giữ độ cao, Loiter, Position Hold, failsafe, mission) bay trên bộ Stabilize, có tạo hình mượt như ArduCopter; autotune khi đó tune thêm Stabilize P. Position Hold dừng chậm hơn một chút so với Angle.":
+    "Angle (Betaflight, the default): the tilt follows angle_strength. Stabilize (ArduPilot): every self-levelling mode of Flycam (height hold, Loiter, Position Hold, the failsafe, a mission) flies on the Stabilize controller, shaped smoothly as in ArduCopter; the autotune then tunes Stabilize P too. Position Hold stops a little later than on Angle.",
+  "Angle (Betaflight)":
+    "Angle (Betaflight)",
+  "Stabilize (ArduPilot)":
+    "Stabilize (ArduPilot)",
+  "WARNING: motor đang dùng {proto}, không phải DShot - dynamic idle không chạy. Chọn DShot và bật DShot hai chiều ở tab Motor.":
+    "WARNING: the motors use {proto}, not DShot - dynamic idle does not run. Choose DShot and turn on bidirectional DShot in the Motor tab.",
+  "WARNING: DShot hai chiều đang tắt - dynamic idle không chạy (cần RPM từ ESC). Bật ở tab Motor.":
+    "WARNING: bidirectional DShot is off - dynamic idle does not run (it needs the rpm from the ESCs). Turn it on in the Motor tab.",
+  "1. Rate PID":
+    "1. Rate PID",
+  "2. Bộ điều khiển rate":
+    "2. Rate controller",
+  "3. Giữ tư thế":
+    "3. Holding the attitude",
+  "4. Giữ độ cao, vị trí và motor idle":
+    "4. Holding height, position and motor idle",
+  "Altitude Hold: vòng gia tốc":
+    "Altitude Hold: acceleration loop",
+  "Vòng trong cùng của Altitude Hold: sai lệch gia tốc thẳng đứng thành ga. Cần ga trong Altitude Hold (điểm giữ, tốc độ leo / hạ) ở tab Rate.":
+    "The innermost loop of Altitude Hold: the vertical acceleration error becomes throttle. The throttle stick in Altitude Hold (hold point, climb / descent rates) is in the Rate tab.",
+  "Position Hold và Loiter":
+    "Position Hold and Loiter",
+  "Như PSC_NE_* của ArduCopter: sai lệch vị trí × \"Vị trí P\" thành vận tốc, vòng vận tốc (P, I, D) thành góc nghiêng. Góc tối đa, phanh và hàng rào ở tab Navigation.":
+    "As ArduCopter's PSC_NE_*: the position error × \"Position P\" becomes a velocity, the velocity loop (P, I, D) a lean angle. Maximum angle, braking and the fence are in the Navigation tab.",
+  "Giữ vòng quay motor không dưới \"rpm tối thiểu\" khi ga thấp (như Betaflight). Cần DShot hai chiều (tab Motor); 0 rpm = tắt.":
+    "Keeps the motors from turning slower than \"minimum rpm\" at low throttle (as Betaflight). Needs bidirectional DShot (Motor tab); 0 rpm = off.",
+  "Hệ số vòng gia tốc (P, I) ở tab PID.":
+    "The acceleration loop gains (P, I) are in the PID tab.",
+  "Hệ số vị trí / vận tốc (P, I, D) ở tab PID.":
+    "The position / velocity gains (P, I, D) are in the PID tab.",
+  "Dynamic idle (cần DShot hai chiều) ở tab PID.":
+    "Dynamic idle (needs bidirectional DShot) is in the PID tab.",
   "Không gọi được chương trình wbclient. Cửa sổ lệnh chạy \"python -m wbclient gui\" còn mở không?":
     "Cannot reach the wbclient program. Is the terminal running \"python -m wbclient gui\" still open?",
   "Hình 3D của máy theo tư thế đang đo":
@@ -597,16 +637,28 @@ export const EN = {
     "The link must be stable again for",
   "Ga khi không có ước lượng độ cao":
     "Throttle without a height estimate",
-  "% ga hover":
-    "% of hover throttle",
+  "Như failsafe_throttle của Betaflight: mất sóng mà không có khí áp kế / lidar / GPS để giữ độ cao thì ga về mức này. Firmware không bao giờ dùng quá 85 % ga treo đo được lúc bay, nên máy luôn hạ xuống chứ không bay lên.":
+    "Betaflight's failsafe_throttle: a lost link with no barometer / lidar / GPS to hold the height brings the throttle here. The firmware never uses more than 85 % of the hover throttle measured in flight, so the craft always comes down, it never climbs away.",
   "Giao thức receiver":
     "Receiver protocol",
   "AUX1 bắt đầu từ kênh":
     "AUX1 starts at channel",
   "8 kênh AUX liên tiếp tính từ kênh này.":
     "8 consecutive AUX channels counted from this one.",
-  "Deadband cần điều khiển":
-    "Stick deadband",
+  "Deadband roll / pitch":
+    "Roll / pitch deadband",
+  "Như deadband của Betaflight: quanh giữa cần (1500 µs) chừng này µs mỗi phía coi là giữa.":
+    "Betaflight's deadband: this many µs either side of the stick centre (1500 µs) count as centred.",
+  "Deadband yaw":
+    "Yaw deadband",
+  "Như yaw_deadband của Betaflight.":
+    "Betaflight's yaw_deadband.",
+  "Deadband ga 3D":
+    "3D throttle deadband",
+  "Mode 3D: quanh giữa cần ga chừng này µs mỗi phía là motor dừng (3d_deadband_throttle của Betaflight).":
+    "3D mode: this many µs either side of the throttle centre stop the motors (Betaflight's 3d_deadband_throttle).",
+  "Chừng này µs mỗi phía của giữa cần coi là giữa.":
+    "This many µs either side of the centre count as centred.",
   "Coi là mất sóng sau":
     "Link counts as lost after",
   "% ga":
@@ -1461,8 +1513,8 @@ export const EN = {
     "Less D at very low throttle (the props have little grip), until the throttle first passes the low breakpoint.",
   "Giới hạn I-term":
     "I-term limit",
-  "Giới hạn công suất motor và dynamic idle (cần DShot hai chiều) ở tab Motor.":
-    "Motor output limit and dynamic idle (needs bidirectional DShot) are in the Motor tab.",
+  "Giới hạn công suất motor ở tab Motor.":
+    "The motor output limit is in the Motor tab.",
   "Giữ máy treo yên một chỗ, bật công tắc ít nhất 2 giây rồi tắt, hạ cánh và disarm: tư thế lúc treo trở thành \"cân bằng\" mới và được tự lưu.":
     "Hold the craft in a steady hover, switch on for at least 2 seconds and off again, land and disarm: the hover attitude becomes the new \"level\" and is saved by itself.",
   "Gyro notch tĩnh":
@@ -2333,12 +2385,12 @@ export const EN = {
     "Stick at the \"hold point\" ± the deadband: the height is held. Up to \"full stick\": the fastest climb; down to \"low stick\": the fastest descent, and on the ground it stays there. The hover throttle is measured by the firmware, nothing to enter. The throttle curve above does not apply in this mode.",
   "Điểm giữ độ cao":
     "Hold point",
-  "Vị trí cần ga (theo receiver, không qua đường cong ga) giữ nguyên độ cao. Mặc định 50 % = giữa cần.":
-    "Throttle stick position (as the receiver sends it, not through the throttle curve) that holds the height. Default 50 % = mid stick.",
+  "Vị trí cần ga (theo receiver, không qua đường cong ga) giữ nguyên độ cao. Mặc định 1500 µs = giữa cần.":
+    "Throttle stick position (as the receiver sends it, not through the throttle curve) that holds the height. Default 1500 µs = mid stick.",
   "Vùng chết":
     "Deadband",
-  "Nửa bề rộng quanh điểm giữ vẫn còn giữ độ cao, tính theo % hành trình cần.":
-    "Half-width around the hold point that still holds the height, in % of the stick travel.",
+  "Nửa bề rộng quanh điểm giữ vẫn còn giữ độ cao, tính bằng µs.":
+    "Half-width around the hold point that still holds the height, in µs.",
   "Cần thấp":
     "Low stick",
   "Dưới mức này là \"ga thấp\": hạ với tốc độ tối đa; đang đứng trên đất thì không cất cánh.":
@@ -2725,14 +2777,14 @@ export const EN = {
     "Drag an element to move it, or click it and use the arrow keys. The numbers here are what the craft reports now (examples when not connected); the symbols are drawn in the goggles' character cells, the goggles use their own Betaflight font. Canvas \"Auto\" is shown as 53 x 20; HDZero tells its own 50 x 18 grid, an element outside it is not shown.",
   "Xưng là":
     "Identify as",
-  "Trả lời như Betaflight 4.5 (BTFL): Betaflight Configurator, app SpeedyBee và công cụ ESC (BLHeliSuite32, ESC Configurator) chỉ nói chuyện với flight controller mà chúng biết. Windburst: báo đúng tên và phiên bản firmware này (WBRX) - các công cụ trên sẽ từ chối.":
-    "Answer as Betaflight 4.5 (BTFL): Betaflight Configurator, the SpeedyBee app and the ESC tools (BLHeliSuite32, ESC Configurator) only talk to flight controllers they know. Windburst: say this firmware's real name and version (WBRX) - the tools above then refuse it.",
+  "Trả lời như Betaflight 2026.12 (BTFL): Betaflight Configurator, app SpeedyBee và công cụ ESC (BLHeliSuite32, ESC Configurator) chỉ nói chuyện với flight controller mà chúng biết. Windburst: báo đúng tên và phiên bản firmware này (WBRX) - các công cụ trên sẽ từ chối.":
+    "Answer as Betaflight 2026.12 (BTFL): Betaflight Configurator, the SpeedyBee app and the ESC tools (BLHeliSuite32, ESC Configurator) only talk to flight controllers they know. Windburst: say this firmware's real name and version (WBRX) - the tools above then refuse it.",
   "Cho công cụ khác sửa cấu hình":
     "Let other tools change settings",
   "Cho Betaflight Configurator / SpeedyBee đổi PID, rate, mode, map kênh, tên máy bay và lưu lại. Tắt: chỉ đọc được. Không bao giờ khi đang arm. Gõ PID trong công cụ đó thì thanh trượt tinh chỉnh ở tab PID tắt (như Betaflight).":
     "Betaflight Configurator / SpeedyBee may change PID, rates, modes, the channel map, the craft name and save them. Off: they can only read. Never while armed. Gains typed there turn off the tuning sliders of the PID tab (like Betaflight).",
-  "Betaflight 4.5 (cho các công cụ của Betaflight)":
-    "Betaflight 4.5 (for Betaflight's tools)",
+  "Betaflight 2026.12 (cho các công cụ của Betaflight)":
+    "Betaflight 2026.12 (for Betaflight's tools)",
   "Windburst (tên thật)":
     "Windburst (its real name)",
   "Công cụ khác qua MSP":
@@ -2785,6 +2837,168 @@ export const EN = {
     "Crash flip (turning over after a crash)",
   "Gán công tắc CRASHFLIP ở tab Chế độ. Chỉ chạy với ESC DShot (lệnh 21 đảo chiều quay, không lưu vào ESC; lệnh 20 trả lại). Có hiệu lực sau khi lưu và khởi động lại.":
     "Assign a CRASHFLIP switch in the Modes tab. DShot ESCs only (command 21 reverses the spin, not stored in the ESC; command 20 sets it back). Takes effect after saving and a restart.",
+  "Ngưỡng cần thấp":
+    "Stick low threshold",
+  "min_check của Betaflight: cần ga dưới mức này là \"ga thấp\" (cho arm, lệnh bằng cần); lệnh ga bắt đầu từ đây. Cần ga của tay phát phải xuống dưới mức này.":
+    "Betaflight's min_check: a throttle stick below this is \"low\" (arming, the stick commands); the throttle starts here. The transmitter's throttle stick must come below it.",
+  "Tâm cần":
+    "Stick centre",
+  "mid_rc của Betaflight: tâm của roll / pitch / yaw (và của cần ga ở Mode 3D). Đặt đúng giá trị tay phát gửi khi buông cần.":
+    "Betaflight's mid_rc: the roll / pitch / yaw centre (and the throttle's in 3D mode). Set it to what the transmitter sends with the sticks let go.",
+  "Ngưỡng cần cao":
+    "Stick high threshold",
+  "max_check của Betaflight: cần trên mức này là \"cao\" cho lệnh bằng cần (vd hiệu chuẩn la bàn).":
+    "Betaflight's max_check: a stick above this is \"high\" for the stick commands (e.g. the compass calibration).",
+  "Như ledstrip_profile của Betaflight: STATUS = mỗi LED theo chức năng và overlay của nó (lưới bên dưới); RACE = cả dải một màu (màu RACE), còi kêu thì màu visual beeper, failsafe nháy; BEACON = cả dải nháy màu beacon.":
+    "Betaflight's ledstrip_profile: STATUS = each LED shows its function and overlays (the grid below); RACE = the whole strip one color (the RACE color), the visual beeper color while the beeper sounds, flashes in failsafe; BEACON = the whole strip flashes the beacon color.",
+  "Màu RACE":
+    "RACE color",
+  "Màu beacon":
+    "Beacon color",
+  "Chu kỳ beacon":
+    "Beacon period",
+  "Phần sáng của chu kỳ beacon":
+    "Beacon on part of the period",
+  "Nháy theo còi (RACE)":
+    "Visual beeper (RACE)",
+  "Màu khi còi kêu":
+    "Visual beeper color",
+  "Ở STATUS: các LED có overlay Cảnh báo sáng màu này khi còi kêu mà không có cảnh báo nào.":
+    "STATUS: the LEDs with the Warning overlay show this color while the beeper sounds and no warning is on.",
+  "Rainbow: lệch màu giữa các LED":
+    "Rainbow: hue step between LEDs",
+  "Rainbow: tốc độ":
+    "Rainbow: speed",
+  "Kênh cho overlay Ga":
+    "Channel for the Throttle overlay",
+  "Overlay Ga đổi màu theo kênh này (0 roll, 1 pitch, 2 yaw, 3 ga, 4 trở đi AUX1..), như ledstrip_aux_channel của Betaflight.":
+    "The Throttle overlay changes the color with this channel (0 roll, 1 pitch, 2 yaw, 3 throttle, 4 on AUX1..), Betaflight's ledstrip_aux_channel.",
+  "Dải LED WS2812 như Betaflight: bố trí trên lưới, chức năng, overlay, bảng màu.":
+    "A WS2812 LED strip as Betaflight does it: the layout on a grid, functions, overlays, the palette.",
+  "Cài đặt":
+    "Settings",
+  "Số LED trên dải là số LED đặt trên lưới. Chân dữ liệu đặt ở tab Chân (LED). Có hiệu lực ngay khi chưa arm; lưu để giữ.":
+    "The strip has as many LEDs as the grid has. The data pin is set in the Pins tab (LED). Takes effect at once while disarmed; save to keep it.",
+  "Lưới LED 16 x 16, mũi máy ở phía trên":
+    "LED grid 16 x 16, the nose at the top",
+  "Hướng":
+    "Direction",
+  "LED {i} trong {n} (theo thứ tự dây). Bấm ô trống để thêm LED tiếp theo.":
+    "LED {i} of {n} (in wiring order). Click an empty cell to add the next LED.",
+  "{n} LED. Bấm ô trống để thêm LED tiếp theo (theo thứ tự dây), bấm một LED để chọn và sửa.":
+    "{n} LEDs. Click an empty cell to add the next LED (in wiring order), click an LED to select and edit it.",
+  "LED này mã hoá thành 0 (= hết danh sách): đặt ở ô khác, hoặc chọn hướng / overlay / màu khác.":
+    "This LED encodes as 0 (= the end of the list): put it in another cell, or pick a direction / overlay / color.",
+  "Xoá LED đang chọn":
+    "Delete the selected LED",
+  "Xoá hết":
+    "Clear all",
+  "Bố trí LED":
+    "LED layout",
+  "Ô (0,0) là góc trên bên trái, mũi máy ở phía trên. Chữ trên LED là mã chức năng của Betaflight (C màu, F chế độ bay, A arm, L pin, S RSSI, G GPS, R vòng ga, P thanh GPS, E thanh pin, U độ cao). Một LED ở ô 0,0 chức năng Màu, màu 0, không overlay, không hướng sẽ thành số 0 = hết danh sách: đặt nó ở ô khác hoặc thêm hướng.":
+    "Cell (0,0) is the top left corner, the nose at the top. The letter on an LED is Betaflight's function code (C color, F flight mode, A arm, L battery, S RSSI, G GPS, R thrust ring, P GPS bar, E battery bar, U altitude). An LED in cell 0,0 with function Color, color 0, no overlay and no direction is the number 0 = the end of the list: put it elsewhere or give it a direction.",
+  "Bảng 16 màu":
+    "The 16-color palette",
+  "HSV của Betaflight: H 0 – 359, S = 0 là màu đậm, 255 là trắng; V độ sáng.":
+    "Betaflight's HSV: H 0 - 359, S = 0 full color, 255 white; V brightness.",
+  "Màu theo chế độ và màu đặc biệt":
+    "Mode and special colors",
+  "Chức năng \"Chế độ bay\": LED lấy màu theo chế độ đang bay và theo hướng đầu tiên của nó. Màu đặc biệt: arm / chưa arm, nền, nền khi nháy, GPS.":
+    "Function \"Flight mode\": an LED takes its color from the mode flown and its first direction. Special colors: armed / disarmed, background, blink background, GPS.",
+  "Trạng thái arm":
+    "Arm state",
+  "Vòng ga":
+    "Thrust ring",
+  "Thanh GPS":
+    "GPS bar",
+  "Thanh pin":
+    "Battery bar",
+  "Larson":
+    "Larson scanner",
+  "Báo hướng":
+    "Indicator",
+  "Khí áp":
+    "Baro",
+  "Chưa arm":
+    "Disarmed",
+  "Đã arm":
+    "Armed",
+  "Hoạt ảnh":
+    "Animation",
+  "Nền":
+    "Background",
+  "Nền khi nháy":
+    "Blink background",
+  "GPS không có vệ tinh":
+    "GPS no sats",
+  "GPS đã fix":
+    "GPS locked",
+  "chưa bắt đầu":
+    "not started",
+  "Làm bước 1 (nằm phẳng) trước.":
+    "Do step 1 (lying flat) first.",
+  "Xong: chip {a}, trim board {r}° / {p}° / {y}°, đang dùng. Bấm \"Lưu\" để giữ lại.":
+    "Done: chip {a}, board trims {r}° / {p}° / {y}°, in use. Press \"Save\" to keep it.",
+  "Đã tìm hướng lắp board: chip {a}":
+    "Board mounting found: chip {a}",
+  "1. Nằm phẳng":
+    "1. Lying flat",
+  "2. Chúi mũi xuống":
+    "2. Nose down",
+  "3. Nghiêng phải xuống":
+    "3. Right side down",
+  "Đã lấy tư thế phẳng. Bước 2: chúi mũi xuống khoảng 45°, giữ yên rồi bấm.":
+    "Flat pose taken. Step 2: put the nose down about 45°, hold still, then press.",
+  "Đã lấy chúi mũi. Bước 3: nghiêng bên phải xuống khoảng 45°, giữ yên rồi bấm.":
+    "Nose down taken. Step 3: put the right side down about 45°, hold still, then press.",
+  "Tự tìm hướng lắp board":
+    "Find the board mounting",
+  "Như wizard \"board alignment\" của Betaflight App: không cần biết chip IMU nằm hướng nào. Cầm máy (mũi hướng ra xa người), mỗi bước giữ yên rồi bấm: 1 nằm phẳng, 2 chúi mũi xuống khoảng 45°, 3 nghiêng bên phải xuống khoảng 45°. Firmware tìm hướng lắp (làm tròn 45°), đặt \"Hướng chip IMU\" và trim board, dùng ngay; level trim giữ nguyên. IMU thứ hai xoay theo.":
+    "Like the Betaflight App's board alignment wizard: no need to know which way the IMU chip sits. Hold the craft (nose pointing away from you); for each step hold still, then press: 1 lying flat, 2 nose down about 45°, 3 right side down about 45°. The firmware finds the mounting (rounded to 45°), sets \"IMU chip orientation\" and the board trims, and uses them at once; the level trim is kept. A second IMU turns along.",
+  "máy đang động: giữ yên rồi bấm lại bước này":
+    "the craft is moving: hold it still and press this step again",
+  "không đọc được accelerometer":
+    "no accelerometer reading",
+  "chưa thấy chúi mũi: làm lại bước 2, chúi nhiều hơn":
+    "no nose-down seen: redo step 2, tilt further",
+  "chưa thấy nghiêng: làm lại bước 3, nghiêng nhiều hơn":
+    "no tilt seen: redo step 3, tilt further",
+  "bước 2 và bước 3 ngược chiều nhau (một bước làm sai phía): làm lại cả hai":
+    "steps 2 and 3 disagree (one was done the wrong way): redo both",
+  "không có hướng chip + trim nào ra đúng tư thế này (board dựng đứng?)":
+    "no chip orientation + trims give this pose (is the board standing on its edge?)",
+  "Mode 3D (motor quay hai chiều)":
+    "3D mode (reversible motors)",
+  "Feature 3D của Betaflight: ESC đảo chiều được, cần ga chia đôi ở giữa: trên giữa là quay thuận, dưới giữa là quay ngược, ở giữa (± deadband ga 3D ở tab Receiver) là motor dừng. Chỉ bay Acro / Angle / Stabilize; các chế độ tự động bị chặn; failsafe là tắt motor. ESC phải được cài 3D (BLHeli: bật 3D mode). Không dùng với DroneCAN hay brushed.":
+    "Betaflight's feature 3D: reversible ESCs, the throttle stick split at its centre: above it the motors spin forward, below it reversed, at the centre (± the 3D throttle deadband in the Receiver tab) they stop. Acro / Angle / Stabilize only; the automatic modes are blocked; failsafe stops the motors. The ESCs must be set up for 3D (BLHeli: 3D mode on). Not with DroneCAN or brushed.",
+  "3D theo công tắc":
+    "Switched 3D",
+  "switched_mode3d của Betaflight: cần ga dùng như thường (dưới cùng là dừng), công tắc 3D ở tab Chế độ chọn chiều: bật là quay ngược. Tắt mục này: công tắc 3D tắt hẳn 3D.":
+    "Betaflight's switched_mode3d: the throttle stick works as usual (bottom = stopped), the 3D switch in the Modes tab picks the direction: on = reversed. With this off, the 3D switch turns 3D off.",
+  "Xung 3D: hết chiều ngược":
+    "3D pulse: reverse starts",
+  "3d_deadband_low của Betaflight (ESC PWM / Oneshot / Multishot): xung ngay dưới điểm dừng, motor bắt đầu quay ngược.":
+    "Betaflight's 3d_deadband_low (PWM / Oneshot / Multishot ESCs): the pulse just below the stop point, where the motors start spinning reversed.",
+  "Xung 3D: bắt đầu chiều thuận":
+    "3D pulse: forward starts",
+  "3d_deadband_high của Betaflight: xung ngay trên điểm dừng.":
+    "Betaflight's 3d_deadband_high: the pulse just above the stop point.",
+  "Xung 3D: điểm dừng":
+    "3D pulse: neutral",
+  "3d_neutral của Betaflight: xung gửi khi disarm và khi motor dừng.":
+    "Betaflight's 3d_neutral: the pulse sent while disarmed and while the motors stand.",
+  "Xung 3D: ngược hết cỡ":
+    "3D pulse: full reverse",
+  "3d_limit_low của Betaflight.":
+    "Betaflight's 3d_limit_low.",
+  "Xung 3D: thuận hết cỡ":
+    "3D pulse: full forward",
+  "3d_limit_high của Betaflight.":
+    "Betaflight's 3d_limit_high.",
+  "Cần bật Mode 3D ở tab Motor. \"3D theo công tắc\" bật: công tắc này chọn chiều quay (bật = ngược). Không bật: công tắc này tắt 3D (cần ga như thường, motor chỉ quay thuận) - \"3D DISABLE\" của Betaflight.":
+    "Needs 3D mode on in the Motors tab. With \"Switched 3D\" on, this switch picks the direction (on = reversed). Otherwise it turns 3D off (the throttle works as usual, the motors spin forward only) - Betaflight's \"3D DISABLE\".",
+  "DShot: 3D dùng 48..1047 cho chiều ngược, 1048..2047 cho chiều thuận, không cần các xung ở trên. Deadband ga 3D ở tab Receiver, công tắc 3D ở tab Chế độ. Bật 3D thì crash flip, runaway lúc cất cánh và dynamic idle tắt. Có hiệu lực sau khi lưu và khởi động lại.":
+    "DShot: 3D uses 48..1047 for reverse and 1048..2047 for forward; the pulses above are not needed. The 3D throttle deadband is in the Receiver tab, the 3D switch in the Modes tab. With 3D on, crash flip, runaway takeoff and dynamic idle are off. Takes effect after saving and a restart.",
   "đang thu: nghiêng máy qua lại quanh cảm biến, rồi bấm Xong":
     "collecting: tilt the craft to and fro about the sensor, then press Done",
   "Không có cảm biến optical flow.":
@@ -3027,6 +3241,8 @@ export const EN = {
     "DroneCAN power module",
   "module nguồn DroneCAN":
     "DroneCAN power module",
+  "offset quá lớn (nam châm hoặc sắt thép sát la bàn?)":
+    "offset too large (a magnet or steel next to the compass?)",
   "máy không được xoay trong 15 giây":
     "the craft was not turned within 15 s",
   "Tự hiệu chuẩn (xoay tay)":
@@ -3560,7 +3776,7 @@ export const EN = {
 
 // Strings that read the same in both languages (units, protocol names, terms pilots use in English).
 export const SAME = [
-  "Servo",
+  "Servo", "3D",
   "m/s²", "m/s³", "Hz", "°", "S", "mV", "ms", "s", "Airmode", "Roll", "Pitch", "Throttle", "Yaw", "%", "Throttle mid", "Throttle expo", "Throttle limit",
   "Angle strength", "TPA rate", "TPA breakpoint", "I-term relax", "Feedforward max rate limit", "µs", "Extended DShot telemetry", "Motor idle",
   "× 100 rpm", "Dynamic idle P", "Dynamic idle I", "Dynamic idle D", "Barometer", "Lidar / sonar", "GPS", "Baud", "bps", "SBAS", "SBAS integrity",
@@ -3587,5 +3803,5 @@ export const SAME = [
   "MAVLink 2", "System ID", "Telemetry (MAVLink)", "Telemetry RX", "Telemetry TX",
   "Motor wizard",
   "MSP DisplayPort (DJI, Walksnail, HDZero)", "HD 53 x 20 (DJI, Walksnail)", "HDZero 50 x 18", "SD 30 x 16", "OSD",
-  "SCK", "MISO", "MOSI", "CSN", "CE", "% / s", "Acro", "Alt hold", "Pos hold", "Rescue", "Loiter", "FPV", "Flycam", "Position Hold", "Crash flip", "Crash flip (turtle)", "250 kbps", "1 Mbps", "2 Mbps", "Chip", "(ADC 0..4095)",
+  "SCK", "MISO", "MOSI", "CSN", "CE", "% / s", "Acro", "Alt hold", "Pos hold", "Rescue", "Loiter", "FPV", "Flycam", "Position Hold", "Dynamic idle", "Autotune", "Crash flip", "Crash flip (turtle)", "250 kbps", "1 Mbps", "2 Mbps", "Chip", "(ADC 0..4095)",
 ];

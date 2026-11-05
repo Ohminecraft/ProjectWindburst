@@ -135,7 +135,7 @@ export default {
     if (hasStickArm) listen('settings:general', build);
     if (hasFlyStyle) { listen('settings:general', paintStyle); paintStyle(); }
     view.append(
-      hasFlyStyle ? block(tr('Kiểu bay'), fields('general', ['fly_style', 'flycam_hold'], { fly_style: { rebootNote: true }, flycam_hold: { enabled: flycam } }), styleNote) : null,
+      hasFlyStyle ? block(tr('Kiểu bay'), fields('general', ['fly_style', 'flycam_hold', 'flycam_attitude'], { fly_style: { rebootNote: true }, flycam_hold: { enabled: flycam }, flycam_attitude: { enabled: flycam } }), styleNote) : null,
       hasStickArm ? block(tr('Arm bằng cần'), fields('general', ['stick_arm'], { stick_arm: { rebootNote: true } })) : null,
       block(null, list),
       note(tr('Altitude Hold, Position Hold và GPS Rescue tự bật Angle. Mode không có dải nào thì luôn tắt. Thay đổi ở tab này có tác dụng ngay, nhưng vẫn cần bấm "Lưu" để giữ lại sau khi tắt nguồn.')));

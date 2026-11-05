@@ -397,10 +397,15 @@ def test_fly_style_setting(gui):
     pg.wait_for_selector('[data-field="general.fly_style"]', timeout=8000)
     assert gui.setting("general", "fly_style") == "FPV"
     assert pg.is_disabled('[data-field="general.flycam_hold"]'), "FPV: the hold choice is greyed out"
+    assert pg.is_disabled('[data-field="general.flycam_attitude"]'), "FPV: the attitude choice is greyed out (0.44)"
     pg.select_option('[data-field="general.fly_style"]', "FLYCAM")
     gui.wait(lambda: gui.setting("general", "fly_style") == "FLYCAM", what="fly_style FLYCAM")
     pg.wait_for_function("!document.querySelector('[data-field=\"general.flycam_hold\"]').disabled", timeout=5000)
     assert "Acro" in pg.inner_text("#fly-style-note")
+    # 0.44: Flycam on Angle (the default) or on ArduPilot's Stabilize
+    assert not pg.is_disabled('[data-field="general.flycam_attitude"]') and gui.setting("general", "flycam_attitude") == "ANGLE"
+    pg.select_option('[data-field="general.flycam_attitude"]', "STABILIZE")
+    gui.wait(lambda: gui.setting("general", "flycam_attitude") == "STABILIZE", what="flycam_attitude STABILIZE")
 
 
 def test_stick_preview(gui):
@@ -547,6 +552,32 @@ def test_accelerometer_calibration_flow(gui):
     pg.wait_for_function("Math.abs(Number(document.querySelector('[data-field=\"calibration.acc_trim_roll\"]').value)) > 1")
 
 
+def test_board_alignment_wizard(gui):
+    """0.44: the Betaflight App's board alignment wizard, run by the firmware (BOARD_ALIGN): the chip turned 90 deg is found."""
+    pg = gui.connect().page
+    gui.sim.do("imualign 1")                                   # the IMU chip turned 90 deg clockwise; the settings still say CW0
+    gui.tab("sensors")
+    assert "chưa bắt đầu" in pg.inner_text("#board-wizard-state")
+    pg.click("#board-wizard-2")
+    pg.wait_for_function("document.getElementById('board-wizard-state').textContent.includes('bước 1')")
+    for n, pose in ((1, "0 0 0"), (2, "0 45 0"), (3, "45 0 0")):
+        gui.sim.do("pose " + pose); gui.sim.sleep(1.5)
+        pg.click("#board-wizard-%d" % n)
+        if n < 3:
+            pg.wait_for_function("n => document.getElementById('board-wizard-state').textContent.includes('Bước ' + (n + 1))", arg=n)
+    pg.wait_for_function("document.getElementById('board-wizard-state').textContent.startsWith('Xong: chip 90°')", timeout=6000)
+    assert gui.hub.fc.get("general")["board_align"] == "CW90"
+    assert gui.field("general.board_align").input_value() == "CW90", "the field shows the new orientation"
+    pg.wait_for_selector("#save:not([hidden])")               # in RAM: Save keeps it
+    # put back: the chip as the settings say, the wizard again
+    gui.sim.do("imualign 0")
+    for n, pose in ((1, "0 0 0"), (2, "0 45 0"), (3, "45 0 0")):
+        gui.sim.do("pose " + pose); gui.sim.sleep(1.5)
+        pg.click("#board-wizard-%d" % n); gui.sim.sleep(0.3)
+    pg.wait_for_function("document.getElementById('board-wizard-state').textContent.startsWith('Xong: chip 0°')", timeout=6000)
+    gui.sim.do("pose 0 0 0")
+
+
 def test_spi_sensor_pins_and_primary_barometer(gui):
     """0.28: a barometer / compass on the IMU's SPI bus (pins.baro_cs, pins.mag_cs) and the choice of the primary barometer."""
     pg = gui.connect().page
@@ -627,6 +658,45 @@ def test_pins_tab(gui):
     pg.wait_for_function("/Không thấy chân trùng/.test(document.getElementById('pin-warnings').textContent)")
 
 
+GAINS_ELSEWHERE = {"rates": ["althold.acc_p", "althold.acc_i"], "nav": ["nav.pos_p", "nav.vel_p", "nav.vel_i", "nav.vel_d"],
+                   "motors": ["motors.dyn_idle_min_rpm", "motors.dyn_idle_p", "motors.dyn_idle_i", "motors.dyn_idle_d", "motors.dyn_idle_max_inc"]}
+
+
+def test_pid_tab_holds_every_pid_gain(gui):
+    """0.44.0: every PID-type gain is in the PID tab - Altitude Hold's acceleration loop, Position Hold / Loiter, dynamic idle - and
+    only there (the old tab says where it went)."""
+    pg = gui.connect().page
+    gui.tab("tuning")
+    for f in sum(GAINS_ELSEWHERE.values(), []):
+        assert gui.field(f).is_visible(), "%s is not in the PID tab" % f
+    assert pg.locator("#pid-althold [data-field]").count() == 2 and pg.locator("#pid-poshold [data-field]").count() == 4 and pg.locator("#pid-dyn-idle [data-field]").count() == 5
+    old = gui.setting("motors", "dyn_idle_p")
+    gui.type_into("motors.dyn_idle_p", str(old + 5))
+    gui.wait(lambda: gui.setting("motors", "dyn_idle_p") == old + 5, what="dynamic idle P written from the PID tab")
+    # laid out from the inner loop out: four titled tiers, each in two columns
+    assert pg.locator("#view > h2.tier").count() == 4 and pg.locator("#view > .cols").count() == 4
+    assert all(pg.locator("#view > .cols").nth(k).locator(":scope > div").count() == 2 for k in range(4))
+    # dynamic idle needs bidirectional DShot: a warning while the motors cannot give their rpm (changed in the Motor tab, as a user does)
+    def motors(**kv):
+        gui.tab("motors")
+        for k, v in kv.items():
+            pg.evaluate("([f, v]) => { const e = document.querySelector('[data-field=\"motors.' + f + '\"]'); if (e.type === 'checkbox') e.checked = !!v; else e.value = v; e.dispatchEvent(new Event('change', { bubbles: true })); }", [k, v])
+            gui.wait(lambda: str(gui.setting("motors", k)) in (str(v), {0: "False", 1: "True"}.get(v, "?")), what="motors.%s written" % k)
+        gui.tab("tuning")
+        return pg.locator("#dyn-idle-warn")
+    w = motors(protocol="PWM")
+    assert w.is_visible() and "WARNING" in w.inner_text() and "PWM" in w.inner_text(), w.inner_text()
+    w = motors(protocol="DSHOT600", bidirectional=0)
+    assert w.is_visible() and "hai chiều đang tắt" in w.inner_text(), w.inner_text()
+    w = motors(bidirectional=1)
+    assert not w.is_visible(), "bidirectional DShot on: no warning"
+    for tab, names in GAINS_ELSEWHERE.items():
+        gui.tab(tab)
+        left = [f for f in names if pg.locator('[data-field="%s"]' % f).count()]
+        assert not left, "still in the %s tab: %s" % (tab, left)
+        assert "tab PID" in pg.inner_text("#view"), "the %s tab does not say where the gains went" % tab
+
+
 def test_pid_tab_sliders_compute_the_gains(gui):
     pg = gui.connect().page
     gui.tab("tuning")
@@ -686,7 +756,7 @@ def test_pid_tab_sliders_compute_the_gains(gui):
     # live values of the firmware
     pg.wait_for_function("/80 %/.test(document.querySelector('#view dl.kv').textContent)")                  # TPA at zero throttle (the low-throttle part)
     assert pg.inner_text("#air-state") == "trên mặt đất: motor ở idle"                                       # disarmed: the motors are not flown by the rate loop
-    assert pg.inner_text("#hover-read") == "37 %", "the hover throttle before the first flight is the firmware's guess"
+    assert pg.inner_text("#hover-read") == "1365 µs", "the hover throttle before the first flight is the firmware's guess (µs, Betaflight's unit)"
 
 
 def test_filters_tab_sliders_map_and_live_values(gui):
@@ -1282,6 +1352,20 @@ def test_betaflight_frames_and_protocols_on_the_motor_tab(gui):
     assert "DroneCAN (ESC trên bus CAN)" in pg.locator('[data-field="motors.protocol"] option').all_inner_texts()
     pg.select_option('[data-field="motors.protocol"]', "DSHOT300")
     pg.wait_for_function("document.getElementById('can-esc-note').hidden")
+    # 0.44, 3D (Betaflight feature 3D): the 3D pulses only for PWM-type ESCs with 3D on; DShot has its own 3D ranges
+    assert pg.is_visible('[data-field="motors.mode3d"]') and not pg.is_visible("#pulse3d-fields")
+    pg.check('[data-field="motors.mode3d"]')
+    gui.wait(lambda: gui.setting("motors", "mode3d") in (1, True), what="3D stored")
+    assert not pg.is_visible("#pulse3d-fields"), "DShot: no 3D pulses to set"
+    pg.select_option('[data-field="motors.protocol"]', "ONESHOT125")
+    pg.wait_for_function("!document.getElementById('pulse3d-fields').hidden")
+    assert gui.field("motors.neutral3d").input_value() == "1460" and "µs" in pg.inner_text("#pulse3d-fields")
+    pg.uncheck('[data-field="motors.mode3d"]')
+    pg.wait_for_function("document.getElementById('pulse3d-fields').hidden")
+    pg.select_option('[data-field="motors.protocol"]', "DSHOT300")
+    gui.tab("receiver")
+    assert gui.field("receiver.deadband3d_throttle").input_value() == "50", "the 3D throttle deadband (us) in the Receiver tab, as Betaflight"
+    assert [gui.field("receiver." + n).input_value() for n in ("min_check", "mid_rc", "max_check")] == ["1050", "1500", "1900"], "Betaflight's stick thresholds"
 
 
 def test_current_sensor_and_servos_on_the_page(gui):
@@ -2467,7 +2551,7 @@ def test_tx_tabs_only(gui):
     pg.wait_for_selector("#save:not([hidden])")
     pg.once("dialog", lambda d: d.accept())
     pg.click("#tx-defaults")
-    gui.wait(lambda: gui.setting("tx_sticks", "deadband") == 3, what="tx_sticks back to its defaults")
+    gui.wait(lambda: gui.setting("tx_sticks", "deadband") == 15, what="tx_sticks back to its defaults")
     pg.click("#connect")                                    # (connected: the button disconnects)
     pg.wait_for_selector("#arm-pill.off")
     gui.connect()

@@ -72,13 +72,13 @@ class PidController {
 public:
     float p_term[3] = {}, i_term[3] = {}, d_term[3] = {}, f_term[3] = {};      // Betaflight "PID sum" units (the mixer gets sum / 1000)
 
+    // Gains in place of the configured ones (Betaflight numbers, fractional: the autotune's), without touching the filters or
+    // the state; restore_gains() goes back to the configured ones.
+    void set_gains(const float p[3], const float i[3], const float d[3], const float d_max[3], const float f[3]) { for (int a = 0; a < 3; a++) set_k(a, p[a], i[a], d[a], d_max[a], f[a]); }
+    void restore_gains() { for (int a = 0; a < 3; a++) set_k(a, cfg_.p[a], cfg_.i[a], cfg_.d[a], cfg_.d_max[a], cfg_.f[a]); }
     void configure(const PidConfig& c, float loop_hz) {
         cfg_ = c; dt_ = 1.0f / loop_hz; freq_ = loop_hz;
-        for (int a = 0; a < 3; a++) {
-            kp_[a] = kPtermScale * c.p[a]; ki_[a] = kItermScale * c.i[a]; kd_[a] = kDtermScale * c.d[a]; kf_[a] = kFeedforwardScale * (c.f[a] * 0.01f);
-            d_max_percent_[a] = (c.d[a] > 0 && c.d_max[a] > c.d[a]) ? (float)c.d_max[a] / (float)c.d[a] : 1.0f;
-        }
-        ki_[YAW] *= 2.5f;
+        restore_gains();
         iterm_limit_ = 0.01f * c.iterm_windup * c.pidsum_limit; iterm_limit_yaw_ = 0.01f * c.iterm_windup * c.pidsum_limit_yaw;
         ag_p_gain_ = c.anti_gravity_p_gain * 0.01f * kAntiGravityKp;
         d_max_gyro_gain_ = kDMaxGyroGainFactor * c.d_max_gain / kDMaxLowpassHz; d_max_setpoint_gain_ = kDMaxSetpointGainFactor * c.d_max_advance / kDMaxLowpassHz;
@@ -229,6 +229,10 @@ private:
 
     PidConfig cfg_; float dt_ = 0.00025f, freq_ = 4000.0f;
     float kp_[3] = {}, ki_[3] = {}, kd_[3] = {}, kf_[3] = {}, d_max_percent_[3] = {1, 1, 1};
+    void set_k(int a, float p, float i, float d, float d_max, float f) {
+        kp_[a] = kPtermScale * p; ki_[a] = kItermScale * i * (a == YAW ? 2.5f : 1.0f); kd_[a] = kDtermScale * d; kf_[a] = kFeedforwardScale * (f * 0.01f);
+        d_max_percent_[a] = (d > 0.0f && d_max > d) ? d_max / d : 1.0f;
+    }
     float iterm_limit_ = 400.0f, iterm_limit_yaw_ = 320.0f, ag_p_gain_ = 0.0f, d_max_gyro_gain_ = 0.0f, d_max_setpoint_gain_ = 0.0f;
     float tpa_break_ = 0.35f, tpa_mult_ = 0.0f, tpa_low_break_ = 0.05f, tpa_low_mult_ = 0.0f, tpa_factor_ = 1.0f; bool tpa_low_faded_ = false;
     float prev_throttle_ = 0.0f, ag_throttle_d_ = 0.0f; bool have_throttle_ = false; int8_t ag_switch_ = -1;

@@ -70,6 +70,7 @@ struct Telemetry {
     uint8_t mission_state = 0, mission_index = 0, mission_count = 0, mission_wait = 0; float mission_dist = 0, mission_left = 0;      // the mission (nav/mission.h)
     // ---- tuning: live state of the filters and the PID helpers
     float gyro_lpf1_hz = 0, dterm_lpf1_hz = 0, dyn_notch_hz[9] = {}, rpm_notch_hz[8] = {}, tpa = 1, anti_gravity = 0, rc_smoothed_hz = 0, rc_cutoff_hz = 0, pid_sum[3] = {}, hover_throttle = 0; uint8_t air_state = false;
+    uint8_t at_state = 0, at_axis = 255, at_step = 0, at_done = 0; float at_p = 0, at_d = 0, at_stab_p = 0;      // 0.44 the autotune (FlightCore CoreOutput::at_*)
     // ---- a section the firmware changed by itself and wants written to flash (in-flight level trim): the link task saves it when seq changes
     uint32_t fw_saved_mask = 0;      // (0.43) every section the flight side changed since boot: several between two looks are all kept
     uint8_t fw_saved_seq = 0, fw_saved_section = 0; uint8_t trim_progress = 0;      // trim_progress: % of the in-flight level trim measurement
@@ -208,7 +209,9 @@ inline uint16_t pack_stream(uint8_t id, const Telemetry& t, uint8_t settings_fla
         for (int i = 0; i < 8; i++) o.rpm_hz[i] = u16(t.rpm_notch_hz[i], 1.0f);
         o.tpa = (uint8_t)scaled(t.tpa, 0.01f, 0, 100); o.anti_gravity = u16(t.anti_gravity, scale::tuning_anti_gravity); o.rc_rate = u16(t.rc_smoothed_hz, 1.0f); o.rc_cutoff = u16(t.rc_cutoff_hz, 1.0f);
         o.air_state = t.air_state; for (int i = 0; i < 3; i++) o.pid_sum[i] = s16(t.pid_sum[i], scale::tuning_pid_sum);
-        o.hover = (uint8_t)scaled(t.hover_throttle, 0.01f, 0, 100);
+        o.hover = (uint16_t)scaled(1000.0f + t.hover_throttle * 1000.0f, 1.0f, 1000, 2000);      // us (Betaflight's)
+        o.at_state = t.at_state; o.at_axis = t.at_axis; o.at_step = t.at_step; o.at_done = t.at_done;
+        o.at_p = (uint8_t)scaled(t.at_p, 1.0f, 0, 255); o.at_d = (uint8_t)scaled(t.at_d, 1.0f, 0, 255); o.at_stab_p = (uint16_t)scaled(t.at_stab_p, 0.01f, 0, 65535);
         memcpy(out, &o, sizeof(o)); break; }
     default: return 0;
     }

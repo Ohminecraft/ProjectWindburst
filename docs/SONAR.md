@@ -29,6 +29,8 @@ arm.range_ok = sonar.valid(millis());
 - `setModel(AUTO|VL53L1X|VL53L0X)`, `setL1xMode(0 short | 1 medium | 2 long)` (default long = 4 m; in strong sunlight try medium/short), `setEnabled(false)` for the switch in the app.
 - Altitude Hold **does not depend** on the sonar: out of range / tilted beyond 30° / signal lost, the Kalman ignores it and the baro carries on.
 
+**Watchdog** (0.44.0, `RangeFinder`): a sensor that stops delivering samples (the chip reset itself after a supply dip, its continuous mode was lost) is started again with `init()` after 0.5 s (or 10 periods) of silence, then at most once a second - **only while disarmed**: a restart blocks the I2C bus for tens of ms. In flight it is only stale (`valid()` false, the height falls back to the baro), as ArduPilot marks it NoData. `restarts()` counts the restarts.
+
 ## Processing (range_height.h)
 - Height = distance × cos(tilt); tilt > 30° drops the sample. Only up to 90% of the maximum range is used (VL53L1X long 4 m → 3.6 m; VL53L0X 1.2 m → 1.08 m).
 - Impossible jumps (> 8 m/s + 0.3 m) are rejected; 3 consistent consecutive samples accept the new level (roofs, steps). A hand under the drone only lasts 1–2 samples so it is rejected.

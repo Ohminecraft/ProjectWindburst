@@ -18,13 +18,13 @@ static const char* const kE_range_model[] = {"AUTO", "VL53L1X", "VL53L0X", "MSP"
 static const char* const kE_mag_model[] = {"AUTO", "HMC5883L", "QMC5883L", "QMC5883P", "AK8963_MPU9250", "DRONECAN", "RM3100", "MSP"};
 static const char* const kE_baro_model[] = {"AUTO", "DRONECAN", "MSP"};
 static const char* const kE_port_function[] = {"NONE", "SERIAL_RX", "GPS", "TELEMETRY", "FLOW_MSP", "ESC_SENSOR", "DISPLAYPORT"};
-static const char* const kE_mode[] = {"ARM", "ANGLE", "STABILIZE", "ALTHOLD", "POSHOLD", "FAILSAFE", "BEEPER", "BLACKBOX", "CALIB", "RESCUE", "ACRO_TRAINER", "AIRMODE", "ANTI_GRAVITY", "BLACKBOX_ERASE", "MISSION", "LOITER", "CRASHFLIP"};
+static const char* const kE_mode[] = {"ARM", "ANGLE", "STABILIZE", "ALTHOLD", "POSHOLD", "FAILSAFE", "BEEPER", "BLACKBOX", "CALIB", "RESCUE", "ACRO_TRAINER", "AIRMODE", "ANTI_GRAVITY", "BLACKBOX_ERASE", "MISSION", "LOITER", "CRASHFLIP", "AUTOTUNE", "3D"};
 static const char* const kE_failsafe[] = {"NONE", "GUARD", "DESCENT", "LANDED"};
 static const char* const kE_ah_state[] = {"STOPPED", "LANDED_IDLE", "LANDED_PRE_TAKEOFF", "TAKEOFF", "FLYING"};
 static const char* const kE_gps_state[] = {"UNKNOWN", "INITIALIZED", "DETECT_BAUD", "CHANGE_BAUD", "CONFIGURE", "RECEIVING_DATA", "LOST_COMMUNICATION"};
 static const char* const kE_cal_kind[] = {"NONE", "GYRO", "ACCEL", "MAG", "MAG_AUTO"};
 static const char* const kE_cal_state[] = {"IDLE", "RUNNING", "DONE", "FAILED"};
-static const char* const kE_mag_cal_result[] = {"OK", "TOO_FEW_SAMPLES", "POOR_COVERAGE", "SINGULAR", "NOT_ELLIPSOID", "TOO_DISTORTED", "BAD_FIELD_STRENGTH", "BAD_FIT", "NO_MOTION"};
+static const char* const kE_mag_cal_result[] = {"OK", "TOO_FEW_SAMPLES", "POOR_COVERAGE", "SINGULAR", "NOT_ELLIPSOID", "TOO_DISTORTED", "BAD_FIELD_STRENGTH", "BAD_FIT", "NO_MOTION", "OFFSET_TOO_LARGE"};
 static const char* const kE_batt_source[] = {"AUTO", "ADC", "ESC", "NONE", "DRONECAN"};
 static const char* const kE_batt_state[] = {"NOT_PRESENT", "OK", "WARNING", "CRITICAL"};
 static const char* const kE_buzzer_type[] = {"ACTIVE", "PASSIVE"};
@@ -79,12 +79,16 @@ static const char* const kE_nrf_rate[] = {"R250K", "R1M", "R2M"};
 static const char* const kE_nrf_power[] = {"MIN", "LOW", "HIGH", "MAX"};
 static const char* const kE_nrf_pps[] = {"HZ50", "HZ100", "HZ150"};
 static const char* const kE_bind_state[] = {"IDLE", "LISTEN", "BINDING", "BOUND", "FAILED"};
-static const char* const kE_fly_mode[] = {"ACRO", "ANGLE", "STABILIZE", "ALTHOLD", "POSHOLD", "RESCUE", "MISSION", "LOITER", "CRASHFLIP"};
+static const char* const kE_fly_mode[] = {"ACRO", "ANGLE", "STABILIZE", "ALTHOLD", "POSHOLD", "RESCUE", "MISSION", "LOITER", "CRASHFLIP", "AUTOTUNE"};
 static const char* const kE_flow_cal_result[] = {"OK", "TOO_FEW", "SIGN_X", "SIGN_Y", "AXES_DIFFER"};
 static const char* const kE_fly_style[] = {"FPV", "FLYCAM"};
 static const char* const kE_flycam_hold[] = {"LOITER", "POSHOLD"};
+static const char* const kE_flycam_attitude[] = {"ANGLE", "STABILIZE"};
 static const char* const kE_tx_throttle[] = {"ALTPOS", "MANUAL"};
-static const char* const kB_arm_blocker[] = {"NO_IMU", "GYRO_NOT_CAL", "RX_LOST", "THROTTLE_HIGH", "ANGLE_TOO_HIGH", "FAILSAFE", "ALTHOLD_NO_BARO", "BATT_LOW", "ARM_SWITCH_ON", "CONFIG_UNSAVED", "CALIBRATING", "POSHOLD_NO_GPS", "MAG_NOT_CALIBRATED", "PIN_CONFLICT", "LOOP_RATE", "RUNAWAY_TAKEOFF", "RESCUE_NO_FIX", "RESCUE_NO_COMPASS", "MOTOR_STALL", "CRASHFLIP"};
+static const char* const kE_autotune_state[] = {"OFF", "NOT_FLYING", "LEVELLING", "TWITCHING", "PILOT", "FINISHED", "FAILED"};
+static const char* const kE_autotune_step[] = {"RATE_D_UP", "RATE_D_DOWN", "RATE_P_UP", "ANGLE_P_DOWN", "ANGLE_P_UP", "COMPLETE"};
+static const char* const kE_board_align_result[] = {"OK", "NOT_STILL", "NO_GRAVITY", "NO_PITCH", "NO_ROLL", "DIRECTION", "NO_FIT"};
+static const char* const kB_arm_blocker[] = {"NO_IMU", "GYRO_NOT_CAL", "RX_LOST", "THROTTLE_HIGH", "ANGLE_TOO_HIGH", "FAILSAFE", "ALTHOLD_NO_BARO", "BATT_LOW", "ARM_SWITCH_ON", "CONFIG_UNSAVED", "CALIBRATING", "POSHOLD_NO_GPS", "MAG_NOT_CALIBRATED", "PIN_CONFLICT", "LOOP_RATE", "RUNAWAY_TAKEOFF", "RESCUE_NO_FIX", "RESCUE_NO_COMPASS", "MOTOR_STALL", "CRASHFLIP", "CONFIGURATOR"};
 static const char* const kB_health[] = {"IMU", "GYRO_CAL", "BARO", "RANGE", "GPS", "MAG_READY", "MAG_CAL", "RX", "MOTORS", "ESC_TELEMETRY", "ACC_CAL", "BATTERY", "FLOW", "IMU2", "CAN"};
 static const char* const kB_settings_flags[] = {"DIRTY", "REBOOT_REQUIRED"};
 static const char* const kB_est_valid[] = {"ALT", "POS", "YAW_FROM_MAG", "VEL", "FLOW", "TILT_AIDED", "GPS_ALT", "GPS_VZ"};
@@ -92,7 +96,7 @@ static const char* const kB_fs_cause[] = {"LINK", "SWITCH", "BATTERY", "BATTERY_
 static const char* const kB_nav_flags[] = {"POSHOLD", "POSHOLD_UNAVAILABLE", "RESCUE", "RESCUE_AVAILABLE", "NAV_LEAN", "POSHOLD_SLOW_GPS", "FENCE", "CRASHFLIP"};
 static const char* const kB_ekf_flags[] = {"ALIGNED", "GPS_AIDING", "HEADING_OK", "USED_FOR_NAV"};
 static const char* const kB_imu_src[] = {"IMU1", "IMU2"};
-constexpr int kFieldCount = 399;
+constexpr int kFieldCount = 422;
 static const FieldInfo kFields[kFieldCount] = {
     {SEC_GENERAL, "loop_hz", 0, FT_U16, 1, FF_RANGE, 1.0f, 500.0f, 8000.0f, nullptr, 0},
     {SEC_GENERAL, "est_hz", 2, FT_U16, 1, FF_RANGE, 1.0f, 100.0f, 1000.0f, nullptr, 0},
@@ -104,7 +108,7 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_GENERAL, "fs_guard_ms", 12, FT_U16, 1, FF_RANGE, 1.0f, 100.0f, 5000.0f, nullptr, 0},
     {SEC_GENERAL, "fs_recover_ms", 14, FT_U16, 1, FF_RANGE, 1.0f, 100.0f, 10000.0f, nullptr, 0},
     {SEC_GENERAL, "fs_max_descent_s", 16, FT_U16, 1, FF_RANGE, 1.0f, 5.0f, 600.0f, nullptr, 0},
-    {SEC_GENERAL, "fs_fallback_throttle", 18, FT_U8, 1, FF_RANGE, 1.0f, 30.0f, 100.0f, nullptr, 0},
+    {SEC_GENERAL, "old_fs_fallback", 18, FT_U8, 1, FF_RANGE, 1.0f, 30.0f, 100.0f, nullptr, 0},
     {SEC_GENERAL, "airmode", 19, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_airmode, 3},
     {SEC_GENERAL, "airmode_start_throttle", 20, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 100.0f, nullptr, 0},
     {SEC_GENERAL, "runaway_takeoff", 21, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
@@ -114,13 +118,15 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_GENERAL, "stick_arm", 56, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_GENERAL, "fly_style", 57, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_fly_style, 2},
     {SEC_GENERAL, "flycam_hold", 58, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_flycam_hold, 2},
+    {SEC_GENERAL, "flycam_attitude", 59, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_flycam_attitude, 2},
+    {SEC_GENERAL, "fs_throttle", 60, FT_U16, 1, FF_RANGE, 1.0f, 1000.0f, 2000.0f, nullptr, 0},
     {SEC_RECEIVER, "protocol", 0, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_rx_protocol, 10},
     {SEC_RECEIVER, "ch_roll", 1, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 15.0f, nullptr, 0},
     {SEC_RECEIVER, "ch_pitch", 2, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 15.0f, nullptr, 0},
     {SEC_RECEIVER, "ch_throttle", 3, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 15.0f, nullptr, 0},
     {SEC_RECEIVER, "ch_yaw", 4, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 15.0f, nullptr, 0},
     {SEC_RECEIVER, "ch_aux0", 5, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 8.0f, nullptr, 0},
-    {SEC_RECEIVER, "deadband", 6, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 20.0f, nullptr, 0},
+    {SEC_RECEIVER, "old_deadband", 6, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 20.0f, nullptr, 0},
     {SEC_RECEIVER, "rx_timeout_ms", 7, FT_U16, 1, FF_RANGE, 1.0f, 50.0f, 5000.0f, nullptr, 0},
     {SEC_RECEIVER, "rc_smoothing", 9, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_RECEIVER, "rc_smoothing_factor", 10, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 250.0f, nullptr, 0},
@@ -131,7 +137,13 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_RECEIVER, "nrf_rate", 19, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_nrf_rate, 3},
     {SEC_RECEIVER, "nrf_pps", 20, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_nrf_pps, 3},
     {SEC_RECEIVER, "nrf_bound", 21, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
-    {SEC_MODES, "mode", 0, FT_U8, 16, FF_OPTIONAL, 1.0f, 0.0f, 0.0f, kE_mode, 17},
+    {SEC_RECEIVER, "deadband", 22, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 100.0f, nullptr, 0},
+    {SEC_RECEIVER, "yaw_deadband", 23, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 100.0f, nullptr, 0},
+    {SEC_RECEIVER, "deadband3d_throttle", 24, FT_U16, 1, FF_RANGE, 1.0f, 1.0f, 100.0f, nullptr, 0},
+    {SEC_RECEIVER, "min_check", 26, FT_U16, 1, FF_RANGE, 1.0f, 1000.0f, 1450.0f, nullptr, 0},
+    {SEC_RECEIVER, "mid_rc", 28, FT_U16, 1, FF_RANGE, 1.0f, 1200.0f, 1700.0f, nullptr, 0},
+    {SEC_RECEIVER, "max_check", 30, FT_U16, 1, FF_RANGE, 1.0f, 1550.0f, 2000.0f, nullptr, 0},
+    {SEC_MODES, "mode", 0, FT_U8, 16, FF_OPTIONAL, 1.0f, 0.0f, 0.0f, kE_mode, 19},
     {SEC_MODES, "aux", 16, FT_U8, 16, FF_RANGE, 1.0f, 0.0f, 7.0f, nullptr, 0},
     {SEC_MODES, "lo", 32, FT_U16, 16, FF_RANGE, 1.0f, 900.0f, 2100.0f, nullptr, 0},
     {SEC_MODES, "hi", 64, FT_U16, 16, FF_RANGE, 1.0f, 900.0f, 2100.0f, nullptr, 0},
@@ -194,6 +206,9 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_PID, "acro_trainer_angle_limit", 75, FT_U8, 1, FF_RANGE, 1.0f, 10.0f, 80.0f, nullptr, 0},
     {SEC_PID, "acro_trainer_lookahead_ms", 76, FT_U16, 1, FF_RANGE, 1.0f, 10.0f, 200.0f, nullptr, 0},
     {SEC_PID, "acro_trainer_gain", 78, FT_U8, 1, FF_RANGE, 1.0f, 25.0f, 255.0f, nullptr, 0},
+    {SEC_PID, "autotune_axes", 79, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 7.0f, nullptr, 0},
+    {SEC_PID, "autotune_aggr", 80, FT_U8, 1, FF_RANGE, 0.001f, 50.0f, 200.0f, nullptr, 0},
+    {SEC_PID, "autotune_backoff", 81, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 50.0f, nullptr, 0},
     {SEC_MOTORS, "layout", 0, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_layout, 14},
     {SEC_MOTORS, "props_out", 1, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_MOTORS, "protocol", 2, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_esc_protocol, 11},
@@ -225,6 +240,13 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_MOTORS, "crashflip_rate", 44, FT_U8, 1, FF_RANGE, 10.0f, 0.0f, 250.0f, nullptr, 0},
     {SEC_MOTORS, "crashflip_motor_pct", 45, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 100.0f, nullptr, 0},
     {SEC_MOTORS, "crashflip_auto_rearm", 46, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_MOTORS, "mode3d", 47, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_MOTORS, "switched_mode3d", 48, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
+    {SEC_MOTORS, "deadband3d_low", 49, FT_U16, 1, FF_RANGE, 1.0f, 1000.0f, 1500.0f, nullptr, 0},
+    {SEC_MOTORS, "deadband3d_high", 51, FT_U16, 1, FF_RANGE, 1.0f, 1500.0f, 2000.0f, nullptr, 0},
+    {SEC_MOTORS, "neutral3d", 53, FT_U16, 1, FF_RANGE, 1.0f, 1400.0f, 1600.0f, nullptr, 0},
+    {SEC_MOTORS, "limit3d_low", 55, FT_U16, 1, FF_RANGE, 1.0f, 1000.0f, 1500.0f, nullptr, 0},
+    {SEC_MOTORS, "limit3d_high", 57, FT_U16, 1, FF_RANGE, 1.0f, 1500.0f, 2000.0f, nullptr, 0},
     {SEC_SENSORS, "baro_enabled", 0, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_SENSORS, "mag_enabled", 1, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_SENSORS, "range_enabled", 2, FT_BOOL, 1, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
@@ -419,16 +441,20 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_SERVO, "angle_min", 26, FT_I16, 4, FF_RANGE, 1.0f, -360.0f, 360.0f, nullptr, 0},
     {SEC_SERVO, "angle_max", 34, FT_I16, 4, FF_RANGE, 1.0f, -360.0f, 360.0f, nullptr, 0},
     {SEC_SERVO, "init_us", 42, FT_U16, 4, FF_RANGE, 1.0f, 500.0f, 2500.0f, nullptr, 0},
-    {SEC_ALTHOLD, "mid_stick", 0, FT_U8, 1, FF_RANGE, 1.0f, 30.0f, 70.0f, nullptr, 0},
-    {SEC_ALTHOLD, "deadband", 1, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 20.0f, nullptr, 0},
-    {SEC_ALTHOLD, "low_stick", 2, FT_U8, 1, FF_RANGE, 1.0f, 2.0f, 25.0f, nullptr, 0},
-    {SEC_ALTHOLD, "max_stick", 3, FT_U8, 1, FF_RANGE, 1.0f, 70.0f, 100.0f, nullptr, 0},
+    {SEC_ALTHOLD, "old_mid_stick", 0, FT_U8, 1, FF_RANGE, 1.0f, 30.0f, 70.0f, nullptr, 0},
+    {SEC_ALTHOLD, "old_deadband", 1, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 20.0f, nullptr, 0},
+    {SEC_ALTHOLD, "old_low_stick", 2, FT_U8, 1, FF_RANGE, 1.0f, 2.0f, 25.0f, nullptr, 0},
+    {SEC_ALTHOLD, "old_max_stick", 3, FT_U8, 1, FF_RANGE, 1.0f, 70.0f, 100.0f, nullptr, 0},
     {SEC_ALTHOLD, "climb_rate", 4, FT_U8, 1, FF_RANGE, 0.1f, 2.0f, 80.0f, nullptr, 0},
     {SEC_ALTHOLD, "descend_rate", 5, FT_U8, 1, FF_RANGE, 0.1f, 2.0f, 50.0f, nullptr, 0},
     {SEC_ALTHOLD, "accel_z", 6, FT_U8, 1, FF_RANGE, 0.1f, 5.0f, 80.0f, nullptr, 0},
     {SEC_ALTHOLD, "jerk_z", 7, FT_U8, 1, FF_RANGE, 0.1f, 10.0f, 200.0f, nullptr, 0},
     {SEC_ALTHOLD, "acc_p", 8, FT_U8, 1, FF_RANGE, 0.01f, 0.0f, 150.0f, nullptr, 0},
     {SEC_ALTHOLD, "acc_i", 9, FT_U8, 1, FF_RANGE, 0.01f, 0.0f, 250.0f, nullptr, 0},
+    {SEC_ALTHOLD, "mid_stick", 10, FT_U16, 1, FF_RANGE, 1.0f, 1300.0f, 1700.0f, nullptr, 0},
+    {SEC_ALTHOLD, "deadband", 12, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 200.0f, nullptr, 0},
+    {SEC_ALTHOLD, "low_stick", 13, FT_U16, 1, FF_RANGE, 1.0f, 1020.0f, 1250.0f, nullptr, 0},
+    {SEC_ALTHOLD, "max_stick", 15, FT_U16, 1, FF_RANGE, 1.0f, 1700.0f, 2000.0f, nullptr, 0},
     {SEC_CAN, "mode", 0, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_can_mode, 2},
     {SEC_CAN, "bitrate", 1, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_can_bitrate, 4},
     {SEC_CAN, "node_id", 2, FT_U8, 1, FF_RANGE, 1.0f, 1.0f, 125.0f, nullptr, 0},
@@ -489,9 +515,10 @@ static const FieldInfo kFields[kFieldCount] = {
     {SEC_TX_STICKS, "cal_max", 20, FT_U16, 4, FF_RANGE, 1.0f, 0.0f, 4095.0f, nullptr, 0},
     {SEC_TX_STICKS, "invert", 28, FT_BOOL, 4, 0, 1.0f, 0.0f, 0.0f, nullptr, 0},
     {SEC_TX_STICKS, "map", 32, FT_U8, 4, FF_RANGE, 1.0f, 0.0f, 3.0f, nullptr, 0},
-    {SEC_TX_STICKS, "deadband", 36, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 20.0f, nullptr, 0},
+    {SEC_TX_STICKS, "old_deadband", 36, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 20.0f, nullptr, 0},
     {SEC_TX_STICKS, "expo", 37, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 100.0f, nullptr, 0},
     {SEC_TX_STICKS, "throttle_mode", 38, FT_U8, 1, 0, 1.0f, 0.0f, 0.0f, kE_tx_throttle, 2},
     {SEC_TX_STICKS, "throttle_rate", 39, FT_U8, 1, FF_RANGE, 1.0f, 5.0f, 200.0f, nullptr, 0},
+    {SEC_TX_STICKS, "deadband", 40, FT_U8, 1, FF_RANGE, 1.0f, 0.0f, 100.0f, nullptr, 0},
 };
 } // namespace wbp

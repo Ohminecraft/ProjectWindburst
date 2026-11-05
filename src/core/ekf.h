@@ -141,6 +141,9 @@ public:
     // velocity (u-blox; NMEA does not).
     void fuse_gps(float pn, float pe, float vn, float ve, float vd, bool vd_valid, float sigma_pos, float sigma_vel) {
         if (!st_.aligned) return;
+        // a NaN / Inf in the fix is never fused - and never reset to (the rejection timer would do that 5 s later)
+        if (!isfinite(pn) || !isfinite(pe) || !isfinite(vn) || !isfinite(ve)) { st_.gps_rejects++; return; }
+        if (!isfinite(vd)) vd_valid = false;
         Hist d; delayed(cfg.gps_delay_s, d);
         const float sp = fmaxf(sigma_pos, cfg.gps_pos_sigma_min), sv = fmaxf(sigma_vel, cfg.gps_vel_sigma_min);
         if (!(last_gps_t_ > -1e8f)) { set_position(pn, pe); d.p[0] = pn; d.p[1] = pe; }   // the first fix: the position starts there
@@ -153,6 +156,7 @@ public:
         if (pos_ok) last_gps_pos_ok_t_ = t_;
         else if (t_ - last_gps_pos_ok_t_ > cfg.reset_after_s) {          // rejected for long: the GPS is believed, the state jumps to it
             { const float dv[3] = {vn - v_[0], ve - v_[1], 0.0f}, dp[3] = {pn - p_[0], pe - p_[1], 0.0f}; shift_hist(dv, dp); }
+            note_pos_reset(pn - p_[0], pe - p_[1]);
             p_[0] = pn; p_[1] = pe; v_[0] = vn; v_[1] = ve;
             for (int i = 3; i < 9; i++) { for (int j = 0; j < N; j++) { P_[i][j] = P_[j][i] = 0.0f; } }
             P_[3][3] = P_[4][4] = sv * sv; P_[5][5] = 1.0f; P_[6][6] = P_[7][7] = sp * sp; P_[8][8] = 4.0f;
@@ -171,6 +175,7 @@ public:
     // Barometric height above the start (m, up positive).
     void fuse_baro(float h_up) {
         if (!st_.aligned) return;
+        if (!isfinite(h_up)) { st_.baro_rejects++; return; }
         float t = 0;
         if (fuse(8, -h_up, cfg.baro_sigma, cfg.gate_baro, &t)) last_baro_ok_t_ = t_;
         else {
@@ -221,9 +226,15 @@ public:
     const float* q() const { return q_; }
     const float* vel() const { return v_; }
     const float* pos() const { return p_; }
+    // Jumps of the horizontal position (a GPS reset, set_position): a controller holding a target moves it by the step
+    // (ArduPilot NavEKF3::getLastPosNorthEastReset).
+    uint8_t pos_reset_count() const { return pos_reset_count_; }
+    float pos_reset_n() const { return pos_reset_[0]; }
+    float pos_reset_e() const { return pos_reset_[1]; }
     const float* gyro_bias() const { return bg_; }
     const float* accel_bias() const { return ba_; }
     float sigma(int i) const { return sqrtf(fmaxf(P_[i][i], 0.0f)); }
+    float cov(int i, int j) const { return P_[i][j]; }           // (tests, the log)
     float yaw_sigma() const { return sigma(2); }
     const EkfStatus& status() {
         st_.gps_aiding = t_ - last_gps_t_ < 1.0f; st_.heading_ok = st_.aligned && yaw_sigma() < 10.0f * kDeg2Rad;
@@ -231,7 +242,7 @@ public:
     }
     float time() const { return t_; }
     // shift the position reference (a home point set later: the GPS position jumps by this much)
-    void set_position(float pn, float pe) { p_[0] = pn; p_[1] = pe; noaid_n_ = pn; noaid_e_ = pe; for (int i = 0; i < kHist; i++) { hist_[i].p[0] = pn; hist_[i].p[1] = pe; } }
+    void set_position(float pn, float pe) { note_pos_reset(pn - p_[0], pe - p_[1]); p_[0] = pn; p_[1] = pe; noaid_n_ = pn; noaid_e_ = pe; for (int i = 0; i < kHist; i++) { hist_[i].p[0] = pn; hist_[i].p[1] = pe; } }
 
 private:
     bool fuse_gps_vel_(const Hist& d, float vn, float ve, float vd, bool vd_valid, float sv) {
@@ -252,6 +263,8 @@ private:
     // A correction (or a reset) moves the past states as well: the next delayed fix is compared with what the state was then AS WE
     // NOW KNOW IT - without this, a correction made after that moment is not seen and is applied again (0.43; StateHistory::shift
     // does the same for the other estimators; EKF3 / EKF2 fuse at the delayed horizon itself)
+    void note_pos_reset(float dn, float de) { pos_reset_[0] = dn; pos_reset_[1] = de; pos_reset_count_++; }
+    uint8_t pos_reset_count_ = 0; float pos_reset_[2] = {0, 0};
     void shift_hist(const float dv[3], const float dp[3]) {
         for (int k = 0; k < hist_n_; k++) { Hist& h = hist_[(hist_i_ - 1 - k + 2 * kHist) % kHist]; for (int i = 0; i < 3; i++) { h.v[i] += dv[i]; h.p[i] += dp[i]; } }
     }
@@ -306,7 +319,7 @@ private:
         float PH[N]; float S = sigma * sigma;
         for (int i = 0; i < N; i++) { float s = 0; for (int k = 0; k < N; k++) if (H[k] != 0.0f) s += P_[i][k] * H[k]; PH[i] = s; }
         for (int k = 0; k < N; k++) if (H[k] != 0.0f) S += H[k] * PH[k];
-        if (!(S > 1e-12f)) return false;
+        if (!(S > 1e-12f) || !isfinite(y)) return false;                // (a NaN innovation passes every gate: refuse it here)
         const float t = fabsf(y) / sqrtf(S);
         if (test) *test = fmaxf(*test, t);
         if (gate > 0.0f && t > gate) return false;

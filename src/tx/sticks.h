@@ -75,7 +75,7 @@ public:
         float v = raw >= mid ? (hi > mid ? (raw - mid) / (hi - mid) : 0.0f) : (mid > lo ? (raw - mid) / (mid - lo) : 0.0f);
         v = v > 1.0f ? 1.0f : v < -1.0f ? -1.0f : v;
         if (c_.invert[a]) v = -v;
-        const float d = c_.deadband / 100.0f, m = v < 0 ? -v : v;
+        const float d = c_.deadband / 500.0f, m = v < 0 ? -v : v;                     // (us of the half travel)
         if (m <= d) return 0.0f;
         return (v < 0 ? -1.0f : 1.0f) * (m - d) / (1.0f - d);
     }

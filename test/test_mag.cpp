@@ -137,6 +137,10 @@ static void sphere_points(MagCalibrator& c, const double off[3], const double M[
 static void t_calibration() {
     printf("[calibration] ellipsoid fit recovers hard + soft iron\n");
     const double R = 0.48;
+    { const double M[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+      MagCalibrator big; big.begin(); const double off_big[3] = {2.0, 0.1, -0.1}; sphere_points(big, off_big, M, R, 0.002, 220); MagCal cb; const MagCalResult rb = big.solve(cb);
+      MagCalibrator ok; ok.begin(); const double off_ok[3] = {1.5, 0.1, -0.1}; sphere_points(ok, off_ok, M, R, 0.002, 220); MagCal co; const MagCalResult ro = ok.solve(co);
+      CHECK(rb == MagCalResult::OFFSET_TOO_LARGE && !cb.valid && ro == MagCalResult::OK, "an offset of 2 G is refused (%s: a magnet or steel next to the chip), 1.5 G is fine (%s)", MagCalibrator::result_name(rb), MagCalibrator::result_name(ro)); }
     { MagCalibrator c; c.begin(); const double off[3] = {0.12, -0.08, 0.20}; const double M[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
       sphere_points(c, off, M, R, 0.002, 220); MagCal cal; MagCalResult r = c.solve(cal);
       CHECK(r == MagCalResult::OK, "hard iron only: %s", MagCalibrator::result_name(r));
@@ -192,6 +196,14 @@ static void t_processor() {
     p.set_alignment(CW0_DEG);
     float strong[3] = {0.1f + 0.5f, -0.05f + 0.4f, 0.4f}; p.update(strong, 2000);
     CHECK(p.interference() > 0.3f && !p.ready_for_fusion(2010), "|B| 36 %% above the calibrated field (motor current / magnet): not used for yaw (%.2f)", p.interference());
+    // a chip that reads all zeros (in reset, a dropped bus) or NaN / Inf: not a field. Calibrated, a zero reading would become -offset,
+    // which can look like a field of the right strength (here 0.45 of 0.5) - it must not count, the compass goes stale instead
+    { MagProcessor z; MagCal c2; c2.valid = true; c2.offset[0] = 0.45f; c2.radius = 0.5f; z.set_calibration(c2);
+      const float good[3] = {0.45f + 0.3f, 0.2f, 0.3464f}; z.update(good, 1000); const float b0 = z.board()[0];
+      const float zero[3] = {0, 0, 0}, nan3[3] = {NAN, 0.1f, 0.2f}, inf3[3] = {0.1f, INFINITY, 0.2f};
+      z.update(zero, 1200); z.update(nan3, 1250); z.update(inf3, 1300); z.update(zero, 1400);
+      CHECK(z.ready_for_fusion(1250) && !z.ready_for_fusion(1450) && z.board()[0] == b0 && isfinite(z.strength()),
+            "zeros / NaN / Inf from the chip: ignored - the last good vector stays and goes stale 300 ms after it (%.3f)", z.board()[0]); }
     MagProcessor u; u.update(raw, 10); CHECK(!u.calibrated() && !u.ready_for_fusion(20), "without a stored calibration the compass never steers the attitude");
     float big[3] = {2.0f, 0, 0}; u.update(big, 30); CHECK(!u.valid(40) || true, "uncalibrated field gate");
 }
@@ -334,6 +346,13 @@ struct Tumble {
 };
 static void t_autocal() {
     printf("[auto calibration] turned by hand, ends by itself; keeps the soft-iron matrix\n");
+    {   // the same limit in the automatic one
+        const float offb[3] = {2.0f, 0.1f, 0.0f}; MagAutoCal a; MagCal none; a.start(0, none); Tumble t; double b[3]; uint32_t ms = 0;
+        for (int i = 0; i < 4000 && a.active(); i++) { ms += 10; float raw[3]; double rate = 0;
+            if (ms > 2000) { t.step(0.01, b); rate = t.rate_dps(); } else { b[0] = 0.30; b[1] = 0; b[2] = 0.38; }
+            for (int k = 0; k < 3; k++) raw[k] = (float)(b[k] + offb[k] + gauss(0.002));
+            a.feed(raw, (float)rate, ms); }
+        CHECK(a.state() == MagAutoCal::FAILED && a.result() == MagCalResult::OFFSET_TOO_LARGE, "automatic: an offset of 2 G is refused too (%s)", MagCalibrator::result_name(a.result())); }
     const float off[3] = {0.12f, -0.08f, 0.05f};
     {   MagAutoCal a; MagCal none; a.start(0, none); Tumble t; double b[3]; uint32_t ms = 0;
         for (int i = 0; i < 3000 && a.active(); i++) {                  // 2 s still on the bench first, then turned: 100 Hz compass

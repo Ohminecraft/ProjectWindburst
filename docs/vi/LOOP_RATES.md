@@ -67,3 +67,9 @@ Báo cáo khởi động ghi lý do: `imu: SPI ICM42688P (20 MHz direct), gyro 4
 - `test_proto`: bố cục và nạp section `general` cũ. `test_core` nhóm fast trigonometry.
 - Mutant: `python3 tools/mutate.py denom`, `python3 tools/mutate.py fastmath`.
 - `test_app` nhóm `loop rate`: bảng `loop_rate_for`. `test_fw` nhóm `loop`: 6000 Hz trên chip 8000 Hz chạy 4000 Hz và báo cáo nói lý do; clock SPI của IMU trong báo cáo (trên PC không có đường đọc trực tiếp).
+
+## Chi tiết chip IMU (0.44.0)
+- **Thứ tự nhận chip** (`classify_spi`, như `gyroSpiDetectFnTable` của Betaflight): WHO_AM_I ở 0x75 trước (họ MPU, ICM-2060x, ICM-426xx), rồi 0x72 (ICM-456xx), các ID ở 0x00 (BMI270, BMI160, ICM-209xx) sau cùng. Trên họ MPU thanh ghi 0x00 chứa byte trim của nhà máy, trên ICM-456xx là dữ liệu gia tốc, nên ở đó có thể đọc ra bất kỳ giá trị nào.
+- **ICM-426xx / ICM-456xx: −32768 nghĩa là "chưa có dữ liệu hợp lệ"** (dấu của chính chip, ví dụ ngay sau khi khởi động). Mẫu có giá trị đó ở bất kỳ trục nào bị bỏ; vòng lặp xử lý như một lần đọc hụt.
+- **Low-pass gyro bên trong ICM-456xx** được chọn theo băng thông, không phải một số chia cố định của tốc độ: khoảng 200 Hz ở mọi tốc độ gyro (6400 Hz: ODR/32, 3200 Hz: ODR/16, 1600 Hz: ODR/8, 800 Hz: ODR/4). Betaflight luôn chạy chip này ở 6400 Hz với ODR/32 = 200 Hz; trước 0.44.0, tốc độ thấp hơn vẫn giữ ODR/32 nên chỉ còn 100 Hz (3200) tới 25 Hz (800) và trễ hơn nhiều.
+- Test: `test_accgyro` (`[detect]`, nhóm −32768, bảng low-pass ICM-456xx). Mutant: `python3 tools/mutate.py audit043`.

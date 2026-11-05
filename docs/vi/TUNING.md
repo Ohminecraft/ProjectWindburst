@@ -62,7 +62,7 @@ Bộ lọc có hai thanh trượt riêng (tab Bộ lọc): `slider_gyro_mult` v�
 
 - **Lowpass 1 động**: tần số cắt chạy từ `dyn_min` (ga 0) lên `dyn_max` (ga đầy) theo đường cong `dyn_expo`; cập nhật nhiều nhất mỗi 5 ms và chỉ khi ga đổi 1 %. `dyn_min = 0` → dùng tần số tĩnh.
 - **RPM filter**: không có DShot hai chiều thì không chạy (tab Bộ lọc ghi rõ). `rpm_min_hz` (100): notch không xuống dưới mức này và mờ dần trong `rpm_fade_range_hz` (50) phía trên nó. Trọng số từng hài 0 – 100 %: cánh 2 lá thường chỉ cần hài 1 và 2.
-- **Dynamic notch**: `count` 0 = tắt. Một đỉnh phải cao gấp đôi nền quanh nó mới được bám; notch được **lái** tới đỉnh (PT1 4 Hz, nhanh gấp tới 10 lần khi đỉnh cao), không nhảy; các notch của một trục luôn xếp theo tần số. Tần số dưới `min_hz` (chuyển động của chính máy) không kéo notch.
+- **Dynamic notch**: `count` 0 = tắt. Một đỉnh phải cao gấp đôi nền quanh nó mới được bám; notch được **lái** tới đỉnh (PT1 4 Hz, nhanh gấp tới 10 lần khi đỉnh cao), không nhảy; các notch của một trục luôn xếp theo tần số. Tần số dưới `min_hz` (chuyển động của chính máy) không kéo notch. Nền nhiễu được lấy trung bình từ 60 Hz trở lên; khi `min_hz` dưới 60, một đỉnh nằm đúng ở 60 Hz không còn kéo nền xuống dưới 0 (0.44.0, như Betaflight master).
 - Tab Bộ lọc vẽ **bản đồ tần số**: từng lowpass (kèm vùng nó trượt), notch tĩnh, vị trí dynamic notch từng trục và RPM notch từng motor **lúc này** (stream `tuning`).
 
 Nguyên tắc: lọc nhiều hơn → motor mát hơn, máy trễ hơn; lọc ít hơn → nhạy hơn, motor dễ nóng. Có RPM filter chạy tốt thì mới nên kéo thanh trượt gyro lên trên 1,0.
@@ -89,7 +89,7 @@ Gia tốc kế của một máy đang bay **không chỉ ra phương thẳng đ�
 | Vừa đặt xuống / vừa cấp điện | × 100 trong 0,5 s (sau 0,25 s yên) | đường chân trời được đặt lại sau va chạm, lật máy. Đang bị cầm xoay (> 15 °/s): × 1 |
 | Lọc trước khi dùng | thông thấp bậc 2 ở 10 Hz | rung motor 100 Hz trở lên còn dưới 1 % |
 | Độ lớn số đọc lệch khỏi lúc nằm yên | trọng số giảm dần, **0 từ 0,1 g** | nghiêng giữ độ cao 25° đã là 1,1 g; leo, rơi, va chạm đều bị bỏ qua. "Lúc nằm yên" được học khi disarm, nên gia tốc kế chưa hiệu chuẩn (ví dụ đọc 1,08 g) vẫn dùng được |
-| Học bias gyro | `ki` 0,01; tối đa 0,5 °/s mỗi phút, không quá 3 °/s | vài giây tăng tốc không dạy được một bias không có thật |
+| Học bias gyro | `ki` 0,01; tối đa 0,5 °/s mỗi phút, không quá 3 °/s; **không học khi quay nhanh hơn 20 °/s** (`SPIN_RATE_LIMIT` của Betaflight / ArduPilot) | vài giây tăng tốc không dạy được một bias không có thật; khi quay nhanh, sai số tỉ lệ của gyro trông giống bias |
 | La bàn (chỉ sửa yaw) | 0,5 /s; nhân cùng hệ số × 10 / × 100 khi disarm | đặt máy xuống, hướng mũi đúng lại trong khoảng một giây |
 
 Hệ quả người bay cần biết (đo trên mô phỏng có lực cản, máy 5 inch):
@@ -104,7 +104,7 @@ Ga treo (đúng ra: **mức ra motor** mà tại đó máy treo) khác nhau tớ
 
 - `HoverEstimator` (`core/althold.h`) đo liên tục trong **mọi mode bay**: `mức ra × cos(nghiêng) / (1 + gia tốc lên / g)`. Bỏ qua lúc nghiêng quá 45°, motor gần như tắt, hoặc tăng / giảm tốc mạnh. Hội tụ trong ~2,5 s bay tay.
 - **Cất cánh trong Altitude Hold**: ga tăng dần 40 %/s cho tới khi máy rời đất (đang lên > 0,15 m/s hoặc cao hơn chỗ đứng 8 cm). Mức ga lúc đó, sau khi trừ phần gia tốc đang có, là ga treo. Tới 90 % mà vẫn chưa rời đất (thiếu cánh, bị giữ): về idle, phải hạ cần ga rồi mới thử lại.
-- **Failsafe không có độ cao** (không baro, không lidar): motor về `fs_fallback_throttle` % của **lực treo đã đo**, nên máy chắc chắn đi xuống. Bản 0.5.0 trở về trước dùng số đoán 40 %: máy treo ở dưới ~16 % sẽ bay vọt lên. **Đừng bay Altitude Hold / dựa vào failsafe với firmware cũ hơn 0.6.0 trên máy lực đẩy lớn.**
+- **Failsafe không có độ cao** (không baro, không lidar): motor về `general.fs_throttle` (us, như `failsafe_throttle` của Betaflight, mặc định 1300), nhưng **không bao giờ quá 85 % ga treo đã đo**, nên máy chắc chắn đi xuống. Bản 0.5.0 trở về trước dùng số đoán 40 %: máy treo ở dưới ~16 % sẽ bay vọt lên. **Đừng bay Altitude Hold / dựa vào failsafe với firmware cũ hơn 0.6.0 trên máy lực đẩy lớn.**
 - Giảm ga mạnh nhất mà Altitude Hold yêu cầu là 0,8 g, để vòng tư thế còn motor mà điều khiển.
 - **Mất độ cao giữa chừng** (barometer ngừng trả lời quá 1 s): công tắc Altitude Hold vẫn bật thì cần ga được đọc quanh ga treo đã đo: giữa cần = treo, đáy = 0, đỉnh = 100 %. Ga không nhảy; có độ cao lại thì Altitude Hold tiếp tục từ mức ga đang có. Tab Tổng quan báo "chưa hợp lệ" ở dòng độ cao.
 - **Kéo cần xuống ngay sau khi rời đất** = lệnh đi xuống (hạ có lực tới khi đứng yên), không phải tắt motor. **Mất sóng lúc ga đang tăng để cất cánh**: về idle ngay; muốn cất cánh lại phải hạ cần trước.
@@ -162,3 +162,8 @@ Phân tích một log thật với số liệu: `docs/HARDWARE_FEEDBACK_2.md` m�
 - Bộ số mặc định trên khung của bạn; ga treo đo bằng đường cong lực đẩy thật (lực đẩy không tỉ lệ thẳng với mức ra như mô hình).
 - Baro bị gió cánh quạt thổi lúc sát đất có làm việc phát hiện rời đất sớm / muộn không.
 - Bộ ước lượng tư thế với gia tốc kế thật: mức rung của khung, hệ số lực cản thật của máy (mô phỏng dùng 0,35 /s: nghiêng 30° thì đạt 16 m/s). Các con số "lệch 3,4°" ở mục 5 là của mô hình đó.
+
+## Độ bền của bộ ước lượng (0.44.0)
+- Mẫu có NaN / Inf ở gyro, gia tốc, bước thời gian hoặc compass bị bộ ước lượng tư thế bỏ qua (nếu không nó sẽ nằm lại trong tư thế mãi).
+- Hàm quy góc (`wrap180`, heading MAVLink) trả 0 với Inf / NaN thay vì lặp vô hạn.
+- Tần số cắt của lowpass động luôn nằm trong min .. max với mọi giá trị ga (cả NaN).

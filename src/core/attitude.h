@@ -234,14 +234,19 @@ public:
 
     // stick[2]: roll / pitch -1..1; yaw_rate_cmd: deg/s from the yaw stick. att: roll, pitch, yaw in degrees (user convention).
     // gyro_dps: the craft's body rates (user convention), for the yaw when the thrust error is large; nullptr: not used. sp[3] out.
-    WB_FAST void update(const float stick[2], float yaw_rate_cmd, const float att[3], float dt, float sp[3], const float* gyro_dps = nullptr) {
+    // ext_target: nullptr = the sticks give the tilt; else {roll, pitch} in degrees (user convention) from an autopilot (Position Hold,
+    // Loiter, the rescue - 0.44, Flycam on Stabilize), clamped to ext_limit_deg. It is shaped like the stick (ArduCopter's Loiter and
+    // Altitude Hold use the same attitude controller as Stabilize).
+    WB_FAST void update(const float stick[2], float yaw_rate_cmd, const float att[3], float dt, float sp[3], const float* gyro_dps = nullptr,
+                        const float* ext_target = nullptr, float ext_limit_deg = 0.0f) {
         if (dt <= 0.0f) return;
         const float acc_rp = cfg_.accel_rp_dss * kDeg2Rad, acc_y = cfg_.accel_yaw_dss * kDeg2Rad;
         // ---- the Euler target moves with its rate, then the pilot's input is shaped (input_euler_angle_roll_pitch_euler_rate_yaw)
         for (int a = 0; a < 3; a++) tgt_[a] += erate_[a] * dt;
         tgt_[2] = wrap_pi(tgt_[2]);
         const float lim = cfg_.limit_deg * kDeg2Rad;
-        const float want_r = clampf(stick[ROLL], -1.0f, 1.0f) * lim, want_p = -clampf(stick[PITCH], -1.0f, 1.0f) * lim;
+        float want_r = clampf(stick[ROLL], -1.0f, 1.0f) * lim, want_p = -clampf(stick[PITCH], -1.0f, 1.0f) * lim;
+        if (ext_target) { const float el = ext_limit_deg * kDeg2Rad; want_r = clampf(ext_target[ROLL] * kDeg2Rad, -el, el); want_p = -clampf(ext_target[PITCH] * kDeg2Rad, -el, el); }
         if (cfg_.rate_ff) {
             attitude_command_model(wrap_pi(want_r - tgt_[0]), 0.0f, erate_[0], eaccel_[0], 0.0f, acc_rp, cfg_.input_tc, dt);
             attitude_command_model(wrap_pi(want_p - tgt_[1]), 0.0f, erate_[1], eaccel_[1], 0.0f, acc_rp, cfg_.input_tc, dt);

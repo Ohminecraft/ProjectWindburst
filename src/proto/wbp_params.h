@@ -6,7 +6,7 @@
 namespace wbp {
 enum ParamType : uint8_t { PT_U8, PT_BOOL, PT_U16, PT_U32, PT_I16, PT_I32, PT_F32 };
 struct ParamInfo { const char* name; uint8_t section; uint16_t offset; uint8_t type; float scale, min, max; };
-constexpr int kParamCount = 114;
+constexpr int kParamCount = 117;
 static const ParamInfo kParams[kParamCount] = {
     {"PID_S_MODE", SEC_PID, 0, PT_U8, 1.0f, 1.0f, 0.0f},
     {"PID_S_D", SEC_PID, 1, PT_U8, 1.0f, 0.0f, 200.0f},
@@ -72,6 +72,9 @@ static const ParamInfo kParams[kParamCount] = {
     {"PID_AT_ANG_LIM", SEC_PID, 75, PT_U8, 1.0f, 10.0f, 80.0f},
     {"PID_AT_LA", SEC_PID, 76, PT_U16, 1.0f, 10.0f, 200.0f},
     {"PID_AT_G", SEC_PID, 78, PT_U8, 1.0f, 25.0f, 255.0f},
+    {"PID_ATUNE_AXES", SEC_PID, 79, PT_U8, 1.0f, 0.0f, 7.0f},
+    {"PID_ATUNE_AGGR", SEC_PID, 80, PT_U8, 0.001f, 50.0f, 200.0f},
+    {"PID_ATUNE_GMBK", SEC_PID, 81, PT_U8, 1.0f, 0.0f, 50.0f},
     {"RATE_CTR_R", SEC_RATES, 0, PT_U16, 1.0f, 10.0f, 500.0f},
     {"RATE_CTR_P", SEC_RATES, 2, PT_U16, 1.0f, 10.0f, 500.0f},
     {"RATE_CTR_Y", SEC_RATES, 4, PT_U16, 1.0f, 10.0f, 500.0f},

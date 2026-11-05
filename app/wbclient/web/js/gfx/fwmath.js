@@ -60,10 +60,10 @@ export function actualRate(centerSens, maxRate, expoPct, s) {
   return s * centerSens + extra * e;
 }
 
-// Receiver microseconds -> stick -1..1 with deadband. Source: rc.h, RcInterpreter::process(). deadbandPct 0..20.
-export function stick(us, deadbandPct) {
-  const db = deadbandPct * 0.01;
-  const v = Math.max(-1, Math.min(1, (us - 1500) / 500));
+// Receiver microseconds -> stick -1..1 with deadband. Source: rc.h, RcInterpreter::process(). deadbandUs: µs either side of 1500.
+export function stick(us, deadbandUs, midUs = 1500) {
+  const db = deadbandUs / 500;
+  const v = Math.max(-1, Math.min(1, (us - midUs) / 500));
   if (Math.abs(v) <= db) return 0;
   return (v - Math.sign(v) * db) / (1 - db);
 }
@@ -140,6 +140,30 @@ export const ledModeColor = (mode) => LED_RGB[LED_MODE[mode] || 'WHITE'];
 export function ledHue(d) {
   d %= 360; const x = Math.floor((d % 60) * 255 / 60);
   return [[255, x, 0], [255 - x, 255, 0], [0, 255, x], [0, 255 - x, 255], [x, 0, 255], [255, 0, 255 - x]][Math.floor(d / 60)];
+}
+// ---- 0.44: the LED strip as Betaflight's (src/app/ledstrip.h, Betaflight's common/colorconversion.c hsvToRgb24 and ledstrip.h)
+// Betaflight's HSV: s = 0 full color, 255 white. Integer arithmetic as the firmware's.
+export function ledHsvToRgb(h, s, v) {
+  const val = v, sat = 255 - s, hue = h;
+  if (sat === 0) return [val, val, val];
+  const base = Math.floor(((255 - sat) * val) / 256);
+  const up = Math.floor(((val - base) * (hue % 60)) / 60) + base, down = Math.floor(((val - base) * (60 - (hue % 60))) / 60) + base;
+  switch (Math.floor(hue / 60)) {
+    case 0: return [val, Math.floor(((val - base) * hue) / 60) + base, base];
+    case 1: return [down, val, base];
+    case 2: return [base, val, up];
+    case 3: return [base, down, val];
+    case 4: return [up, base, val];
+    case 5: return [val, base, down];
+    default: return [0, 0, 0];
+  }
+}
+// the 32-bit led config: position x,y (bits 4-7, 0-3), function (8-11), overlays (12-21), color (22-25), directions (26-31)
+export function ledDefine(x, y, color, dirs, fn, overlays) {
+  return ((((x & 15) << 4) | (y & 15)) | ((fn & 15) << 8) | ((overlays & 0x3FF) << 12) | ((color & 15) << 22) | ((dirs & 0x3F) << 26)) >>> 0;
+}
+export function ledFields(c) {
+  return { x: (c >>> 4) & 15, y: c & 15, fn: (c >>> 8) & 15, overlays: (c >>> 12) & 0x3FF, color: (c >>> 22) & 15, dirs: (c >>> 26) & 0x3F };
 }
 export function ledColors(led, st, t) {
   const n = Math.max(0, Math.min(32, led.count));

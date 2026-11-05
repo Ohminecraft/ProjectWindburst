@@ -48,15 +48,18 @@ public:
         if (!ireg_update(ACCEL_SRC_CTRL, 0x03, 0x02)) ireg_update(ACCEL_SRC_CTRL, 0x03, 0x00);       // interpolator + FIR AAF
         if (!ireg_update(ACCEL_UI_LPF_CFG, 0x07, 0x02)) ireg_update(ACCEL_UI_LPF_CFG, 0x07, 0x00);   // ODR/8
         if (!ireg_update(GYRO_SRC_CTRL, 0x03 << 5, 0x02 << 5)) ireg_update(GYRO_SRC_CTRL, 0x03 << 5, 0x00);
-        static const uint8_t lpf_div[3] = {0x04 /*ODR/32*/, 0x03 /*ODR/16*/, 0x02 /*ODR/8*/};
-        const uint8_t sel = lpf_div[cfg.hw_lpf > 2 ? 0 : cfg.hw_lpf];
-        if (!ireg_update(GYRO_UI_LPF_CFG, 0x07, sel)) ireg_update(GYRO_UI_LPF_CFG, 0x07, 0x00);
-
         uint8_t odr = ODR_3K2; gyro_hz_ = 3200.0f;
         if (cfg.gyro_odr_hz >= 4800)      { odr = ODR_6K4; gyro_hz_ = 6400.0f; }
         else if (cfg.gyro_odr_hz >= 2400) { odr = ODR_3K2; gyro_hz_ = 3200.0f; }
         else if (cfg.gyro_odr_hz >= 1200) { odr = ODR_1K6; gyro_hz_ = 1600.0f; }
         else                              { odr = ODR_800; gyro_hz_ = 800.0f; }
+        // The UI LPF is a divider of the ODR (code 1..4 = ODR/4 .. ODR/32). Betaflight runs at 6.4 kHz and picks ODR/32, /16, /8 =
+        // 200 / 400 / 800 Hz; at a lower ODR the same divider would be far narrower (ODR/32 at 800 Hz = 25 Hz of lag), so pick the
+        // divider that gives that bandwidth at this ODR.
+        static const float lpf_hz[3] = {200.0f, 400.0f, 800.0f};
+        uint8_t sel = 1;
+        for (float div = 8.0f; sel < 4 && gyro_hz_ / lpf_hz[cfg.hw_lpf > 2 ? 0 : cfg.hw_lpf] >= div; div *= 2.0f) sel++;
+        if (!ireg_update(GYRO_UI_LPF_CFG, 0x07, sel)) ireg_update(GYRO_UI_LPF_CFG, 0x07, 0x00);
         bus_.write(GYRO_CONFIG0, (uint8_t)((0x01 << 4) | odr));  // +-2000 dps
         ag_delay_ms(35);                                         // gyro start-up (DS Table 9-6)
 
@@ -70,6 +73,8 @@ public:
     WB_FAST bool read(AgSample& out) override {
         uint8_t b[12];
         if (!bus_.read(ACCEL_DATA_X1, b, 12)) return false;      // little-endian
+        // -32768 on any axis = no valid data yet (Invensense v3, as Betaflight / ArduPilot treat it): drop the whole sample
+        for (int i = 0; i < 6; i++) if (le16(b + 2 * i) == INT16_MIN) return false;
         for (int i = 0; i < 3; i++) {
             out.acc_g[i] = le16(b + 2 * i) * (1.0f / 2048.0f);
             out.gyro_dps[i] = le16(b + 6 + 2 * i) * (1.0f / 16.384f);

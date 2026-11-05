@@ -32,7 +32,7 @@ struct MagCal {
     }
 };
 
-enum class MagCalResult : uint8_t { OK, TOO_FEW_SAMPLES, POOR_COVERAGE, SINGULAR, NOT_ELLIPSOID, TOO_DISTORTED, BAD_FIELD_STRENGTH, BAD_FIT, NO_MOTION };   // == schema enum mag_cal_result (NO_MOTION: 0.18, the automatic one)
+enum class MagCalResult : uint8_t { OK, TOO_FEW_SAMPLES, POOR_COVERAGE, SINGULAR, NOT_ELLIPSOID, TOO_DISTORTED, BAD_FIELD_STRENGTH, BAD_FIT, NO_MOTION, OFFSET_TOO_LARGE };   // == schema enum mag_cal_result (NO_MOTION: 0.18, the automatic one)
 
 class MagCalibrator {
 public:
@@ -40,6 +40,7 @@ public:
     float min_spacing = 0.03f;         // gauss between kept samples
     int min_samples = 80, min_bins = 26;
     float max_axis_ratio = 2.0f, max_rms_pct = 6.0f, min_radius = 0.15f, max_radius = 0.90f;
+    float max_offset = 1.8f;           // gauss, any axis (ArduPilot COMPASS_OFFS_MAX 1800 mG): more is a magnet or steel next to the chip
 
     void begin() { n_ = 0; rejected_ = 0; }
     int count() const { return n_; }
@@ -127,13 +128,14 @@ public:
         }
         const double rms = 100.0 * sqrt(ss / n_) / R;
         if (rms > max_rms_pct) return MagCalResult::BAD_FIT;
+        if (fabs(c[0]) > max_offset || fabs(c[1]) > max_offset || fabs(c[2]) > max_offset) return MagCalResult::OFFSET_TOO_LARGE;
         out.valid = true; out.radius = (float)R; out.fit_rms_pct = (float)rms;
         for (int k = 0; k < 3; k++) out.offset[k] = (float)c[k];
         for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) out.m[i][j] = (float)S[i][j];
         return MagCalResult::OK;
     }
     static const char* result_name(MagCalResult r) {
-        static const char* n[] = {"ok", "too few samples", "turn the craft through more orientations", "singular data", "data is not an ellipsoid", "sensor too distorted (metal / magnets nearby?)", "field strength implausible", "poor fit", "the craft was not turned"};
+        static const char* n[] = {"ok", "too few samples", "turn the craft through more orientations", "singular data", "data is not an ellipsoid", "sensor too distorted (metal / magnets nearby?)", "field strength implausible", "poor fit", "the craft was not turned", "offset too large (a magnet or steel next to the compass?)"};
         return n[(int)r];
     }
 

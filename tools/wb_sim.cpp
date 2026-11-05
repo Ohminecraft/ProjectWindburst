@@ -159,6 +159,7 @@ static std::string control(Rig& r, const std::string& line, bool& quit) {
     }
     if (!strcmp(cmd, "pose") &&sscanf(line.c_str(), "%*s %lf %lf %lf", &a, &b, &c) == 3) { r.board.plant.set_tilt((float)a, (float)b, (float)c); r.board.plant.w[0] = r.board.plant.w[1] = r.board.plant.w[2] = 0; r.board.plant.z = 0; r.board.plant.vz = 0; r.board.plant.ground = true; return "ok"; }
     if (!strcmp(cmd, "shake") && sscanf(line.c_str(), "%*s %lf", &a) == 1) { r.board.shaking = a != 0; return "ok"; }
+    if (!strcmp(cmd, "imualign") && sscanf(line.c_str(), "%*s %lf", &a) == 1 && a >= 0 && a <= 7) { r.board.imu_align = (uint8_t)a; return "ok"; }   // the IMU chip turned (AccGyroAlign)
     if (!strcmp(cmd, "mount") && sscanf(line.c_str(), "%*s %lf %lf", &a, &b) == 2) { r.board.mount_roll_deg = (float)a; r.board.mount_pitch_deg = (float)b; return "ok"; }
     { double o[3], k[3]; if (!strcmp(cmd, "accerr") && sscanf(line.c_str(), "%*s %lf %lf %lf %lf %lf %lf", &o[0], &o[1], &o[2], &k[0], &k[1], &k[2]) == 6) { for (int i = 0; i < 3; i++) { r.board.acc_offset[i] = (float)o[i]; r.board.acc_scale[i] = (float)k[i]; } return "ok"; } }
     { double h[3]; if (!strcmp(cmd, "magerr") && sscanf(line.c_str(), "%*s %lf %lf %lf", &h[0], &h[1], &h[2]) == 3) { for (int i = 0; i < 3; i++) r.board.mag_hard[i] = h[i]; return "ok"; } }

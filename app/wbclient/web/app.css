@@ -201,6 +201,9 @@ h1 { font: 600 30px/1.1 var(--display); font-stretch: 87.5%; margin: 0 0 6px; le
 .cols > div > .block:last-child, .cols > .block { margin-bottom: 0; }
 .cols > div { display: flex; flex-direction: column; gap: 18px; }
 .cols > div > .block { margin: 0; }
+/* a titled group of blocks spanning the page (PID tab: one tier of the control loops) */
+.tier { margin: 30px 0 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+#view > .tier:first-of-type { margin-top: 4px; border-top: 0; padding-top: 0; }
 .block .block { padding: 0; border: 0; background: none; box-shadow: none; border-radius: 0; }
 .block > h2 { font: 600 17px/1.25 var(--display); font-stretch: 87.5%; letter-spacing: 0.01em; margin: 0 0 12px; }
 .help { color: var(--muted); font-size: 12.5px; margin: 4px 0 8px; max-width: 72ch; }
@@ -208,6 +211,7 @@ h1 { font: 600 30px/1.1 var(--display); font-stretch: 87.5%; margin: 0 0 6px; le
 .note.ok { border-left-color: var(--ok); }
 .note.bad { border-left-color: var(--bad); color: var(--bad); }
 .note.todo { border-left-color: var(--warn); }
+.note.warn { border-left-color: var(--warn); color: var(--warn); font-weight: 600; }
 .welcome { max-width: 60ch; margin: 7vh auto 0; padding: 26px 30px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-panel); }
 .welcome h1 { margin-bottom: 12px; }
 .welcome ol { padding-left: 20px; }

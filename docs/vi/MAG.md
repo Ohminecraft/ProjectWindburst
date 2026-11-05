@@ -26,7 +26,7 @@ La bàn chỉ sửa **yaw** (quay quanh trục Down của trái đất), không 
 ## Tự hiệu chuẩn (0.18.0, giống Betaflight 4.5)
 - **Cách bắt đầu** (chỉ khi disarm, la bàn đã được tìm thấy):
   - nút "Tự hiệu chuẩn (xoay tay)" trong tab Cảm biến (lệnh `MAG_AUTOCAL`);
-  - hoặc ngoài sân, bằng cần: **ga lên hết, cần pitch kéo về, roll và yaw ở giữa, giữ 1 giây** (`app/stick_commands.h`). Cùng nơi đó có lệnh hiệu chuẩn gyro: ga thấp, yaw trái, pitch kéo về.
+  - hoặc ngoài sân, bằng cần: **ga lên hết (trên `receiver.max_check`), cần pitch kéo về (dưới `min_check`), roll và yaw ở giữa, giữ 1 giây** (`app/stick_commands.h`). Cùng nơi đó có lệnh hiệu chuẩn gyro: ga thấp, yaw trái, pitch kéo về.
   - Lúc bắt đầu beeper kêu như khi hiệu chuẩn gia tốc.
 - **Sau đó**: nhấc máy lên, xoay theo mọi hướng. Gyro quay trên 30 °/s mới tính là "đang xoay"; đặt máy nằm yên thì không thu mẫu.
 - **Cách tính** (`hal/mag/mag_autocal.h`):
@@ -44,6 +44,8 @@ La bàn chỉ sửa **yaw** (quay quanh trục Down của trái đất), không 
   - hết 30 s mà chưa đủ: `TOO_FEW_SAMPLES` / `POOR_COVERAGE`;
   - cường độ trường ngoài 0,15 – 0,9 G: `BAD_FIELD_STRENGTH`;
   - sai số khớp trên 8 %: `BAD_FIT`.
+  - offset trên 1,8 G ở bất kỳ trục nào (nam châm hoặc sắt thép sát chip; `COMPASS_OFFS_MAX` 1800 mG của ArduPilot): `OFFSET_TOO_LARGE` (0.44.0; hiệu chuẩn đầy đủ cũng kiểm tra như vậy).
+- **Số đọc không phải từ trường** (0.44.0): toàn số 0 (chip đang reset, mất bus) hoặc NaN / Inf bị bỏ qua, nên la bàn trở thành cũ thay vì lái hướng mũi. Khi đã hiệu chuẩn, số 0 sẽ thành -offset và có thể lọt qua kiểm tra cường độ.
   - Thất bại thì hiệu chuẩn cũ giữ nguyên, beeper kêu kiểu lỗi.
 - **Xong**: hiệu chuẩn mới được dùng ngay, beeper kêu 3 tiếng, và **firmware tự ghi section `calibration` vào flash** (giống level trim khi bay): ngoài sân không có app để bấm Lưu.
 - Trong lúc chạy, arming bị chặn (blocker CALIBRATING) và LED hiện màu đang hiệu chuẩn.

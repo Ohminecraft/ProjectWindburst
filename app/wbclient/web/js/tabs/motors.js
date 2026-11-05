@@ -396,13 +396,16 @@ export default {
   mount(view) {
     const pulse = h('div', { id: 'pulse-fields' }, fields('motors', ['pulse_disarmed', 'pulse_armed', 'pulse_max', 'pulse_hz']),
       h('p', { class: 'help' }, tr('Với PWM, Oneshot, Multishot và brushed không có "Motor idle": ga thấp nhất khi đã arm chính là "Xung khi arm" (như min_throttle của Betaflight).')));
-    const dshot = h('div', { id: 'dshot-fields' }, fields('motors', ['bidirectional', 'ext_pullup', 'pole_count', 'edt', 'esc_sensor', 'dyn_idle_min_rpm', 'dyn_idle_p', 'dyn_idle_i', 'dyn_idle_d', 'dyn_idle_max_inc']));
+    const dshot = h('div', { id: 'dshot-fields' }, fields('motors', ['bidirectional', 'ext_pullup', 'pole_count', 'edt', 'esc_sensor']),
+      h('p', { class: 'help' }, tr('Dynamic idle (cần DShot hai chiều) ở tab PID.')));
     const idle = h('div', { id: 'idle-field' }, fields('motors', ['idle_x10']));
     const tooMany = h('p', { class: 'note bad', id: 'dshot-count' });
     const canNote = h('p', { class: 'help', id: 'can-esc-note' }, tr('ESC DroneCAN: lệnh ga đi trên bus CAN (esc.RawCommand, 400 lần/giây), ESC index = slot motor (thứ tự motor vẫn áp dụng). Không cần chân motor; CAN bus phải bật (tab Cảm biến). Vòng quay, điện áp, dòng, nhiệt độ lấy từ esc.Status của ESC. Không có lệnh DShot (beacon, đổi chiều): chiều quay đặt trong cấu hình của ESC.'));
+    const pulse3d = h('div', { id: 'pulse3d-fields' }, fields('motors', ['deadband3d_low', 'deadband3d_high', 'neutral3d', 'limit3d_low', 'limit3d_high']));
     const which = () => {
       const m = store.settings.motors, d = /^(DSHOT|PROSHOT)/.test(String(m.protocol));
       const can = m.protocol === 'DRONECAN';
+      pulse3d.hidden = d || can || m.protocol === 'BRUSHED' || !m.mode3d;
       pulse.hidden = d || can; dshot.hidden = !d; idle.hidden = !(d || can); canNote.hidden = !can;
       const n = motorCount(m.layout); tooMany.hidden = !(d && n > 4);
       tooMany.textContent = tr('Khung này có {n} motor: DShot / ProShot trên ESP32-S3 chỉ chạy được 4 (4 bộ phát RMT). Chọn PWM, Oneshot hoặc Multishot.', { n });
@@ -423,6 +426,8 @@ export default {
           note(tr('Cần tốc độ của từng motor: DShot hai chiều hoặc dây telemetry ESC. Motor không có tốc độ thì không bị xét. Có hiệu lực sau khi lưu và khởi động lại.'))),
         block(tr('Crash flip (lật lại sau khi rơi)'), fields('motors', ['crashflip_rate', 'crashflip_motor_pct', 'crashflip_auto_rearm']),
           note(tr('Gán công tắc CRASHFLIP ở tab Chế độ. Chỉ chạy với ESC DShot (lệnh 21 đảo chiều quay, không lưu vào ESC; lệnh 20 trả lại). Có hiệu lực sau khi lưu và khởi động lại.'))),
+        block(tr('Mode 3D (motor quay hai chiều)'), fields('motors', ['mode3d', 'switched_mode3d']), pulse3d,
+          note(tr('DShot: 3D dùng 48..1047 cho chiều ngược, 1048..2047 cho chiều thuận, không cần các xung ở trên. Deadband ga 3D ở tab Receiver, công tắc 3D ở tab Chế độ. Bật 3D thì crash flip, runaway lúc cất cánh và dynamic idle tắt. Có hiệu lực sau khi lưu và khởi động lại.'))),
         escToolBlock(),
         servos())));
   },

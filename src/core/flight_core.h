@@ -16,12 +16,15 @@
 #include "nav/mission.h"
 #include "acro_trainer.h"
 #include "nav/nav_log.h"
+#include "nav/nav_source.h"
 #include "nav/alt_estimator.h"
 #include "nav/alt_control.h"
 #include "nav/pos_estimator.h"
 #include "nav/pos_hold.h"
 #include "nav/loiter.h"
 #include "crash_flip.h"
+#include "throttle3d.h"
+#include "autotune.h"
 
 // ============================================================================
 // FlightCore - the whole flight stack behind two entry points, shaped around what the hardware drivers actually deliver:
@@ -60,6 +63,7 @@ struct Health {                    // straight from the drivers' valid() / usabl
     bool flow_ok = false;                               // an optical-flow sensor is there and answers (not: it sees the ground)
     bool pin_conflict = false;                          // the pin map puts two functions on one GPIO (checked at boot)
     bool loop_slow = false;                             // the loop ran less than 80 % of its configured cycles, two seconds in a row
+    bool configurator = false;                          // 0.44: a configurator holds the arming off (MSP_SET_ARMING_DISABLED, app/exchange.h)
 };
 
 struct MotorFeedback { float rpm[kMaxMotors] = {}; bool rpm_valid = false; uint8_t valid_mask = 0; };   // valid_mask: bit per motor whose speed is known (bidirectional DShot or the ESC telemetry wire)   // MotorOutputManager::rpm_array() (logical motor order; 0 = that motor has no telemetry). rpm_valid: there is telemetry at all
@@ -74,7 +78,8 @@ struct GpsMeas {                   // metres / m/s relative to the home point, a
 };
 
 // What the EKF (ekf.h, run by the sensor thread) gives navigation: NED from home, heading in deg (aero, -180 .. 180)
-struct EkfNav { bool valid = false, gps_aiding = false, heading_ok = false; float pn = 0, pe = 0, vn = 0, ve = 0, yaw_deg = 0; };
+struct EkfNav { bool valid = false, gps_aiding = false, heading_ok = false; float pn = 0, pe = 0, vn = 0, ve = 0, yaw_deg = 0;
+                uint8_t reset_count = 0; float reset_n = 0, reset_e = 0; };   // (Ekf::pos_reset_count / pos_reset_n / pos_reset_e)
 
 struct CoreConfig {
     float loop_hz = 4000.0f, est_hz = 500.0f;      // loop_hz: the gyro's rate (one FastInput per sample)
@@ -94,12 +99,15 @@ struct CoreConfig {
     FsConfig fs;
     RunawayConfig runaway;
     StallConfig stall;                             // a motor that stops: disarm (needs rpm telemetry)
+    Mode3dConfig mode3d;                           // 3D (motors.mode3d, throttle3d.h): reversible motors, the throttle stick split at its centre
     CrashFlipConfig crashflip;                     // the CRASHFLIP switch (crash_flip.h); available = the motors can turn round (DShot)
     // Flycam style (0.43, general.fly_style; FPV = false): self-levelling only - Angle + Altitude Hold always, and Loiter (or Position
     // Hold) whenever there is a position to hold with; the Acro / Stabilize switches are ignored. The throttle stick centred = hold:
     // arming wants it no higher than the middle, pushed up from there it takes off, held down for 3 s after the touch-down the motors
     // stop (DJI). Without a GPS / flow it flies Angle + Altitude Hold (DJI's ATTI) and says so; without a height it does not arm.
     bool flycam = false, flycam_loiter = true; float flycam_land_disarm_s = 3.0f;
+    bool flycam_stabilize = false;                   // 0.44 flycam_attitude STABILIZE: Flycam's self-levelling modes on StabilizeController, not AngleController
+    AutoTuneConfig autotune;                         // 0.44 the AUTOTUNE switch (autotune.h); angle_p / angle_max_deg are set at its start
     float max_arm_angle_deg = 25.0f;
     Ahrs::Config ahrs; nav::AltEstConfig alt_est; nav::PosEstConfig pos_est;      // alt_est.gps_delay_s follows pos_est.gps_delay_s
     bool use_mag = false; float declination_deg = 0.0f;
@@ -155,6 +163,7 @@ struct CoreOutput {
     float motor[kMaxMotors] = {};  // absolute 0..1 (0 when disarmed)
     int motor_count = 4;
     bool armed = false;
+    bool reversed3d = false;       // 3D: the motors turn the other way (the motor layer sends the reversed range)
     bool crashflip = false;        // armed into crash flip (crash_flip.h): motor[] is its command, the motor layer turns the motors round
     uint32_t arm_blockers = 0;
     FsStage failsafe = FsStage::NONE;
@@ -197,6 +206,10 @@ struct CoreOutput {
     // a ground station (0.40, MAVLink): its flight mode stands in for the pilot's; the answer to its last arm / disarm request
     bool mode_override = false;
     uint8_t remote_seq = 0, remote_result = 0;     // FlightCore::remote_arm's seq once it has been tried; 0 = done, 1 = refused
+    // the autotune (0.44, autotune.h): at_state = the schema's autotune_state; at_save_seq counts the results to save (disarmed
+    // with the switch on and something tuned): at_result holds the last one (a counter, so a reader that looks less often misses none)
+    uint8_t at_state = 0, at_axis = 255, at_step = 0, at_done = 0; float at_p = 0, at_d = 0, at_stab_p = 0;
+    uint8_t at_save_seq = 0; TuneGains at_result;
     Estimate est;
 };
 
@@ -339,11 +352,24 @@ private:
         // ---- 4. pilot command, arming, failsafe
         RcCommand cmd = rc.process(in.rc_us, in.rc_link);
         apply_mode_override(cmd, in.rc_link); o.mode_override = ovr_on_;
+        // 3D (throttle3d.h): the throttle stick around its centre -> direction + magnitude; only the pilot's modes fly (no height, no
+        // position: the thrust may point either way) - Altitude / Position Hold, Loiter, Rescue, Mission, Autotune, crash flip are off
+        const bool m3d = cfg.mode3d.enabled;
+        Throttle3d t3;
+        if (m3d) {
+            m3d_.cfg = cfg.mode3d;
+            t3 = m3d_.update(in.rc_us[rc.cfg.ch_throttle], (cmd.modes >> M_3D) & 1u, armed_, dt);
+            cmd.throttle_low = t3.low; cmd.throttle_cmd = t3.thr; cmd.throttle = t3.thr; cmd.throttle_raw = t3.thr;
+            cmd.modes &= ~((1u << M_ALTHOLD) | (1u << M_POSHOLD) | (1u << M_LOITER) | (1u << M_RESCUE) | (1u << M_MISSION) | (1u << M_AUTOTUNE) | (1u << M_CRASHFLIP));
+        }
         const uint32_t pilot_modes = cmd.modes;              // (what the pilot / a ground station chose: arming asks it about a position)
-        if (cfg.flycam) cmd.modes = (cmd.modes & ~((1u << M_STABILIZE) | (1u << M_ACRO_TRAINER))) | (1u << M_ANGLE) | (1u << M_ALTHOLD) | (1u << (cfg.flycam_loiter ? M_LOITER : M_POSHOLD));
+        if (cfg.flycam && !m3d) {                                    // self-levelling only: Angle (or Stabilize, flycam_attitude) + Altitude Hold + the hold
+            const uint32_t level = 1u << (cfg.flycam_stabilize ? M_STABILIZE : M_ANGLE), other = 1u << (cfg.flycam_stabilize ? M_ANGLE : M_STABILIZE);
+            cmd.modes = (cmd.modes & ~(other | (1u << M_ACRO_TRAINER))) | level | (1u << M_ALTHOLD) | (1u << (cfg.flycam_loiter ? M_LOITER : M_POSHOLD));
+        }
         o.modes = cmd.modes;
         ArmInput ai;
-        ai.imu_ok = in.health.imu_ok; ai.gyro_calibrated = in.health.gyro_calibrated; ai.rx_ok = in.rc_link; ai.throttle_low = cfg.flycam ? cmd.throttle_raw <= cfg.alt.mid_stick + cfg.alt.deadband : cmd.throttle_low;      // (Flycam: no higher than the middle)
+        ai.imu_ok = in.health.imu_ok; ai.gyro_calibrated = in.health.gyro_calibrated; ai.rx_ok = in.rc_link; ai.throttle_low = cfg.flycam && !m3d ? cmd.throttle_raw <= cfg.alt.mid_stick + cfg.alt.deadband : cmd.throttle_low;      // (Flycam: no higher than the middle)
         ai.tilt_deg = armed_ ? 0.0f : ahrs_.tilt_deg(); ai.max_arm_angle_deg = cfg.max_arm_angle_deg;
         ai.failsafe_active = fs_.get_stage() != FsStage::NONE;
         // (a height for Altitude Hold: the barometer, or - when the GPS height may stand in - a GPS fix; home and with it the GPS height come at arming)
@@ -356,7 +382,7 @@ private:
         ai.calibrating = in.health.calibrating; ai.batt_low = in.health.batt_low;
         ai.use_mag = cfg.use_mag; ai.mag_calibrated = in.health.mag_calibrated; ai.pin_conflict = in.health.pin_conflict; ai.loop_slow = in.health.loop_slow;
         const bool flip_sw = (cmd.modes >> M_CRASHFLIP) & 1u;
-        ai.crashflip = flip_sw; ai.crashflip_ok = cfg.crashflip.available;
+        ai.crashflip = flip_sw; ai.crashflip_ok = cfg.crashflip.available; ai.configurator = in.health.configurator;
         const bool was_armed = armed_;
         bool arm_sw = (cmd.modes >> M_ARM) & 1u, keep_reason = false;
         if (cfg.stick_arm) {
@@ -396,9 +422,19 @@ private:
         fi.rescue_active = rescue_out_.active; fi.stick_move = in.rc_link ? maxf(fabsf(cmd.roll), maxf(fabsf(cmd.pitch), fabsf(cmd.yaw))) : 0.0f;
         const FsOutput fo = fs_.update(fi, dt);
         if (fo.disarm) { arming_.force_disarm(); armed_ = false; }
+        // 3D: a failsafe that would fly (a descent, a hold, Rescue) cuts the motors instead - Betaflight's advice for 3D is DROP: a
+        // throttle held on a thrust that may point down is no landing
+        if (m3d && armed_ && (fo.rescue || fo.alt_descent || fo.hold || fo.throttle_fallback)) { arming_.force_disarm(); armed_ = false; }
+        if (m3d && mission_.running()) { mission_.stop(); mission_app_ = false; mission_out_ = MissionOutput(); mission_fly_ = false; }
+        const bool at_sw = (cmd.modes >> M_AUTOTUNE) & 1u;
+        if (was_armed && !armed_) {                         // (ArduPilot AC_AutoTune::disarmed: saved when landed and disarmed in the mode)
+            if (at_sw && at_.mode() != AutoTune::OFF && at_.axes_done()) { at_result_ = at_.result(); at_save_seq_++; }
+            at_.stop(); if (at_gains_) { pid_.restore_gains(); at_gains_ = false; }
+        }
         // a failsafe that flies something ends the mission (ArduPilot: the failsafe changes the mode, AUTO stops)
         if ((fo.rescue || fo.alt_descent || fo.hold || fo.throttle_fallback || fo.disarm) && mission_.running()) { mission_.stop(); mission_app_ = false; mission_out_ = MissionOutput(); mission_fly_ = false; }
         o.failsafe = fo.stage; o.fs_cause = fo.cause; o.fs_action = fo.action; o.armed = armed_;
+        o.at_save_seq = at_save_seq_; o.at_result = at_result_;
 
         est_.att = att_; est_.tilt_deg = ahrs_.tilt_deg(); est_.yaw_from_mag = mag_fresh && mag_seeded_; heading_ok_ = est_.yaw_from_mag;
         o.est = est_; o.ah_state = alt_.state();
@@ -421,6 +457,7 @@ private:
             if (dt_est > 0.0f) { RescueInput ri; rescue_out_ = rescue_.update(ri, dt_est); if (!flip_) mission_step(in, arm_sw, dt_est); }       // (forgets the flight: its highest point, a failure)
             was_poshold_ = false; was_loiter_ = false; nav_lean_ = false; ph_unavail_ = false; ph_slow_gps_ = false; rescue_ok_ = false; was_req_ = false; req_climb_on_ = false; mission_fly_ = was_mission_h_ = false;
             mission_fill(o);
+            o.at_state = at_sw ? 1 : 0;                        // (autotune: NOT_FLYING while the switch waits on the ground)
             if (flip_ && armed_) {                             // crash flip: the sticks pick the motors (centred while the failsafe holds them)
                 cf_.cfg = cfg.crashflip;
                 cf_.update(mixer_, neutral ? 0.0f : cmd.roll, neutral ? 0.0f : cmd.pitch, neutral ? 0.0f : cmd.yaw, ahrs_.up_cos(), g_f_[ROLL], g_f_[PITCH], in.limits, o.motor);
@@ -451,7 +488,7 @@ private:
             thr = alt_.update(ah, dt); o.althold_active = true; was_althold_ = true;
             rescue_landed = rescue && alt_.state() == AhState::LANDED_IDLE;
         } else if (fo.throttle_fallback) {                                            // failsafe without an altitude estimate: gentle fixed descent, never a motor cut
-            thr = alt_.hover_throttle(cfg.fs.fallback_throttle_scale); was_althold_ = false;
+            thr = fminf(cfg.fs.fallback_throttle, alt_.hover_throttle(cfg.fs.fallback_throttle_scale)); was_althold_ = false;
         } else {
             if (was_althold_) alt_.on_disengage();
             was_althold_ = false; pilot_throttle = true;
@@ -508,6 +545,12 @@ private:
             bool heading_valid = est_.yaw_from_mag, pos_valid = est_.pos_valid, vel_valid = est_.vel_valid;
             ekf_in_use_ = cfg.ekf_nav && ekf_.valid && ekf_.gps_aiding && !est_.flow_valid && age_ms(now, ekf_ms_) <= 200u;
             if (ekf_in_use_) { yaw = ekf_.yaw_deg; npn = ekf_.pn; npe = ekf_.pe; nvn = ekf_.vn; nve = ekf_.ve; heading_valid = ekf_.heading_ok; pos_valid = vel_valid = have_gps_; }
+            // one reset counter for the position holders, whichever source they fly on: a switch of the source or a reset of
+            // the one in use moves their target (nav_source.h)
+            { nav::NavSource::Src se, sk;
+              se.pos_n = est_.pos_n; se.pos_e = est_.pos_e; se.reset_count = pos_est_.reset_count(); se.reset_n = pos_est_.reset_step_n(); se.reset_e = pos_est_.reset_step_e();
+              sk.pos_n = ekf_.pn; sk.pos_e = ekf_.pe; sk.reset_count = ekf_.reset_count; sk.reset_n = ekf_.reset_n; sk.reset_e = ekf_.reset_e;
+              nav_src_.update(ekf_in_use_, se, sk); }
             // the mission first: it may ask for the rescue (its RTL, or a landing where it is when it lost the position)
             mission_step(in, arm_sw, dt_est, npn, npe, nvn, nve, yaw, pos_valid);
             const bool pilot_rescue = ((cmd.modes >> M_RESCUE) & 1u) || fo.rescue;
@@ -536,14 +579,14 @@ private:
             const bool req_on = ph_on && ph_ok && have_req_ && age_ms(now, req_ms_) <= cfg.nav_request_timeout_ms && !neutral && cmd.roll == 0.0f && cmd.pitch == 0.0f;
             if (rescue_out_.active && rescue_out_.horizontal) {
                 // the rescue's target point, flown with its velocity as feed-forward (0.36: a path, PX4 / ArduPilot RTL)
-                if (!was_rescue) rctl_.init(npn, npe, nvn, nve, angle_.target_deg(ROLL), angle_.target_deg(PITCH), yaw);
+                if (!was_rescue) rctl_.init(npn, npe, nvn, nve, lean_deg(ROLL), lean_deg(PITCH), yaw);
                 rctl_.set_target(rescue_out_.tgt_n, rescue_out_.tgt_e);
                 rctl_.update(npn, npe, nvn, nve, dt_est, true, rescue_out_.vel_n, rescue_out_.vel_e);
                 rctl_.lean(yaw, nav_tgt_[ROLL], nav_tgt_[PITCH]);
                 nav_lean_ = true; was_poshold_ = false;
             } else if (mission_fly_ && mission_out_.horizontal) {
                 // the mission's target point, flown with its velocity as feed-forward - the same controller as the rescue's
-                if (!was_mission_h_) rctl_.init(npn, npe, nvn, nve, angle_.target_deg(ROLL), angle_.target_deg(PITCH), yaw);
+                if (!was_mission_h_) rctl_.init(npn, npe, nvn, nve, lean_deg(ROLL), lean_deg(PITCH), yaw);
                 rctl_.set_target(mission_out_.tgt_n, mission_out_.tgt_e);
                 rctl_.update(npn, npe, nvn, nve, dt_est, true, mission_out_.vel_n, mission_out_.vel_e);
                 rctl_.lean(yaw, nav_tgt_[ROLL], nav_tgt_[PITCH]);
@@ -553,7 +596,7 @@ private:
                 float vn = req_.vel_n_mps, ve = req_.vel_e_mps; const float dn = req_.north_m - npn, de = req_.east_m - npe, d = sqrtf(dn * dn + de * de);
                 const bool arrived = req_.position && d < 1.0f;
                 if (req_.position) { const float v = d > 1e-3f ? minf(req_.speed_mps, nav::sqrt_controller(d, cfg.pos.pos_p, cfg.pos.accel_corr_mps2)) : 0.0f; vn = d > 1e-3f ? dn / d * v : 0.0f; ve = d > 1e-3f ? de / d * v : 0.0f; }
-                if (!was_req_) rctl_.init(npn, npe, nvn, nve, angle_.target_deg(ROLL), angle_.target_deg(PITCH), yaw);
+                if (!was_req_) rctl_.init(npn, npe, nvn, nve, lean_deg(ROLL), lean_deg(PITCH), yaw);
                 if (arrived) rctl_.set_target(req_.north_m, req_.east_m);
                 rctl_.update(npn, npe, nvn, nve, dt_est, arrived, arrived ? 0.0f : vn, arrived ? 0.0f : ve);
                 rctl_.lean(yaw, nav_tgt_[ROLL], nav_tgt_[PITCH]);
@@ -561,14 +604,14 @@ private:
                 req_climb_ = clampf(nav::sqrt_controller(req_.height_m - est_.z, cfg.alt.pos_p, cfg.alt.accel_max_mps2), -cfg.alt.descend_max_mps, cfg.alt.climb_max_mps);
                 nav_lean_ = true; was_poshold_ = false; was_req_ = true;
             } else if (lt_on && ph_ok) {
-                nav::LoiterInput li; li.airborne = airborne_; li.reset_count = pos_est_.reset_count(); li.reset_step_n = pos_est_.reset_step_n(); li.reset_step_e = pos_est_.reset_step_e();
-                li.yaw_deg = yaw; li.pos_n = npn; li.pos_e = npe; li.vel_n = nvn; li.vel_e = nve; li.roll_deg = angle_.target_deg(ROLL); li.pitch_deg = angle_.target_deg(PITCH);
+                nav::LoiterInput li; li.airborne = airborne_; li.reset_count = nav_src_.count(); li.reset_step_n = nav_src_.step_n(); li.reset_step_e = nav_src_.step_e();
+                li.yaw_deg = yaw; li.pos_n = npn; li.pos_e = npe; li.vel_n = nvn; li.vel_e = nve; li.roll_deg = lean_deg(ROLL); li.pitch_deg = lean_deg(PITCH);
                 li.stick_roll = ss.rate[ROLL] / maxf(cfg.rates.max_rate_dps[ROLL], 1.0f); li.stick_pitch = ss.rate[PITCH] / maxf(cfg.rates.max_rate_dps[PITCH], 1.0f);
                 if (!was_loiter_) lt_.init(li);
                 lt_.update(li, dt_est, nav_tgt_[ROLL], nav_tgt_[PITCH]);
                 nav_lean_ = true; was_poshold_ = false; loiter_now = true;
             } else if (ph_on && ph_ok) {
-                nav::PosHoldInput pi; pi.airborne = airborne_; pi.reset_count = pos_est_.reset_count(); pi.reset_step_n = pos_est_.reset_step_n(); pi.reset_step_e = pos_est_.reset_step_e(); pi.yaw_deg = yaw; pi.pos_n = npn; pi.pos_e = npe; pi.vel_n = nvn; pi.vel_e = nve;
+                nav::PosHoldInput pi; pi.airborne = airborne_; pi.reset_count = nav_src_.count(); pi.reset_step_n = nav_src_.step_n(); pi.reset_step_e = nav_src_.step_e(); pi.yaw_deg = yaw; pi.pos_n = npn; pi.pos_e = npe; pi.vel_n = nvn; pi.vel_e = nve;
                 pi.pilot_roll_deg = cfg.angle.limit_deg * ss.rate[ROLL] / maxf(cfg.rates.max_rate_dps[ROLL], 1.0f); pi.pilot_pitch_deg = cfg.angle.limit_deg * ss.rate[PITCH] / maxf(cfg.rates.max_rate_dps[PITCH], 1.0f);
                 pi.roll_centred = neutral || cmd.roll == 0.0f; pi.pitch_centred = neutral || cmd.pitch == 0.0f;      // (the failsafe's hold: the sticks are not the pilot's)
                 if (!was_poshold_) ph_.init(pi);
@@ -592,15 +635,25 @@ private:
         navlog_.ctl_flags = (uint8_t)((o.althold_active ? 1u : 0u) | (was_poshold_ ? 2u : 0u) | (was_poshold_ && ph_.holding() ? 4u : 0u) | (o.fence ? 8u : 0u));
         o.nav_target_n = nctl.target_n(); o.nav_target_e = nctl.target_e(); o.nav_wind_n = ph_.wind_n(); o.nav_wind_e = ph_.wind_e(); o.nav_home_dist = sqrtf(est_.pos_n * est_.pos_n + est_.pos_e * est_.pos_e);
 
+        // Flycam on Stabilize (0.44): everything that levels itself - the hold modes, the failsafe, a mission - flies on StabilizeController
+        const bool on_stab = cfg.flycam && cfg.flycam_stabilize;
+
+        // ---- 6c. the autotune (0.44, autotune.h): the AUTOTUNE switch while the craft flies with its height held (ArduCopter: the
+        // AUTOTUNE mode holds the height). A stick out of its centre pauses it (the original gains); the switch off forgets it.
+        const AutoTune::Out at_out = autotune_step(cmd, at_sw, neutral, on_stab, dt, o);
+
         // ---- 7. modes -> rate setpoints
-        const bool angle = ((cmd.modes >> M_ANGLE) & 1u) || neutral || mission_fly_;    // the failsafe levels the craft; the hold modes and the rescue switch carry ANGLE with them (ModeMap::resolve)
-        const bool stab = !angle && ((cmd.modes >> M_STABILIZE) & 1u);
+        const bool angle = !on_stab && (((cmd.modes >> M_ANGLE) & 1u) || neutral || mission_fly_);    // the failsafe levels the craft; the hold modes and the rescue switch carry ANGLE with them (ModeMap::resolve)
+        const bool stab = on_stab || (!angle && ((cmd.modes >> M_STABILIZE) & 1u));
         float sp_dps[3] = {ss.rate[ROLL], ss.rate[PITCH], ss.rate[YAW]};
         // the rescue turns the nose towards home; a pilot who is there (a rescue from the switch) keeps the last word with his yaw stick
         if (rescue_out_.active && rescue_out_.yaw_control && (neutral || fabsf(cmd.yaw) < 0.05f)) sp_dps[YAW] = rescue_out_.yaw_rate_dps;
         else if (mission_fly_ && mission_out_.yaw_control && (neutral || fabsf(cmd.yaw) < 0.05f)) sp_dps[YAW] = mission_out_.yaw_rate_dps;
         PidInput pin;
-        if (angle) {                                           // Betaflight Angle: the stick - or the autopilot - gives a tilt
+        if (at_out.control) {                                  // a twitch: the autotune gives the rates; no feed-forward (load_test_gains: ff 0)
+            for (int a = 0; a < 3; a++) sp_dps[a] = at_out.sp_dps[a];
+            if (stab && at_.axis() == YAW) stab_.hold_yaw(att_.yaw);      // (a yaw twitch moves the heading to hold: ArduPilot desired_yaw follows it)
+        } else if (angle) {                                    // Betaflight Angle: the stick - or the autopilot - gives a tilt
             if (!was_angle_) angle_.reset();
             const float ffrp[2] = {ss.feedforward[ROLL], ss.feedforward[PITCH]};
             angle_.update(sp_dps, ffrp, att_.roll, att_.pitch, cfg.rates.max_rate_dps, nav_lean_ ? nav_tgt_ : nullptr, cfg.poshold.angle_max_deg);
@@ -608,8 +661,8 @@ private:
         } else if (stab) {                                     // ArduPilot Stabilize: shaped tilt target, heading hold
             if (!was_stab_) stab_.reset(att_.roll, att_.pitch, att_.yaw);
             if (ground_idle) stab_.hold_yaw(att_.yaw);         // standing on the ground: the heading to hold is the one it has (ArduCopter resets the yaw target there)
-            const float st[2] = {ss.stick[ROLL], ss.stick[PITCH]}, at[3] = {att_.roll, att_.pitch, att_.yaw};
-            stab_.update(st, ss.rate[YAW], at, dt, sp_dps, g_f_);
+            const float st[2] = {neutral ? 0.0f : ss.stick[ROLL], neutral ? 0.0f : ss.stick[PITCH]}, at[3] = {att_.roll, att_.pitch, att_.yaw};
+            stab_.update(st, sp_dps[YAW], at, dt, sp_dps, g_f_, nav_lean_ ? nav_tgt_ : nullptr, cfg.poshold.angle_max_deg);   // (sp_dps[YAW]: the stick's, or the rescue's / the mission's)
             for (int a = 0; a < 3; a++) pin.feedforward[a] = stab_.target_accel(a);   // the shaped target says how the rate is about to change: no waiting for the error
         } else {                                               // Acro
             for (int a = 0; a < 3; a++) pin.feedforward[a] = ss.feedforward[a];
@@ -634,7 +687,12 @@ private:
         pin.i_enabled = !ground_idle;
         pid_.update(pin, o.u);
         for (int a = 0; a < 3; a++) { o.sp_dps[a] = sp_dps[a]; o.pid_p[a] = pid_.p_term[a]; o.pid_i[a] = pid_.i_term[a]; o.pid_d[a] = pid_.d_term[a]; o.pid_f[a] = pid_.f_term[a]; }
-        mixer_.mix(in.limits, boost_.apply(thr, pilot_throttle), o.u[ROLL], o.u[PITCH], o.u[YAW], o.motor, ground_idle);
+        // 3D reversed: the thrust and the props' drag point the other way - the whole mix turns round (Betaflight motorOutputMixSign);
+        // after a reversal the I-terms stay at zero for 250 ms (Betaflight pidResetIterm)
+        const float ms = m3d && t3.reversed ? -1.0f : 1.0f;
+        if (m3d && m3d_.iterm_hold()) for (int a = 0; a < 3; a++) { pid_.reset_i(a); o.pid_i[a] = 0.0f; }
+        o.reversed3d = m3d && t3.reversed;
+        mixer_.mix(in.limits, boost_.apply(thr, pilot_throttle), ms * o.u[ROLL], ms * o.u[PITCH], ms * o.u[YAW], o.motor, ground_idle);
         if (alt_.state() == AhState::STOPPED && o.althold_active) for (auto& m : o.motor) m = 0;
 
         // ---- 9. runaway take-off prevention (safety.h): the loop fights the craft instead of steering it -> motors off
@@ -671,6 +729,7 @@ public:
     const SetpointGenerator& setpoints() const { return sp_gen_; }
     const AngleController& angle_ctl() const { return angle_; }
     const StabilizeController& stabilize() const { return stab_; }
+    const AutoTune& autotune() const { return at_; }
     const Estimate& estimate() const { return est_; }
     bool armed() const { return armed_; }
     const RunawayTakeoff& runaway() const { return runaway_; }
@@ -687,6 +746,40 @@ public:
     }
 
 private:
+    // One step of the autotune (6c): start it, feed it, fly its gains; the state for the telemetry.
+    AutoTune::Out autotune_step(const RcCommand& cmd, bool sw, bool neutral, bool on_stab, float dt, CoreOutput& o) {
+        AutoTune::Out out;
+        const bool flying = sw && airborne_ && o.althold_active && !neutral && !rescue_out_.active && !mission_fly_ && !o.nav_request;
+        if (!sw) { if (at_.mode() != AutoTune::OFF) at_.stop(); }
+        else if (flying && at_.mode() == AutoTune::OFF) {
+            at_.cfg = cfg.autotune; at_.cfg.angle_p = on_stab;               // Stabilize P only when the craft flies Stabilize
+            at_.cfg.angle_max_deg = minf(cfg.angle.limit_deg, 30.0f);        // (ArduPilot's ANGLE_MAX default: the twitches are fractions of it)
+            at_.cfg.pid_hz = cfg.pid_hz(); at_.cfg.dterm_lpf_hz = cfg.pid.dterm_lpf1_dyn_min_hz > 0 ? cfg.pid.dterm_lpf1_dyn_min_hz : cfg.pid.dterm_lpf1_static_hz;
+            TuneGains g;
+            for (int a = 0; a < 3; a++) { g.p[a] = cfg.pid.p[a]; g.i[a] = cfg.pid.i[a]; g.d[a] = cfg.pid.d[a]; g.d_max[a] = cfg.pid.d_max[a]; g.f[a] = cfg.pid.f[a]; g.stab_p[a] = cfg.stab.kp[a]; }
+            g.accel_rp_dss = cfg.stab.accel_rp_dss; g.accel_yaw_dss = cfg.stab.accel_yaw_dss;
+            at_.start(g);
+        }
+        if (at_.mode() != AutoTune::OFF) {
+            AutoTune::In in; in.dt = dt;
+            for (int a = 0; a < 3; a++) in.gyro_dps[a] = g_f_[a];
+            in.att_deg[ROLL] = att_.roll; in.att_deg[PITCH] = att_.pitch; in.att_deg[YAW] = att_.yaw;
+            in.level_deg[ROLL] = lean_deg(ROLL); in.level_deg[PITCH] = lean_deg(PITCH); in.hover = alt_.hover_throttle();
+            in.pilot = !flying || fabsf(cmd.roll) > 0.05f || fabsf(cmd.pitch) > 0.05f || fabsf(cmd.yaw) > 0.05f || fabsf(cmd.throttle_raw - cfg.alt.mid_stick) > cfg.alt.deadband;
+            out = at_.update(in);
+        }
+        const bool tuning = at_.mode() == AutoTune::TUNING && !at_.overridden();
+        if (tuning) { const TuneGains g = at_.gains(out.gains); pid_.set_gains(g.p, g.i, g.d, g.d_max, g.f); at_gains_ = true; }
+        else if (at_gains_) { pid_.restore_gains(); at_gains_ = false; }
+        // the state, as the schema's autotune_state: OFF, NOT_FLYING, LEVELLING, TWITCHING, PILOT, FINISHED, FAILED
+        const AutoTune::Mode m = at_.mode();
+        o.at_state = !sw ? 0 : m == AutoTune::OFF ? 1 : m == AutoTune::FINISHED ? 5 : m == AutoTune::FAILED ? 6 : !flying ? 1 : at_.overridden() ? 4 : at_.step() == AutoTune::WAITING_FOR_LEVEL ? 2 : 3;
+        o.at_axis = at_.mode() == AutoTune::OFF || at_.axis() < 0 ? 255 : (uint8_t)at_.axis(); o.at_step = (uint8_t)at_.type(); o.at_done = at_.axes_done();
+        if (o.at_axis < 3) { const TuneGains& t = at_.tuned(); o.at_p = t.p[o.at_axis]; o.at_d = t.d[o.at_axis]; o.at_stab_p = t.stab_p[o.at_axis]; }
+        return out;
+    }
+    // The tilt the attitude controller is steering to now (what a position controller starts from): Angle's, or Stabilize's in Flycam on Stabilize.
+    float lean_deg(int axis) const { return (cfg.flycam && cfg.flycam_stabilize) ? stab_.target_deg(axis) : angle_.target_deg(axis); }
     // The mission, once per estimator step (armed or not: it waits on the ground with the motors off): start / stop as the
     // switch or the app ask, then one step. The navigation numbers are the ones 6b flies with (the EKF's when it is in use).
     void mission_step(const FastInput& in, bool arm_sw, float dt_est, float pn = 0, float pe = 0, float vn = 0, float ve = 0, float yaw = 0, bool pos_valid = false) {
@@ -836,10 +929,12 @@ private:
     void apply_loiter() { lt_.cfg = cfg.loiter; lt_.cfg.fence_radius_m = cfg.poshold.fence_radius_m; lt_.ctl.cfg = cfg.pos; lt_.ctl.cfg.angle_max_deg = cfg.poshold.angle_max_deg; }
     nav::LoiterMode lt_; bool was_loiter_ = false;
     CrashFlip cf_; bool flip_ = false;
+    Mode3d m3d_;
     FlowScaleCal fcal_;
     float fc_land_t_ = 0.0f;                           // Flycam: how long it has stood on the ground with the stick down                 // armed into crash flip (crash_flip.h)
     nav::PosHoldMode ph_; nav::PosController rctl_; Rescue rescue_; RescueOutput rescue_out_; bool was_poshold_ = false, nav_lean_ = false, ph_unavail_ = false, ph_slow_gps_ = false, rescue_ok_ = false; float nav_tgt_[2] = {0, 0};
-    EkfNav ekf_; uint32_t ekf_ms_ = 0; bool ekf_in_use_ = false;
+    EkfNav ekf_; uint32_t ekf_ms_ = 0; bool ekf_in_use_ = false; nav::NavSource nav_src_;
+    AutoTune at_; bool at_gains_ = false; uint8_t at_save_seq_ = 0; TuneGains at_result_;
     nav::NavRequest req_; uint32_t req_ms_ = 0; bool have_req_ = false, was_req_ = false, req_climb_on_ = false; float req_climb_ = 0.0f;
     MissionRunner mission_; MissionPlan mission_plan_; MissionOutput mission_out_; uint16_t mission_servo_[4] = {0, 0, 0, 0};
     bool mission_req_ = false, mission_app_ = false, mission_sw_ = false, mission_fly_ = false, was_mission_h_ = false;

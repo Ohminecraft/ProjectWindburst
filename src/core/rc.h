@@ -15,14 +15,15 @@ constexpr int kRcMinCheck = 1050;
 
 
 // stick(-1..1) from us, with centre deadband (fraction of half-range, e.g. 0.02).
-inline float rc_stick(uint16_t us, float deadband = 0.0f) {
-    float v = clampf((float)((int)us - kRcMid) / 500.0f, -1.0f, 1.0f);
+// mid: the stick centre (Betaflight mid_rc); the travel is 500 us either side whatever the centre (Betaflight rcCommand)
+inline float rc_stick(uint16_t us, float deadband = 0.0f, int mid = kRcMid) {
+    float v = clampf((float)((int)us - mid) / 500.0f, -1.0f, 1.0f);
     if (fabsf(v) <= deadband) return 0.0f;
     return (v - signf(v) * deadband) / (1.0f - deadband);
 }
 inline float rc_throttle01(uint16_t us) { return clampf((float)((int)us - kRcMin) / 1000.0f, 0.0f, 1.0f); }        // where the stick IS (0.5 = middle)
 // what the stick ASKS FOR as direct throttle (Betaflight fc/rc.c: min_check .. 2000 -> 0 .. 1)
-inline float rc_throttle_cmd(uint16_t us) { return clampf((float)((int)us - kRcMinCheck) / (float)(kRcMax - kRcMinCheck), 0.0f, 1.0f); }
+inline float rc_throttle_cmd(uint16_t us, int min_check = kRcMinCheck) { return clampf((float)((int)us - min_check) / (float)(kRcMax - min_check), 0.0f, 1.0f); }
 
 // Flight-mode boxes. Altitude Hold / Position Hold are SEPARATE switches and both REQUIRE Angle (they force it on),
 // like Betaflight BOXALTHOLD/BOXPOSHOLD. Acro = neither Angle nor Stabilize.
@@ -36,7 +37,7 @@ inline float rc_throttle_cmd(uint16_t us) { return clampf((float)((int)us - kRcM
 // M_CRASHFLIP = Betaflight's crash flip / turtle mode (crash_flip.h, 0.42): on at the arming, the motors turn the other way and the
 // sticks turn an upside-down craft back over. It counts at the arming only.
 enum Mode : uint8_t { M_ARM, M_ANGLE, M_STABILIZE, M_ALTHOLD, M_POSHOLD, M_FAILSAFE_SW, M_BEEPER, M_BLACKBOX, M_CALIB, M_RESCUE,
-                      M_ACRO_TRAINER, M_AIRMODE, M_ANTI_GRAVITY, M_BLACKBOX_ERASE, M_MISSION, M_LOITER, M_CRASHFLIP, M_COUNT };
+                      M_ACRO_TRAINER, M_AIRMODE, M_ANTI_GRAVITY, M_BLACKBOX_ERASE, M_MISSION, M_LOITER, M_CRASHFLIP, M_AUTOTUNE, M_3D, M_COUNT };
 
 struct ModeRange { uint8_t mode; uint8_t aux; uint16_t lo_us, hi_us; }; // active when lo <= aux < hi (like BF, 900..2100 clamp)
 
@@ -76,7 +77,8 @@ inline float apply_actual_rate(const RateProfile& p, int axis, float s) {
 // ---------------------------------------------------------------------------------------------------------------------
 struct RcConfig {
     uint8_t ch_roll = 0, ch_pitch = 1, ch_throttle = 2, ch_yaw = 3, ch_aux0 = 4;
-    float deadband = 0.02f;
+    float deadband = 0.02f, yaw_deadband = 0.02f;     // fraction of the half travel (receiver.deadband / yaw_deadband us / 500)
+    uint16_t min_check = kRcMinCheck, mid_rc = kRcMid; // us: throttle "low" below this, the roll / pitch / yaw centre (receiver.min_check, mid_rc)
     float throttle_mid = 0.5f, throttle_expo = 0.0f, throttle_limit = 1.0f;     // direct-throttle curve (AltHold uses the raw stick)
 };
 struct RcCommand {
@@ -95,10 +97,10 @@ public:
     ModeMap modes;
     WB_FAST RcCommand process(const uint16_t ch[16], bool link_ok) const {
         RcCommand c; c.link_ok = link_ok;
-        auto stick = [&](uint16_t us) WB_FAST { const float v = rc_stick(us); if (fabsf(v) <= cfg.deadband) return 0.0f; return (v - signf(v) * cfg.deadband) / (1.0f - cfg.deadband); };
-        c.roll = stick(ch[cfg.ch_roll]); c.pitch = stick(ch[cfg.ch_pitch]); c.yaw = stick(ch[cfg.ch_yaw]);
+        auto stick = [&](uint16_t us, float db) WB_FAST { const float v = rc_stick(us, 0.0f, cfg.mid_rc); if (fabsf(v) <= db) return 0.0f; return (v - signf(v) * db) / (1.0f - db); };
+        c.roll = stick(ch[cfg.ch_roll], cfg.deadband); c.pitch = stick(ch[cfg.ch_pitch], cfg.deadband); c.yaw = stick(ch[cfg.ch_yaw], cfg.yaw_deadband);
         c.throttle_raw = rc_throttle01(ch[cfg.ch_throttle]);
-        c.throttle_cmd = rc_throttle_cmd(ch[cfg.ch_throttle]); c.throttle_low = ch[cfg.ch_throttle] < kRcMinCheck;
+        c.throttle_cmd = rc_throttle_cmd(ch[cfg.ch_throttle], cfg.min_check); c.throttle_low = ch[cfg.ch_throttle] < cfg.min_check;
         c.throttle = curve(c.throttle_cmd);
         for (int i = 0; i < kAuxCount; i++) c.aux[i] = ch[cfg.ch_aux0 + i];
         c.modes = modes.resolve(c.aux);

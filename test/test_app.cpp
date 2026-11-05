@@ -92,7 +92,7 @@ static void t_pack() {
       tt.rc_smoothed_hz = 149.6f; tt.rc_cutoff_hz = 56.2f; tt.air_state = 2; tt.hover_throttle = 0.234f; tt.pid_sum[0] = 123.44f; tt.pid_sum[1] = -500.0f; tt.pid_sum[2] = 5000.0f; tt.trim_progress = 60;
       app::pack_stream(STR_TUNING, tt, 0, b, sizeof(b)); T_tuning o; memcpy(&o, b, sizeof(o));
       CHECK(o.gyro_lpf1_hz == 406 && o.dterm_lpf1_hz == 122 && o.dyn_notch_hz[0] == 100 && o.dyn_notch_hz[8] == 180 && o.rpm_hz[0] == 200 && o.rpm_hz[7] == 207, "tuning stream: the filter frequencies in whole Hz");
-      CHECK(o.tpa == 68 && o.anti_gravity == 1235 && o.rc_rate == 150 && o.rc_cutoff == 56 && o.air_state == 2 && o.hover == 23 && o.pid_sum[0] == 1234 && o.pid_sum[1] == -5000 && o.pid_sum[2] == 32767, "TPA in %%, anti-gravity x 100, frame rate, cutoff, PID sums x 10 (saturated)");
+      CHECK(o.tpa == 68 && o.anti_gravity == 1235 && o.rc_rate == 150 && o.rc_cutoff == 56 && o.air_state == 2 && o.hover == 1234 && o.pid_sum[0] == 1234 && o.pid_sum[1] == -5000 && o.pid_sum[2] == 32767, "TPA in %%, anti-gravity x 100, frame rate, cutoff, the hover throttle in us (0.44: Betaflight's), PID sums x 10 (saturated)");
       tt.tpa = NAN; tt.gyro_lpf1_hz = -5; app::pack_stream(STR_TUNING, tt, 0, b, sizeof(b)); memcpy(&o, b, sizeof(o)); CHECK(o.tpa == 0 && o.gyro_lpf1_hz == 0, "nonsense in, zero out");
       app::pack_stream(STR_CALIBRATION, tt, 0, b, sizeof(b)); T_calibration c; memcpy(&c, b, sizeof(c)); CHECK(c.inflight_trim == 60, "calibration stream: progress of the in-flight level trim"); }
 }
@@ -253,6 +253,17 @@ static void t_gate() {
 
 static int g_wait_calls = 0;
 // A flight loop that executes everything it is given: lets us see what LinkHost itself refuses before asking it.
+// 0.44: MSP_SET_ARMING_DISABLED from the Betaflight App - the link task holds the arming off, the flight loop reads it
+static void t_msp_arming() {
+    printf("[exchange] a configurator holds the arming off while it talks\n");
+    app::Exchange x;
+    CHECK(!x.msp_arming_disabled(1000), "nothing said: arming allowed");
+    x.msp_arming(true, 1000);
+    CHECK(x.msp_arming_disabled(1000) && x.msp_arming_disabled(3900), "SET_ARMING_DISABLED 1: held off");
+    x.msp_touch(3500); CHECK(x.msp_arming_disabled(6400), "every MSP frame keeps it (the App polls)");
+    CHECK(!x.msp_arming_disabled(6600), "3 s without a frame (the cable pulled, the App closed): released");
+    x.msp_touch(7000); x.msp_arming(false, 7000); CHECK(!x.msp_arming_disabled(7000), "SET_ARMING_DISABLED 0: released");
+}
 struct YesFlight { app::Exchange x; int ran = 0; uint8_t last_cmd = 0;
     static void wait(void* p) { YesFlight* f = (YesFlight*)p; f->x.service([f](const app::Request& r) { f->ran++; f->last_cmd = r.cmd; return app::Reply(ERR_OK, 7); }); } };
 static void t_host() {
@@ -433,7 +444,7 @@ static void t_settings() {
     printf("[settings] validation that protects the flight code\n");
     Settings s; defaults(s);
     CHECK(validate(s.modes) == 0 && s.modes.mode[0] == 255 && s.modes.mode[15] == 255, "defaults are valid; unused mode slots stay 255");
-    s.modes.mode[2] = MODE_CRASHFLIP + 1; CHECK(validate(s.modes) == 1 && s.modes.mode[2] == 255, "an unknown mode id (from a newer firmware, or a damaged record) empties its slot - it does not become some other mode");
+    s.modes.mode[2] = MODE_3D + 1; CHECK(validate(s.modes) == 1 && s.modes.mode[2] == 255, "an unknown mode id (from a newer firmware, or a damaged record) empties its slot - it does not become some other mode");
     for (const SectionInfo& si : kSections) { Settings d; defaults(d); CHECK(validate_section(d, si.id) == 0, "section %s: defaults pass their own validation", si.name); }
     const float nan = NAN;
     s.pid.stab_p[1] = nan; s.pid.stab_p[2] = nan; s.calibration.acc_scale[2] = nan; s.calibration.mag_matrix[4] = nan;
@@ -625,7 +636,15 @@ static void t_sticks() {
     hold(1500, 1500, 1500, 1000, false, true, 200); hold(1500, 1000, 1500, 2000, true, true, 2000); CHECK(got == StickCommands::NONE, "armed: never");
     hold(1500, 1500, 1500, 1000, false, true, 200); hold(1500, 1000, 1500, 2000, false, false, 2000); CHECK(got == StickCommands::NONE, "the link lost (failsafe values): never");
     hold(1500, 1500, 1500, 1000, false, true, 200); hold(1800, 1000, 1500, 2000, false, true, 2000); CHECK(got == StickCommands::NONE, "roll not centred: no command");
-    CHECK(StickCommands::pattern(1500, 1000, 1500, 1950) == StickCommands::MAG_CAL && StickCommands::pattern(1500, 1150, 1500, 1950) == StickCommands::NONE && StickCommands::pattern(1500, 1000, 1000, 1950) == StickCommands::NONE,
+    // 0.44: low / high are Betaflight's min_check / max_check (receiver.min_check, max_check)
+    hold(1500, 1500, 1500, 1000, false, true, 200); hold(1500, 1000, 1500, 1880, false, true, 1500); CHECK(got == StickCommands::NONE, "max_check 1900: 1880 is not high");
+    sc.configure(1100, 1850);
+    hold(1500, 1500, 1500, 1000, false, true, 200); hold(1500, 1000, 1500, 1880, false, true, 1500); CHECK(got == StickCommands::MAG_CAL, "max_check 1850: 1880 is high");
+    hold(1500, 1500, 1500, 1000, false, true, 200); hold(1500, 1080, 1080, 1080, false, true, 1500); CHECK(got == StickCommands::GYRO_CAL, "min_check 1100: 1080 is low");
+    sc.configure(1050, 1900);
+    hold(1500, 1500, 1500, 1000, false, true, 200); hold(1500, 1080, 1080, 1080, false, true, 1500); CHECK(got == StickCommands::NONE, "min_check 1050: 1080 is not low");
+    const StickCommands pc;
+    CHECK(pc.pattern(1500, 1000, 1500, 1950) == StickCommands::MAG_CAL && pc.pattern(1500, 1150, 1500, 1950) == StickCommands::NONE && pc.pattern(1500, 1000, 1000, 1950) == StickCommands::NONE,
           "thresholds: pitch under 1100, throttle over 1900, yaw centred for the compass");
 }
 
@@ -640,10 +659,11 @@ static void t_usb_name() {
     CHECK(!strcmp(app::usb_product_name(g.usb_name, "ESP32-S3", out), "Qu__d_"), "not printable ASCII: '_' (a USB string here is 8-bit) ('%s')", out);
     memset(g.usb_name, 'x', sizeof(g.usb_name)); app::usb_product_name(g.usb_name, "ESP32-S3", out);
     CHECK(strlen(out) == 32 && out[31] == 'x', "all 32 bytes used (no end mark): taken whole, ended in the output");
-    CHECK(sizeof(g.usb_name) == app::kUsbNameLen && offsetof(S_general, usb_name) == 24 && find_section(SEC_GENERAL)->compat3 == 24, "the field: 32 bytes at the end of the general section, the old size known");
+    CHECK(sizeof(g.usb_name) == app::kUsbNameLen && offsetof(S_general, usb_name) == 24 && find_section(SEC_GENERAL)->compat5 == 24, "the field: 32 bytes at the end of the general section, the old size known");
 }
 
 int main() {
+    t_msp_arming();
     t_usb_name();
     t_pack(); t_sticks();
     t_sync();

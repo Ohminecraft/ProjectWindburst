@@ -165,6 +165,14 @@ inline int telemetry_uart(bool gps_on_uart1, bool receiver_on_uart2, bool uart0_
 //   TABLE: the ports section's function per UART (port_function: NONE, SERIAL_RX, GPS, TELEMETRY = unused, FLOW_MSP).
 //          UART0 only when the app link does not use it (native USB). A device with no UART in the table gets a reason.
 enum PortFn : uint8_t { PF_NONE, PF_SERIAL_RX, PF_GPS, PF_TELEMETRY, PF_FLOW_MSP, PF_ESC_SENSOR, PF_DISPLAYPORT };     // == schema enum port_function
+// What FlightApp::begin() really did with the UARTs (0.44: the Betaflight App's `peripherals`, app/msp_cli.h): per device the UART
+// it was given (-1: none) and whether it opened there; whether UART0 carries the app link (a USB-UART bridge on UART0).
+struct PortUse {
+    int8_t uart[7] = {-1, -1, -1, -1, -1, -1, -1};     // by PortFn: SERIAL_RX, GPS, TELEMETRY, FLOW_MSP (the MSP port), ESC_SENSOR, DISPLAYPORT
+    bool open[7] = {};
+    bool uart0_link = true, known = false;
+    void set(int fn, int u, bool ok) { if (fn > 0 && fn < 7) { uart[fn] = (int8_t)u; open[fn] = u >= 0 && ok; } }
+};
 struct UartPlan { int gps = -1, rx = -1, flow = -1, esc = -1, tlm = -1, osd = -1; const char* why = ""; };      // tlm, osd: TABLE only (AUTO: telemetry_uart)
 inline UartPlan plan_uarts(bool table, const uint8_t fn[3], bool want_gps, bool want_rx, bool want_flow, bool uart0_free, bool gps_on, bool rx_on) {
     UartPlan p;

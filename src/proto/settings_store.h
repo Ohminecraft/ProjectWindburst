@@ -4,6 +4,7 @@
 #include "wbp_schema.h"
 #include "wbp_codec.h"
 #include "settings_rules.h"
+#include "settings_upgrade.h"
 
 // ============================================================================
 // Persistent settings. One storage record per section ("wbs01".."wbs12"), each = [format u8][size u16][data][crc16 of the rest].
@@ -38,7 +39,7 @@ public:
             uint8_t buf[kMaxPayload + 8]; char key[8]; make_key(key, si.id);
             const int n = st_.read(key, buf, sizeof(buf));
             uint16_t stored = 0;                              // the size the record was written with, if it is one we can read
-            const uint16_t sizes[5] = {si.size, si.compat, si.compat2, si.compat3, si.compat4};
+            const uint16_t sizes[9] = {si.size, si.compat, si.compat2, si.compat3, si.compat4, si.compat5, si.compat6, si.compat7, si.compat8};
             for (const uint16_t want : sizes) {
                 if (!want || stored) continue;
                 if (n == (int)want + 5 && buf[0] == kFormat && (uint16_t)(buf[1] | (buf[2] << 8)) == want &&
@@ -46,6 +47,7 @@ public:
             }
             if (stored) {
                 memcpy(section_ptr(s, si.id), buf + 3, stored < si.size ? stored : si.size);      // what an older record does not have keeps its default
+                if (stored != si.size) upgrade_section(s, si.id, stored);                        // a unit that changed since (settings_upgrade.h)
                 const int fx = validate_section(s, si.id); if (fx > 0) r.clamped_fields += (uint32_t)fx;
                 apply_rules(s, si.id);
                 r.loaded_mask |= 1u << si.id; if (stored != si.size) r.migrated_mask |= 1u << si.id;

@@ -93,6 +93,15 @@ static void t_ahrs() {
 
 // How much the accelerometer may say about the attitude. In flight it shows the thrust, not gravity (core/ahrs.h): the estimate
 // follows it slowly, only while its size says "not accelerating", and never through vibration.
+static void t_wrap180() {
+    printf("[types] wrap180\n");
+    CHECK(wrap180(190.0f) == -170.0f && wrap180(-190.0f) == 170.0f && wrap180(180.0f) == 180.0f && wrap180(-180.0f) == -180.0f && fabsf(wrap180(725.0f) - 5.0f) < 1e-4f, "the usual: 190 -> -170, 725 -> 5");
+    CHECK(fabsf(wrap180(1e7f + 10.0f) - wrap180(fmodf(1e7f + 10.0f, 360.0f))) < 1e-3f, "a far-off angle still lands in range (%.3f)", wrap180(1e7f + 10.0f));
+    volatile float inf = INFINITY, huge = 1e30f, nan = NAN;      // (volatile: a loop that never ends may be assumed away for a constant)
+    CHECK(wrap180(inf) == 0.0f && wrap180(-inf) == 0.0f && wrap180(huge) == wrap180(fmodf(huge, 360.0f)) && wrap180(-huge) == wrap180(fmodf(-huge, 360.0f)) && wrap180(nan) == 0.0f,
+          "Inf / NaN / 1e30 (x - 360 == x): 0 instead of an endless loop that stalls the control cycle");
+}
+
 static void t_ahrs_trust() {
     printf("[ahrs] how far the accelerometer is believed\n");
     const float s20 = sinf(20 * kDeg2Rad), c20 = cosf(20 * kDeg2Rad);
@@ -159,6 +168,19 @@ static void t_ahrs_trust() {
       CHECK(fabsf(z.gyro_bias_dps().x) < 0.003f && fabsf(z.gyro_bias_dps().y) < 0.003f && z.acc_weight() == 0.0f, "a reading that does not count teaches nothing (%.4f / %.4f deg/s from 4 s of 1.3 g, 28 deg off)", z.gyro_bias_dps().x, z.gyro_bias_dps().y);
       Ahrs b; b.reset_to_accel({0, 0, -1}); float at3 = 0; for (int i = 0; i < 120000; i++) { b.update({6.0f * kDeg2Rad, 0, 0}, {0, 0, -1}, 0.01f); if (i == 17999) at3 = b.gyro_bias_dps().x; }   // a gyro 6 deg/s off, 20 minutes
       CHECK(fabsf(at3 - 1.5f) < 0.02f && fabsf(b.gyro_bias_dps().x - 3.0f) < 0.01f, "and never more than 3 deg/s, whatever happens (a gyro 6 deg/s off: %.2f after 3 minutes, %.2f after 20)", at3, b.gyro_bias_dps().x); }
+    // turning fast, a gyro scale error looks like a bias: the integral is not fed above 20 deg/s (Betaflight / ArduPilot SPIN_RATE_LIMIT)
+    { Ahrs a; a.reset_to_accel({0, 0, -1}); for (int i = 0; i < 4000; i++) a.update({0, 0, 100 * kDeg2Rad}, {0, -s20, -c20}, 0.001f);
+      Ahrs s; s.reset_to_accel({0, 0, -1}); for (int i = 0; i < 4000; i++) s.update({0, 0, 15 * kDeg2Rad}, {0, -s20, -c20}, 0.001f);
+      const Vec3 fa = a.gyro_bias_dps(), sa = s.gyro_bias_dps();
+      CHECK(fabsf(fa.x) + fabsf(fa.y) + fabsf(fa.z) < 1e-6f && fabsf(sa.x) + fabsf(sa.y) > 0.01f,
+            "4 s at 100 deg/s with a reading 20 deg off teach no bias (%.4f), at 15 deg/s they do (%.3f)", fabsf(fa.x) + fabsf(fa.y) + fabsf(fa.z), fabsf(sa.x) + fabsf(sa.y)); }
+    // one broken sample (NaN / Inf from a bus glitch or a bad calibration) must not poison the attitude for good
+    { Ahrs a; a.reset_to_accel({0, sinf(10 * kDeg2Rad), -cosf(10 * kDeg2Rad)}); const Vec3 m{0.3f, 0, 0.4f};
+      a.update({NAN, 0, 0}, {0, 0, -1}, 0.001f); a.update({0, 0, 0}, {0, INFINITY, -1}, 0.001f); a.update({0, 0, 0}, {0, 0, -1}, NAN, &m);
+      const Vec3 bad{NAN, 0, 0.4f}; a.update({0, 0, 0}, {0, sinf(10 * kDeg2Rad), -cosf(10 * kDeg2Rad)}, 0.001f, &bad);
+      const EulerDeg e = a.euler_aero(); const Vec3 b = a.gyro_bias_dps();
+      CHECK(isfinite(a.q0) && isfinite(a.q1) && isfinite(a.q2) && isfinite(a.q3) && fabsf(e.roll + 10.0f) < 0.05f && fabsf(e.yaw) < 0.005f && isfinite(b.x) && isfinite(b.y) && isfinite(b.z),
+            "NaN / Inf gyro, accelerometer, dt or compass: the sample is skipped, the horizon and the heading stay (roll %.2f, yaw %.4f)", e.roll, e.yaw); }
     // disarmed the reading is gravity - when the craft lies still (Betaflight's schedule)
     { AccelGainSchedule g; struct Seen { float first = -1, last = -1, fast_s = 0; };
       auto run = [&](float dur, bool armed, float gyro, bool ok) { Seen o; for (int i = 0; i < (int)(dur * 1000 + 0.5f); i++) { o.last = g.update(armed, gyro, ok, 0.001f); if (o.first < 0) o.first = o.last; if (o.last == 100.0f) o.fast_s += 0.001f; } return o; };
@@ -209,6 +231,15 @@ static void t_rc() {
       CHECK(!at(1050).throttle_low && at(1050).throttle == 0 && fabsf(at(1525).throttle - 0.5f) < 1e-5f && at(2000).throttle == 1.0f && fabsf(at(1145).throttle_cmd - 0.1f) < 1e-5f,
             "1050 us is not low any more; 1050 .. 2000 us is 0 .. 1 (1525 -> %.3f, 1145 -> %.3f)", at(1525).throttle, at(1145).throttle_cmd);
       CHECK(fabsf(at(1500).throttle_raw - 0.5f) < 1e-6f && fabsf(at(1050).throttle_raw - 0.05f) < 1e-6f, "the stick's POSITION (Altitude Hold: the middle holds) stays 1000 .. 2000 us"); }
+    // 0.44: Betaflight's mid_rc / min_check (receiver.mid_rc, min_check): the centre and "low" moved
+    { RcInterpreter t; t.cfg.mid_rc = 1520; t.cfg.min_check = 1100; t.cfg.deadband = 0; t.cfg.yaw_deadband = 0; uint16_t k[16]; for (auto& x : k) x = 1520;
+      RcCommand a = t.process(k, true);
+      CHECK(a.roll == 0 && a.pitch == 0 && a.yaw == 0, "mid_rc 1520: sticks at 1520 are centred");
+      k[0] = 2000; k[1] = 1020; a = t.process(k, true);
+      CHECK(fabsf(a.roll - 0.96f) < 1e-4f && a.pitch == -1.0f, "(us - mid_rc) / 500, clamped (Betaflight): 2000 -> %.3f, 1020 -> %.3f", a.roll, a.pitch);
+      k[2] = 1099; a = t.process(k, true); CHECK(a.throttle_low && a.throttle_cmd == 0, "min_check 1100: 1099 us is low");
+      k[2] = 1100; a = t.process(k, true); CHECK(!a.throttle_low && a.throttle_cmd == 0, "1100 us: not low, throttle 0");
+      k[2] = 1550; a = t.process(k, true); CHECK(fabsf(a.throttle_cmd - 0.5f) < 1e-5f, "1100 .. 2000 us is 0 .. 1 (1550 -> %.3f)", a.throttle_cmd); }
     rc.cfg.throttle_mid = 0.3f; ch[2] = 1525; c = rc.process(ch, true); CHECK(fabsf(c.throttle - 0.3f) < 1e-4f && fabsf(c.throttle_raw - 0.525f) < 1e-5f, "throttle mid pins half throttle to 0.3 but AltHold still sees the raw stick");
     rc.cfg.throttle_mid = 0.5f; rc.cfg.throttle_limit = 0.8f; ch[2] = 2000; c = rc.process(ch, true); CHECK(fabsf(c.throttle - 0.8f) < 1e-4f, "throttle limit");
     rc.cfg.ch_roll = 3; rc.cfg.ch_yaw = 0; ch[3] = 1500; ch[0] = 2000; c = rc.process(ch, true); CHECK(c.yaw > 0.99f && c.roll == 0, "remappable channels (TAER style)");
@@ -355,6 +386,7 @@ static void t_safety() {
     CHECK(arm_blockers(a) == 0, "clean");
     a.althold_switch = true; a.baro_ok = false; CHECK(arm_blockers(a) & AB_ALTHOLD_NO_BARO, "AltHold without baro"); a.baro_ok = true;
     a.tilt_deg = 40; CHECK(arm_blockers(a) & AB_ANGLE_TOO_HIGH, "tilt"); a.tilt_deg = 0; a.throttle_low = false; CHECK(arm_blockers(a) & AB_THROTTLE_HIGH, "throttle"); a.throttle_low = true;
+    a.configurator = true; CHECK(arm_blockers(a) == AB_CONFIGURATOR, "0.44: a configurator (the Betaflight App) holds the arming off"); a.configurator = false;
     a.use_mag = true; a.mag_calibrated = false; CHECK(arm_blockers(a) & AB_MAG_NOT_CALIBRATED, "compass enabled but not calibrated"); a.mag_calibrated = true; CHECK(arm_blockers(a) == 0, "...and fine once calibrated");
     a.loop_slow = true; CHECK(arm_blockers(a) == AB_LOOP_RATE, "loop below its configured rate"); a.loop_slow = false;
     a.batt_low = true; CHECK(arm_blockers(a) == AB_BATT_LOW, "battery at the warning level: no take-off"); a.batt_low = false; CHECK(arm_blockers(a) == 0, "battery fine");
@@ -928,6 +960,6 @@ int main() {
     t_stall_guard();
     t_fast_math();
     t_minmax();
-    t_filters(); t_ahrs(); t_ahrs_trust(); t_rc(); t_mixer(); t_layouts(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges(); t_kinematics(); t_althold_cascade(); t_failsafe_actions(); t_crash_flip();
+    t_filters(); t_ahrs(); t_ahrs_trust(); t_wrap180(); t_rc(); t_mixer(); t_layouts(); t_safety(); t_althold_unit(); t_hover_estimator(); t_althold_takeoff(); t_althold_edges(); t_kinematics(); t_althold_cascade(); t_failsafe_actions(); t_crash_flip();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

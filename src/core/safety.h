@@ -13,7 +13,7 @@ enum ArmBlock : uint32_t {
     AB_ANGLE_TOO_HIGH = 1u << 4, AB_FAILSAFE = 1u << 5, AB_ALTHOLD_NO_BARO = 1u << 6, AB_BATT_LOW = 1u << 7,
     AB_ARM_SWITCH_ON = 1u << 8, AB_CONFIG_UNSAVED = 1u << 9, AB_CALIBRATING = 1u << 10, AB_POSHOLD_NO_GPS = 1u << 11, AB_MAG_NOT_CALIBRATED = 1u << 12,
     AB_PIN_CONFLICT = 1u << 13, AB_LOOP_RATE = 1u << 14, AB_RUNAWAY_TAKEOFF = 1u << 15, AB_RESCUE_NO_FIX = 1u << 16, AB_RESCUE_NO_COMPASS = 1u << 17, AB_MOTOR_STALL = 1u << 18,
-    AB_CRASHFLIP = 1u << 19,          // the crash flip switch with motors that cannot turn round (no DShot), or a crash flip ended by its switch (the arm switch must go off)
+    AB_CRASHFLIP = 1u << 19, AB_CONFIGURATOR = 1u << 20,          // the crash flip switch with motors that cannot turn round (no DShot), or a crash flip ended by its switch (the arm switch must go off)
 };
 
 struct ArmInput {
@@ -28,6 +28,7 @@ struct ArmInput {
     bool rescue_configured = false, rescue_allow_no_fix = false;       // GPS Rescue is set up (a switch, or the failsafe procedure): home is where the craft is ARMED - with a fix
     bool rescue_no_compass = false;                     // ... but the compass is switched off: the rescue could never fly
     float tilt_deg = 0, max_arm_angle_deg = 25.0f;
+    bool configurator = false;                          // 0.44: a configurator (the Betaflight App, MSP_SET_ARMING_DISABLED) holds the arming off while it talks
     bool crashflip = false, crashflip_ok = false;       // the CRASHFLIP switch is on; the motors can be turned round (DShot): then upside down and without a GPS fix it arms (Betaflight)
 };
 inline uint32_t arm_blockers(const ArmInput& a) {
@@ -39,6 +40,7 @@ inline uint32_t arm_blockers(const ArmInput& a) {
     const bool flip = a.crashflip && a.crashflip_ok;
     if (a.tilt_deg > a.max_arm_angle_deg && !flip) b |= AB_ANGLE_TOO_HIGH;
     if (a.crashflip && !a.crashflip_ok) b |= AB_CRASHFLIP;
+    if (a.configurator) b |= AB_CONFIGURATOR;
     if (a.failsafe_active) b |= AB_FAILSAFE;
     if (a.althold_switch && !a.baro_ok) b |= AB_ALTHOLD_NO_BARO;       // spec: Altitude Hold requires baro, warn immediately
     if (a.poshold_switch && !a.pos_source) b |= AB_POSHOLD_NO_GPS;
@@ -97,7 +99,10 @@ enum FsProcedure : uint8_t { FSP_LAND = 0, FSP_RESCUE = 1, FSP_HOLD = 2, FSP_DRO
 enum FsAction : uint8_t { FA_NONE = 0, FA_WARN = 1, FA_HOLD = 2, FA_RTL = 3, FA_LAND = 4, FA_DROP = 5 };      // severity order
 enum FsBattLow : uint8_t { FBL_WARN = 0, FBL_RTL = 1, FBL_LAND = 2 };
 enum FsBattCrit : uint8_t { FBC_LAND = 0, FBC_RTL = 1 };
-struct FsConfig { float guard_s = 0.5f, recover_s = 1.0f, max_descent_s = 60.0f; float fallback_throttle_scale = 0.85f;
+struct FsConfig { float guard_s = 0.5f, recover_s = 1.0f, max_descent_s = 60.0f;
+                  // no altitude estimate: the throttle (0..1, general.fs_throttle), never above this share of the hover throttle measured
+                  // in flight - the craft always descends, whatever it weighs
+                  float fallback_throttle = 0.30f, fallback_throttle_scale = 0.85f;
                   uint8_t procedure = FSP_LAND;          // LINK / SWITCH: what to fly (FsProcedure)
                   float stick_threshold = 0.30f;         // the pilot takes the craft back by moving a stick this far
                   float hold_s = 30.0f;                  // FSP_HOLD: how long before it lands

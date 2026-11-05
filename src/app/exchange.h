@@ -85,6 +85,15 @@ public:
         return link_seen_.load(std::memory_order_acquire) && (uint32_t)(now_ms - link_ms_.load(std::memory_order_relaxed)) < timeout_ms;
     }
 
+    // ---------------- a configurator holds the arming off (0.44, MSP_SET_ARMING_DISABLED; link task writes, flight loop reads)
+    // Betaflight's ARMING_DISABLED_MSP: on while the App says so - and while it is there: 3 s without an MSP frame (the cable pulled,
+    // the App closed without saying) releases it, so a craft is never kept from arming by a configurator that is gone.
+    void msp_arming(bool disable, uint32_t now_ms) { msp_touch(now_ms); msp_arming_off_.store(disable, std::memory_order_release); }
+    void msp_touch(uint32_t now_ms) { msp_ms_.store(now_ms, std::memory_order_release); }
+    bool msp_arming_disabled(uint32_t now_ms, uint32_t timeout_ms = 3000) const {
+        return msp_arming_off_.load(std::memory_order_acquire) && (uint32_t)(now_ms - msp_ms_.load(std::memory_order_acquire)) < timeout_ms;
+    }
+
 private:
     enum : uint8_t { IDLE, FILLING, PENDING, RUNNING, DONE };
     Telemetry tel_;
@@ -92,6 +101,7 @@ private:
     std::atomic<uint8_t> state_{IDLE};
     Request req_; Reply reply_; uint32_t timeouts_ = 0;
     std::atomic<uint32_t> link_ms_{0}; std::atomic<bool> link_seen_{false};
+    std::atomic<uint32_t> msp_ms_{0}; std::atomic<bool> msp_arming_off_{false};
 };
 
 } // namespace app

@@ -47,6 +47,7 @@ Same as Betaflight's BLACKBOX ERASE box.
 - **FPV** (default): as before, every mode follows the switches, including Acro.
 - **Flycam**: for camera operators, flies like a DJI craft.
   - **Angle + Altitude Hold + position hold** always on, per `flycam_hold`: **Loiter** (default, stick = velocity, release to brake and stop, like DJI's P mode) or **Position Hold**. The Acro, Stabilize, Acro Trainer switches are ignored. The GPS Rescue, Mission, Crash flip, Failsafe switches still work.
+  - **`flycam_attitude`** (0.44): the attitude controller all of that flies on - **Angle** (Betaflight, default, `angle_strength`) or **Stabilize** (ArduPilot, `stab_p`, the target shaped by `stab_input_tc` and the acceleration limits, as ArduCopter's Loiter / Altitude Hold). On Stabilize the hold modes, the failsafe, the rescue and a mission all steer through it, the Angle switch is ignored instead, and the autotune also tunes Stabilize P. Position Hold stops a little later on Stabilize (0.3 m/s left 4 s after letting go of a 3.4 m/s flight, nothing after 7 s; Loiter the same as on Angle). FPV is not affected: its hold modes stay on Angle.
   - **Throttle stick at centre = hold altitude.** Arming is allowed when the throttle stick is **not above centre** (at centre or at the bottom, so DJI-style stick arming still works). Throttle above centre blocks arming (`THROTTLE_HIGH`).
   - **Takeoff:** push up from centre to take off, no need to pull to the bottom first as in FPV. In FPV you still have to pull to the bottom first, so the craft does not climb by itself if armed by mistake with the throttle high. If the throttle is above centre at arming or right after landing, it must go back to centre before takeoff is possible.
   - **Landing:** pull the stick down and the craft descends. After touchdown, holding the stick at the bottom for 3 seconds stops the motors (DJI). To fly again, flip ARM to OFF and back on.
@@ -117,6 +118,60 @@ Betaflight's Turtle mode, written from the real code: `mixer.c` (`applyCrashFlip
 - `test_osd`, `test_rx`, `test_radio`, `test_proto`, app (`test_crash_flip_on_the_page`);
 - 36 mutants `crashflip:`.
 - **Not yet tried on a real craft.** It is also not yet known which ESCs accept commands 20 / 21: BLHeli_32, AM32, Bluejay do; BLHeli_S needs version 16.7 or newer.
+
+## 3D: reversible motors (`motors.mode3d`, switch `3D`, 0.44)
+Betaflight's feature 3D, written from its code (`rc.c`, `rc_controls.c`, `mixer.c`, `dshot.c`, `pwm_output.c`). The ESCs spin either way; the throttle stick is split at its centre.
+
+**How to use:**
+- **Motors** tab, "3D mode" block: turn on **3D mode**. Needs save and restart.
+- The ESCs must be set up for 3D too (BLHeli / Bluejay / AM32: 3D mode on).
+- Not available with DroneCAN or brushed ESCs (the setting turns itself off).
+
+| Stick | Motors |
+|---|---|
+| above centre + deadband | forward, faster towards the top |
+| centre +- `receiver.deadband3d_throttle` (us, Receiver tab, default 50) | stopped; this is "throttle low" for arming |
+| below centre - deadband | reversed, faster towards the bottom |
+
+- Back inside the deadband, the motors keep the direction they had, at zero.
+- After disarming, the next arming starts forward.
+- **Arming:** the stick must be inside the deadband. Betaflight arms a 3D craft at any throttle; here the motors must not start at speed.
+- **3D switch** (Modes tab, Betaflight's box 29 "3D DISABLE"):
+  - With **Switched 3D** (`motors.switched_mode3d`) off: switch on turns 3D off, the stick works as usual (bottom = stopped, forward only).
+  - With Switched 3D on (Betaflight's `3d_switched_mode`): the stick works as usual and the switch picks the direction, on = reversed.
+- **Reversing in flight:**
+  - the roll / pitch / yaw corrections change sign (the thrust points the other way);
+  - the I-terms are held at zero for 250 ms, as in Betaflight.
+
+**Settings** (names as in Betaflight):
+
+| Setting | Betaflight | Default | Meaning |
+|---|---|---|---|
+| `motors.mode3d` | feature 3D | off | 3D on |
+| `motors.switched_mode3d` | `3d_switched_mode` | off | the 3D switch reverses instead of turning 3D off |
+| `receiver.deadband3d_throttle` | `3d_deadband_throttle` | 50 us | the stop band around the throttle centre |
+| `motors.deadband3d_low` | `3d_deadband_low` | 1406 us | PWM / Oneshot / Multishot only: the pulse where reverse starts |
+| `motors.deadband3d_high` | `3d_deadband_high` | 1514 us | ... where forward starts |
+| `motors.neutral3d` | `3d_neutral` | 1460 us | ... the stop pulse (disarmed, stopped) |
+| `motors.limit3d_low` / `limit3d_high` | `3d_limit_low` / `3d_limit_high` | 1000 / 2000 us | ... full reverse / full forward |
+
+- DShot needs none of the pulse settings: 48..1047 is reverse, 1048..2047 forward.
+- The motor test in the Motors tab spins the motors forward.
+
+**What 3D turns off:**
+- Only Acro, Angle and Stabilize fly. Altitude / Position Hold, Loiter, GPS Rescue, Mission, Autotune and crash flip are blocked: the thrust may point either way, so height and position cannot be held.
+- Failsafe stops the motors (disarm), as Betaflight does with 3D. A running mission stops.
+- Runaway takeoff, dynamic idle and Flycam are off.
+
+**Source:** `src/core/throttle3d.h` (the stick), `FlightCore` (modes, failsafe, mixer sign, I-terms), `MotorOutputManager` (`to_value3d`).
+
+**Verification:**
+- `test_mode3d` (stick split, deadband direction, switched / switch, I-term hold, DShot and PWM values);
+- `test_flight` (flying forward and reversed, failsafe disarm, blocked modes);
+- `test_fw` group `mode3d` (the DShot values on the virtual ESC wire; DroneCAN turns 3D off);
+- `test_proto`, `test_msp_config` (feature bit 12, MOTOR_3D_CONFIG, RC_DEADBAND, box 29), app;
+- 23 mutants `m3d:`.
+- **Not yet tried on a real craft** or with real 3D ESCs.
 
 ## Stick arming (`general.stick_arm`, 0.24)
 Turned on in the **Modes** tab, "Arm with the sticks" box. Needs save and restart. Off by default.

@@ -1,6 +1,6 @@
 // Sensors: calibration (gyro, 6-face accelerometer, level, compass), board alignment, module switches, GPS.
 import { satellitesView } from '../gfx/instruments.js';
-import { store } from '../store.js';
+import { store, reloadSection } from '../store.js';
 import { h, block, fields, form, row, listen, note, cmdButton, toast, readout, kv, canvas, token, errorText } from '../ui.js';
 import { ENUM_LABELS } from '../labels.js';
 import { tr } from '../i18n.js';
@@ -119,6 +119,36 @@ function calibration() {
   ];
 }
 
+// 0.44: the board alignment wizard (Betaflight App's, run by the firmware: BOARD_ALIGN): flat, nose down, right side down
+function boardWizard() {
+  const state = h('span', { id: 'board-wizard-state' }, tr('chưa bắt đầu'));
+  const say = (t) => { state.textContent = t; };
+  const why = (e) => {
+    const reason = e.extra && e.extra.result && e.extra.result.reason;
+    if (e.code === 'FAILED' && reason) return tr(ENUM_LABELS.board_align_result[reason] || reason);
+    if (e.code === 'BAD_STATE') return tr('Làm bước 1 (nằm phẳng) trước.');
+    return errorText(e);
+  };
+  const step = (n, text, next) => cmdButton(text, 'BOARD_ALIGN', { step: n }, {
+    done: async (res) => {
+      if (n !== 3) { say(next); return; }
+      await reloadSection('general'); await reloadSection('sensors');
+      const al = ENUM_LABELS.align[res.align] || res.align, t = (v) => (v / 10).toFixed(1);
+      say(tr('Xong: chip {a}, trim board {r}° / {p}° / {y}°, đang dùng. Bấm "Lưu" để giữ lại.', { a: al, r: t(res.trim_roll), p: t(res.trim_pitch), y: t(res.trim_yaw) }));
+      toast(tr('Đã tìm hướng lắp board: chip {a}', { a: al }), 'ok');
+    },
+    fail: (e) => say(why(e)),
+  });
+  const b1 = step(1, tr('1. Nằm phẳng'), tr('Đã lấy tư thế phẳng. Bước 2: chúi mũi xuống khoảng 45°, giữ yên rồi bấm.'));
+  const b2 = step(2, tr('2. Chúi mũi xuống'), tr('Đã lấy chúi mũi. Bước 3: nghiêng bên phải xuống khoảng 45°, giữ yên rồi bấm.'));
+  const b3 = step(3, tr('3. Nghiêng phải xuống'), '');
+  const cancel = cmdButton(tr('Huỷ'), 'BOARD_ALIGN', { step: 0 }, { class: 'quiet', done: () => say(tr('chưa bắt đầu')) });
+  b1.id = 'board-wizard-1'; b2.id = 'board-wizard-2'; b3.id = 'board-wizard-3'; cancel.id = 'board-wizard-cancel';
+  return block(tr('Tự tìm hướng lắp board'),
+    h('p', { class: 'help' }, tr('Như wizard "board alignment" của Betaflight App: không cần biết chip IMU nằm hướng nào. Cầm máy (mũi hướng ra xa người), mỗi bước giữ yên rồi bấm: 1 nằm phẳng, 2 chúi mũi xuống khoảng 45°, 3 nghiêng bên phải xuống khoảng 45°. Firmware tìm hướng lắp (làm tròn 45°), đặt "Hướng chip IMU" và trim board, dùng ngay; level trim giữ nguyên. IMU thứ hai xoay theo.')),
+    h('p', {}, tr('Trạng thái: '), state), h('div', { class: 'btn-row' }, b1, b2, b3, cancel));
+}
+
 // the second IMU: its state, which chip(s) the loop flies on, and its gyro next to the first one's (for checking its orientation)
 function imu2Text(s) {
   if (s.imu2 === undefined || s.imu2 === 'NONE') return tr('không có');
@@ -172,6 +202,7 @@ export default {
           kv([[tr('IMU thứ hai'), h('span', { id: 'imu2-state' }, readout('sensors', (s) => imu2Text(s)))],
             [tr('Đang chạy'), h('span', { id: 'rates-now' }, readout('status', (s) => (s.pid_target ? tr('gyro {gyro} Hz, PID {pid} Hz', { gyro: s.loop_target, pid: s.pid_target }) : '–')))]]),
           note(tr('Các mục này có hiệu lực sau khi lưu và khởi động lại.'))),
+        boardWizard(),
         block('Module',
           fields('sensors', ['baro_enabled', 'baro_model', 'baro_primary', 'range_enabled', 'range_model', 'range_l1x_mode', 'mag_enabled', 'mag_model', 'mag_align', 'mag_trim_roll', 'mag_trim_pitch', 'mag_trim_yaw', 'mag_declination', 'gps_enabled']),
           note(tr('Bật hoặc tắt module cần lưu và khởi động lại. Module bật mà firmware không tìm thấy sẽ hiện "Không có" ở tab Tổng quan kèm lý do.'))),

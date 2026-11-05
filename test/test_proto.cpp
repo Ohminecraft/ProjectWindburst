@@ -99,7 +99,7 @@ static void t_store() {
         std::vector<uint8_t> rec(size + 5u); rec[0] = 1; rec[1] = (uint8_t)size; rec[2] = (uint8_t)(size >> 8); memcpy(rec.data() + 3, data, size);
         const uint16_t c = crc16(rec.data(), size + 3u); rec[size + 3u] = (uint8_t)c; rec[size + 4u] = (uint8_t)(c >> 8); ms.kv[key] = rec;
     };
-    CHECK(find_section(SEC_PINS)->compat == 52 && find_section(SEC_PINS)->compat2 == 50 && find_section(SEC_PINS)->compat3 == 48 && find_section(SEC_PINS)->compat4 == 47 && offsetof(S_pins, nrf_sck) == 52 && offsetof(S_pins, baro_cs) == 50 && offsetof(S_pins, mag_cs) == 51 && offsetof(S_pins, can_tx) == 48 && offsetof(S_pins, imu2_cs) == 47 && offsetof(S_pins, esc_tlm) == 46 && find_section(SEC_SENSORS)->compat == 20 && find_section(SEC_SENSORS)->compat2 == 19 && find_section(SEC_SENSORS)->compat3 == 18 && find_section(SEC_SENSORS)->compat4 == 16 && offsetof(S_sensors, esc_boot_wait) == 20 && offsetof(S_sensors, baro_primary) == 19 && offsetof(S_sensors, baro_model) == 18 && offsetof(S_sensors, gyro_use) == 16 && offsetof(S_pins, flow_cs) == 27 && offsetof(S_pins, curr_adc) == 37 && offsetof(S_pins, servo) == 33 && find_section(SEC_BATTERY)->compat == 13 && offsetof(S_battery, current_source) == 13 && find_section(SEC_BLACKBOX)->compat == 8 && find_section(SEC_MOTORS)->compat == 44 && find_section(SEC_MOTORS)->compat2 == 37 && find_section(SEC_MOTORS)->compat3 == 36 && find_section(SEC_MOTORS)->compat4 == 35 && offsetof(S_motors, crashflip_rate) == 44 && offsetof(S_motors, stall_disarm) == 37 && offsetof(S_motors, esc_sensor) == 36 && offsetof(S_motors, ext_pullup) == 35 && find_section(SEC_NAV)->compat == 43 && find_section(SEC_NAV)->compat2 == 38 && find_section(SEC_NAV)->compat3 == 34 && find_section(SEC_NAV)->compat4 == 31 && offsetof(S_nav, loiter_speed) == 43 && offsetof(S_nav, rescue_cone) == 38 && offsetof(S_nav, fence_alt_max) == 34 && offsetof(S_nav, fence_radius) == 36 && offsetof(S_nav, fs_hold_s) == 31 && offsetof(S_nav, batt_crit_action) == 33 && offsetof(S_nav, gps_alt) == 27 && offsetof(S_nav, ph_min_gps_hz) == 29 && offsetof(S_nav, ekf) == 30 && find_section(SEC_GENERAL)->compat == 57 && find_section(SEC_GENERAL)->compat2 == 56 && find_section(SEC_GENERAL)->compat3 == 24 && find_section(SEC_GENERAL)->compat4 == 22 && offsetof(S_general, fly_style) == 57 && offsetof(S_general, flycam_hold) == 58 && offsetof(S_general, reserved_g) == 22 && offsetof(S_general, pid_denom) == 23 && find_section(SEC_GPS)->compat == 0 && offsetof(S_blackbox, sd_mode) == 8,
+    CHECK(find_section(SEC_PINS)->compat == 52 && find_section(SEC_PINS)->compat2 == 50 && find_section(SEC_PINS)->compat3 == 48 && find_section(SEC_PINS)->compat4 == 47 && offsetof(S_pins, nrf_sck) == 52 && offsetof(S_pins, baro_cs) == 50 && offsetof(S_pins, mag_cs) == 51 && offsetof(S_pins, can_tx) == 48 && offsetof(S_pins, imu2_cs) == 47 && offsetof(S_pins, esc_tlm) == 46 && find_section(SEC_SENSORS)->compat == 20 && find_section(SEC_SENSORS)->compat2 == 19 && find_section(SEC_SENSORS)->compat3 == 18 && find_section(SEC_SENSORS)->compat4 == 16 && offsetof(S_sensors, esc_boot_wait) == 20 && offsetof(S_sensors, baro_primary) == 19 && offsetof(S_sensors, baro_model) == 18 && offsetof(S_sensors, gyro_use) == 16 && offsetof(S_pins, flow_cs) == 27 && offsetof(S_pins, curr_adc) == 37 && offsetof(S_pins, servo) == 33 && find_section(SEC_BATTERY)->compat == 13 && offsetof(S_battery, current_source) == 13 && find_section(SEC_BLACKBOX)->compat == 8 && find_section(SEC_MOTORS)->compat == 47 && find_section(SEC_MOTORS)->compat2 == 44 && find_section(SEC_MOTORS)->compat3 == 37 && find_section(SEC_MOTORS)->compat4 == 36 && find_section(SEC_MOTORS)->compat5 == 35 && offsetof(S_motors, crashflip_rate) == 44 && offsetof(S_motors, stall_disarm) == 37 && offsetof(S_motors, esc_sensor) == 36 && offsetof(S_motors, ext_pullup) == 35 && find_section(SEC_NAV)->compat == 43 && find_section(SEC_NAV)->compat2 == 38 && find_section(SEC_NAV)->compat3 == 34 && find_section(SEC_NAV)->compat4 == 31 && offsetof(S_nav, loiter_speed) == 43 && offsetof(S_nav, rescue_cone) == 38 && offsetof(S_nav, fence_alt_max) == 34 && offsetof(S_nav, fence_radius) == 36 && offsetof(S_nav, fs_hold_s) == 31 && offsetof(S_nav, batt_crit_action) == 33 && offsetof(S_nav, gps_alt) == 27 && offsetof(S_nav, ph_min_gps_hz) == 29 && offsetof(S_nav, ekf) == 30 && find_section(SEC_GENERAL)->compat == 60 && find_section(SEC_GENERAL)->compat2 == 59 && find_section(SEC_GENERAL)->compat3 == 57 && find_section(SEC_GENERAL)->compat4 == 56 && find_section(SEC_GENERAL)->compat5 == 24 && find_section(SEC_GENERAL)->compat6 == 23 && find_section(SEC_GENERAL)->compat7 == 22 && offsetof(S_general, flycam_attitude) == 59 && offsetof(S_general, fly_style) == 57 && offsetof(S_general, flycam_hold) == 58 && offsetof(S_general, reserved_g) == 22 && offsetof(S_general, pid_denom) == 23 && find_section(SEC_GPS)->compat == 0 && offsetof(S_blackbox, sd_mode) == 8,
           "pins (three times: the flow sensor's, the servos', the current sensor's and PWM receiver's), battery and blackbox grew at their end: their old sizes are known, and the old layout really is the start of the new one");
     { MemStorage ms; SettingsStore so(ms); Settings w; defaults(w); so.save(w);
       S_pins op; defaults(op); op.imu_cs = 10; op.motor[3] = 7; op.batt_adc = 2; op.sd_cs = 42; op.flow_cs = 38; op.servo[0] = 99; op.esc_tlm = 44; op.imu2_cs = 34;   // (imu2_cs lies beyond the 47 bytes that are stored)
@@ -140,7 +140,7 @@ static void t_store() {
       CHECK((r5.defaulted_mask & (1u << SEC_GPS)) && bad3.gps.rate_hz == 10, "a section without a known old size (gps) never takes a shorter record");
       { S_general og2; defaults(og2); og2.loop_hz = 2000; uint8_t rec[23]; memcpy(rec, &og2, 22); rec[22] = 1;
         old_record(ms, "wbs01", rec, 23); Settings g8; const auto r8 = so.load(g8);
-        CHECK(sizeof(S_general) == 59 && g8.general.loop_hz != 2000 && (r8.defaulted_mask & (1u << SEC_GENERAL)), "the general section of 0.9.0 - 0.9.4 (23 bytes): since 0.43 (Flycam) not one of the four sizes kept - defaults"); }
+        CHECK(sizeof(S_general) == 62 && g8.general.loop_hz == 2000 && (r8.migrated_mask & (1u << SEC_GENERAL)), "the general section of 0.9.0 - 0.9.4 (23 bytes): kept again since 0.44 (six older sizes; 0.43 had to drop it)"); }
       { S_general og3; defaults(og3); og3.loop_hz = 8000; og3.est_hz = 250; old_record(ms, "wbs01", &og3, 22); Settings g9; const auto r9 = so.load(g9);
         CHECK(g9.general.loop_hz == 8000 && g9.general.est_hz == 250 && g9.general.pid_denom == 1 && (r9.migrated_mask & (1u << SEC_GENERAL)), "the general section of 0.9.5 - 0.11 (22 bytes): kept, the control rate = the gyro's (pid_denom 1)"); }
       { S_sensors os; defaults(os); os.mag_enabled = 1; os.range_l1x_mode = 2; old_record(ms, "wbs07", &os, 16); Settings g16; const auto r16 = so.load(g16);
@@ -161,14 +161,36 @@ static void t_store() {
         CHECK(gn.nav.fs_procedure == FS_PROCEDURE_RESCUE && gn.nav.batt_low_action == FS_BATT_LOW_WARN && gn.nav.fs_hold_s == 30 && gn.nav.batt_crit_action == FS_BATT_CRIT_LAND && (rn.migrated_mask & (1u << SEC_NAV)),
               "the nav section of 0.18 - 0.31 (31 bytes): kept, the failsafe actions of 0.32 at their defaults (WARN, LAND, hold 30 s)"); }
       { S_althold oa; defaults(oa); oa.climb_rate = 33; oa.acc_p = 7; old_record(ms, "wbs19", &oa, 6); Settings g6a; const auto r6a = so.load(g6a);
-        CHECK(find_section(SEC_ALTHOLD)->compat == 6 && offsetof(S_althold, accel_z) == 6 && g6a.althold.climb_rate == 33 && g6a.althold.acc_p == 50 && g6a.althold.accel_z == 25 && (r6a.migrated_mask & (1u << SEC_ALTHOLD)),
+        CHECK(find_section(SEC_ALTHOLD)->compat == 10 && find_section(SEC_ALTHOLD)->compat2 == 6 && offsetof(S_althold, accel_z) == 6 && g6a.althold.climb_rate == 33 && g6a.althold.acc_p == 50 && g6a.althold.accel_z == 25 && (r6a.migrated_mask & (1u << SEC_ALTHOLD)),
               "the althold section before 0.29 (6 bytes): kept, the new controller's settings at their defaults"); }
+      // 0.44: the settings that became Betaflight's microseconds - an older record (the % field, not the us one) is converted on load
+      { S_receiver orx; defaults(orx); orx.old_deadband = 4; old_record(ms, "wbs02", &orx, 22);
+        S_althold oal; defaults(oal); oal.old_mid_stick = 55; oal.old_deadband = 8; oal.old_low_stick = 7; oal.old_max_stick = 90; old_record(ms, "wbs19", &oal, 10);
+        S_general ogn; defaults(ogn); ogn.old_fs_fallback = 70; old_record(ms, "wbs01", &ogn, 60);
+        Settings gu; const auto ru = so.load(gu);
+        CHECK(gu.receiver.deadband == 20 && gu.receiver.yaw_deadband == 20 && gu.receiver.deadband3d_throttle == 50 && (ru.migrated_mask & (1u << SEC_RECEIVER)),
+              "receiver of 0.43 (22 bytes): deadband 4 %% -> 20 us, roll / pitch and yaw (%u, %u)", gu.receiver.deadband, gu.receiver.yaw_deadband);
+        CHECK(gu.althold.mid_stick == 1550 && gu.althold.deadband == 80 && gu.althold.low_stick == 1070 && gu.althold.max_stick == 1900 && (ru.migrated_mask & (1u << SEC_ALTHOLD)),
+              "althold of 0.43 (10 bytes): 55 / 8 / 7 / 90 %% -> 1550 / 80 / 1070 / 1900 us (%u %u %u %u)", gu.althold.mid_stick, gu.althold.deadband, gu.althold.low_stick, gu.althold.max_stick);
+        CHECK(gu.general.fs_throttle == 1259 && (ru.migrated_mask & (1u << SEC_GENERAL)), "general of 0.44-dev (60 bytes): failsafe 70 %% of the hover -> 1259 us (the hover guess 37 %%) (%u)", gu.general.fs_throttle); }
+      { S_general o59; defaults(o59); o59.old_fs_fallback = 85; old_record(ms, "wbs01", &o59, 59); Settings g59; so.load(g59);
+        CHECK(g59.general.fs_throttle == 1315, "general of 0.43 (59 bytes): the default 85 %% -> 1315 us (%u)", g59.general.fs_throttle); }
+      { S_receiver nrx; defaults(nrx); nrx.old_deadband = 4; nrx.deadband = 33; nrx.yaw_deadband = 7; old_record(ms, "wbs02", &nrx, (uint16_t)sizeof(S_receiver)); Settings gn2; so.load(gn2);
+        CHECK(gn2.receiver.deadband == 33 && gn2.receiver.yaw_deadband == 7, "today's record: taken as it is (no conversion)"); }
+      { Settings ug; defaults(ug); ug.general.old_fs_fallback = 70; ug.general.fs_throttle = 1450; upgrade_section(ug, SEC_GENERAL, (uint16_t)sizeof(S_general));
+        CHECK(ug.general.fs_throttle == 1450, "a general record that has fs_throttle is never converted again (%u)", ug.general.fs_throttle); }
+      { S_receiver o9; defaults(o9); o9.old_deadband = 6; old_record(ms, "wbs02", &o9, 9); Settings g9r; so.load(g9r);
+        CHECK(g9r.receiver.deadband == 30, "receiver of 9 bytes (the deadband among them): converted too (%u)", g9r.receiver.deadband); }
+      { S_althold o6; defaults(o6); old_record(ms, "wbs19", &o6, 6); Settings g6; so.load(g6);
+        CHECK(g6.althold.mid_stick == 1500 && g6.althold.deadband == 50 && g6.althold.low_stick == 1060 && g6.althold.max_stick == 2000, "the old defaults convert to the new defaults"); }
+      { MemStorage mt; SettingsStore st(mt); st.set_role(ROLE_TX); S_tx_sticks ot; defaults(ot); ot.old_deadband = 4; old_record(mt, "wbs28", &ot, 40); Settings gt; const auto rt = st.load(gt);
+        CHECK(gt.tx_sticks.deadband == 20 && (rt.migrated_mask & (1u << SEC_TX_STICKS)), "the transmitter's sticks of 0.43 (40 bytes): deadband 4 %% -> 20 us (%u)", gt.tx_sticks.deadband); }
       { S_sensors os; defaults(os); os.baro_model = BARO_MODEL_DRONECAN; os.baro_primary = 1; old_record(ms, "wbs07", &os, 19); Settings g19; const auto r19 = so.load(g19);
         CHECK(g19.sensors.baro_model == BARO_MODEL_DRONECAN && g19.sensors.baro_primary == 0 && (r19.migrated_mask & (1u << SEC_SENSORS)), "the sensors section of 0.15 - 0.27 (19 bytes): kept, baro_primary 0"); }
       { S_pins p11; defaults(p11); p11.imu_cs = 9; p11.imu2_cs = 34; old_record(ms, "wbs11", &p11, 48); Settings g11; const auto r11 = so.load(g11);
         CHECK(g11.pins.imu2_cs == 34 && g11.pins.can_tx == 255 && g11.pins.can_rx == 255 && (r11.migrated_mask & (1u << SEC_PINS)), "the pin map of 0.14 (48 bytes): kept, the CAN pins unset"); }
       {   // 0.20: receiver.telemetry at the end of the receiver section (12 bytes before)
-        CHECK(sizeof(S_receiver) == 22 && offsetof(S_receiver, telemetry) == 12 && offsetof(S_receiver, nrf_addr) == 13 && find_section(SEC_RECEIVER)->compat == 13 && find_section(SEC_RECEIVER)->compat2 == 12 && find_section(SEC_RECEIVER)->compat3 == 9, "receiver: telemetry switch, then the nRF24 fields at the end; the old sizes 13, 12 and 9 known");
+        CHECK(sizeof(S_receiver) == 32 && offsetof(S_receiver, telemetry) == 12 && offsetof(S_receiver, nrf_addr) == 13 && offsetof(S_receiver, deadband) == 22 && offsetof(S_receiver, min_check) == 26 && find_section(SEC_RECEIVER)->compat == 26 && find_section(SEC_RECEIVER)->compat2 == 22 && find_section(SEC_RECEIVER)->compat3 == 13 && find_section(SEC_RECEIVER)->compat4 == 12 && find_section(SEC_RECEIVER)->compat5 == 9, "receiver: telemetry switch, the nRF24 fields, then (0.44) the deadbands in us and the stick thresholds at the end; the old sizes 26, 22, 13, 12 and 9 known");
         S_receiver d; defaults(d); CHECK(d.telemetry == 1, "default: telemetry on (as before)");
         MemStorage ms; SettingsStore so(ms); Settings w; defaults(w); so.save(w);
         S_receiver o; defaults(o); o.protocol = RX_PROTOCOL_SBUS; o.ch_throttle = 0; o.rc_smoothing_throttle = 77; o.telemetry = 0;     // (not stored: beyond 12 bytes)
@@ -191,7 +213,7 @@ static void t_store() {
         CHECK(got.led.count == 12 && got.led.brightness == 70 && got.led.layout == LED_LAYOUT_NAV && got.led.fn[5] == LED_FUNCTION_STATUS && got.led.speed == 5 && (rr.migrated_mask & (1u << SEC_LED)), "an led section of 0.21 is kept, the manual fields at their defaults"); }
       {   // 0.24: general.stick_arm at the end (56 bytes before)
         S_general d; defaults(d);
-        CHECK(offsetof(S_general, stick_arm) == 56 && find_section(SEC_GENERAL)->compat2 == 56 && d.stick_arm == 0 && d.fly_style == FLY_STYLE_FPV && d.flycam_hold == FLYCAM_HOLD_LOITER, "general: stick_arm, then (0.43) fly_style FPV / flycam_hold LOITER at the end; the old sizes 57 and 56 known");
+        CHECK(offsetof(S_general, stick_arm) == 56 && find_section(SEC_GENERAL)->compat4 == 56 && d.stick_arm == 0 && d.fly_style == FLY_STYLE_FPV && d.flycam_hold == FLYCAM_HOLD_LOITER, "general: stick_arm, then (0.43) fly_style FPV / flycam_hold LOITER at the end; the old sizes 57 and 56 known");
         MemStorage ms; SettingsStore so(ms); Settings w; defaults(w); so.save(w);
         S_general o; defaults(o); o.loop_hz = 2000; o.airmode = 2;
         std::vector<uint8_t> rec(56 + 5u); rec[0] = 1; rec[1] = 56; rec[2] = 0; memcpy(rec.data() + 3, &o, 56);
@@ -199,9 +221,34 @@ static void t_store() {
         char key[8]; snprintf(key, sizeof(key), "wbs%02u", (unsigned)SEC_GENERAL); ms.kv[key] = rec;
         Settings got; const auto rr = so.load(got);
         CHECK(got.general.loop_hz == 2000 && got.general.airmode == 2 && got.general.stick_arm == 0 && (rr.migrated_mask & (1u << SEC_GENERAL)), "a general section of 0.23 is kept, stick arming off"); }
+      {   // 0.44: general.flycam_attitude (59 bytes before), then fs_throttle (60 bytes before); seven older sizes, down to 0.9.5's 22
+        S_general d; defaults(d); const SectionInfo* gi = find_section(SEC_GENERAL);
+        CHECK(sizeof(S_general) == 62 && offsetof(S_general, flycam_attitude) == 59 && offsetof(S_general, fs_throttle) == 60 && d.flycam_attitude == FLYCAM_ATTITUDE_ANGLE && d.fs_throttle == 1300 &&
+              gi->compat == 60 && gi->compat2 == 59 && gi->compat3 == 57 && gi->compat4 == 56 && gi->compat5 == 24 && gi->compat6 == 23 && gi->compat7 == 22 && gi->compat8 == 0,
+              "general: flycam_attitude ANGLE, fs_throttle 1300 us at the end; older sizes 60, 59, 57, 56, 24, 23, 22 all known");
+        for (const uint16_t old : {(uint16_t)59, (uint16_t)22}) {
+            MemStorage ms; SettingsStore so(ms); Settings w; defaults(w); so.save(w);
+            S_general o; defaults(o); o.loop_hz = 2000; o.flycam_attitude = FLYCAM_ATTITUDE_STABILIZE;
+            std::vector<uint8_t> rec(old + 5u); rec[0] = 1; rec[1] = (uint8_t)old; rec[2] = 0; memcpy(rec.data() + 3, &o, old);
+            const uint16_t c = crc16(rec.data(), old + 3u); rec[old + 3u] = (uint8_t)c; rec[old + 4u] = (uint8_t)(c >> 8);
+            char key[8]; snprintf(key, sizeof(key), "wbs%02u", (unsigned)SEC_GENERAL); ms.kv[key] = rec;
+            Settings got; const auto rr = so.load(got);
+            CHECK(got.general.loop_hz == 2000 && got.general.flycam_attitude == FLYCAM_ATTITUDE_ANGLE && (rr.migrated_mask & (1u << SEC_GENERAL)),
+                  "a %u-byte general record is kept, Flycam flies Angle", (unsigned)old); } }
+      {   // 0.44: the autotune's settings at the end of the pid section (79 bytes before)
+        S_pid d; defaults(d); const SectionInfo* pi = find_section(SEC_PID);
+        CHECK(offsetof(S_pid, autotune_axes) == 79 && pi->compat == 79 && pi->compat2 == 75 && d.autotune_axes == 7 && d.autotune_aggr == 75 && d.autotune_backoff == 25,
+              "pid: autotune axes (all three) / aggressiveness 0.075 / backoff 25 %% at the end - ArduPilot's defaults; the sizes 79 and 75 known");
+        MemStorage ms; SettingsStore so(ms); Settings w; defaults(w); so.save(w);
+        S_pid o; defaults(o); o.p[0] = 61; o.slider_mode = SLIDER_MODE_OFF; o.autotune_axes = 1;
+        std::vector<uint8_t> rec(79 + 5u); rec[0] = 1; rec[1] = 79; rec[2] = 0; memcpy(rec.data() + 3, &o, 79);
+        const uint16_t c = crc16(rec.data(), 82); rec[82] = (uint8_t)c; rec[83] = (uint8_t)(c >> 8);
+        char key[8]; snprintf(key, sizeof(key), "wbs%02u", (unsigned)SEC_PID); ms.kv[key] = rec;
+        Settings got; const auto rr = so.load(got);
+        CHECK(got.pid.p[0] == 61 && got.pid.autotune_axes == 7 && (rr.migrated_mask & (1u << SEC_PID)), "a pid section of 0.43 is kept, the autotune at its defaults"); }
       {   // 0.23: the acro trainer's settings at the end of the pid section (75 bytes before)
         S_pid d; defaults(d);
-        CHECK(sizeof(S_pid) == 79 && offsetof(S_pid, acro_trainer_angle_limit) == 75 && find_section(SEC_PID)->compat == 75 && d.acro_trainer_angle_limit == 20 && d.acro_trainer_lookahead_ms == 50 && d.acro_trainer_gain == 75,
+        CHECK(sizeof(S_pid) == 82 && offsetof(S_pid, acro_trainer_angle_limit) == 75 && find_section(SEC_PID)->compat2 == 75 && d.acro_trainer_angle_limit == 20 && d.acro_trainer_lookahead_ms == 50 && d.acro_trainer_gain == 75,
               "pid: acro trainer limit / lookahead / gain at the end, Betaflight's defaults, the old size known");
         d.acro_trainer_angle_limit = 5; d.acro_trainer_lookahead_ms = 900; d.acro_trainer_gain = 3; validate(d);
         CHECK(d.acro_trainer_angle_limit == 10 && d.acro_trainer_lookahead_ms == 200 && d.acro_trainer_gain == 25, "Betaflight's ranges: 10 - 80 deg, 10 - 200 ms, 25 - 255");
@@ -357,8 +404,8 @@ static void t_apply() {
             "althold defaults = the controller's own defaults (nothing changes for a craft that never touches the section)");
       { Settings u; defaults(u); u.althold.accel_z = 15; u.althold.jerk_z = 30; u.althold.acc_p = 0; u.althold.acc_i = 150; fc::nav::AltConfig a; apply_althold(u, a);
         CHECK(fabsf(a.accel_max_mps2 - 1.5f) < 1e-5f && fabsf(a.jerk_max_mps3 - 3.0f) < 1e-5f && a.acc_p == 0.0f && fabsf(a.acc_i - 1.5f) < 1e-5f, "althold 0.28: accel 1.5 m/s^2, jerk 3 m/s^3, acceleration loop P 0 / I 1.5"); }
-      Settings t; defaults(t); t.althold.mid_stick = 45; t.althold.climb_rate = 35; t.althold.low_stick = 25; t.althold.deadband = 10; fc::nav::AltConfig a; apply_althold(t, a);
-      CHECK(fabsf(a.mid_stick - 0.45f) < 1e-6f && fabsf(a.climb_max_mps - 3.5f) < 1e-5f && a.low_stick <= 0.30f + 1e-6f, "althold: 45 %% holds, 3.5 m/s; a 'low' that would leave no descent travel is pulled down (%.2f)", a.low_stick); }
+      Settings t; defaults(t); t.althold.mid_stick = 1450; t.althold.climb_rate = 35; t.althold.low_stick = 1250; t.althold.deadband = 100; fc::nav::AltConfig a; apply_althold(t, a);
+      CHECK(fabsf(a.mid_stick - 0.45f) < 1e-6f && fabsf(a.climb_max_mps - 3.5f) < 1e-5f && a.low_stick <= 0.30f + 1e-6f, "althold: 1450 us (0.45) holds, 3.5 m/s; a 'low' that would leave no descent travel is pulled down (%.2f)", a.low_stick); }
     CHECK(c.loop_hz == def.loop_hz && c.est_hz == def.est_hz && c.max_arm_angle_deg == def.max_arm_angle_deg && c.airmode == def.airmode && c.airmode == fc::AM_AUTO && fabsf(c.airmode_threshold - def.airmode_threshold) < 1e-6f, "default settings reproduce the core's defaults (loop, arming, airmode)");
     { const fc::PidConfig &a = c.pid, &d = def.pid; bool same = true;
       for (int x = 0; x < 3; x++) same &= a.p[x] == d.p[x] && a.i[x] == d.i[x] && a.d[x] == d.d[x] && a.d_max[x] == d.d_max[x] && a.f[x] == d.f[x] && c.rates.max_rate_dps[x] == def.rates.max_rate_dps[x] && c.rates.center_sens_dps[x] == def.rates.center_sens_dps[x];
@@ -383,17 +430,17 @@ static void t_apply() {
     CHECK(c.angle.limit_deg == def.angle.limit_deg && c.angle.strength == def.angle.strength && c.angle.feedforward == def.angle.feedforward && c.angle.ff_smoothing_ms == def.angle.ff_smoothing_ms && c.angle.earth_ref == def.angle.earth_ref, "Angle defaults");
     CHECK(c.stab.limit_deg == def.stab.limit_deg && c.stab.kp[0] == def.stab.kp[0] && c.stab.kp[1] == def.stab.kp[1] && c.stab.kp[2] == def.stab.kp[2] && c.stab.accel_rp_dss == def.stab.accel_rp_dss && c.stab.accel_yaw_dss == def.stab.accel_yaw_dss &&
           fabsf(c.stab.input_tc - def.stab.input_tc) < 1e-6f && c.stab.rate_ff == def.stab.rate_ff, "Stabilize defaults (ArduPilot's)");
-    CHECK(fabsf(c.fs.guard_s - def.fs.guard_s) < 1e-6f && fabsf(c.fs.fallback_throttle_scale - def.fs.fallback_throttle_scale) < 1e-6f, "failsafe defaults");
+    CHECK(fabsf(c.fs.guard_s - def.fs.guard_s) < 1e-6f && fabsf(c.fs.fallback_throttle_scale - def.fs.fallback_throttle_scale) < 1e-6f && fabsf(c.fs.fallback_throttle - def.fs.fallback_throttle) < 1e-6f, "failsafe defaults (fs_throttle 1300 us = 0.30)");
     { S_pid sp; defaults(sp); bool same = true; for (int x = 0; x < 3; x++) same &= sp.p[x] == fc::kPidDefaultP[x] && sp.i[x] == fc::kPidDefaultI[x] && sp.d[x] == fc::kPidDefaultD[x] && sp.d_max[x] == fc::kPidDefaultDMax[x] && sp.f[x] == fc::kPidDefaultF[x];
       S_filters sf; defaults(sf);
       CHECK(same && sf.gyro_lpf1_dyn_min_hz == fc::kGyroLpf1DynMinDefault && sf.gyro_lpf1_dyn_max_hz == fc::kGyroLpf1DynMaxDefault && sf.gyro_lpf2_hz == fc::kGyroLpf2Default && sf.dterm_lpf1_dyn_min_hz == fc::kDtermLpf1DynMinDefault &&
             sf.dterm_lpf1_dyn_max_hz == fc::kDtermLpf1DynMaxDefault && sf.dterm_lpf2_hz == fc::kDtermLpf2Default, "the sliders at 100 give exactly the stored defaults (one set of numbers, checked)"); }
 
     // ---- every setting lands in its own place, in the right unit
-    s.general.fs_guard_ms = 750; s.rates.throttle_mid = 30; s.rates.expo[1] = 25; s.sensors.mag_declination = -35; s.receiver.deadband = 5; s.motors.layout = LAYOUT_HEX_X; s.general.airmode_start_throttle = 40; s.rates.angle_limit = 55;
+    s.general.fs_guard_ms = 750; s.rates.throttle_mid = 30; s.rates.expo[1] = 25; s.sensors.mag_declination = -35; s.receiver.deadband = 25; s.receiver.yaw_deadband = 40; s.motors.layout = LAYOUT_HEX_X; s.general.airmode_start_throttle = 40; s.rates.angle_limit = 55;
     s.receiver.protocol = RX_PROTOCOL_SBUS; s.receiver.rc_smoothing = 0; s.receiver.rc_smoothing_factor = 41; s.receiver.rc_smoothing_throttle = 42;
     for (int a = 0; a < 3; a++) { s.rates.center_sens[a] = (uint16_t)(111 + a); s.rates.max_rate[a] = (uint16_t)(555 + a); }
-    s.rates.throttle_expo = 35; s.rates.throttle_limit = 85; s.general.fs_fallback_throttle = 66;
+    s.rates.throttle_expo = 35; s.rates.throttle_limit = 85; s.general.fs_throttle = 1660;
     s.receiver.ch_roll = 1; s.receiver.ch_pitch = 0; s.receiver.ch_throttle = 3; s.receiver.ch_yaw = 2; s.receiver.ch_aux0 = 6;
     { S_pid& p = s.pid; p.slider_mode = SLIDER_MODE_OFF; uint8_t v = 101;
       for (int a = 0; a < 3; a++) { p.p[a] = v++; p.i[a] = v++; p.d[a] = v++; p.d_max[a] = v++; p.f[a] = (uint16_t)(300 + a); p.stab_p[a] = 2.0f + a; }
@@ -406,13 +453,32 @@ static void t_apply() {
       f.rpm_harmonics = 2; f.rpm_min_hz = 90; f.rpm_q = 700; f.rpm_fade_range_hz = 60; f.rpm_lpf_hz = 170; f.rpm_weights[0] = 91; f.rpm_weights[1] = 92; f.rpm_weights[2] = 93;
       f.dterm_lpf1_type = LPF_TYPE_PT3; f.dterm_lpf1_static_hz = 81; f.dterm_lpf1_dyn_min_hz = 82; f.dterm_lpf1_dyn_max_hz = 163; f.dterm_lpf1_dyn_expo = 6; f.dterm_lpf2_type = LPF_TYPE_PT2; f.dterm_lpf2_hz = 164; f.dterm_notch_hz = 265; f.dterm_notch_cutoff = 166; f.yaw_lowpass_hz = 67; }
     apply_core(s, c, rc);
-    CHECK(fabsf(c.fs.guard_s - 0.75f) < 1e-6f && fabsf(c.rc.throttle_mid - 0.3f) < 1e-6f && fabsf(c.rates.expo[1] - 0.25f) < 1e-6f && fabsf(c.declination_deg + 3.5f) < 1e-5f && fabsf(rc.cfg.deadband - 0.05f) < 1e-6f &&
+    CHECK(fabsf(c.fs.guard_s - 0.75f) < 1e-6f && fabsf(c.rc.throttle_mid - 0.3f) < 1e-6f && fabsf(c.rates.expo[1] - 0.25f) < 1e-6f && fabsf(c.declination_deg + 3.5f) < 1e-5f && fabsf(rc.cfg.deadband - 0.05f) < 1e-6f && fabsf(rc.cfg.yaw_deadband - 0.08f) < 1e-6f &&
           fabsf(c.airmode_threshold - 0.4f) < 1e-6f && c.angle.limit_deg == 55 && c.stab.limit_deg == 55, "unit conversions (ms, %%, 0.1 deg); one tilt limit for Angle and Stabilize");
+    { Settings y; defaults(y); y.receiver.deadband = 0; y.receiver.yaw_deadband = 50; fc::CoreConfig cy; fc::RcInterpreter ry; apply_core(y, cy, ry);
+      uint16_t ch[16]; for (int i = 0; i < 16; i++) ch[i] = 1500; ch[ry.cfg.ch_roll] = 1520; ch[ry.cfg.ch_yaw] = 1520;
+      const fc::RcCommand k = ry.process(ch, true);
+      CHECK(k.roll > 0.03f && k.yaw == 0.0f, "the yaw stick has its own deadband: 20 us is roll %.3f, yaw %.3f (yaw_deadband 50 us)", k.roll, k.yaw); }
+    { Settings y; defaults(y); CHECK(y.receiver.min_check == 1050 && y.receiver.mid_rc == 1500 && y.receiver.max_check == 1900, "Betaflight's stick thresholds by default");
+      y.receiver.min_check = 1100; y.receiver.mid_rc = 1520; y.receiver.max_check = 1850; y.motors.mode3d = 1;
+      fc::CoreConfig cy; fc::RcInterpreter ry; apply_core(y, cy, ry);
+      CHECK(ry.cfg.min_check == 1100 && ry.cfg.mid_rc == 1520 && cy.mode3d.mid_us == 1520 && cy.mode3d.min_check_us == 1100, "min_check / mid_rc to the sticks and to 3D"); }
     CHECK(c.ff.interpolate && !c.rc_smoothing.enabled && c.rc_smoothing.auto_factor == 41 && c.rc_smoothing.auto_factor_throttle == 42, "receiver: RC smoothing, and a link that may repeat frames (SBUS) gets the duplicate handling");
     { bool r = true; for (int a = 0; a < 3; a++) r &= c.rates.center_sens_dps[a] == 111 + a && c.rates.max_rate_dps[a] == 555 + a;
-      CHECK(r && fabsf(c.rc.throttle_expo - 0.35f) < 1e-6f && fabsf(c.rc.throttle_limit - 0.85f) < 1e-6f && fabsf(c.fs.fallback_throttle_scale - 0.66f) < 1e-6f, "rates per axis, throttle expo and limit, the failsafe's share of the hover thrust (66 %%)");
+      CHECK(r && fabsf(c.rc.throttle_expo - 0.35f) < 1e-6f && fabsf(c.rc.throttle_limit - 0.85f) < 1e-6f && fabsf(c.fs.fallback_throttle - 0.66f) < 1e-6f && fabsf(c.fs.fallback_throttle_scale - 0.85f) < 1e-6f, "rates per axis, throttle expo and limit, the failsafe throttle (1660 us = 0.66; its ceiling stays 85 %% of the hover)");
       CHECK(c.rc.ch_roll == 1 && c.rc.ch_pitch == 0 && c.rc.ch_throttle == 3 && c.rc.ch_yaw == 2 && c.rc.ch_aux0 == 6 && rc.cfg.ch_roll == 1 && rc.cfg.ch_yaw == 2 && rc.cfg.ch_aux0 == 6 && fabsf(rc.cfg.throttle_limit - 0.85f) < 1e-6f,
             "the channel map (here: pitch, roll, yaw, throttle, switches from channel 7) - in the configuration and in the interpreter that reads the sticks"); }
+    // 0.44: 3D (Betaflight feature 3D) into the core and the motor layer
+    { Settings t; defaults(t); t.motors.protocol = ESC_PROTOCOL_DSHOT600; t.motors.mode3d = 1; t.motors.switched_mode3d = 1; t.receiver.deadband3d_throttle = 70;
+      t.motors.dyn_idle_min_rpm = 30; t.motors.neutral3d = 1480; t.motors.deadband3d_low = 1420; t.motors.deadband3d_high = 1530; t.motors.limit3d_low = 1050; t.motors.limit3d_high = 1950;
+      fc::CoreConfig c3; fc::RcInterpreter rc3; apply_core(t, c3, rc3); motor::MotorConfig m3; apply_motors(t, m3);
+      CHECK(c3.mode3d.enabled && c3.mode3d.switched && c3.mode3d.deadband_us == 70 && !c3.runaway.enabled && !c3.crashflip.available,
+            "3D: on, switched, deadband 70 us; runaway take-off detection and crash flip off (Betaflight: neither is 3D-aware)");
+      CHECK(m3.mode3d && m3.neutral3d == 1480 && m3.db3d_low == 1420 && m3.db3d_high == 1530 && m3.limit3d_low == 1050 && m3.limit3d_high == 1950 && m3.dyn.min_rpm_100 == 0,
+            "the motor layer: 3D, its pulses; dynamic idle off (Betaflight)");
+      t.motors.protocol = ESC_PROTOCOL_DRONECAN; validate(t.motors); apply_rules(t, SEC_MOTORS); CHECK(!t.motors.mode3d, "DroneCAN ESCs: 3D turned off (no reversed range here)");
+      t.motors.protocol = ESC_PROTOCOL_BRUSHED; t.motors.mode3d = 1; apply_rules(t, SEC_MOTORS); CHECK(!t.motors.mode3d, "brushed: 3D turned off");
+      t.motors.protocol = ESC_PROTOCOL_PWM; t.motors.mode3d = 1; apply_rules(t, SEC_MOTORS); CHECK(t.motors.mode3d, "PWM: 3D stays"); }
     { const fc::PidConfig& a = c.pid; bool g = true; uint8_t v = 101;
       for (int x = 0; x < 3; x++) { g &= a.p[x] == v && a.i[x] == v + 1 && a.d[x] == v + 2 && a.d_max[x] == v + 3 && a.f[x] == 300 + x && c.stab.kp[x] == 2.0f + x; v = (uint8_t)(v + 4); }
       CHECK(g, "gains per axis: P, I, D, D max, F and the Stabilize P");
@@ -589,11 +655,11 @@ static void t_radio_schema() {
       CHECK(s.tx_radio.pin_sck == 7 && s.tx_radio.pin_miso == 6 && s.tx_radio.pin_mosi == 8 && s.tx_radio.pin_cs == 24 && s.tx_radio.pin_ce == 23, "the old project's nRF24 pins on the ESP32-C5");
       CHECK(s.tx_sticks.adc_pin[0] == 4 && s.tx_sticks.adc_pin[1] == 5 && s.tx_sticks.adc_pin[2] == 3 && s.tx_sticks.adc_pin[3] == 2 && s.tx_sticks.cal_mid[1] == 2048 && s.tx_sticks.cal_max[3] == 4095, "joysticks on GPIO 4 5 3 2, a 12-bit ADC centred at 2048");
       CHECK(s.tx_sticks.map[0] == 0 && s.tx_sticks.map[1] == 1 && s.tx_sticks.map[2] == 3 && s.tx_sticks.map[3] == 2, "roll = joy1 X, pitch = joy1 Y, throttle = joy2 Y, yaw = joy2 X");
-      CHECK(s.tx_sticks.throttle_mode == TX_THROTTLE_MANUAL && s.tx_sticks.deadband == 3 && s.tx_sticks.throttle_rate == 50, "throttle MANUAL (the safe one) by default");
+      CHECK(s.tx_sticks.throttle_mode == TX_THROTTLE_MANUAL && s.tx_sticks.deadband == 15 && s.tx_sticks.throttle_rate == 50, "throttle MANUAL (the safe one) by default");
       CHECK(s.receiver.nrf_channel == 76 && s.receiver.nrf_rate == NRF_RATE_R250K && s.receiver.nrf_pps == NRF_PPS_HZ100 && s.receiver.nrf_bound == 0 && s.pins.nrf_ce == 255 && s.pins.nrf_cs == 255, "flight controller: nRF24 receiver settings, its pins unset");
       CHECK(BIND_STATE_BOUND == 3 && FLY_MODE_MISSION == 6 && find_command(CMD_BIND) && find_command(CMD_STICK_CAL), "bind states, flight modes, commands BIND and STICK_CAL"); }
     { const SectionInfo* rc = find_section(SEC_RECEIVER); const SectionInfo* pn = find_section(SEC_PINS);
-      CHECK(rc->compat == 13 && pn->compat == 52, "receiver and pins remember their 0.37 sizes (%u, %u)", rc->compat, pn->compat);
+      CHECK(rc->compat3 == 13 && pn->compat == 52, "receiver and pins remember their 0.37 sizes (%u, %u)", rc->compat3, pn->compat);
       MemStorage ms; SettingsStore so(ms); S_receiver old; defaults(old); old.protocol = RX_PROTOCOL_SBUS;
       uint8_t buf[64]; buf[0] = 1; buf[1] = 13; buf[2] = 0; memcpy(buf + 3, &old, 13); const uint16_t c = crc16(buf, 16); buf[16] = (uint8_t)c; buf[17] = (uint8_t)(c >> 8); ms.kv["wbs02"] = std::vector<uint8_t>(buf, buf + 18);
       Settings got; so.load(got); CHECK(got.receiver.protocol == RX_PROTOCOL_SBUS && got.receiver.nrf_channel == 76, "a 0.37 receiver record loads, the nRF24 fields get their defaults"); }

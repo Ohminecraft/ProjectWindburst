@@ -57,10 +57,24 @@ function live() {
       [tr('Anti Gravity'), readout('tuning', (t) => t.anti_gravity.toFixed(1))],
       [tr('Trạng thái'), h('span', { id: 'air-state' }, readout('tuning', (t) => ({ GROUND: tr('trên mặt đất: motor ở idle'), AIR: tr('đang bay'), AIRMODE: tr('đang bay, cần ga ở min (airmode)') }[t.air_state] || t.air_state)))],
       [tr('PID sum (roll, pitch, yaw)'), readout('tuning', (t) => t.pid_sum.map((v) => v.toFixed(0)).join('  '))],
-      [tr('Ga treo đo được'), h('span', { id: 'hover-read' }, readout('tuning', (t) => pct(t.hover)))],
+      [tr('Ga treo đo được'), h('span', { id: 'hover-read' }, readout('tuning', (t) => (t.hover ? `${t.hover} µs` : '–')))],
     ]),
     h('p', { class: 'help' }, tr('Ga treo: firmware tự đo trong mọi mode bay (trước chuyến bay đầu là số đoán). Altitude Hold và failsafe dùng số này, không cần nhập.')),
     h('p', { class: 'help' }, tr('PID sum: 1000 là toàn bộ dải motor; giới hạn 500 (roll, pitch) và 400 (yaw). Số nhảy quanh giới hạn khi bay bình thường là hệ số quá cao hoặc motor quá yếu.')));
+}
+
+// Dynamic idle needs the motors' rpm: DShot (or ProShot) with bidirectional telemetry. Anything else: a warning in its block.
+function idleWarn() {
+  const el = h('p', { class: 'note warn', id: 'dyn-idle-warn', role: 'alert' });
+  const show = () => {
+    const m = store.settings.motors || {}, proto = String(m.protocol || '');
+    const dshot = /^(DSHOT|PROSHOT)/.test(proto);
+    el.textContent = !dshot ? tr('WARNING: motor đang dùng {proto}, không phải DShot - dynamic idle không chạy. Chọn DShot và bật DShot hai chiều ở tab Motor.', { proto: proto || '?' })
+      : !m.bidirectional ? tr('WARNING: DShot hai chiều đang tắt - dynamic idle không chạy (cần RPM từ ESC). Bật ở tab Motor.') : '';
+    el.hidden = dshot && !!m.bidirectional;
+  };
+  listen('settings:motors', show); show();
+  return el;
 }
 
 export default {
@@ -72,24 +86,21 @@ export default {
     const stab = h('table', { class: 'grid axis', id: 'stab-gains' },
       h('thead', {}, h('tr', {}, h('th', {}), h('th', {}, 'Stabilize P'))),
       h('tbody', {}, AXES.map((ax, i) => h('tr', {}, h('th', { scope: 'row' }, h('i', { class: 'swatch', style: { background: `var(${SERIES[i]})` } }), ax), h('td', {}, control('pid', 'stab_p', { index: i }))))));
-    view.append(h('div', { class: 'cols' },
-      h('div', {},
-        sliders(),
-        block(tr('PID từng trục'), gainTable(),
-          h('p', { class: 'help' }, tr('Thang của Betaflight: P, I, D, D Max từ 0 đến 250, Feedforward từ 0 đến 1000. D Max lớn hơn D thì D tự tăng về phía D Max khi máy bị lắc hoặc cần gạt nhanh (Dynamic Damping).'))),
-        live()),
-      h('div', {},
-        block(tr('Feedforward'), fields('pid', ['ff_jitter_factor', 'ff_smooth_factor', 'ff_averaging', 'ff_boost', 'ff_max_rate_limit', 'ff_transition', 'ff_yaw_hold_gain', 'ff_yaw_hold_time']),
-          h('p', { class: 'help' }, tr('Feedforward lấy tốc độ gạt cần đẩy thẳng ra motor, nên máy quay cùng lúc với cần thay vì chờ sai lệch lớn lên. Tắt hẳn: đặt cột Feedforward trong bảng về 0.'))),
-        block(tr('I-term relax'), fields('pid', ['iterm_relax', 'iterm_relax_type', 'iterm_relax_cutoff', 'iterm_windup'])),
-        block(tr('Anti Gravity'), fields('pid', ['anti_gravity', 'anti_gravity_gain', 'anti_gravity_p_gain', 'anti_gravity_cutoff'])),
-        store.schema.sectionByName.pid.fields.some((f) => f.n === 'acro_trainer_gain') ? block(tr('Acro trainer'), fields('pid', ['acro_trainer_angle_limit', 'acro_trainer_lookahead_ms', 'acro_trainer_gain']),
-          h('p', { class: 'help' }, tr('Bật bằng công tắc ACRO TRAINER (tab Mode), chỉ có tác dụng trong Acro. Nhìn trước: máy quay càng nhanh thì càng phanh sớm để không vượt góc; gạt hết cần có thể vượt vài độ rồi kéo về.'))) : null,
-        block(tr('Dynamic Damping (D Max)'), fields('pid', ['d_max_gain', 'd_max_advance'])),
-        block(tr('TPA và ga'), fields('pid', ['tpa_mode', 'tpa_rate', 'tpa_breakpoint', 'tpa_low_rate', 'tpa_low_breakpoint', 'tpa_low_always', 'throttle_boost', 'throttle_boost_cutoff']),
-          note(tr('Giới hạn công suất motor và dynamic idle (cần DShot hai chiều) ở tab Motor.'))),
-        block(tr('Angle'), fields('pid', ['angle_strength', 'angle_feedforward', 'angle_ff_smoothing', 'angle_earth_ref']), form(row('rates', 'angle_limit'))),
-        block(tr('Stabilize (kiểu ArduPilot)'), stab, fields('pid', ['stab_input_tc', 'stab_accel_rp', 'stab_accel_yaw', 'stab_rate_ff']),
-          h('p', { class: 'help' }, tr('Stabilize P: tốc độ quay yêu cầu (°/s) trên mỗi độ sai lệch góc, riêng từng trục (ATC_ANG_RLL_P, ATC_ANG_PIT_P, ATC_ANG_YAW_P; mặc định 4,5). Yaw trong Stabilize giữ hướng mũi khi cần yaw ở giữa.'))))));
+    // From the inner loop out - the order a craft is tuned in: the rate PID, the rest of the rate controller, holding an attitude,
+    // holding a height / a position / the motor idle.
+    const tier = (title, left, right) => [h('h2', { class: 'tier' }, title), h('div', { class: 'cols' }, h('div', {}, left), h('div', {}, right))];
+    view.append(
+      ...tier(tr('1. Rate PID'), [sliders()], [block(tr('PID từng trục'), gainTable(),
+          h('p', { class: 'help' }, tr('Thang của Betaflight: P, I, D, D Max từ 0 đến 250, Feedforward từ 0 đến 1000. D Max lớn hơn D thì D tự tăng về phía D Max khi máy bị lắc hoặc cần gạt nhanh (Dynamic Damping).'))), live()]),
+      ...tier(tr('2. Bộ điều khiển rate'), [block(tr('Feedforward'), fields('pid', ['ff_jitter_factor', 'ff_smooth_factor', 'ff_averaging', 'ff_boost', 'ff_max_rate_limit', 'ff_transition', 'ff_yaw_hold_gain', 'ff_yaw_hold_time']),
+          h('p', { class: 'help' }, tr('Feedforward lấy tốc độ gạt cần đẩy thẳng ra motor, nên máy quay cùng lúc với cần thay vì chờ sai lệch lớn lên. Tắt hẳn: đặt cột Feedforward trong bảng về 0.'))), block(tr('I-term relax'), fields('pid', ['iterm_relax', 'iterm_relax_type', 'iterm_relax_cutoff', 'iterm_windup']))], [block(tr('Dynamic Damping (D Max)'), fields('pid', ['d_max_gain', 'd_max_advance'])), block(tr('Anti Gravity'), fields('pid', ['anti_gravity', 'anti_gravity_gain', 'anti_gravity_p_gain', 'anti_gravity_cutoff'])), block(tr('TPA và ga'), fields('pid', ['tpa_mode', 'tpa_rate', 'tpa_breakpoint', 'tpa_low_rate', 'tpa_low_breakpoint', 'tpa_low_always', 'throttle_boost', 'throttle_boost_cutoff']),
+          note(tr('Giới hạn công suất motor ở tab Motor.')))]),
+      ...tier(tr('3. Giữ tư thế'), [block(tr('Angle'), fields('pid', ['angle_strength', 'angle_feedforward', 'angle_ff_smoothing', 'angle_earth_ref']), form(row('rates', 'angle_limit'))), store.schema.sectionByName.pid.fields.some((f) => f.n === 'acro_trainer_gain') ? block(tr('Acro trainer'), fields('pid', ['acro_trainer_angle_limit', 'acro_trainer_lookahead_ms', 'acro_trainer_gain']),
+          h('p', { class: 'help' }, tr('Bật bằng công tắc ACRO TRAINER (tab Mode), chỉ có tác dụng trong Acro. Nhìn trước: máy quay càng nhanh thì càng phanh sớm để không vượt góc; gạt hết cần có thể vượt vài độ rồi kéo về.'))) : null], [block(tr('Stabilize (kiểu ArduPilot)'), stab, fields('pid', ['stab_input_tc', 'stab_accel_rp', 'stab_accel_yaw', 'stab_rate_ff']),
+          h('p', { class: 'help' }, tr('Stabilize P: tốc độ quay yêu cầu (°/s) trên mỗi độ sai lệch góc, riêng từng trục (ATC_ANG_RLL_P, ATC_ANG_PIT_P, ATC_ANG_YAW_P; mặc định 4,5). Yaw trong Stabilize giữ hướng mũi khi cần yaw ở giữa.')))]),
+      ...tier(tr('4. Giữ độ cao, vị trí và motor idle'), [block(tr('Altitude Hold: vòng gia tốc'), h('div', { id: 'pid-althold' }, fields('althold', ['acc_p', 'acc_i'])),
+          h('p', { class: 'help' }, tr('Vòng trong cùng của Altitude Hold: sai lệch gia tốc thẳng đứng thành ga. Cần ga trong Altitude Hold (điểm giữ, tốc độ leo / hạ) ở tab Rate.'))), block(tr('Dynamic idle'), idleWarn(), h('div', { id: 'pid-dyn-idle' }, fields('motors', ['dyn_idle_min_rpm', 'dyn_idle_p', 'dyn_idle_i', 'dyn_idle_d', 'dyn_idle_max_inc'])),
+          h('p', { class: 'help' }, tr('Giữ vòng quay motor không dưới "rpm tối thiểu" khi ga thấp (như Betaflight). Cần DShot hai chiều (tab Motor); 0 rpm = tắt.')))], [block(tr('Position Hold và Loiter'), h('div', { id: 'pid-poshold' }, fields('nav', ['pos_p', 'vel_p', 'vel_i', 'vel_d'])),
+          h('p', { class: 'help' }, tr('Như PSC_NE_* của ArduCopter: sai lệch vị trí × "Vị trí P" thành vận tốc, vòng vận tốc (P, I, D) thành góc nghiêng. Góc tối đa, phanh và hàng rào ở tab Navigation.')))]));
   },
 };

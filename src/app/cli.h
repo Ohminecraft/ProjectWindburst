@@ -29,6 +29,8 @@ namespace app {
 class Cli {
 public:
     using OutFn = void (*)(const char* text, void* ctx);
+    using ExtFn = bool (*)(const char* line, void* ctx);       // another set of commands first (true: it took the line) - app/msp_cli.h
+    void set_ext(ExtFn f, void* ctx) { ext_ = f; ext_ctx_ = ctx; }
     Cli(wbp::Settings& s, wbp::Server& srv, OutFn out, void* ctx) : s_(s), srv_(srv), out_(out), ctx_(ctx) {}
 
     // The byte that opens the command line: '#' between two protocol frames.
@@ -51,6 +53,7 @@ public:
     void run(const char* text) {
         char l[256]; strncpy(l, text, sizeof(l) - 1); l[sizeof(l) - 1] = 0; trim(l);
         if (!*l || *l == '#') return;
+        if (ext_ && ext_(l, ext_ctx_)) return;
         char* arg = l; while (*arg && *arg != ' ') arg++;
         if (*arg) { *arg++ = 0; while (*arg == ' ') arg++; }
         if (!strcmp(l, "help")) help();
@@ -248,7 +251,7 @@ private:
         say(b);
     }
 
-    wbp::Settings& s_; wbp::Server& srv_; OutFn out_; void* ctx_;
+    wbp::Settings& s_; wbp::Server& srv_; OutFn out_; void* ctx_; ExtFn ext_ = nullptr; void* ext_ctx_ = nullptr;
     bool active_ = false, cr_ = false; char line_[200] = {}; size_t n_ = 0;
 };
 

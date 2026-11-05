@@ -33,6 +33,9 @@ public:
 
     // feed one raw chip-frame sample (gauss)
     void update(const float raw[3], uint32_t now_ms) {
+        // all zeros (the chip in reset, a dropped bus) or NaN / Inf is not a field: ignored, so the compass goes stale (ArduPilot
+        // AP_Compass_Backend::field_ok). Calibrated, a zero would become -offset and could pass the strength check.
+        if (!isfinite(raw[0]) || !isfinite(raw[1]) || !isfinite(raw[2]) || (raw[0] == 0.0f && raw[1] == 0.0f && raw[2] == 0.0f)) { rejected_++; return; }
         float v[3];
         if (cal_.valid) cal_.apply(raw, v); else { v[0] = raw[0]; v[1] = raw[1]; v[2] = raw[2]; }
         accgyro::align_chip(v, align_);                 // chip axes -> board frame (x forward, y right, z down), orientation named as in Betaflight
@@ -51,9 +54,10 @@ public:
     float strength() const { return strength_; }
     float interference() const { return interference_; }        // |B| deviation from the calibrated radius, fraction
     uint32_t samples() const { return samples_; }
+    uint32_t rejected() const { return rejected_; }            // zero / NaN / Inf readings ignored
 
 private:
     MagCal cal_;
     AccGyroAlign align_ = CW0_DEG; bool fine_ = false; float rot_[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
-    float board_[3] = {0, 0, 0}, strength_ = 0, interference_ = 0; bool have_ = false, field_ok_ = false; uint32_t last_ms_ = 0, samples_ = 0;
+    float board_[3] = {0, 0, 0}, strength_ = 0, interference_ = 0; bool have_ = false, field_ok_ = false; uint32_t last_ms_ = 0, samples_ = 0, rejected_ = 0;
 };

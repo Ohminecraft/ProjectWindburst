@@ -93,7 +93,7 @@ struct Firmware {
         blackbox.set_loop(app.core.cfg.pid_hz(), app.motors.cfg().count, app.core.cfg.loop_hz);   // a record per control cycle at most
         host.set_blackbox(&blackbox, &settings);
         host.attach(&server);
-        host.set_report(app.report(), app.report_lines());
+        host.set_report(app.report(), app.report_lines()); host.set_ports(&app.port_use());
         for (int i = 0; i < app.report_lines(); i++) server.log(1, app.report()[i]);
     }
     // 1 ms of the link task's sleep = 1 ms of flight loop

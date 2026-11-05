@@ -36,6 +36,7 @@ public:
         int min_samples = 60, min_bins = 18;
         float settle_g = 0.004f; uint32_t settle_ms = 1500, min_motion_ms = 4000;
         float max_rms_pct = 8.0f, min_radius = 0.15f, max_radius = 0.90f;
+        float max_offset = 1.8f;                   // gauss, any axis (ArduPilot COMPASS_OFFS_MAX)
     } cfg;
     enum State : uint8_t { IDLE, WAITING, COLLECTING, DONE, FAILED };
     static constexpr int kMaxSamples = 300, kBins = 32;
@@ -133,8 +134,10 @@ private:
         double ss = 0; for (int i = 0; i < n_; i++) { const double e = dist(s_[i], est_) - R; ss += e * e; }
         const float rms = (float)(100.0 * sqrt(ss / n_) / R);
         if (rms > cfg.max_rms_pct) { fail(MagCalResult::BAD_FIT); return; }
+        float off[3]; for (int i = 0; i < 3; i++) off[i] = Mi_[i][0] * est_[0] + Mi_[i][1] * est_[1] + Mi_[i][2] * est_[2];
+        if (fabsf(off[0]) > cfg.max_offset || fabsf(off[1]) > cfg.max_offset || fabsf(off[2]) > cfg.max_offset) { fail(MagCalResult::OFFSET_TOO_LARGE); return; }
         out_ = MagCal(); out_.valid = true; out_.radius = R; out_.fit_rms_pct = rms;
-        for (int i = 0; i < 3; i++) { out_.offset[i] = Mi_[i][0] * est_[0] + Mi_[i][1] * est_[1] + Mi_[i][2] * est_[2]; for (int j = 0; j < 3; j++) out_.m[i][j] = M_[i][j]; }
+        for (int i = 0; i < 3; i++) { out_.offset[i] = off[i]; for (int j = 0; j < 3; j++) out_.m[i][j] = M_[i][j]; }
         st_ = DONE; result_ = MagCalResult::OK; finished_ = true;
     }
     void fail(MagCalResult r) { st_ = FAILED; result_ = r; finished_ = true; }

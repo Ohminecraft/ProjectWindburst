@@ -11,6 +11,7 @@
 #include "tx_queue.h"
 #include "msp_bridge.h"
 #include "msp_config.h"
+#include "msp_cli.h"
 #include "../blackbox/bb_service.h"
 #include "../proto/settings_apply.h"
 
@@ -44,7 +45,7 @@ inline void msp_info_of(const Telemetry& t, const wbp::Settings* s, msp::Info& i
         in.modes_set = 0;
         for (int i = 0; i < 16; i++) if (s->modes.hi[i] > s->modes.lo[i] && s->modes.mode[i] < 32) in.modes_set |= 1u << s->modes.mode[i];
     }
-    in.health = t.health; in.modes_on = t.modes; in.blockers = t.blockers; in.cpu_pct = t.cpu_pct;
+    in.health = t.health; in.modes_on = t.modes; in.blockers = t.blockers; in.cpu_pct = t.cpu_pct; if (t.loop_hz) in.gyro_hz = t.loop_hz;      // (the gyro is read every loop)
     for (int i = 0; i < 8; i++) in.motor_out[i] = t.motor_cmd[i];
 }
 
@@ -68,6 +69,8 @@ public:
     void attach(wbp::Server* s) { srv_ = s; }
     // Boot report: text lines that never change after setup() (detected sensors, failure reasons). Sent as LOG frames on CMD_REPORT.
     void set_report(const char* const* lines, int n) { report_ = lines; report_n_ = n; }
+    void set_ports(const PortUse* p) { ports_ = p; }                 // what each UART serves (FlightApp::port_use(): set once begin() is done)
+    const PortUse* ports() const { return ports_; }
 
     // The blackbox service lives in the link task too. `settings` = the Settings object the server edits (for the blackbox section).
     void set_blackbox(bb::Service* svc, const wbp::Settings* settings) { bb_ = svc; settings_ = settings; if (bb_ && settings_) { bb::Config c; wbp::apply_blackbox(*settings_, c); bb_->set_config(c); } }
@@ -162,8 +165,11 @@ public:
         memcpy(in.uid, uid_, 12);
     }
     void set_uid(const uint8_t uid[12]) { memcpy(uid_, uid, 12); }
+    void msp_arming(bool disable) { x_.msp_arming(disable, now_()); }      // (MSP_SET_ARMING_DISABLED, app/exchange.h)
+    void msp_touch() { x_.msp_touch(now_()); }
     const Telemetry& telemetry() const { return tel_; }       // the snapshot msp_info() took
     wbp::Server* server() const { return srv_; }
+    Reply call(const Request& r) { return timed_call(r); }          // a request to the flight loop (MSP_SET_MOTOR's motor test)
 
 private:
     uint8_t uid_[12] = {};
@@ -176,7 +182,7 @@ private:
     bool tick_seen_ = false; uint32_t last_tick_ms_ = 0, win_ms_ = 0, gap_cur_ = 0, gap_last_ = 0, cmd_cur_ = 0, cmd_last_ = 0;
     Exchange& x_; Exchange::WaitFn wait_; void* ctx_; NowFn now_;
     wbp::Server* srv_ = nullptr; Telemetry tel_; bool changed_ = false; uint8_t saved_seq_ = 0; uint32_t autosave_ = 0;      // autosave_: a bit per section to keep
-    const char* const* report_ = nullptr; int report_n_ = 0;
+    const char* const* report_ = nullptr; int report_n_ = 0; const PortUse* ports_ = nullptr;
     bb::Service* bb_ = nullptr; const wbp::Settings* settings_ = nullptr;
 };
 
@@ -186,17 +192,25 @@ private:
 class MspLink {
 public:
     // settings: the object the app's server edits - given, the configurators may read and (msp.writes) change it (app/msp_config.h)
-    MspLink(LinkHost& h, wbp::Transport& tx, wbp::Settings* settings = nullptr) : h_(h), tx_(tx), port_(h), cfg_(settings ? *settings : spare(), port_) {
+    MspLink(LinkHost& h, wbp::Transport& tx, wbp::Settings* settings = nullptr) : h_(h), tx_(tx), settings_(settings), port_(h), cfg_(settings ? *settings : spare(), port_) {
         if (settings) br_.set_handler(&msp::Config::handler, &cfg_);
     }
     void set_firmware(uint8_t maj, uint8_t min, uint8_t patch, const char* date, const char* time) { info_.fw_major = maj; info_.fw_minor = min; info_.fw_patch = patch; info_.build_date = date; info_.build_time = time; info_.target = WB_MCU_NAME; }
     uint8_t on_byte(uint8_t c) {
+        // the Betaflight App's CLI over MSP (app/msp_cli.h): STX, a printable line, ETX - only between frames of both protocols
+        if (cli_) {
+            if (c == 0x03) { cli_ = false; cli_buf_[cli_n_] = 0; run_cli(); return 0; }
+            if (c == 0x0A || c == 0x0D) return 0;
+            if (cli_n_ >= sizeof(cli_buf_) - 1) { cli_ = false; return 0; }       // (not a command line: dropped)
+            cli_buf_[cli_n_++] = (char)c; return 0;
+        }
+        if (c == 0x02 && settings_ && h_.server() && !br_.mid_frame() && !h_.server()->rx_mid_frame()) { cli_ = true; cli_n_ = 0; return 0; }
         if (c == '$' && !info_fresh_) { h_.msp_info(info_); cfg_.set_telemetry(&h_.telemetry()); info_fresh_ = true; }      // (a fresh snapshot per frame, not per byte)
         uint8_t out[msp::kMaxReply + 9]; size_t n = 0;
         const msp::Bridge::Result r = br_.feed(c, info_, out, sizeof(out), n);
         if (r == msp::Bridge::NONE) return 0;
         info_fresh_ = false;
-        if (r == msp::Bridge::REPLY) { tx_.write(out, n); if (cfg_.reboot_pending()) h_.reboot(); return 0; }
+        if (r == msp::Bridge::REPLY) { h_.msp_touch(); tx_.write(out, n); if (cfg_.reboot_pending()) h_.reboot(); return 0; }
         const uint8_t escs = h_.esc_passthrough();          // PASSTHROUGH: ask the flight side (refused armed, without motors)
         n = br_.passthrough_reply(escs, out, sizeof(out)); tx_.write(out, n);
         passthroughs_ += escs ? 1 : 0;
@@ -214,10 +228,34 @@ private:
         bool armed() override { return h.armed(); }
         void commit(uint8_t section) override { if (wbp::Server* s = h.server()) s->commit_section(section); }
         bool save() override { wbp::Server* s = h.server(); return s && s->save_all(); }
+        void arming_disabled(bool on) override { h.msp_arming(on); }
+        // MSP_SET_MOTOR: the same requests as the app's Motor tab (the flight loop's gate: disarmed; each one keeps the motor 600 ms)
+        bool motor_test(const uint16_t* us, int n) override {
+            bool any = false, ok = true;
+            for (int i = 0; i < n && i < 8; i++) {
+                const uint16_t v = us[i] <= 1000 ? 0 : us[i] >= 2000 ? 1000 : (uint16_t)(us[i] - 1000);     // (0.1 %)
+                if (v == 0 && !was[i]) continue;
+                Request r; r.cmd = wbp::CMD_MOTOR_TEST; r.n = 3; r.args[0] = (uint8_t)i; r.args[1] = (uint8_t)v; r.args[2] = (uint8_t)(v >> 8);
+                const Reply rep = h.call(r);
+                if (rep.err != wbp::ERR_OK && v) ok = false;                // (a motor this frame has not: refused, fine when asked to stand)
+                was[i] = v != 0; any = any || v != 0;
+            }
+            if (!any) { Request r; r.cmd = wbp::CMD_MOTOR_STOP; h.call(r); }
+            return ok;
+        }
+        bool was[8] = {};
     };
     static wbp::Settings& spare() { static wbp::Settings s; return s; }      // (no settings given: the handler is not installed)
-    LinkHost& h_; wbp::Transport& tx_; msp::Bridge br_; msp::Info info_; bool info_fresh_ = false; uint32_t passthroughs_ = 0;
+    void run_cli() {
+        h_.msp_touch();
+        const uint8_t stx = 0x02, etx = 0x03; tx_.write(&stx, 1);
+        app::BfCli bf(*settings_, *h_.server(), [](const char* t, void* ctx) { ((wbp::Transport*)ctx)->write((const uint8_t*)t, strlen(t)); }, &tx_, h_.ports());
+        bf.run(cli_buf_);
+        tx_.write(&etx, 1);
+    }
+    LinkHost& h_; wbp::Transport& tx_; wbp::Settings* settings_ = nullptr; msp::Bridge br_; msp::Info info_; bool info_fresh_ = false; uint32_t passthroughs_ = 0;
     Port port_; msp::Config cfg_;
+    bool cli_ = false; char cli_buf_[128] = {}; uint8_t cli_n_ = 0;
 };
 
 } // namespace app

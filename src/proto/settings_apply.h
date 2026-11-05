@@ -31,10 +31,10 @@ WB_SAME(GPS_MODEL_AT_SEA, gps::MODEL_AT_SEA); WB_SAME(GPS_MODEL_AIRBORNE_1G, gps
 WB_SAME(UTC_AUTO, gps::UTC_AUTO); WB_SAME(UTC_USNO, gps::UTC_USNO); WB_SAME(UTC_EU, gps::UTC_EU); WB_SAME(UTC_SU, gps::UTC_SU); WB_SAME(UTC_NTSC, gps::UTC_NTSC);
 WB_SAME(GPS_STATE_UNKNOWN, gps::ST_UNKNOWN); WB_SAME(GPS_STATE_INITIALIZED, gps::ST_INITIALIZED); WB_SAME(GPS_STATE_DETECT_BAUD, gps::ST_DETECT_BAUD); WB_SAME(GPS_STATE_CHANGE_BAUD, gps::ST_CHANGE_BAUD);
 WB_SAME(GPS_STATE_CONFIGURE, gps::ST_CONFIGURE); WB_SAME(GPS_STATE_RECEIVING_DATA, gps::ST_RECEIVING_DATA); WB_SAME(GPS_STATE_LOST_COMMUNICATION, gps::ST_LOST_COMMUNICATION);
-WB_SAME(MODE_ARM, fc::M_ARM); WB_SAME(MODE_ANGLE, fc::M_ANGLE); WB_SAME(MODE_STABILIZE, fc::M_STABILIZE); WB_SAME(MODE_ALTHOLD, fc::M_ALTHOLD); WB_SAME(MODE_POSHOLD, fc::M_POSHOLD);
+WB_SAME(MODE_AUTOTUNE, fc::M_AUTOTUNE); WB_SAME(MODE_ARM, fc::M_ARM); WB_SAME(MODE_ANGLE, fc::M_ANGLE); WB_SAME(MODE_STABILIZE, fc::M_STABILIZE); WB_SAME(MODE_ALTHOLD, fc::M_ALTHOLD); WB_SAME(MODE_POSHOLD, fc::M_POSHOLD);
 WB_SAME(MODE_FAILSAFE, fc::M_FAILSAFE_SW); WB_SAME(MODE_BEEPER, fc::M_BEEPER); WB_SAME(MODE_BLACKBOX, fc::M_BLACKBOX);
 WB_SAME(MODE_CALIB, fc::M_CALIB); WB_SAME(MODE_RESCUE, fc::M_RESCUE);
-WB_SAME(MODE_ACRO_TRAINER, fc::M_ACRO_TRAINER); WB_SAME(MODE_AIRMODE, fc::M_AIRMODE); WB_SAME(MODE_ANTI_GRAVITY, fc::M_ANTI_GRAVITY); WB_SAME(MODE_BLACKBOX_ERASE, fc::M_BLACKBOX_ERASE); WB_SAME(MODE_MISSION, fc::M_MISSION); WB_SAME(MODE_LOITER, fc::M_LOITER); WB_SAME(MODE_CRASHFLIP, fc::M_CRASHFLIP); WB_SAME(MODE_CRASHFLIP + 1, fc::M_COUNT);
+WB_SAME(MODE_ACRO_TRAINER, fc::M_ACRO_TRAINER); WB_SAME(MODE_AIRMODE, fc::M_AIRMODE); WB_SAME(MODE_ANTI_GRAVITY, fc::M_ANTI_GRAVITY); WB_SAME(MODE_BLACKBOX_ERASE, fc::M_BLACKBOX_ERASE); WB_SAME(MODE_MISSION, fc::M_MISSION); WB_SAME(MODE_LOITER, fc::M_LOITER); WB_SAME(MODE_CRASHFLIP, fc::M_CRASHFLIP); WB_SAME(MODE_3D, fc::M_3D); WB_SAME(MODE_3D + 1, fc::M_COUNT);
 WB_SAME(LPF_TYPE_PT1, fc::LPF_PT1); WB_SAME(LPF_TYPE_BIQUAD, fc::LPF_BIQUAD); WB_SAME(LPF_TYPE_PT2, fc::LPF_PT2); WB_SAME(LPF_TYPE_PT3, fc::LPF_PT3);
 WB_SAME(ITERM_RELAX_OFF, fc::RELAX_OFF); WB_SAME(ITERM_RELAX_RP, fc::RELAX_RP); WB_SAME(ITERM_RELAX_RPY, fc::RELAX_RPY); WB_SAME(ITERM_RELAX_RP_INC, fc::RELAX_RP_INC); WB_SAME(ITERM_RELAX_RPY_INC, fc::RELAX_RPY_INC);
 WB_SAME(ITERM_RELAX_TYPE_GYRO, fc::RELAX_GYRO); WB_SAME(ITERM_RELAX_TYPE_SETPOINT, fc::RELAX_SETPOINT); WB_SAME(TPA_MODE_PD, fc::TPA_PD); WB_SAME(TPA_MODE_D, fc::TPA_D);
@@ -44,7 +44,7 @@ WB_SAME(AH_STATE_STOPPED, fc::AhState::STOPPED); WB_SAME(AH_STATE_LANDED_IDLE, f
 WB_SAME(AH_STATE_TAKEOFF, fc::AhState::TAKEOFF); WB_SAME(AH_STATE_FLYING, fc::AhState::FLYING);
 WB_SAME(ARM_BLOCKER_NO_IMU, fc::AB_NO_IMU); WB_SAME(ARM_BLOCKER_GYRO_NOT_CAL, fc::AB_GYRO_NOT_CAL); WB_SAME(ARM_BLOCKER_RX_LOST, fc::AB_RX_LOST); WB_SAME(ARM_BLOCKER_THROTTLE_HIGH, fc::AB_THROTTLE_HIGH);
 WB_SAME(ARM_BLOCKER_ANGLE_TOO_HIGH, fc::AB_ANGLE_TOO_HIGH); WB_SAME(ARM_BLOCKER_FAILSAFE, fc::AB_FAILSAFE); WB_SAME(ARM_BLOCKER_ALTHOLD_NO_BARO, fc::AB_ALTHOLD_NO_BARO); WB_SAME(ARM_BLOCKER_BATT_LOW, fc::AB_BATT_LOW);
-WB_SAME(ARM_BLOCKER_ARM_SWITCH_ON, fc::AB_ARM_SWITCH_ON); WB_SAME(ARM_BLOCKER_CONFIG_UNSAVED, fc::AB_CONFIG_UNSAVED); WB_SAME(ARM_BLOCKER_CALIBRATING, fc::AB_CALIBRATING);
+WB_SAME(ARM_BLOCKER_ARM_SWITCH_ON, fc::AB_ARM_SWITCH_ON); WB_SAME(ARM_BLOCKER_CONFIG_UNSAVED, fc::AB_CONFIG_UNSAVED); WB_SAME(ARM_BLOCKER_CONFIGURATOR, fc::AB_CONFIGURATOR); WB_SAME(ARM_BLOCKER_CALIBRATING, fc::AB_CALIBRATING);
 WB_SAME(ARM_BLOCKER_POSHOLD_NO_GPS, fc::AB_POSHOLD_NO_GPS); WB_SAME(ARM_BLOCKER_MAG_NOT_CALIBRATED, fc::AB_MAG_NOT_CALIBRATED); WB_SAME(ARM_BLOCKER_PIN_CONFLICT, fc::AB_PIN_CONFLICT); WB_SAME(ARM_BLOCKER_LOOP_RATE, fc::AB_LOOP_RATE); WB_SAME(ARM_BLOCKER_RUNAWAY_TAKEOFF, fc::AB_RUNAWAY_TAKEOFF);
 WB_SAME(FS_CAUSE_LINK, fc::FS_LINK); WB_SAME(FS_CAUSE_SWITCH, fc::FS_SWITCH); WB_SAME(FS_CAUSE_BATTERY, fc::FS_BATTERY); WB_SAME(FS_CAUSE_BATTERY_LOW, fc::FS_BATTERY_LOW);
 WB_SAME(ARM_BLOCKER_RESCUE_NO_FIX, fc::AB_RESCUE_NO_FIX); WB_SAME(ARM_BLOCKER_RESCUE_NO_COMPASS, fc::AB_RESCUE_NO_COMPASS); WB_SAME(ARM_BLOCKER_MOTOR_STALL, fc::AB_MOTOR_STALL); WB_SAME(ARM_BLOCKER_CRASHFLIP, fc::AB_CRASHFLIP);
@@ -102,7 +102,8 @@ inline void apply_rates_and_rc(const Settings& s, fc::CoreConfig& c, fc::RcInter
     c.rc.throttle_mid = s.rates.throttle_mid * 0.01f; c.rc.throttle_expo = s.rates.throttle_expo * 0.01f; c.rc.throttle_limit = s.rates.throttle_limit * 0.01f;
     c.angle.limit_deg = s.rates.angle_limit; c.stab.limit_deg = s.rates.angle_limit;
     c.rc.ch_roll = s.receiver.ch_roll; c.rc.ch_pitch = s.receiver.ch_pitch; c.rc.ch_throttle = s.receiver.ch_throttle; c.rc.ch_yaw = s.receiver.ch_yaw;
-    c.rc.ch_aux0 = s.receiver.ch_aux0; c.rc.deadband = s.receiver.deadband * 0.01f;
+    c.rc.ch_aux0 = s.receiver.ch_aux0; c.rc.deadband = s.receiver.deadband / 500.0f; c.rc.yaw_deadband = s.receiver.yaw_deadband / 500.0f;   // (us of the half travel, Betaflight's)
+    c.rc.min_check = s.receiver.min_check; c.rc.mid_rc = s.receiver.mid_rc;                          // (Betaflight's min_check, mid_rc)
     c.rc_smoothing.enabled = s.receiver.rc_smoothing != 0; c.rc_smoothing.auto_factor = s.receiver.rc_smoothing_factor; c.rc_smoothing.auto_factor_throttle = s.receiver.rc_smoothing_throttle;
     c.ff.interpolate = s.receiver.protocol != RX_PROTOCOL_CRSF;        // CRSF never repeats a frame; every other link may (Betaflight feedforwardInterpolate)
     rc.cfg = c.rc;
@@ -122,6 +123,7 @@ inline void apply_pid(const Settings& s, fc::CoreConfig& c) {
     c.ff.boost = p.ff_boost; c.ff.max_rate_limit = p.ff_max_rate_limit; c.ff.yaw_hold_gain = p.ff_yaw_hold_gain; c.ff.yaw_hold_time = p.ff_yaw_hold_time;
     c.throttle_boost = p.throttle_boost; c.throttle_boost_cutoff = p.throttle_boost_cutoff;
     c.angle.strength = p.angle_strength; c.angle.feedforward = p.angle_feedforward; c.angle.ff_smoothing_ms = p.angle_ff_smoothing; c.angle.earth_ref = p.angle_earth_ref;
+    c.autotune.axes = p.autotune_axes; c.autotune.aggr = p.autotune_aggr * 0.001f; c.autotune.backoff = p.autotune_backoff * 0.01f;
     c.stab.accel_rp_dss = p.stab_accel_rp; c.stab.accel_yaw_dss = p.stab_accel_yaw; c.stab.input_tc = p.stab_input_tc * 0.01f; c.stab.rate_ff = p.stab_rate_ff != 0;
 }
 
@@ -185,7 +187,8 @@ inline void mission_plan_from(const S_mission& m, const gps::Location& home, fc:
 // The althold section: what the throttle stick means in Altitude Hold (live).
 inline void apply_althold(const Settings& s, fc::nav::AltConfig& a) {
     const S_althold& h = s.althold;
-    a.mid_stick = h.mid_stick * 0.01f; a.deadband = h.deadband * 0.01f; a.low_stick = h.low_stick * 0.01f; a.max_stick = h.max_stick * 0.01f;
+    // us (Betaflight's) -> the stick 0..1
+    a.mid_stick = (h.mid_stick - 1000) * 0.001f; a.deadband = h.deadband * 0.001f; a.low_stick = (h.low_stick - 1000) * 0.001f; a.max_stick = (h.max_stick - 1000) * 0.001f;
     a.climb_max_mps = h.climb_rate * 0.1f; a.descend_max_mps = h.descend_rate * 0.1f;
     a.accel_max_mps2 = h.accel_z * 0.1f; a.jerk_max_mps3 = h.jerk_z * 0.1f; a.acc_p = h.acc_p * 0.01f; a.acc_i = h.acc_i * 0.01f;
     if (a.low_stick > a.mid_stick - a.deadband - 0.05f) a.low_stick = fmaxf(0.02f, a.mid_stick - a.deadband - 0.05f);      // (a usable descent travel)
@@ -194,13 +197,17 @@ inline void apply_althold(const Settings& s, fc::nav::AltConfig& a) {
 inline void apply_core(const Settings& s, fc::CoreConfig& c, fc::RcInterpreter& rc) {
     c.loop_hz = s.general.loop_hz; c.pid_denom = s.general.pid_denom < 1 ? 1 : s.general.pid_denom; c.est_hz = s.general.est_hz; c.max_arm_angle_deg = s.general.max_arm_angle;
     c.fs.guard_s = s.general.fs_guard_ms * 0.001f; c.fs.recover_s = s.general.fs_recover_ms * 0.001f; c.fs.max_descent_s = s.general.fs_max_descent_s;
-    c.fs.fallback_throttle_scale = s.general.fs_fallback_throttle * 0.01f; c.runaway.enabled = s.general.runaway_takeoff != 0;
+    c.fs.fallback_throttle = (s.general.fs_throttle < 1000 ? 0 : s.general.fs_throttle - 1000) * 0.001f;
+    // 3D (core/throttle3d.h): runaway take-off detection and crash flip know nothing of a reversed thrust (Betaflight leaves both out)
+    c.mode3d.enabled = s.motors.mode3d != 0; c.mode3d.switched = s.motors.switched_mode3d != 0; c.mode3d.deadband_us = s.receiver.deadband3d_throttle;
+    c.mode3d.mid_us = s.receiver.mid_rc; c.mode3d.min_check_us = s.receiver.min_check;
+    c.runaway.enabled = s.general.runaway_takeoff != 0 && !c.mode3d.enabled;
     c.stall.enabled = s.motors.stall_disarm != 0; c.stall.min_rpm = s.motors.stall_min_rpm; c.stall.drop_ratio = s.motors.stall_drop * 0.01f;
     c.stall.min_command = s.motors.stall_min_cmd * 0.01f; c.stall.delay_s = s.motors.stall_ms * 0.001f;
     c.stick_arm = s.general.stick_arm != 0;
-    c.flycam = s.general.fly_style == wbp::FLY_STYLE_FLYCAM; c.flycam_loiter = s.general.flycam_hold == wbp::FLYCAM_HOLD_LOITER;      // (0.43: core/flight_core.h CoreConfig::flycam)
+    c.flycam = s.general.fly_style == wbp::FLY_STYLE_FLYCAM; c.flycam_loiter = s.general.flycam_hold == wbp::FLYCAM_HOLD_LOITER; c.flycam_stabilize = s.general.flycam_attitude == wbp::FLYCAM_ATTITUDE_STABILIZE;      // (0.43: core/flight_core.h CoreConfig::flycam)
     // crash flip (core/crash_flip.h): only DShot can turn a motor round by command
-    c.crashflip.available = motor::is_dshot((motor::Protocol)s.motors.protocol); c.crashflip.rate_limit_dps = s.motors.crashflip_rate * 10.0f;
+    c.crashflip.available = motor::is_dshot((motor::Protocol)s.motors.protocol) && !s.motors.mode3d; c.crashflip.rate_limit_dps = s.motors.crashflip_rate * 10.0f;
     c.crashflip.motor_pct = s.motors.crashflip_motor_pct; c.crashflip.auto_rearm = s.motors.crashflip_auto_rearm != 0;
     c.airmode = s.general.airmode; c.airmode_threshold = s.general.airmode_start_throttle * 0.01f;
     c.mixer.layout = (fc::Layout)s.motors.layout; c.mixer.props_out = s.motors.props_out != 0;
@@ -217,7 +224,9 @@ inline void apply_motors(const Settings& s, motor::MotorConfig& m) {
     // motor idle is a DShot setting (Betaflight: motor_idle). PWM / Oneshot / Multishot / brushed: the lowest armed output is the
     // 'armed' pulse itself (Betaflight's min_throttle), no idle on top of it.
     m.idle = motor::is_dshot(m.protocol) ? s.motors.idle_x10 * 0.001f : 0.0f; m.output_limit = s.motors.output_limit * 0.01f;
-    m.dyn.min_rpm_100 = s.motors.dyn_idle_min_rpm; m.dyn.p_gain = s.motors.dyn_idle_p; m.dyn.i_gain = s.motors.dyn_idle_i; m.dyn.d_gain = s.motors.dyn_idle_d; m.dyn.max_increase = s.motors.dyn_idle_max_inc;
+    m.mode3d = s.motors.mode3d != 0; m.neutral3d = s.motors.neutral3d; m.db3d_low = s.motors.deadband3d_low; m.db3d_high = s.motors.deadband3d_high;
+    m.limit3d_low = s.motors.limit3d_low; m.limit3d_high = s.motors.limit3d_high;
+    m.dyn.min_rpm_100 = m.mode3d ? 0 : s.motors.dyn_idle_min_rpm; m.dyn.p_gain = s.motors.dyn_idle_p; m.dyn.i_gain = s.motors.dyn_idle_i; m.dyn.d_gain = s.motors.dyn_idle_d; m.dyn.max_increase = s.motors.dyn_idle_max_inc;
 }
 
 inline void apply_gps(const Settings& s, gps::Config& g) {

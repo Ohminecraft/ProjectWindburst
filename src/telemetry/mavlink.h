@@ -66,7 +66,7 @@ enum : uint32_t {                                   // MAV_SYS_STATUS_SENSOR
 };
 enum : uint8_t { GPS_FIX_NO_GPS = 0, GPS_FIX_NONE = 1, GPS_FIX_2D = 2, GPS_FIX_3D = 3 };
 // ArduCopter's flight mode numbers in HEARTBEAT.custom_mode (what Betaflight sends as well): ground stations name them
-enum : uint32_t { COPTER_STABILIZE = 0, COPTER_ACRO = 1, COPTER_ALT_HOLD = 2, COPTER_AUTO = 3, COPTER_RTL = 6, COPTER_LOITER = 5, COPTER_LAND = 9, COPTER_POSHOLD = 16, COPTER_SMART_RTL = 21 };
+enum : uint32_t { COPTER_STABILIZE = 0, COPTER_ACRO = 1, COPTER_ALT_HOLD = 2, COPTER_AUTO = 3, COPTER_RTL = 6, COPTER_LOITER = 5, COPTER_LAND = 9, COPTER_POSHOLD = 16, COPTER_SMART_RTL = 21, COPTER_AUTOTUNE = 15 };
 
 // CRC-16/MCRF4XX step (MAVLink's crc_accumulate)
 inline uint16_t crc_add(uint16_t crc, uint8_t b) {

@@ -23,7 +23,8 @@ int stub_i2c_rx(uint8_t, uint8_t*, size_t) { return 0; }
 struct FakeRange : RangeDriver {
     bool has = false, ok = true; RangeReading next; float maxr = 3.0f, minr = 0.04f; bool inited = true;
     const char* name() const override { return "FAKE"; }
-    bool init() override { return inited; }
+    int inits = 0;
+    bool init() override { inits++; return inited; }
     bool update(uint32_t, RangeReading& o) override { if (!has) return false; has = false; o = next; return true; }
     float max_range_m() const override { return maxr; } float min_range_m() const override { return minr; }
     float nominal_rate_hz() const override { return 30; } bool healthy() const override { return ok; }
@@ -129,7 +130,31 @@ static void t_manager() {
     CHECK(strcmp(nolib.name(), "none") == 0 && !nolib.available() && nolib.maxRangeM() == 0, "not available");
 }
 
+// A sensor that stops answering (a brown-out reset of the chip, a lost continuous mode): started again - only while disarmed.
+// In flight it is only marked stale (valid() false), as ArduPilot does: a restart blocks the I2C bus for tens of ms.
+static void t_watchdog() {
+    printf("[manager] a sensor that went silent is started again while disarmed\n");
+    FakeRange fr; RangeFinder rf; rf.useDriver(&fr); rf.height().cfg.ground_clearance_m = 0.0f;
+    uint32_t ms = 0, us = 0;
+    auto run = [&](float seconds, bool armed, bool data) { for (int i = 0; i < (int)(seconds * 100); i++) { ms += 10; us += 10000; if (data && i % 3 == 0) fr.push(1.0f); rf.update(us, ms, 1.0f, armed); } };
+    run(1.0f, false, true);
+    CHECK(fr.inits == 0 && rf.restarts() == 0, "answering: never restarted");
+    run(0.4f, false, false);
+    CHECK(fr.inits == 0, "0.4 s without a sample: not yet");
+    run(0.2f, false, false);
+    CHECK(fr.inits == 1 && rf.restarts() == 1, "0.5 s without a sample, disarmed: init() again (%d)", fr.inits);
+    run(0.8f, false, false);
+    CHECK(fr.inits == 1, "still silent: the next try waits a second");
+    run(0.3f, false, false);
+    CHECK(fr.inits == 2, "... then tries again (%d)", fr.inits);
+    run(1.0f, false, true); const int after = fr.inits;
+    run(2.0f, false, true);
+    CHECK(fr.inits == after && rf.valid(ms), "answering again: no more restarts, valid");
+    run(3.0f, true, false);
+    CHECK(fr.inits == after && !rf.valid(ms), "armed and silent for 3 s: never restarted in flight, only invalid");
+}
+
 int main() {
-    t_height(); t_clearance(); t_closed_loop(); t_manager();
+    t_height(); t_clearance(); t_closed_loop(); t_manager(); t_watchdog();
     printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
 }

@@ -60,6 +60,7 @@ struct State {
     bool rc_link = false; uint16_t rc[16] = {}; uint8_t rssi_pct = 0;
     // 0.40: what the rescue flies (wbp rescue_mode: 0 RTL, 1 SMART_RTL, 2 LAND), the home point, the mission
     uint8_t rescue_kind = 0;
+    bool autotune = false;                                            // 0.44 the autotune flies (ArduCopter mode AUTOTUNE)
     bool have_home = false; int32_t home_lat = 0, home_lon = 0, home_alt_mm = 0;      // degE7, mm MSL
     uint16_t mission_seq = 0, mission_total = 0; uint8_t mission_state = MISSION_STATE_NO_MISSION, mission_mode = 2;     // MISSION_CURRENT (mode 1 = flying it, 2 = not)
 };
@@ -69,9 +70,9 @@ inline Heartbeat heartbeat_of(const State& s) {
     Heartbeat h; h.type = s.vehicle_type; h.autopilot = MAV_AUTOPILOT_GENERIC;
     h.base_mode = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | MAV_MODE_FLAG_MANUAL_INPUT_ENABLED;
     if (s.armed) h.base_mode |= MAV_MODE_FLAG_SAFETY_ARMED;
-    if (s.angle || s.stabilize || s.althold || s.poshold || s.rescue || s.mission || s.loiter) h.base_mode |= MAV_MODE_FLAG_STABILIZE_ENABLED;
+    if (s.angle || s.stabilize || s.althold || s.poshold || s.rescue || s.mission || s.loiter || s.autotune) h.base_mode |= MAV_MODE_FLAG_STABILIZE_ENABLED;
     const uint32_t rescue = s.rescue_kind == 1 ? COPTER_SMART_RTL : s.rescue_kind == 2 ? COPTER_LAND : COPTER_RTL;
-    h.custom_mode = s.failsafe ? (s.rescue ? rescue : COPTER_LAND) : s.rescue ? rescue : s.mission ? COPTER_AUTO : s.loiter ? COPTER_LOITER : s.poshold ? COPTER_POSHOLD : s.althold ? COPTER_ALT_HOLD
+    h.custom_mode = s.failsafe ? (s.rescue ? rescue : COPTER_LAND) : s.rescue ? rescue : s.mission ? COPTER_AUTO : s.autotune ? COPTER_AUTOTUNE : s.loiter ? COPTER_LOITER : s.poshold ? COPTER_POSHOLD : s.althold ? COPTER_ALT_HOLD
                   : (s.angle || s.stabilize) ? COPTER_STABILIZE : COPTER_ACRO;
     h.system_status = s.failsafe ? MAV_STATE_CRITICAL : s.calibrating && !s.armed ? MAV_STATE_CALIBRATING : s.armed ? MAV_STATE_ACTIVE : MAV_STATE_STANDBY;
     return h;
@@ -82,7 +83,7 @@ inline uint8_t gps_fix_of(const State& s) {
 }
 inline int16_t sat16(float v) { return v >= 32767.0f ? (int16_t)32767 : v <= -32768.0f ? (int16_t)-32768 : (int16_t)(v < 0 ? v - 0.5f : v + 0.5f); }
 inline int32_t sat32(float v) { return !(v == v) ? 0 : v >= 2.0e9f ? (int32_t)2000000000 : v <= -2.0e9f ? (int32_t)-2000000000 : (int32_t)(v < 0 ? v - 0.5f : v + 0.5f); }
-inline uint16_t cdeg360(float deg) { float d = deg; while (d < 0.0f) d += 360.0f; while (d >= 360.0f) d -= 360.0f; const uint32_t c = (uint32_t)(d * 100.0f + 0.5f); return (uint16_t)(c >= 36000u ? 0u : c); }
+inline uint16_t cdeg360(float deg) { if (!isfinite(deg)) return 0; float d = fmodf(deg, 360.0f); while (d < 0.0f) d += 360.0f; while (d >= 360.0f) d -= 360.0f; const uint32_t c = (uint32_t)(d * 100.0f + 0.5f); return (uint16_t)(c >= 36000u ? 0u : c); }
 
 class Scheduler {
 public:

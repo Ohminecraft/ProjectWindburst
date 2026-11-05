@@ -113,6 +113,8 @@ static void t_gyro_chain() {
     GyroFilterConfig def;
     CHECK(def.lpf1_dyn_min_hz == 250 && def.lpf1_dyn_max_hz == 500 && def.lpf2_hz == 500 && def.dyn.count == 3 && def.rpm.harmonics == 3 && def.rpm.q == 5.0f && def.rpm.min_hz == 100 && def.notch1_hz == 0, "defaults = Betaflight's");
     // ---- dynamic low-pass 1: the cutoff follows the throttle
+    CHECK(near(dyn_lpf_cutoff(1.3f, 250, 500, 5), 500, 0.01f) && near(dyn_lpf_cutoff(-0.3f, 250, 500, 5), 250, 0.01f) && near(dyn_lpf_cutoff(NAN, 250, 500, 5), 250, 0.01f) && near(dyn_lpf_cutoff(NAN, 250, 500, 0), 250, 0.01f),
+            "a throttle outside 0 .. 1 (or NaN) never takes the cutoff outside min .. max (%.1f at 1.3, %.1f at -0.3)", dyn_lpf_cutoff(1.3f, 250, 500, 5), dyn_lpf_cutoff(-0.3f, 250, 500, 5));
     { CHECK(near(dyn_lpf_cutoff(0, 250, 500, 5), 250, 0.01f) && near(dyn_lpf_cutoff(1, 250, 500, 5), 500, 0.01f) && near(dyn_lpf_cutoff(0.5f, 250, 500, 5), 250 + 250 * (0.5f * 0.5f * 0.5f + 0.5f), 0.01f),
             "curve with expo 5: min at zero throttle, max at full, (max - min) x (t (1 - t) 0.5 + t) + min in between (%.1f at half)", dyn_lpf_cutoff(0.5f, 250, 500, 5));
       CHECK(near(dyn_lpf_cutoff(0.5f, 250, 500, 0), 0.5f * (1 - 0.25f / 3) * 1.5f * 500, 0.01f) && near(dyn_lpf_cutoff(0.1f, 250, 500, 0), 250, 0.01f) && near(dyn_lpf_cutoff(1, 250, 500, 0), 500, 0.01f),
@@ -206,6 +208,13 @@ static void t_dyn_notch() {
     { GyroFilterConfig g; g.rpm.harmonics = 0; GyroFilter f; f.configure(g, FS, 4); double pi = 0, po = 0;                         // inside the whole chain, on pitch
       for (int i = 0; i < 8000; i++) { const float t = i * DT; float v[3] = {gauss(1), 25 * sinf(2 * kPi * 310 * t) + gauss(1), gauss(1)}; const float in = v[1]; f.apply(v, nullptr); if (i > 6000) { pi += in * in; po += v[1] * v[1]; } }
       CHECK(po < 0.05 * pi && f.dyn_notch().count() == 3, "in the gyro chain: a 310 Hz frame resonance on pitch is taken out (%.1f %% of the power left)", 100 * po / pi); }
+    // min_hz below 60: the noise floor starts at 60 Hz, above the first bin. A peak ON the floor's first bin has its lower neighbour
+    // outside the floor's sum - taking that neighbour out as well drove the floor below zero and every bump counted as a peak
+    // (Betaflight master: peak bin > floor start).
+    { DynNotchConfig lo = c; lo.min_hz = 20; lo.count = 2; DynNotch d; d.configure(lo, FS); float worst = 1e9f;
+      for (int i = 0; i < (int)(FS * 1.5f); i++) { const float t = i * DT, x = 40 * sinf(2 * kPi * 52.0f * t) + gauss(0.2f);
+        for (int a = 0; a < 3; a++) { d.push(a, x); d.apply(a, x); } d.update(); if (i > FS / 2) worst = fminf(worst, d.noise_threshold()); }
+      CHECK(worst > 0.0f, "a strong tone just below 60 Hz (min_hz 20): the noise floor stays above zero (lowest %.4g)", worst); }
     // ---- the details, on clean tones (roll only; no noise, so every number below is the algorithm's own)
     auto tone = [](DynNotch& d, int cycles, float a1, float hz1, float a2 = 0, float hz2 = 0, int i0 = 0, double* in_pow = nullptr, double* out_pow = nullptr) {
         double pi = 0, po = 0;
@@ -676,6 +685,14 @@ static void t_attitude() {
       StabilizeController s; s.configure(c); s.reset(0, 0, 0); float att[3] = {0, 0, 0}, sp[3], peak = 0, t90 = -1; const float dt = DT, st[2] = {0.8f, 0};
       for (int i = 0; i < 8000; i++) { s.update(st, 0, att, dt, sp); att[0] += sp[0] * dt; att[1] += sp[1] * dt; att[2] += sp[2] * dt; peak = fmaxf(peak, att[0]); if (t90 < 0 && att[0] > 0.9f * 36) t90 = i * dt; }
       CHECK(near(att[0], 36, 0.05f) && peak < 36.05f && t90 > 0.3f && t90 < 0.7f && fabsf(att[1]) < 0.01f && fabsf(att[2]) < 0.01f, "stick 0.8 -> 36 deg (linear in the stick): there after %.2f s, peak %.2f, pitch and heading untouched", t90, peak);
+      // 0.44: an autopilot's lean (Position Hold, Loiter, the rescue in Flycam on Stabilize) goes through the same shaping as the
+      // stick: {roll, pitch} in degrees (user convention, as AngleController takes it), clamped to the autopilot's own limit
+      { StabilizeController e; e.configure(c); e.reset(0, 0, 0); float ea[3] = {0, 0, 0}; const float lean[2] = {8.0f, -5.0f}; float epk = 0;
+        for (int i = 0; i < 8000; i++) { e.update(st, 0, ea, dt, sp, nullptr, lean, 30.0f); for (int a = 0; a < 3; a++) ea[a] += sp[a] * dt; epk = fmaxf(epk, ea[0]); }
+        CHECK(near(ea[0], 8, 0.05f) && near(ea[1], -5, 0.05f) && fabsf(ea[2]) < 0.01f && epk < 8.05f && near(e.target_deg(ROLL), 8, 0.01f) && near(e.target_deg(PITCH), -5, 0.01f),
+              "an autopilot's lean (8 / -5 deg, user convention): reached and held, the stick (0.8) ignored, no overshoot (%.2f %.2f, peak %.2f)", ea[0], ea[1], epk);
+        const float big[2] = {50.0f, 0.0f}; for (int i = 0; i < 8000; i++) { e.update(st, 0, ea, dt, sp, nullptr, big, 25.0f); for (int a = 0; a < 3; a++) ea[a] += sp[a] * dt; }
+        CHECK(near(ea[0], 25, 0.05f), "and never beyond the autopilot's limit (50 asked, 25 allowed: %.2f)", ea[0]); }
       // the per-axis P gains: a disturbance is corrected with kp x error
       StabilizeController k; StabilizeConfig kc = c; kc.kp[0] = 3; kc.kp[1] = 6; kc.kp[2] = 2; k.configure(kc); k.reset(0, 0, 0); const float a2[3] = {-2, 1, 3}, st0[2] = {0, 0}; k.update(st0, 0, a2, dt, sp);
       // (0.29: the error is a rotation in the BODY frame - thrust vector, then heading - so for small angles each axis is kp x its error)

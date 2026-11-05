@@ -106,9 +106,14 @@ int main() {
       CHECK((s.r[0][0x4F] >> 5) == 1, "42686P needs FS_SEL 1 for 2000 dps / 16 g (0 = 4000 dps / 32 g)"); }
     { Sim s(C_ICM45686, true); Icm456xxAccGyro d(s, Icm456xxAccGyro::Variant::ICM45686); run_driver("ICM45686", s, d, 3200, "ICM45686");
       CHECK(s.ireg[0xA57B] == 0x02 && (s.ireg[0xA4A6] & 0x60) == 0x40, "AAF+interpolator enabled via IREG");
-      CHECK((s.ireg[0xA583] & 7) == 2 && (s.ireg[0xA4AC] & 7) == 4, "UI LPFs via IREG");
+      CHECK((s.ireg[0xA583] & 7) == 2 && (s.ireg[0xA4AC] & 7) == 3, "UI LPFs via IREG: accel 1.6k/8, gyro 3.2k/16 = 200 Hz (%d)", s.ireg[0xA4AC] & 7);
       CHECK(s.r[0][0x1C] == 0x14 && s.r[0][0x1B] == 0x15, "GYRO_CONFIG0 = 2000dps|3.2k, ACCEL_CONFIG0 = 16g|1.6k (0x%02x 0x%02x)", s.r[0][0x1C], s.r[0][0x1B]); }
-    { Sim s(C_ICM45686, true); Icm456xxAccGyro d(s, Icm456xxAccGyro::Variant::ICM45686); run_driver("ICM45686 6.4k", s, d, 6400, "ICM45686", 8000); }
+    { Sim s(C_ICM45686, true); Icm456xxAccGyro d(s, Icm456xxAccGyro::Variant::ICM45686); run_driver("ICM45686 6.4k", s, d, 6400, "ICM45686", 8000);
+      CHECK((s.ireg[0xA4AC] & 7) == 4, "6.4k/32 = 200 Hz, Betaflight's setting"); }
+    // The gyro UI LPF is a divider of the ODR: pick it for the bandwidth (200 / 400 / 800 Hz as Betaflight gets at 6.4 kHz), not a fixed divider
+    { struct L { uint16_t odr; uint8_t hw; uint8_t want; } t[] = {{1600, 0, 2}, {800, 0, 1}, {3200, 1, 2}, {3200, 2, 1}, {6400, 2, 2}, {800, 2, 1}};
+      for (const L& l : t) { Sim s(C_ICM45686, true); Icm456xxAccGyro d(s, Icm456xxAccGyro::Variant::ICM45686); AgInitConfig c; c.gyro_odr_hz = l.odr; c.hw_lpf = l.hw;
+        d.init(c); CHECK((s.ireg[0xA4AC] & 7) == l.want, "ICM456 ODR %u hw_lpf %u: LPF code %d want %d", l.odr, l.hw, s.ireg[0xA4AC] & 7, l.want); } }
     { Sim s(C_ICM45605, true); Icm456xxAccGyro d(s, Icm456xxAccGyro::Variant::ICM45605); run_driver("ICM45605", s, d, 3200, "ICM45605"); }
     { Sim s(C_BMI160, true); Bmi160AccGyro d(s); run_driver("BMI160", s, d, 3200, "BMI160");
       CHECK(s.spi_mode, "SPI woken up"); CHECK(s.r[0][0x41] == 0x08 && s.r[0][0x43] == 0x00, "8 g / 2000 dps"); }
@@ -127,6 +132,15 @@ int main() {
       CHECK(s.r[2][0x01] == 0x07 && s.r[0][0x03] == 0x00, "I2C: DLPF on (1125 Hz), I2C left enabled"); }
     { Sim s(C_ICM20948, true); Icm20948AccGyro d(s, Icm20948AccGyro::Variant::ICM20948); run_driver("ICM20948 SPI 1k", s, d, 1125, "ICM20948", 1000); }
     { Sim s(C_ICM20948, true); s.bank = 2; Icm20948AccGyro d(s, Icm20948AccGyro::Variant::ICM20948); AgInitConfig c; CHECK(d.init(c), "a chip left in bank 2 (warm restart) is selected back to bank 0 first"); }
+
+    printf("[drivers] Invensense v3: a raw -32768 is the chip's 'no valid data' marker, the sample is dropped\n");
+    { Sim s(C_ICM42688P, true); Icm426xxAccGyro d(s, Icm426xxAccGyro::Variant::ICM42688P); AgInitConfig c; d.init(c);
+      s.tg[1] = -5000.0f; AgSample o{}; CHECK(!d.read(o), "ICM42688P gyro y = INT16_MIN must not be flown");
+      s.tg[1] = -20.0f; s.ta[2] = -40.0f; CHECK(!d.read(o), "ICM42688P accel z = INT16_MIN must not be flown");
+      s.ta[2] = 0.97f; CHECK(d.read(o) && sample_ok(o, s), "valid again"); }
+    { Sim s(C_ICM45686, true); Icm456xxAccGyro d(s, Icm456xxAccGyro::Variant::ICM45686); AgInitConfig c; d.init(c);
+      s.tg[0] = -5000.0f; AgSample o{}; CHECK(!d.read(o), "ICM45686 gyro x = INT16_MIN must not be flown");
+      s.tg[0] = 10.0f; CHECK(d.read(o) && sample_ok(o, s), "valid again"); }
 
     printf("[drivers] wrong / dead chip is rejected\n");
     { Sim s(C_MPU6500, true); Bmi270AccGyro d(s); AgInitConfig c; CHECK(!d.init(c), "BMI270 driver must refuse an MPU6500"); }

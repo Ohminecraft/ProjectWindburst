@@ -37,7 +37,7 @@ function rateChart() {
       ctx.beginPath(); ctx.moveTo(Math.round(X(s)) + 0.5, padT); ctx.lineTo(Math.round(X(s)) + 0.5, padT + ph); ctx.stroke();
       ctx.globalAlpha = 1; ctx.fillStyle = token('--muted'); ctx.fillText(`${s * 100} %`, X(s), hh - 6);
     }
-    const sticks = rc ? [rc.ch[rx.ch_roll], rc.ch[rx.ch_pitch], rc.ch[rx.ch_yaw]].map((us) => stick(us, rx.deadband)) : [null, null, null];
+    const sticks = rc ? [rc.ch[rx.ch_roll], rc.ch[rx.ch_pitch], rc.ch[rx.ch_yaw]].map((us, i) => stick(us, i === 2 ? rx.yaw_deadband : rx.deadband, rx.mid_rc || 1500)) : [null, null, null];
     const ends = [];
     AXES.forEach((ax, i) => {
       const f = (s) => actualRate(r.center_sens[i], r.max_rate[i], r.expo[i], s);
@@ -120,7 +120,8 @@ export default {
       h('div', {},
         block(tr('Ga'), fields('rates', ['throttle_mid', 'throttle_expo', 'throttle_limit']), throttleChart(),
           h('p', { class: 'help' }, tr('Đường cong ga chỉ dùng khi bay ga tay. Altitude Hold dùng thẳng vị trí cần ga, theo mục bên dưới.'))),
-        block(tr('Cần ga trong Altitude Hold'), fields('althold', ['mid_stick', 'deadband', 'low_stick', 'max_stick', 'climb_rate', 'descend_rate', 'accel_z', 'jerk_z', 'acc_p', 'acc_i']),
+        block(tr('Cần ga trong Altitude Hold'), fields('althold', ['mid_stick', 'deadband', 'low_stick', 'max_stick', 'climb_rate', 'descend_rate', 'accel_z', 'jerk_z']),
+          h('p', { class: 'help' }, tr('Hệ số vòng gia tốc (P, I) ở tab PID.')),
           h('p', { class: 'help' }, tr('Cần ở "điểm giữ" ± vùng chết: giữ độ cao. Đẩy lên tới "cần tối đa": leo nhanh nhất; kéo xuống tới "cần thấp": hạ nhanh nhất, và trên mặt đất thì đứng yên. Ga treo (mức ga máy treo được) firmware tự đo, không cần nhập. Đường cong ga ở trên không áp dụng cho mode này.'))),
         block(tr('Angle và Stabilize'), form(row('rates', 'angle_limit')),
           h('p', { class: 'help' }, tr('Angle (Betaflight): góc nghiêng theo cần đi theo đường cong rate ở trên, nên nửa cần cho ít hơn nửa góc tối đa. Stabilize (ArduPilot): tỉ lệ thẳng với cần. Các hệ số của hai mode ở tab PID.'))))));

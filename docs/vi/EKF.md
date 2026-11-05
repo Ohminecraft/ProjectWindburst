@@ -16,7 +16,7 @@
 - Trạng thái lỗi 15: góc (3, hệ trái đất), vận tốc NED (3), vị trí NED (3), bias gyro (3), bias accel (3).
 - Dự đoán từ tổng gyro / accel của **mọi mẫu IMU** (task bay cộng dồn, ~4 kHz), mỗi 4 ms (250 Hz).
 - Đo:
-  - GPS vị trí N/E và vận tốc N/E (D nếu u-blox), so với trạng thái của `gps_delay_s` trước (lưu lịch sử 0,5 s);
+  - GPS vị trí N/E và vận tốc N/E (D nếu u-blox), so với trạng thái của `gps_delay_s` trước (lưu lịch sử 0,5 s; mỗi lần hiệu chỉnh và mỗi lần reset đều dời lịch sử đó theo trạng thái, nên lần fix sau không thấy lại cùng một cú nhảy - 0.44.0);
   - baro (độ cao);
   - la bàn: **chỉ hướng**, ma trận Jacobian theo góc của từ trường ngang (không phải góc yaw Euler: khi máy nghiêng hai cái khác nhau). Tối đa 10 Hz, sigma 0,5 rad như EK3_YAW_M_NSE của ArduPilot: sai số la bàn gần motor là một độ lệch chậm, không phải nhiễu trắng;
   - không có GPS quá 1 s: "đứng yên tại chỗ" (sigma 10 m, EK3_NOAID_M_NSE) để độ nghiêng không trôi;
@@ -48,6 +48,8 @@ Bước dự đoán chỉ nhân trên ~40 phần tử khác 0 của F (≈ 1000 
 `test_fw` nhóm `ekf` (firmware thật trên mạch ảo):
 - SHADOW: căn chỉnh đúng hướng 60° trên mặt đất; bay các chặng với Position Hold, hướng EKF lệch thật ≤ 4°, vị trí ≤ 1,5 m, nghiêng ≤ 3°.
 - NAV: Position Hold giữ trong 0,8 m suốt 10 s, đẩy cần thì đi đúng theo mũi.
+- NAV, **reset vị trí** (0.44.0): khi lời giải GPS nhảy (đa đường, đổi bộ vệ tinh), EKF bị reset về nó sau 5 s bị từ chối; Position Hold và Loiter dời target đúng bằng bước đó, nên máy đứng yên tại chỗ (nhảy 12 m: lệch 0,06 m; trước 0.44.0 máy dừng lệch 2 m vì target bị dời theo bước của bộ ước lượng cũ). Chuyển giữa EKF và bộ ước lượng cũ (EKF bắt đầu hoặc ngừng hỗ trợ) được xử lý cùng cách, bước là chênh lệch giữa hai vị trí (`src/core/nav/nav_source.h`, như ArduPilot báo một lần chuyển lane).
+- **Số đo NaN / Inf** (0.44.0): một fix GPS, độ cao baro hay số đọc compass có NaN / Inf không bao giờ được fuse (một innovation NaN lọt qua mọi cổng gate) và không bao giờ bị reset về - trước đây 5 s GPS NaN sẽ reset trạng thái về NaN. Chỉ riêng vận tốc đứng NaN thì chỉ bỏ phần đứng. Mọi phương sai luôn lớn hơn 0 và không tương quan nào vượt 1 khi fuse một phút số đo 'chính xác' (1e-6) (`test_ekf` nhóm covariance).
 - NAV, **không có la bàn**: lúc đầu Position Hold bị từ chối (bộ cũ không biết hướng); bay vài lần tăng tốc ở Altitude Hold, EKF lấy được hướng từ vận tốc GPS (lệch 0,5°), Position Hold bật được và giữ trong 0,19 m suốt 8 s. Đây là chỗ EKF làm được việc mà bộ cũ không làm được.
 - OFF: không chạy.
 - `test_threads` (ThreadSanitizer) chạy cùng EKF: không có truy cập nào ngoài khoá.

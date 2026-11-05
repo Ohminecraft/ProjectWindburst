@@ -32,6 +32,8 @@ struct Plant {
     bool held = false; float hold_vn = 0, hold_ve = 0, hold_an = 0, hold_ae = 0;
     float hold_vz = 0;                                            // ... and lifts it at this rate (m/s, up +)
     float total_thrust = 0;
+    float delay_s = 0.0f;                                         // a pure delay of the commands (filters, ESC, motor electronics); 0 = none (most tests)
+    std::vector<std::vector<float>> cmd_pipe; size_t pipe_i = 0;
     explicit Plant(int layout = 0) {                                // 0 quad X (BF numbering), 1 quad +, 2 hex X
         // a quad built the Betaflight way ("props in"): rear-right CW, front-right CCW, rear-left CCW, front-left CW
         if (layout == 0) { n = 4; ang = {135, 45, 225, 315}; spin = {-1, +1, +1, -1}; Tmax = 4.9f; }
@@ -46,7 +48,16 @@ struct Plant {
     float hover_cmd() const { return mass * fc::kG0 / (n * Tmax); }
     // two ESC plugs in each other's place: command i now drives the motor at j's position, and the other way round
     void motor_swap(int i, int j) { std::swap(ang[i], ang[j]); std::swap(spin[i], spin[j]); }
-    void step(const float* cmd, float dt) {
+    void step(const float* cmd_in, float dt) {
+        const float* cmd = cmd_in; float delayed[8];
+        if (delay_s > 0.0f) {                                     // a ring of past commands, delay_s / dt deep
+            const size_t depth = (size_t)(delay_s / dt + 0.5f) + 1;
+            if (cmd_pipe.size() != depth) { cmd_pipe.assign(depth, std::vector<float>(8, 0.0f)); pipe_i = 0; }
+            for (int i = 0; i < n && i < 8; i++) cmd_pipe[pipe_i][i] = cmd_in[i];
+            const size_t out = (pipe_i + 1) % depth;
+            for (int i = 0; i < n && i < 8; i++) delayed[i] = cmd_pipe[out][i];
+            pipe_i = out; cmd = delayed;
+        }
         float tq[3] = {0, 0, 0}; total_thrust = 0;
         for (int i = 0; i < n; i++) {
             const float T0 = T[i];

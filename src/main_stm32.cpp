@@ -197,7 +197,10 @@ void setup() {
     { static uint8_t pins[port::kPinMaskBytes]; port::chip_pins(pins); server.set_chip(WB_MCU_NAME, pins); }      // the app: which MCU, which pins exist
     host.attach(&server);
     host.set_report(flight.report(), flight.report_lines());
+    host.set_ports(&flight.port_use());
     for (int i = 0; i < flight.report_lines(); i++) server.log(1, flight.report()[i]);
+    // the Betaflight App's CLI tab talks to this terminal: its commands (peripherals, gps_uart, ..., save = save + restart) first
+    term_cli.set_ext([](const char* l, void*) { app::BfCli b(settings, server, [](const char* t, void*) { transport.write((const uint8_t*)t, strlen(t)); }, nullptr, host.ports()); return b.handle(l); }, nullptr);
     link_task.set_cli(&term_cli);
     link_task.start();
     vTaskStartScheduler();                                   // does not return

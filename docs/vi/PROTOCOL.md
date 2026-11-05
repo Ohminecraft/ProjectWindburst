@@ -47,6 +47,29 @@ Mã lỗi (`errors` trong json): `OK, UNKNOWN, BAD_ARG, ARMED, BUSY, NOT_SUPPORT
 
 ## 2. Settings
 
+**0.44.0:** section `general` thêm `flycam_attitude` (enum mới `flycam_attitude`: ANGLE, STABILIZE) ở cuối (59 → 60 byte); `compat` của `general` giờ là 59, 57, 56, 24, 23, 22 - một section được ghi **sáu** kích thước cũ (trước là bốn), nên bản ghi 23 byte của 0.9.0 – 0.9.4 nạp lại được. Enum `mag_cal_result` thêm `OFFSET_TOO_LARGE` ở cuối (hiệu chuẩn la bàn có offset trên 1,8 G bị từ chối). Schema hash đổi.
+
+**0.44.0, đơn vị của Betaflight, 3D, wizard board:**
+- **Micro giây thay cho phần trăm**, như Betaflight. Field cũ giữ chỗ, đổi tên `old_*` và không dùng nữa; field mới thêm vào cuối section. Bản ghi của firmware cũ được đổi khi nạp (chỉ khi có field cũ mà chưa có field mới):
+
+| Section | Cũ (%) | Mới (us) | Cách đổi |
+|---|---|---|---|
+| `general` | `old_fs_fallback` (% của ga treo) | `fs_throttle` (mặc định 1300) | 1000 + % x 3,7 |
+| `receiver` | `old_deadband` | `deadband`, `yaw_deadband` (10), `deadband3d_throttle` (50, mới) | % x 5 |
+| `althold` | `old_mid_stick`, `old_deadband`, `old_low_stick`, `old_max_stick` | `mid_stick` (1500), `deadband` (50), `low_stick` (1060), `max_stick` (2000) | 1000 + % x 10; deadband % x 10 |
+| `tx_sticks` | `old_deadband` | `deadband` (15) | % x 5 |
+
+- `hover` của stream `tuning` tính bằng us (1000 + hover x 1000).
+- `receiver` thêm các ngưỡng cần của Betaflight ở cuối: `min_check` (1050 us: dưới mức này là "ga thấp", lệnh ga bắt đầu từ đây; mức thấp của lệnh bằng cần), `mid_rc` (1500 us: tâm roll / pitch / yaw, và tâm cần ga ở 3D), `max_check` (1900 us: mức cao của lệnh bằng cần). `compat` của `receiver` giờ là 26, 22, 13, 12, 9.
+- Một section được ghi **tám** kích thước cũ (trước là sáu).
+- `motors` thêm `mode3d`, `switched_mode3d`, `deadband3d_low`, `deadband3d_high`, `neutral3d`, `limit3d_low`, `limit3d_high` (docs/MODES.md, mục 3D). Luật: ESC DroneCAN hay brushed thì `mode3d` tắt.
+- Enum `mode` thêm `3D` ở cuối.
+- Lệnh **BOARD_ALIGN** (27, ghi `general`; `sensors.imu2_align` xoay theo):
+  - tham số `step`: 1 nằm phẳng, 2 chúi mũi xuống, 3 nghiêng phải xuống, 0 huỷ;
+  - kết quả: `reason` (enum mới `board_align_result`: OK, NOT_STILL, NO_GRAVITY, NO_PITCH, NO_ROLL, DIRECTION, NO_FIT), `align`, `trim_roll` / `trim_pitch` / `trim_yaw` (0,1 độ);
+  - FAILED thì giữ các bước đã làm; bước 2 hay 3 trước bước 1: BAD_STATE.
+- Schema hash đổi.
+
 **0.43.0: Flycam / FPV, baro theo nhiệt độ.** **Tương thích ngược:** app không còn đòi hash phải bằng nhau. Nó dùng schema của firmware đã kết nối, lấy từ thư viện `app/wbclient/schemas` (xem docs/APP.md). Firmware không đổi gì. Section `general` thêm `fly_style` (enum mới `fly_style`: FPV, FLYCAM) và `flycam_hold` (enum mới `flycam_hold`: LOITER, POSHOLD) ở cuối (57 → 59 byte). `compat` của `general` nay là 57, 56, 24, 22: bản ghi 23 byte (0.9.0 – 0.9.4) về mặc định. Schema hash đổi.
 
 **0.42.1: optical flow.** Enum `flow_reject` thêm `RATE` ở cuối. Enum mới `flow_cal_result`. Lệnh mới `FLOW_CAL` (26): `step` 1 = bắt đầu, 2 = xong, 0 = huỷ. Kết quả gồm `reason`, `scale` (%), `scale_x`, `scale_y` (% có dấu). OK thì ghi `nav.flow_scale` (RAM, Lưu để giữ). Schema hash đổi, section không đổi.
@@ -71,7 +94,7 @@ Mã lỗi (`errors` trong json): `OK, UNKNOWN, BAD_ARG, ARMED, BUSY, NOT_SUPPORT
 
 | id | section | byte | áp dụng | nội dung |
 |---|---|---|---|---|
-| 1 | general | 22 | reboot | tần số vòng lặp, board alignment + trim, failsafe (kể cả `fs_fallback_throttle`: % lực treo khi không có độ cao), airmode + ngưỡng ga bắt đầu airmode |
+| 1 | general | 22 | reboot | tần số vòng lặp, board alignment + trim, failsafe (kể cả `fs_throttle`: us, mức ga khi không có độ cao, tối đa 85 % ga treo đã đo), airmode + ngưỡng ga bắt đầu airmode |
 | 2 | receiver | 12 | reboot | giao thức RX, thứ tự kênh, deadband, timeout, RC smoothing (bật, hệ số cho cần và cho ga) |
 | 3 | modes | 96 | **live** | 16 ô: mode / aux / dải µs (như Betaflight) |
 | 4 | rates | 19 | **live** | Actual rates, throttle mid/expo/limit, giới hạn góc của Angle / Stabilize |

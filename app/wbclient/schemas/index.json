@@ -70,5 +70,11 @@
   "hash": "0x5ACBE279",
   "protocol": 1,
   "file": "0.43.0.json"
+ },
+ {
+  "fw": "0.44.0",
+  "hash": "0x1760AD1F",
+  "protocol": 1,
+  "file": "0.44.0.json"
  }
 ]

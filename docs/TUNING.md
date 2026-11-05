@@ -62,7 +62,7 @@ The filters have two sliders of their own (Filters tab): `slider_gyro_mult` and 
 
 - **Dynamic lowpass 1**: the cutoff runs from `dyn_min` (throttle 0) up to `dyn_max` (full throttle) along the `dyn_expo` curve; updated at most every 5 ms and only when throttle changes by 1 %. `dyn_min = 0` → use the static frequency.
 - **RPM filter**: does not run without bidirectional DShot (the Filters tab says so). `rpm_min_hz` (100): the notch does not go below this level and fades out over `rpm_fade_range_hz` (50) above it. Per-harmonic weight 0 – 100 %: 2-blade props usually only need harmonics 1 and 2.
-- **Dynamic notch**: `count` 0 = off. A peak must be twice as high as the floor around it to be tracked; the notch is **steered** towards the peak (PT1 4 Hz, up to 10 times faster when the peak is high), it does not jump; the notches of one axis are always ordered by frequency. Frequencies below `min_hz` (the craft's own motion) do not pull a notch.
+- **Dynamic notch**: `count` 0 = off. A peak must be twice as high as the floor around it to be tracked; the notch is **steered** towards the peak (PT1 4 Hz, up to 10 times faster when the peak is high), it does not jump; the notches of one axis are always ordered by frequency. Frequencies below `min_hz` (the craft's own motion) do not pull a notch. The noise floor is averaged from 60 Hz up; with `min_hz` below 60 a peak right at 60 Hz no longer drives the floor below zero (0.44.0, as Betaflight master).
 - The Filters tab draws a **frequency map**: each lowpass (with the range it slides over), the static notches, the position of the dynamic notches per axis and the RPM notches per motor **right now** (`tuning` stream).
 
 Principle: more filtering → cooler motors, more delay; less filtering → more responsive, motors heat up more easily. Only push the gyro slider above 1.0 when the RPM filter is working well.
@@ -89,7 +89,7 @@ The accelerometer of a flying craft **does not point to the vertical**: it sense
 | Just set down / just powered up | × 100 for 0.5 s (after 0.25 s at rest) | the horizon is reset after crashes, flips. While being turned by hand (> 15 °/s): × 1 |
 | Filtering before use | 2nd-order lowpass at 10 Hz | motor vibration at 100 Hz and above stays below 1 % |
 | Reading magnitude deviating from the resting value | weight decreases, **0 from 0.1 g** | a 25° altitude-holding tilt is already 1.1 g; climbs, falls, crashes are all ignored. The "resting value" is learned while disarmed, so an uncalibrated accelerometer (e.g. reading 1.08 g) still works |
-| Gyro bias learning | `ki` 0.01; at most 0.5 °/s per minute, no more than 3 °/s | a few seconds of acceleration cannot teach a bias that does not exist |
+| Gyro bias learning | `ki` 0.01; at most 0.5 °/s per minute, no more than 3 °/s; **not while turning faster than 20 °/s** (Betaflight / ArduPilot `SPIN_RATE_LIMIT`) | a few seconds of acceleration cannot teach a bias that does not exist; in a fast turn a gyro scale error would look like a bias |
 | Compass (corrects yaw only) | 0.5 /s; multiplied by the same × 10 / × 100 factors when disarmed | set the craft down and the nose heading is correct again within about a second |
 
 Consequences the pilot needs to know (measured in a simulation with drag, 5-inch craft):
@@ -104,7 +104,7 @@ Hover throttle (strictly: the **motor output level** at which the craft hovers) 
 
 - `HoverEstimator` (`core/althold.h`) measures continuously in **every flight mode**: `output level × cos(tilt) / (1 + upward acceleration / g)`. Skipped when tilted beyond 45°, with motors nearly off, or during strong acceleration / deceleration. Converges in ~2.5 s of manual flight.
 - **Takeoff in Altitude Hold**: throttle ramps up at 40 %/s until the craft leaves the ground (climbing > 0.15 m/s or 8 cm above where it stood). The throttle level at that moment, after subtracting the current acceleration part, is the hover throttle. Reaching 90 % without leaving the ground (missing props, held down): back to idle, the throttle stick must be lowered before trying again.
-- **Failsafe without altitude** (no baro, no lidar): the motors go to `fs_fallback_throttle` % of the **measured hover thrust**, so the craft surely descends. Version 0.5.0 and earlier used a guessed 40 %: a craft hovering below ~16 % would shoot upward. **Do not fly Altitude Hold / rely on failsafe with firmware older than 0.6.0 on a high-thrust craft.**
+- **Failsafe without altitude** (no baro, no lidar): the motors go to `general.fs_throttle` (us, as Betaflight's `failsafe_throttle`, default 1300), but **never above 85 % of the measured hover throttle**, so the craft surely descends. Version 0.5.0 and earlier used a guessed 40 %: a craft hovering below ~16 % would shoot upward. **Do not fly Altitude Hold / rely on failsafe with firmware older than 0.6.0 on a high-thrust craft.**
 - The strongest throttle reduction Altitude Hold requests is 0.8 g, so the attitude loop still has motor authority to work with.
 - **Altitude lost midway** (barometer not replying for more than 1 s): if the Altitude Hold switch is still on, the throttle stick is read around the measured hover throttle: mid stick = hover, bottom = 0, top = 100 %. Throttle does not jump; when altitude comes back, Altitude Hold continues from the current throttle level. The Overview tab reports "not valid" on the altitude line.
 - **Pulling the stick down right after leaving the ground** = a descend command (powered descent until standing still), not motor cut. **Signal lost while throttle is rising for takeoff**: back to idle immediately; to take off again the stick must be lowered first.
@@ -162,3 +162,8 @@ Done (`make test`): each block checked against its formula (`test/test_control.c
 - The default set on your frame; hover throttle measured with a real thrust curve (thrust is not linear in the output level as in the model).
 - Whether prop wash blowing on the baro close to the ground makes takeoff detection early / late.
 - The attitude estimator with a real accelerometer: the frame's vibration level, the craft's real drag coefficient (the simulation uses 0.35 /s: a 30° tilt reaches 16 m/s). The "3.4° off" figures in section 5 come from that model.
+
+## Estimator robustness (0.44.0)
+- A sample with NaN / Inf in the gyro, the accelerometer, the time step or the compass is skipped by the attitude estimator (it would otherwise stay in the attitude for good).
+- Angle wrapping (`wrap180`, MAVLink heading) returns 0 for Inf / NaN instead of looping forever.
+- The dynamic lowpass cutoff stays inside min .. max for any throttle value (also NaN).

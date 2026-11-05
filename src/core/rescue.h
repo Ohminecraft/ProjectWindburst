@@ -192,7 +192,7 @@ public:
     static constexpr float kArrive = 0.5f;                 // m: this close to a height counts as there
     static constexpr float kZp = 1.0f;                     // 1/s: a height off the path's is flown out at 1 m/s per metre
     static constexpr float kSmartLastUp = 2.0f;            // m: SmartRTL's last point is home this much up
-    static float wrap180(float d) { while (d > 180.0f) d -= 360.0f; while (d < -180.0f) d += 360.0f; return d; }
+    static float wrap180(float d) { return fc::wrap180(d); }     // (types.h: safe for Inf / NaN)
 
     // CONE: PX4 RTL::computeReturnAltitude, home as the destination (height 0) - before the "never lower than now"
     float cone_height(float dist) const {

@@ -47,6 +47,7 @@ Tab **Mode**, khối "Kiểu bay". Cần lưu và khởi động lại.
 - **FPV** (mặc định): như cũ, mọi mode theo công tắc, kể cả Acro.
 - **Flycam**: cho người quay phim, cách bay giống máy DJI.
   - Luôn bật **Angle + Altitude Hold + giữ vị trí**, tức `flycam_hold`: **Loiter** (mặc định, cần = vận tốc, buông là tự phanh rồi đứng, như chế độ P của DJI) hoặc **Position Hold**. Công tắc Acro, Stabilize, Acro Trainer bị bỏ qua. Công tắc GPS Rescue, Nhiệm vụ, Crash flip, Failsafe vẫn chạy.
+  - **`flycam_attitude`** (0.44): bộ điều khiển tư thế mà tất cả những mode đó bay trên - **Angle** (Betaflight, mặc định, `angle_strength`) hoặc **Stabilize** (ArduPilot, `stab_p`, target được tạo hình bởi `stab_input_tc` và giới hạn gia tốc, như Loiter / Altitude Hold của ArduCopter). Khi chọn Stabilize, các mode giữ, failsafe, rescue và mission đều lái qua nó, công tắc Angle bị bỏ qua, và autotune tune thêm Stabilize P. Position Hold dừng chậm hơn một chút trên Stabilize (còn 0,3 m/s sau 4 s buông cần khi đang bay 3,4 m/s, hết hẳn sau 7 s; Loiter như trên Angle). FPV không bị ảnh hưởng: các mode giữ vẫn trên Angle.
   - **Cần ga ở giữa = giữ độ cao.** Arm được khi cần ga **không cao hơn giữa** (ở giữa hoặc ở đáy, nên arm bằng cần kiểu DJI vẫn dùng được). Cần ga cao hơn giữa thì chặn arm (`THROTTLE_HIGH`).
   - **Cất cánh:** từ giữa đẩy lên là cất cánh, không phải kéo xuống đáy trước như ở FPV. Ở FPV vẫn phải kéo xuống đáy trước, để máy không tự bay lên khi lỡ arm với cần ga đang cao. Nếu lúc arm hoặc lúc vừa đáp cần ga đang cao hơn giữa, thì phải về giữa trước rồi mới cất cánh được.
   - **Hạ cánh:** kéo cần xuống thì máy hạ. Đáp rồi mà giữ cần ở đáy 3 giây thì motor tắt (DJI). Muốn bay lại thì gạt ARM về OFF rồi bật lại.
@@ -117,6 +118,60 @@ Turtle mode của Betaflight, viết theo mã thật: `mixer.c` (`applyCrashFlip
 - `test_osd`, `test_rx`, `test_radio`, `test_proto`, app (`test_crash_flip_on_the_page`);
 - 36 mutant `crashflip:`.
 - **Chưa thử trên máy thật.** Cũng chưa biết ESC nào nhận lệnh 20 / 21: BLHeli_32, AM32, Bluejay thì có; BLHeli_S thì cần bản 16.7 trở lên.
+
+## 3D: motor quay hai chiều (`motors.mode3d`, công tắc `3D`, 0.44)
+Feature 3D của Betaflight, viết theo code thật của nó (`rc.c`, `rc_controls.c`, `mixer.c`, `dshot.c`, `pwm_output.c`). ESC quay được cả hai chiều; cần ga chia đôi ở giữa.
+
+**Cách dùng:**
+- Tab **Motor**, khối "Mode 3D": bật **Mode 3D**. Cần lưu và khởi động lại.
+- ESC cũng phải được cài 3D (BLHeli / Bluejay / AM32: bật 3D mode).
+- Không dùng được với ESC DroneCAN hay brushed (setting tự tắt).
+
+| Cần ga | Motor |
+|---|---|
+| trên giữa + deadband | quay thuận, càng lên càng nhanh |
+| giữa +- `receiver.deadband3d_throttle` (us, tab Receiver, mặc định 50) | dừng; đây là "ga thấp" khi arm |
+| dưới giữa - deadband | quay ngược, càng xuống càng nhanh |
+
+- Về lại trong deadband: motor giữ chiều đang quay, ở mức 0.
+- Disarm xong, lần arm sau bắt đầu quay thuận.
+- **Arm:** cần ga phải nằm trong deadband. Betaflight cho máy 3D arm ở mọi mức ga; ở đây motor không được khởi động khi đang có tốc độ.
+- **Công tắc 3D** (tab Chế độ, box 29 "3D DISABLE" của Betaflight):
+  - **3D theo công tắc** (`motors.switched_mode3d`) tắt: bật công tắc là tắt 3D, cần ga như thường (dưới cùng là dừng, chỉ quay thuận).
+  - 3D theo công tắc bật (`3d_switched_mode` của Betaflight): cần ga như thường, công tắc chọn chiều, bật = quay ngược.
+- **Đổi chiều khi đang bay:**
+  - lệnh roll / pitch / yaw đổi dấu (lực đẩy hướng ngược lại);
+  - các thành phần I giữ ở 0 trong 250 ms, như Betaflight.
+
+**Setting** (tên như Betaflight):
+
+| Setting | Betaflight | Mặc định | Ý nghĩa |
+|---|---|---|---|
+| `motors.mode3d` | feature 3D | tắt | bật 3D |
+| `motors.switched_mode3d` | `3d_switched_mode` | tắt | công tắc 3D đổi chiều thay vì tắt 3D |
+| `receiver.deadband3d_throttle` | `3d_deadband_throttle` | 50 us | khoảng dừng quanh giữa cần ga |
+| `motors.deadband3d_low` | `3d_deadband_low` | 1406 us | chỉ với PWM / Oneshot / Multishot: xung bắt đầu quay ngược |
+| `motors.deadband3d_high` | `3d_deadband_high` | 1514 us | ... xung bắt đầu quay thuận |
+| `motors.neutral3d` | `3d_neutral` | 1460 us | ... xung dừng (disarm, đang dừng) |
+| `motors.limit3d_low` / `limit3d_high` | `3d_limit_low` / `3d_limit_high` | 1000 / 2000 us | ... ngược hết cỡ / thuận hết cỡ |
+
+- DShot không cần các xung trên: 48..1047 là quay ngược, 1048..2047 quay thuận.
+- Thử motor ở tab Motor cho motor quay thuận.
+
+**3D tắt những gì:**
+- Chỉ bay Acro, Angle và Stabilize. Altitude / Position Hold, Loiter, GPS Rescue, Nhiệm vụ, Autotune và crash flip bị chặn: lực đẩy có thể hướng cả hai phía nên không giữ được độ cao và vị trí.
+- Failsafe tắt motor (disarm), như Betaflight làm với 3D. Nhiệm vụ đang chạy thì dừng.
+- Runaway lúc cất cánh, dynamic idle và Flycam tắt.
+
+**Code:** `src/core/throttle3d.h` (cần ga), `FlightCore` (mode, failsafe, dấu của mixer, thành phần I), `MotorOutputManager` (`to_value3d`).
+
+**Kiểm chứng:**
+- `test_mode3d` (chia cần ga, chiều trong deadband, theo công tắc / công tắc, giữ I, giá trị DShot và PWM);
+- `test_flight` (bay thuận và ngược, failsafe disarm, mode bị chặn);
+- `test_fw` nhóm `mode3d` (giá trị DShot trên dây ESC ảo; DroneCAN thì 3D tắt);
+- `test_proto`, `test_msp_config` (feature bit 12, MOTOR_3D_CONFIG, RC_DEADBAND, box 29), app;
+- 23 mutant `m3d:`.
+- **Chưa thử trên máy thật** hay với ESC 3D thật.
 
 ## Arm bằng cần (`general.stick_arm`, 0.24)
 Bật ở tab **Mode**, ô "Arm bằng cần". Cần lưu và khởi động lại. Mặc định tắt.

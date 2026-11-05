@@ -83,6 +83,7 @@ private:
 
 // Cutoff of a dynamic low-pass for a throttle 0..1 (Betaflight dynLpfCutoffFreq / dynThrottle).
 WB_FAST inline float dyn_lpf_cutoff(float throttle, float min_hz, float max_hz, uint8_t expo) {
+    throttle = throttle > 0.0f ? minf(throttle, 1.0f) : 0.0f;          // (Betaflight constrains it to 0..1 first; NaN -> 0 = min_hz)
     if (expo > 0) { const float e = expo * 0.1f, curve = throttle * (1.0f - throttle) * e + throttle; return (max_hz - min_hz) * curve + min_hz; }
     return maxf(throttle * (1.0f - throttle * throttle / 3.0f) * 1.5f * max_hz, min_hz);
 }

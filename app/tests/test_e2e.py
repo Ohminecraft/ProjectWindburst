@@ -19,9 +19,10 @@ def test_hello_report_and_schema_guard(sim, fc):
     assert "CALIBRATION" in fc.info.features and "MOTOR_TEST" in fc.info.features
     rep = fc.report()
     assert any("imu: SPI ICM42688P" in l for l in rep) and any("rx: CRSF" in l for l in rep) and any("range: FAILED" in l for l in rep)
-    # an app built for another schema must refuse to talk instead of mis-reading settings
+    # an app that speaks another protocol must refuse to talk instead of mis-reading settings (since 0.43 another SCHEMA of the
+    # same protocol is fine: the app takes the firmware's own from its library - test_compat.py)
     fc.close()                                            # one app at a time, like one USB cable
-    other = Schema(); other.hash ^= 1
+    other = Schema(); other.version += 1
     c = WbClient(sim.url, schema=other)
     try:
         with pytest.raises(SchemaMismatch):
@@ -162,7 +163,7 @@ def test_streams_show_the_craft(sim, fc):
 def test_tuning_stream_shows_what_the_filters_do(sim, fc):
     fc.subscribe("tuning", 20)
     t = fc.wait_stream("tuning")
-    assert t["gyro_lpf1_hz"] == 250 and t["dterm_lpf1_hz"] == 75 and t["tpa"] == 80 and t["air_state"] == "GROUND" and t["hover"] == 37, t
+    assert t["gyro_lpf1_hz"] == 250 and t["dterm_lpf1_hz"] == 75 and t["tpa"] == 80 and t["air_state"] == "GROUND" and t["hover"] == 1365, t     # (0.44: us, the first guess 36.5 %)
     assert len(t["dyn_notch_hz"]) == 9 and all(100 <= v <= 600 for v in t["dyn_notch_hz"]) and t["rpm_hz"] == [0] * 8 and 130 < t["rc_rate"] < 160, t
     # a frame resonance on pitch: one of the three pitch notches goes there, and stays when it is gone from roll's point of view
     sim.do("vib 2 280 15"); sim.sleep(1.5)

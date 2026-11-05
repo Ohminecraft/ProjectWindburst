@@ -27,6 +27,7 @@
 #include "../hal/beeper/beeper_base.h"
 #include "../core/flight_core.h"
 #include "../core/inflight_trim.h"
+#include "../core/board_align.h"
 #include "../hal/mag/mag_autocal.h"
 #include "stick_commands.h"
 #include "../core/ekf.h"
@@ -103,8 +104,10 @@ public:
     I2CBus sensorBus{I2C_DEVICE_0};
     app::Exchange link;                                   // the only object shared with the link task
     fc::InflightTrim inflight_trim;
+    uint8_t at_state_seen_ = 0, at_save_seen_ = 0; bool at_save_known_ = false;      // update_autotune
     bool use_external_rc = false;                         // true: channels come from set_rc() (tests / a radio module) instead of `rc`
     bool usb_link = false;                                // the app link is the chip's own USB (GPIO19 / 20): set before begin(), for the pin check
+    const app::PortUse& port_use() const { return port_use_; }   // what each UART serves (set by begin(); the link task reads it: app/msp_cli.h)
     CanPort* can_port = nullptr;                          // the CAN controller (twai_bus.h on the ESP32): set before begin(); nullptr = none on this chip
     dcan::Node can_node;                                  // the flight controller as a DroneCAN node (section can)
     uint8_t chip_uid[12] = {};                            // the chip's unique id (DroneCAN's hardware unique id): set before begin()
@@ -125,6 +128,7 @@ public:
         flow.setType(s.flow.type);
         mag.setAlignment((AccGyroAlign)s.sensors.mag_align, s.sensors.mag_trim_roll * 0.1f, s.sensors.mag_trim_pitch * 0.1f, s.sensors.mag_trim_yaw * 0.1f);
         rc.setTimeoutMs(s.receiver.rx_timeout_ms);
+        sticks_.configure(s.receiver.min_check, s.receiver.max_check);   // the stick commands' low / high (Betaflight min_check / max_check)
         apply_calibration();
     }
 
@@ -260,6 +264,7 @@ public:
         uint8_t pfn[3]; for (int i = 0; i < 3; i++) pfn[i] = s.ports.function[i];
         const bool gps_uart = s.sensors.gps_enabled && gps::uses_uart((gps::Provider)s.gps.provider);        // (a DroneCAN GPS needs no UART)
         const app::UartPlan plan = app::plan_uarts(port_table, pfn, gps_uart, serial_rx, msp_port, uart0 != nullptr, false, false);
+        port_use_ = app::PortUse(); port_use_.uart0_link = uart0 == nullptr; port_use_.known = true;
         if (*plan.why) { char line[kReportLen]; snprintf(line, sizeof(line), "ports: WARNING - %s", plan.why); add_report(line); }
         if (s.sensors.gps_enabled && s.gps.provider == wbp::GPS_PROVIDER_DRONECAN) {
             status.gps = status.can && gnss.beginExternal();
@@ -267,6 +272,7 @@ public:
         } else if (msp_gps_) {                                               // (the MSP port is opened below; the GPS starts with it)
         } else if (plan.gps >= 0 || !s.sensors.gps_enabled) {
             status.gps = gnss.begin(*uarts[plan.gps >= 0 ? plan.gps : 1]);        // (disabled: begin() only says so)
+            if (s.sensors.gps_enabled) port_use_.set(app::PF_GPS, plan.gps >= 0 ? plan.gps : 1, status.gps);
             say(status.gps, "gps", "started", gnss.failReason(), "%s %lu baud", uname[plan.gps >= 0 ? plan.gps : 1], (unsigned long)gnss.config().baud);
         } else { status.gps = false; say(false, "gps", "", "no UART has the function GPS in the serial ports table (Pins and ports tab)", ""); }
         if (!use_external_rc) {
@@ -292,6 +298,7 @@ public:
             } else if (plan.rx >= 0) {
                 uint8_t rxp[3]; hw.getSerialRxPins(rxp);
                 status.rx = rc.begin(rp, *uarts[plan.rx], rxp[0], rxp[1]);
+                port_use_.set(app::PF_SERIAL_RX, plan.rx, status.rx);
                 rx_tlm_on_ = s.receiver.telemetry != 0;
                 const bool tlm_kind = rc.telemetryPossible() || rc.mavlinkUart();
                 say(status.rx, "rx", rc.name(), rc.failReason(), "%s on %s%s", rc.name(), uname[plan.rx], !tlm_kind ? "" : !rx_tlm_on_ ? ", telemetry off (receiver.telemetry)"
@@ -319,6 +326,7 @@ public:
                 say(true, "msp", "", "", "MSP port on %s RX %s TX %s, %lu baud, for:%s", uname[u], pin_str(s.pins.flow_rx, rb), pin_str(s.pins.flow_tx, tb), (unsigned long)s.flow.baud, what);
             }
         }
+        port_use_.set(app::PF_FLOW_MSP, flow_u, msp_on_);
         msp_port_.setFlow(nullptr, nullptr);
         if (msp_gps_) {
             status.gps = msp_on_ && gnss.beginExternal();
@@ -356,7 +364,9 @@ public:
             else if (s.pins.esc_tlm == 255) say(false, "esc tlm", "", "no pin for the ESC telemetry wire (Pins tab: ESC telemetry)", "");
             else if (u < 0) say(false, "esc tlm", "", port_table ? "no UART has the function ESC_SENSOR in the serial ports table" : "no UART left for the ESC telemetry wire (GPS, receiver and flow sensor have them)", "");
             else if (!port::uart_begin(*uarts[u], escs::kBaud, SERIAL_8N1, s.pins.esc_tlm, 255, false, 256)) say(false, "esc tlm", "", "the UART did not start on that pin", "");
-            else { esc_uart_ = uarts[u]; esc_u = u; say(true, "esc tlm", "", "", "KISS telemetry on %s RX %s, 115200 baud (the first request after 5 s)", uname[u], pin_str(s.pins.esc_tlm, pb)); }
+            port_use_.set(app::PF_ESC_SENSOR, u, false);
+            if (false) {}
+            else { esc_uart_ = uarts[u]; esc_u = u; port_use_.set(app::PF_ESC_SENSOR, u, true); say(true, "esc tlm", "", "", "KISS telemetry on %s RX %s, 115200 baud (the first request after 5 s)", uname[u], pin_str(s.pins.esc_tlm, pb)); }
         }
 
         // ---- OSD (section osd, osd/osd.h): MSP DisplayPort to the video transmitter of a digital FPV system, on the UART that is
@@ -372,9 +382,9 @@ public:
 #endif
                 if (!port::uart_begin(*uarts[u], s.osd.baud, SERIAL_8N1, s.osd.rx_pin, s.osd.tx_pin, false, 256)) why = WB_PLATFORM_STM32 ? "the UART did not start on those pins (an STM32 needs osd.rx_pin as well)" : "the UART did not start on those pins";
             }
-            if (why) say(false, "osd", "", why, "");
+            if (why) { say(false, "osd", "", why, ""); port_use_.set(app::PF_DISPLAYPORT, u, false); }
             else {
-                osd_uart_ = uarts[u]; osd_u = u;
+                osd_uart_ = uarts[u]; osd_u = u; port_use_.set(app::PF_DISPLAYPORT, u, true);
                 osd_.configure(s.osd.canvas, s.osd.rate);
                 memcpy(osd_layout_.pos, s.osd.pos, sizeof(osd_layout_.pos));
                 size_t k = 0; for (; k < sizeof(s.osd.name) && s.osd.name[k]; k++) { const char c = (char)s.osd.name[k]; osd_layout_.name[k] = c >= 'a' && c <= 'z' ? (char)(c - 32) : (c >= 0x20 && c < 0x7F ? c : ' '); }   // (Betaflight shows the name in capitals)
@@ -412,7 +422,7 @@ public:
                     uarts[u]->setTxBufferSize(1024);                 // (frames wait there, the sensor thread never does: poll() only fills the room it has)
 #endif
                     if (!port::uart_begin(*uarts[u], tc.baud, SERIAL_8N1, tc.rx_pin, tc.tx_pin, false, 256)) why = WB_PLATFORM_STM32 ? "the UART did not start on those pins (an STM32 needs telemetry.rx_pin as well)" : "the UART did not start on that pin";
-                    else { mav_uart_ = uarts[u]; char pb[8]; snprintf(wire, sizeof(wire), "%s TX %s, %lu baud", uname[u], pin_str(tc.tx_pin, pb), (unsigned long)tc.baud); }
+                    else { mav_uart_ = uarts[u]; port_use_.set(app::PF_TELEMETRY, u, true); char pb[8]; snprintf(wire, sizeof(wire), "%s TX %s, %lu baud", uname[u], pin_str(tc.tx_pin, pb), (unsigned long)tc.baud); }
                 }
             } else why = "no TX pin (telemetry.tx_pin)";
             mav_on_ = mav_uart_ != nullptr;
@@ -655,6 +665,7 @@ public:
             if (esc_ask >= 0) motors.manager().request_telemetry(esc_ask);       // (the bit goes out with the next control cycle's frame)
             if (blackbox.take_erase_done()) beep_event(beep::BLACKBOX_ERASE);
             update_inflight_trim(now_ms);
+            update_autotune();
             update_stick_commands(now_ms, now_armed);
             update_mag_autocal();
             update_beeper(now_ms, now_armed);
@@ -779,6 +790,7 @@ public:
             const fc::EulerDeg e = core.ahrs().euler_aero();                                                 // the (already filtered) attitude estimate at rest
             return set_level_from_attitude(e.roll, e.pitch) ? wbp::ERR_OK : wbp::ERR_FAILED;                 // more than 20 degrees: that is a board alignment, not a trim
         }
+        case wbp::CMD_BOARD_ALIGN: return board_align_step(r.args[0]);
 
         case wbp::CMD_FLOW_CAL: {                            // (disarmed: check_request)
             const uint8_t step = r.args[0];
@@ -902,7 +914,7 @@ private:
         const uint32_t t_core = micros();
         const bool ctl = last_out_.pid_stepped;           // a control cycle (every pid_denom-th sample): a new motor command, a log record
         if (ctl) {
-            motors.update(now_us, last_out_.motor, last_out_.armed, last_out_.crashflip);
+            motors.update(now_us, last_out_.motor, last_out_.armed, last_out_.crashflip, last_out_.reversed3d);
             motors.pollTelemetry(now_ms);                 // the ESC replies of the previous frame: fresh rpm for the next cycle's filters
             pid_loops_++;
         }
@@ -1038,6 +1050,32 @@ private:
         default: break;
         }
     }
+    // The autotune's result (0.44, core/autotune.h): landed and disarmed with the AUTOTUNE switch on, the core hands out the tuned
+    // gains (CoreOutput::at_save_seq). They go into the pid section - the axes the tune was done on, with the sliders off for them
+    // so the sliders do not compute them away - and are written to flash by the link task: in the field there is no app to press Save.
+    // The beeper: two short at the end of the tune (ACC_CALIBRATION, the in-flight trim's), two long when it fails, two short when saved.
+    void update_autotune() {
+        const fc::CoreOutput& o = last_out_;
+        if (o.at_state != at_state_seen_) {
+            if (o.at_state == wbp::AUTOTUNE_STATE_FINISHED) beep_event(beep::ACC_CALIBRATION);
+            else if (o.at_state == wbp::AUTOTUNE_STATE_FAILED) beep_event(beep::ACC_CALIBRATION_FAIL);
+            at_state_seen_ = o.at_state;
+        }
+        if (o.at_save_seq == at_save_seen_) return;
+        at_save_seen_ = o.at_save_seq;
+        if (!at_save_known_) { at_save_known_ = true; return; }          // (the first look after the boot: nothing new)
+        const fc::TuneGains& g = o.at_result; wbp::S_pid& p = s_->pid;
+        const auto u8 = [](float v) { return (uint8_t)(v < 0.0f ? 0.0f : v > 250.0f ? 250.0f : v + 0.5f); };
+        for (int a = 0; a < 3; a++) {
+            p.p[a] = u8(g.p[a]); p.i[a] = u8(g.i[a]); p.d[a] = u8(g.d[a]); p.d_max[a] = u8(g.d_max[a]); p.stab_p[a] = g.stab_p[a];
+        }
+        p.stab_accel_rp = (uint16_t)(g.accel_rp_dss + 0.5f); p.stab_accel_yaw = (uint16_t)(g.accel_yaw_dss + 0.5f);
+        if (p.slider_mode != wbp::SLIDER_MODE_OFF) p.slider_mode = wbp::SLIDER_MODE_OFF;     // (the sliders would compute P / I / D again)
+        wbp::validate_section(*s_, wbp::SEC_PID); wbp::apply_rules(*s_, wbp::SEC_PID);
+        apply_live(wbp::SEC_PID);
+        tel_.fw_saved_mask |= 1u << wbp::SEC_PID; tel_.fw_saved_section = wbp::SEC_PID; tel_.fw_saved_seq++;
+        beep_event(beep::ACC_CALIBRATION);
+    }
     void update_inflight_trim(uint32_t now_ms) {
         const float dt = (uint32_t)(now_ms - trim_ms_) * 0.001f; trim_ms_ = now_ms;
         if (!status.imu || dt <= 0.0f || dt > 0.1f) return;
@@ -1058,6 +1096,43 @@ private:
         }
         tel_.trim_progress = inflight_trim.collecting() ? (uint8_t)(inflight_trim.progress() * 100.0f + 0.5f) : (inflight_trim.pending() ? 100 : 0);
     }
+    // The board alignment wizard (CMD_BOARD_ALIGN; the Betaflight App's, core/board_align.h detect()): 1 lying flat, 2 nose down,
+    // 3 right side down, each held still; 0 cancels. With all three the mounting is found (snapped to 45 deg), turned into a chip
+    // orientation + board trims (from_bf: the level trims are kept) and used at once (RAM: Save keeps it). A second IMU turns with
+    // the first. Reply: reason (board_align_result), the chip orientation, the board trims (0.1 deg).
+    app::Reply board_align_step(uint8_t step) {
+        static_assert((int)fc::balign::DET_NO_FIT == (int)wbp::BOARD_ALIGN_RESULT_NO_FIT && (int)fc::balign::DET_NOT_STILL == (int)wbp::BOARD_ALIGN_RESULT_NOT_STILL, "board_align_result");
+        if (step == 0) { ba_have_ = 0; return wbp::ERR_OK; }
+        if (step > 3) return wbp::ERR_BAD_ARG;
+        if (!status.imu) return wbp::ERR_NO_SENSOR;
+        if (step > 1 && !(ba_have_ & 1)) return wbp::ERR_BAD_STATE;                      // flat first: the others are measured against it
+        wbp::S_general& g = s_->general;
+        const auto reply = [&](uint8_t why) {
+            app::Reply rp(why == fc::balign::DET_OK ? wbp::ERR_OK : wbp::ERR_FAILED); rp.n = 8; rp.data[0] = why; rp.data[1] = g.board_align;
+            const int16_t t[3] = {g.board_trim_roll, g.board_trim_pitch, g.board_trim_yaw}; memcpy(rp.data + 2, t, 6);
+            return rp;
+        };
+        for (int a = 0; a < 3; a++) if (fabsf(last_out_.gyro_f_dps[a]) > kBoardAlignStillDps) return reply(fc::balign::DET_NOT_STILL);
+        const fc::Vec3 a = core.ahrs().acc_filtered();
+        float* v = ba_acc_[step - 1]; v[0] = a.x; v[1] = -a.y; v[2] = -a.z;              // Betaflight's frame (x forward, y left, z up), as MSP_RAW_IMU
+        ba_have_ = step == 1 ? 1 : (uint8_t)(ba_have_ | (1u << (step - 1)));            // (a new flat pose: the tilts are taken again)
+        if (ba_have_ != 7) return reply(fc::balign::DET_OK);
+        // the chip the loop flies on is the one measured (the second one alone: gyro_use SECOND)
+        const bool second = imu_sel_.in_use() == imusel::kImu2;
+        const uint8_t mine = second ? s_->sensors.imu2_align : g.board_align, other = second ? g.board_align : s_->sensors.imu2_align;
+        float cur[3]; fc::balign::bf_of(mine, g.board_trim_roll * 0.1f, g.board_trim_pitch * 0.1f, g.board_trim_yaw * 0.1f, cur);
+        int found[3]; uint8_t why = fc::balign::detect(ba_acc_[0], ba_acc_[1], ba_acc_[2], cur, found);
+        uint8_t na = mine; float t[3] = {0, 0, 0};
+        if (why == fc::balign::DET_OK && !fc::balign::from_bf((float)found[0], (float)found[1], (float)found[2], mine, na, t)) why = fc::balign::DET_NO_FIT;   // (a board on its edge)
+        if (why != fc::balign::DET_OK) return reply(why);
+        const uint8_t no = fc::balign::follow(na, mine, other);
+        if (second) { s_->sensors.imu2_align = na; g.board_align = no; } else { g.board_align = na; s_->sensors.imu2_align = no; }
+        g.board_trim_roll = (int16_t)lroundf(t[0] * 10.0f); g.board_trim_pitch = (int16_t)lroundf(t[1] * 10.0f); g.board_trim_yaw = (int16_t)lroundf(t[2] * 10.0f);
+        wbp::validate_section(*s_, wbp::SEC_GENERAL); wbp::validate_section(*s_, wbp::SEC_SENSORS); apply_alignment();
+        ba_have_ = 0;
+        return reply(fc::balign::DET_OK);
+    }
+    static constexpr float kBoardAlignStillDps = 30.0f;    // hand-held tilts tremble; a turn or a shake is far more than this
     void apply_alignment() {
         float r, p, y; wbp::board_fine_alignment(*s_, r, p, y);
         imu.setAlignment((AccGyroAlign)s_->general.board_align, r, p, y);
@@ -1145,7 +1220,7 @@ private:
         h.baro_ok = baro.valid(now_ms) || baro2.valid(now_ms); h.range_ok = sonar.valid(now_ms); h.gps_ok = gnss.usable(); h.flow_ok = status.flow && flow.healthy(now_ms) && sonar.available();      // (flow without a range sensor gives no speed: not something to hold a position with)
         h.mag_calibrated = mag.calibrated(); h.mag_ok = mag.readyForFusion(now_ms);
         h.batt_low = battery.monitor.low(); h.batt_critical = land_on_critical_ && battery.monitor.critical();
-        h.pin_conflict = status.pin_conflict; h.loop_slow = loop_slow_;
+        h.pin_conflict = status.pin_conflict; h.loop_slow = loop_slow_; h.configurator = link.msp_arming_disabled(now_ms);
         return h;
     }
     // ---- beeper: the state of the craft -> sounds; the buzzer pin follows the running pattern
@@ -1257,7 +1332,7 @@ private:
         m.batt_present = status.battery && t.batt_v > 0.5f; m.volts = t.batt_v; m.cells = t.batt_cells; m.remaining = m.batt_present ? (int8_t)(t.batt_remaining > 100 ? 100 : t.batt_remaining) : -1;
         m.have_current = t.curr_source == batt::CUR_ADC || t.curr_source == batt::CUR_ESC || t.curr_source == batt::CUR_DRONECAN; m.amps = t.batt_amps; m.mah = t.batt_mah;
         m.rc_errors = t.rc_bad; m.rc_link = t.rc_link; for (int i = 0; i < 16; i++) m.rc[i] = t.rc[i]; m.rssi_pct = t.rssi;
-        m.rescue_kind = t.rescue_mode;
+        m.rescue_kind = t.rescue_mode; m.autotune = t.at_state >= wbp::AUTOTUNE_STATE_LEVELLING && t.at_state <= wbp::AUTOTUNE_STATE_PILOT;
         const uint8_t ms = t.mission_state; const bool flies = ms >= wbp::MISSION_STATE_TAKEOFF && ms <= wbp::MISSION_STATE_RTL;
         const uint16_t h = s_->telemetry.mp_home_item && s_->mission.count ? 1 : 0;      // (Mission Planner's home item counts as item 0, mavlink_gcs.h)
         m.mission_total = (uint16_t)(s_->mission.count + h);
@@ -1411,6 +1486,7 @@ private:
         const fc::EkfStatus& st = ekf_.status(); float r, p, y; ekf_.euler_rad(r, p, y);
         ekf_nav_.valid = true; ekf_nav_.gps_aiding = st.gps_aiding; ekf_nav_.heading_ok = st.heading_ok;
         ekf_nav_.pn = ekf_.pos()[0]; ekf_nav_.pe = ekf_.pos()[1]; ekf_nav_.vn = ekf_.vel()[0]; ekf_nav_.ve = ekf_.vel()[1]; ekf_nav_.yaw_deg = y * fc::kRad2Deg;
+        ekf_nav_.reset_count = ekf_.pos_reset_count(); ekf_nav_.reset_n = ekf_.pos_reset_n(); ekf_nav_.reset_e = ekf_.pos_reset_e();
         ekf_out_.roll = r * fc::kRad2Deg; ekf_out_.pitch = -p * fc::kRad2Deg; ekf_out_.yaw = y * fc::kRad2Deg; ekf_out_.z = -ekf_.pos()[2]; ekf_out_.vd = ekf_.vel()[2];
         ekf_out_.yaw_sigma = ekf_.yaw_sigma() * fc::kRad2Deg; ekf_out_.test_vel = st.test_vel; ekf_out_.test_mag = st.test_mag;
         const uint32_t us = micros() - t0; if (us > ekf_us_cur_) ekf_us_cur_ = us;
@@ -1469,7 +1545,9 @@ private:
           for (int m = 0; m < 8; m++) tel_.rpm_notch_hz[m] = gf.rpm_filter().active() && gf.rpm_filter().notch_weight(m, 0) > 0.0f ? gf.rpm_filter().notch_hz(m, 0) : 0.0f;
           tel_.tpa = pc.tpa_factor(); tel_.anti_gravity = pc.anti_gravity(); tel_.rc_smoothed_hz = core.setpoints().rx_rate().smoothed_hz(); tel_.rc_cutoff_hz = core.setpoints().setpoint_cutoff_hz();
           tel_.air_state = !last_out_.armed || last_out_.ground_idle ? wbp::AIR_STATE_GROUND : last_out_.airmode_active ? wbp::AIR_STATE_AIRMODE : wbp::AIR_STATE_AIR; tel_.hover_throttle = core.alt_hold().hover_throttle();
-          for (int a = 0; a < 3; a++) tel_.pid_sum[a] = last_out_.pid_p[a] + last_out_.pid_i[a] + last_out_.pid_d[a] + last_out_.pid_f[a]; }
+          for (int a = 0; a < 3; a++) tel_.pid_sum[a] = last_out_.pid_p[a] + last_out_.pid_i[a] + last_out_.pid_d[a] + last_out_.pid_f[a];
+          tel_.at_state = last_out_.at_state; tel_.at_axis = last_out_.at_axis; tel_.at_step = last_out_.at_step; tel_.at_done = last_out_.at_done;
+          tel_.at_p = last_out_.at_p; tel_.at_d = last_out_.at_d; tel_.at_stab_p = last_out_.at_stab_p; }
         uint16_t h = 0;
         if (imu_sel_.in_use()) h |= wbp::HEALTH_IMU;
         if (gyro_calibrated()) h |= wbp::HEALTH_GYRO_CAL;
@@ -1577,6 +1655,8 @@ private:
 
     wbp::Settings* s_ = nullptr;
     app::Telemetry tel_;
+    app::PortUse port_use_;
+    float ba_acc_[3][3] = {}; uint8_t ba_have_ = 0;      // CMD_BOARD_ALIGN: gravity at the steps taken (Betaflight's frame), bit = step - 1
     AccCalibrator acc_cal_; bool acc_session_ = false, acc_done_ = false; CalState mag_cal_state_ = CalState::IDLE; uint8_t cal_kind_ = 0, mag_result_ = 0;
     MagAutoCal mag_auto_; app::StickCommands sticks_; uint16_t cal_samples_ = 1000;
     static constexpr uint32_t kEscSettleMs = 500;      // every ESC answers: this much more before the boot gyro calibration
@@ -1747,6 +1827,7 @@ private:
     uint8_t fly_mode() const {
         const fc::CoreOutput& o = last_out_; const auto sw = [&](int m) { return ((o.modes >> m) & 1u) != 0; };
         if (o.crashflip) return wbp::FLY_MODE_CRASHFLIP;
+        if (o.at_state >= wbp::AUTOTUNE_STATE_LEVELLING && o.at_state <= wbp::AUTOTUNE_STATE_PILOT) return wbp::FLY_MODE_AUTOTUNE;
         if ((o.mission_state >= 1 && o.mission_state <= 7) || sw(fc::M_MISSION)) return wbp::FLY_MODE_MISSION;
         return o.rescue_active || sw(fc::M_RESCUE) ? wbp::FLY_MODE_RESCUE : o.loiter_active || sw(fc::M_LOITER) ? wbp::FLY_MODE_LOITER
              : o.poshold_active || sw(fc::M_POSHOLD) ? wbp::FLY_MODE_POSHOLD

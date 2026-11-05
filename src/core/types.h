@@ -29,7 +29,13 @@ inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi 
 WB_FAST inline float maxf(float a, float b) { return a != a ? b : (a < b ? b : a); }
 WB_FAST inline float minf(float a, float b) { return a != a ? b : (b < a ? b : a); }
 inline float signf(float v) { return v < 0.0f ? -1.0f : 1.0f; }
-WB_FAST inline float wrap180(float deg) { while (deg > 180.0f) deg -= 360.0f; while (deg < -180.0f) deg += 360.0f; return deg; }
+// Inf / NaN give 0 (no endless loop: Inf - 360 == Inf, and so is 1e30 - 360); a far-off angle is brought near with fmodf first.
+WB_FAST inline float wrap180(float deg) {
+    if (!(deg > -1e6f && deg < 1e6f)) { if (!isfinite(deg)) return 0.0f; deg = fmodf(deg, 360.0f); }
+    while (deg > 180.0f) deg -= 360.0f;
+    while (deg < -180.0f) deg += 360.0f;
+    return deg;
+}
 inline uint32_t age_ms(uint32_t now_ms, uint32_t then_ms) { return now_ms - then_ms; }   // wraps correctly
 
 // ---- fast trigonometry for the control cycle (Betaflight's maths.c approximations). The C library's sinf / atan2f / acosf are

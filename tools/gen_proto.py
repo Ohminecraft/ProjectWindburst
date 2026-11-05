@@ -20,10 +20,10 @@ SZ = {'u8': 1, 'bool': 1, 'u16': 2, 'u32': 4, 'i16': 2, 'i32': 4, 'f32': 4}
 enum_size = {k: len(v) for k, v in S['enums'].items()}
 
 def compat_of(sec):
-    """'compat' in the schema: one older size, or a list of them (newest first; at most four)."""
+    """'compat' in the schema: one older size, or a list of them (newest first; at most eight)."""
     c = sec.get('compat', 0); c = list(c) if isinstance(c, list) else [c]
-    assert len(c) <= 4, f'section {sec["name"]}: at most four older sizes'
-    return [int(x) for x in c] + [0] * (4 - len(c))
+    assert len(c) <= 8, f'section {sec["name"]}: at most eight older sizes'
+    return [int(x) for x in c] + [0] * (8 - len(c))
 
 def role_of(x):
     r = x.get('role', 'rx'); assert r in ('rx', 'tx'), f'{x["name"]}: role is rx or tx'
@@ -113,11 +113,11 @@ for sec in S['sections']: w(f'    S_{sec["name"]} {sec["name"]};')
 w('};')
 w('inline void defaults(Settings& s) { ' + ' '.join(f'defaults(s.{sec["name"]});' for sec in S['sections']) + ' }')
 w('')
-w('// live: applied to the running firmware without a reboot. compat .. compat4: sizes of this section in older firmwares whose layout was the same\n// up to that size (fields were only appended or cut at the end since): such a stored record is still loaded. 0 = none.')
+w('// live: applied to the running firmware without a reboot. compat .. compat8: sizes of this section in older firmwares whose layout was the same\n// up to that size (fields were only appended or cut at the end since): such a stored record is still loaded. 0 = none.')
 w('// role: the device that has the section (ROLE_RX = 0 the flight controller, ROLE_TX = 1 the transmitter; "role" in the schema, absent = rx).\n// One schema for both: a server serves, and a store keeps, only the sections of its own role.')
-w('struct SectionInfo { uint8_t id; const char* name; uint16_t size; bool live; uint16_t compat, compat2, compat3, compat4; uint8_t role; };')
+w('struct SectionInfo { uint8_t id; const char* name; uint16_t size; bool live; uint16_t compat, compat2, compat3, compat4, compat5, compat6, compat7, compat8; uint8_t role; };')
 w(f'constexpr int kSectionCount = {len(S["sections"])};')
-w('constexpr SectionInfo kSections[kSectionCount] = {' + ', '.join(f'{{SEC_{s["name"].upper()}, "{s["name"]}", {size_of(s["fields"])}, {"true" if s.get("live") else "false"}, {compat_of(s)[0]}, {compat_of(s)[1]}, {compat_of(s)[2]}, {compat_of(s)[3]}, {role_of(s)}}}' for s in S['sections']) + '};')
+w('constexpr SectionInfo kSections[kSectionCount] = {' + ', '.join(f'{{SEC_{s["name"].upper()}, "{s["name"]}", {size_of(s["fields"])}, {"true" if s.get("live") else "false"}, {compat_of(s)[0]}, {compat_of(s)[1]}, {compat_of(s)[2]}, {compat_of(s)[3]}, {compat_of(s)[4]}, {compat_of(s)[5]}, {compat_of(s)[6]}, {compat_of(s)[7]}, {role_of(s)}}}' for s in S['sections']) + '};')
 w('inline const SectionInfo* find_section(uint8_t id) { for (const auto& s : kSections) if (s.id == id) return &s; return nullptr; }')
 w('// pointer to / size of a section inside a Settings object (nullptr if unknown)')
 w('inline uint8_t* section_ptr(Settings& st, uint8_t id) { switch (id) {')
@@ -195,7 +195,7 @@ SHORT = [('SLIDER_', 'S_'), ('ANTI_GRAVITY', 'AG'), ('ITERM_RELAX', 'IREL'), ('I
          ('AVERAGING', 'AVG'), ('TRANSITION', 'TRANS'), ('JITTER_FACTOR', 'JIT'), ('MAX_RATE_LIMIT', 'MAXRL'), ('YAW_HOLD', 'YH'),
          ('CENTER_SENS', 'CTR'), ('HARMONICS', 'HARM'), ('FADE_RANGE_HZ', 'FADE'), ('WEIGHTS', 'W'), ('_STATIC_HZ', '_HZ'), ('EARTH_REF', 'EREF'),
          ('INPUT_TC', 'ITC'), ('ACCEL', 'ACC'), ('FEEDFORWARD', 'FF'), ('DYN_NOTCH', 'DN'), ('_DYN_', '_D'), ('DTERM', 'DT'), ('GYRO', 'G'),
-         ('LOWPASS', 'LP'), ('ADVANCE', 'ADV'), ('_MULT', 'X'), ('PITCH', 'PIT'), ('_GAIN', '_G'), ('ANGLE_', 'ANG_'), ('_LIMIT', '_LIM'), ('_ALWAYS', '_ALW'), ('THR_BOOST', 'TBOOST'), ('MAX_HZ', 'MAX'), ('MIN_HZ', 'MIN'), ('DEXPO', 'DEXP')]
+         ('LOWPASS', 'LP'), ('ADVANCE', 'ADV'), ('_MULT', 'X'), ('PITCH', 'PIT'), ('_GAIN', '_G'), ('ANGLE_', 'ANG_'), ('_LIMIT', '_LIM'), ('_ALWAYS', '_ALW'), ('THR_BOOST', 'TBOOST'), ('AUTOTUNE', 'ATUNE'), ('BACKOFF', 'GMBK'), ('MAX_HZ', 'MAX'), ('MIN_HZ', 'MIN'), ('DEXPO', 'DEXP')]
 AXES = ('ROLL', 'PITCH', 'YAW')
 params = []
 for sec_name, prefix in PARAM_SECTIONS:

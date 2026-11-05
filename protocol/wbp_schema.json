@@ -1,6 +1,6 @@
 {
  "version": 1,
- "hash": "0x5ACBE279",
+ "hash": "0x1760AD1F",
  "enums": {
   "layout": [
    "QUAD_X",
@@ -132,7 +132,9 @@
    "BLACKBOX_ERASE",
    "MISSION",
    "LOITER",
-   "CRASHFLIP"
+   "CRASHFLIP",
+   "AUTOTUNE",
+   "3D"
   ],
   "failsafe": [
    "NONE",
@@ -178,7 +180,8 @@
    "TOO_DISTORTED",
    "BAD_FIELD_STRENGTH",
    "BAD_FIT",
-   "NO_MOTION"
+   "NO_MOTION",
+   "OFFSET_TOO_LARGE"
   ],
   "batt_source": [
    "AUTO",
@@ -559,7 +562,8 @@
    "RESCUE",
    "MISSION",
    "LOITER",
-   "CRASHFLIP"
+   "CRASHFLIP",
+   "AUTOTUNE"
   ],
   "flow_cal_result": [
    "OK",
@@ -576,9 +580,39 @@
    "LOITER",
    "POSHOLD"
   ],
+  "flycam_attitude": [
+   "ANGLE",
+   "STABILIZE"
+  ],
   "tx_throttle": [
    "ALTPOS",
    "MANUAL"
+  ],
+  "autotune_state": [
+   "OFF",
+   "NOT_FLYING",
+   "LEVELLING",
+   "TWITCHING",
+   "PILOT",
+   "FINISHED",
+   "FAILED"
+  ],
+  "autotune_step": [
+   "RATE_D_UP",
+   "RATE_D_DOWN",
+   "RATE_P_UP",
+   "ANGLE_P_DOWN",
+   "ANGLE_P_UP",
+   "COMPLETE"
+  ],
+  "board_align_result": [
+   "OK",
+   "NOT_STILL",
+   "NO_GRAVITY",
+   "NO_PITCH",
+   "NO_ROLL",
+   "DIRECTION",
+   "NO_FIT"
   ]
  },
  "bits": {
@@ -602,7 +636,8 @@
    "RESCUE_NO_FIX",
    "RESCUE_NO_COMPASS",
    "MOTOR_STALL",
-   "CRASHFLIP"
+   "CRASHFLIP",
+   "CONFIGURATOR"
   ],
   "health": [
    "IMU",
@@ -746,12 +781,12 @@
      "max": 600
     },
     {
-     "n": "fs_fallback_throttle",
+     "n": "old_fs_fallback",
      "t": "u8",
      "d": 85,
      "min": 30,
      "max": 100,
-     "desc": "% of hover throttle when no altitude estimate"
+     "desc": "unused since 0.44 (was fs_fallback_throttle, % of hover throttle when no altitude estimate): converted to fs_fallback_throttle (us) when an older record is loaded"
     },
     {
      "n": "airmode",
@@ -815,13 +850,31 @@
      "d": 0,
      "enum": "flycam_hold",
      "desc": "how Flycam holds the place: LOITER (the stick = a velocity, it brakes by itself - DJI's P mode) or POSHOLD"
+    },
+    {
+     "n": "flycam_attitude",
+     "t": "u8",
+     "d": 0,
+     "enum": "flycam_attitude",
+     "desc": "0.44: the attitude controller Flycam flies every self-levelling mode on (Altitude Hold, Loiter, Position Hold, the failsafe, a mission): ANGLE (Betaflight's, angle_strength) or STABILIZE (ArduPilot's, stab_p - the autotune then tunes it too)"
+    },
+    {
+     "n": "fs_throttle",
+     "t": "u16",
+     "d": 1300,
+     "min": 1000,
+     "max": 2000,
+     "desc": "failsafe without an altitude estimate: throttle (us, Betaflight failsafe_throttle); never more than 85 % of the hover throttle measured in flight, so it always descends"
     }
    ],
    "live": false,
    "compat": [
+    60,
+    59,
     57,
     56,
     24,
+    23,
     22
    ]
   },
@@ -873,12 +926,12 @@
      "desc": "first of 8 consecutive aux channels"
     },
     {
-     "n": "deadband",
+     "n": "old_deadband",
      "t": "u8",
      "d": 2,
      "min": 0,
      "max": 20,
-     "desc": "stick deadband (%)"
+     "desc": "unused since 0.44 (was deadband, stick deadband (%)): converted to deadband (us) when an older record is loaded"
     },
     {
      "n": "rx_timeout_ms",
@@ -950,10 +1003,60 @@
      "t": "bool",
      "d": 0,
      "desc": "nRF24: bound to a transmitter. Never bound: the receiver listens for a bind for 60 s after power-up"
+    },
+    {
+     "n": "deadband",
+     "t": "u8",
+     "d": 10,
+     "min": 0,
+     "max": 100,
+     "desc": "roll / pitch stick deadband around the centre (us, Betaflight deadband)"
+    },
+    {
+     "n": "yaw_deadband",
+     "t": "u8",
+     "d": 10,
+     "min": 0,
+     "max": 100,
+     "desc": "yaw stick deadband around the centre (us, Betaflight yaw_deadband)"
+    },
+    {
+     "n": "deadband3d_throttle",
+     "t": "u16",
+     "d": 50,
+     "min": 1,
+     "max": 100,
+     "desc": "3D: throttle stick deadband around the centre where the motors stop (us, Betaflight 3d_deadband_throttle)"
+    },
+    {
+     "n": "min_check",
+     "t": "u16",
+     "d": 1050,
+     "min": 1000,
+     "max": 1450,
+     "desc": "throttle stick below this is \"low\" (arming, the stick commands, the throttle starts here) (us, Betaflight min_check)"
+    },
+    {
+     "n": "mid_rc",
+     "t": "u16",
+     "d": 1500,
+     "min": 1200,
+     "max": 1700,
+     "desc": "the roll / pitch / yaw stick centre (us, Betaflight mid_rc)"
+    },
+    {
+     "n": "max_check",
+     "t": "u16",
+     "d": 1900,
+     "min": 1550,
+     "max": 2000,
+     "desc": "a stick above this is \"high\" for the stick commands (us, Betaflight max_check)"
     }
    ],
    "live": false,
    "compat": [
+    26,
+    22,
     13,
     12,
     9
@@ -1507,10 +1610,38 @@
      "min": 25,
      "max": 255,
      "desc": "how hard the craft is pushed back to the limit (Betaflight acro_trainer_gain)"
+    },
+    {
+     "n": "autotune_axes",
+     "t": "u8",
+     "d": 7,
+     "min": 0,
+     "max": 7,
+     "desc": "0.44: the axes the in-flight autotune (switch AUTOTUNE) tunes - bit 0 roll, 1 pitch, 2 yaw (ArduPilot AUTOTUNE_AXES)"
+    },
+    {
+     "n": "autotune_aggr",
+     "t": "u8",
+     "d": 75,
+     "min": 50,
+     "max": 200,
+     "scale": 0.001,
+     "desc": "the bounce-back that ends a gain's climb, a fraction of the twitch's peak (ArduPilot AUTOTUNE_AGGR: 0.05 soft .. 0.10 crisp)"
+    },
+    {
+     "n": "autotune_backoff",
+     "t": "u8",
+     "d": 25,
+     "min": 0,
+     "max": 50,
+     "desc": "% the final gains stay below the limit the twitches found (ArduPilot AUTOTUNE_GMBK)"
     }
    ],
    "live": true,
-   "compat": 75
+   "compat": [
+    79,
+    75
+   ]
   },
   {
    "id": 6,
@@ -1741,10 +1872,63 @@
      "t": "bool",
      "d": 0,
      "desc": "crash flip: the switch off flies on (Betaflight crashflip_auto_rearm); off = disarm, arming again after the arm switch was off"
+    },
+    {
+     "n": "mode3d",
+     "t": "bool",
+     "d": 0,
+     "desc": "3D: the motors turn both ways (the ESCs must be set to 3D); throttle stick centre = stopped, below = reversed (Betaflight feature 3D). Acro / Angle / Stabilize only; failsafe cuts the motors"
+    },
+    {
+     "n": "switched_mode3d",
+     "t": "bool",
+     "d": 0,
+     "desc": "3D on a switch: the 3D switch reverses the motors, the throttle stick keeps its full travel (Betaflight 3d_switched_mode)"
+    },
+    {
+     "n": "deadband3d_low",
+     "t": "u16",
+     "d": 1406,
+     "min": 1000,
+     "max": 1500,
+     "desc": "3D, PWM-type ESCs: the highest reversed pulse (us)"
+    },
+    {
+     "n": "deadband3d_high",
+     "t": "u16",
+     "d": 1514,
+     "min": 1500,
+     "max": 2000,
+     "desc": "3D, PWM-type ESCs: the lowest forward pulse (us)"
+    },
+    {
+     "n": "neutral3d",
+     "t": "u16",
+     "d": 1460,
+     "min": 1400,
+     "max": 1600,
+     "desc": "3D, PWM-type ESCs: the stop pulse (us)"
+    },
+    {
+     "n": "limit3d_low",
+     "t": "u16",
+     "d": 1000,
+     "min": 1000,
+     "max": 1500,
+     "desc": "3D, PWM-type ESCs: full reverse (us)"
+    },
+    {
+     "n": "limit3d_high",
+     "t": "u16",
+     "d": 2000,
+     "min": 1500,
+     "max": 2000,
+     "desc": "3D, PWM-type ESCs: full forward (us)"
     }
    ],
    "live": false,
    "compat": [
+    47,
     44,
     37,
     36,
@@ -3275,36 +3459,36 @@
    "desc": "Altitude Hold: what the throttle stick does (the throttle curve of the rates tab is not used in this mode)",
    "fields": [
     {
-     "n": "mid_stick",
+     "n": "old_mid_stick",
      "t": "u8",
      "d": 50,
      "min": 30,
      "max": 70,
-     "desc": "stick position (%) that holds the height"
+     "desc": "unused since 0.44 (was mid_stick, stick position (%) that holds the height): converted to mid_stick (us) when an older record is loaded"
     },
     {
-     "n": "deadband",
+     "n": "old_deadband",
      "t": "u8",
      "d": 5,
      "min": 0,
      "max": 20,
-     "desc": "half-width (% of the stick travel) around mid_stick that still holds the height"
+     "desc": "unused since 0.44 (was deadband, half-width (% of the stick travel) around mid_stick that still holds the height): converted to deadband (us) when an older record is loaded"
     },
     {
-     "n": "low_stick",
+     "n": "old_low_stick",
      "t": "u8",
      "d": 6,
      "min": 2,
      "max": 25,
-     "desc": "stick below this (%) = throttle low: full descent, and on the ground it stays there"
+     "desc": "unused since 0.44 (was low_stick, stick below this (%) = throttle low: full descent, and on the ground it stays there): converted to low_stick (us) when an older record is loaded"
     },
     {
-     "n": "max_stick",
+     "n": "old_max_stick",
      "t": "u8",
      "d": 100,
      "min": 70,
      "max": 100,
-     "desc": "stick position (%) that asks for the full climb rate"
+     "desc": "unused since 0.44 (was max_stick, stick position (%) that asks for the full climb rate): converted to max_stick (us) when an older record is loaded"
     },
     {
      "n": "climb_rate",
@@ -3359,9 +3543,42 @@
      "max": 250,
      "scale": 0.01,
      "desc": "its integrator (1/s): takes up what the hover throttle estimate gets wrong"
+    },
+    {
+     "n": "mid_stick",
+     "t": "u16",
+     "d": 1500,
+     "min": 1300,
+     "max": 1700,
+     "desc": "throttle stick (us) that holds the height"
+    },
+    {
+     "n": "deadband",
+     "t": "u8",
+     "d": 50,
+     "min": 0,
+     "max": 200,
+     "desc": "half-width (us) around mid_stick that still holds the height"
+    },
+    {
+     "n": "low_stick",
+     "t": "u16",
+     "d": 1060,
+     "min": 1020,
+     "max": 1250,
+     "desc": "stick below this (us) = throttle low: full descent, and on the ground it stays there"
+    },
+    {
+     "n": "max_stick",
+     "t": "u16",
+     "d": 2000,
+     "min": 1700,
+     "max": 2000,
+     "desc": "stick (us) that asks for the full climb rate"
     }
    ],
    "compat": [
+    10,
     6
    ]
   },
@@ -3913,10 +4130,10 @@
      "max": 3
     },
     {
-     "n": "deadband",
+     "n": "old_deadband",
      "t": "u8",
      "d": 3,
-     "desc": "dead zone around the centre (%)",
+     "desc": "unused since 0.44 (was deadband, dead zone around the centre (%)): converted to deadband (us) when an older record is loaded",
      "min": 0,
      "max": 20
     },
@@ -3942,7 +4159,18 @@
      "desc": "MANUAL throttle: how fast full stick moves it (% of the range per second)",
      "min": 5,
      "max": 200
+    },
+    {
+     "n": "deadband",
+     "t": "u8",
+     "d": 15,
+     "min": 0,
+     "max": 100,
+     "desc": "dead zone around the centre (us)"
     }
+   ],
+   "compat": [
+    40
    ]
   }
  ],
@@ -4843,8 +5071,46 @@
     },
     {
      "n": "hover",
+     "t": "u16",
+     "desc": "throttle (us) at which the craft hovers, as the firmware measures it in flight (about 1365 us before the first flight: the guess)"
+    },
+    {
+     "n": "at_state",
      "t": "u8",
-     "desc": "throttle (%) at which the craft hovers, as the firmware measures it in flight (the guess 37 % before the first flight)"
+     "enum": "autotune_state",
+     "desc": "0.44 autotune: OFF = switch off; NOT_FLYING = on, waiting for the craft to fly with Altitude Hold; LEVELLING / TWITCHING = at work; PILOT = paused, the pilot moves a stick; FINISHED = done (land and disarm with the switch on to save); FAILED"
+    },
+    {
+     "n": "at_axis",
+     "t": "u8",
+     "desc": "the axis being tuned: 0 roll, 1 pitch, 2 yaw, 255 none"
+    },
+    {
+     "n": "at_step",
+     "t": "u8",
+     "enum": "autotune_step",
+     "desc": "the step on that axis (ArduPilot's tune sequence)"
+    },
+    {
+     "n": "at_done",
+     "t": "u8",
+     "desc": "bit per axis whose tune is complete"
+    },
+    {
+     "n": "at_p",
+     "t": "u8",
+     "desc": "rate P being tried on that axis"
+    },
+    {
+     "n": "at_d",
+     "t": "u8",
+     "desc": "rate D being tried on that axis"
+    },
+    {
+     "n": "at_stab_p",
+     "t": "u16",
+     "scale": 0.01,
+     "desc": "Stabilize P being tried on that axis"
     }
    ]
   },
@@ -5601,6 +5867,46 @@
      "n": "scale_y",
      "t": "i16",
      "desc": "% - pitch axis alone"
+    }
+   ]
+  },
+  {
+   "id": 27,
+   "name": "BOARD_ALIGN",
+   "args": [
+    {
+     "n": "step",
+     "t": "u8"
+    }
+   ],
+   "writes": "general",
+   "desc": "board alignment wizard (the Betaflight App's): 1 = the craft lies flat, 2 = nose down (about 45 deg), 3 = right side down: the mounting is found (snapped to 45 deg) and general.board_align + board_trim_* are in use (RAM - save to keep); 0 = cancel. Each step: hold still. FAILED: `reason` says why (the steps taken so far are kept)",
+   "result": [
+    {
+     "n": "reason",
+     "t": "u8",
+     "enum": "board_align_result"
+    },
+    {
+     "n": "align",
+     "t": "u8",
+     "enum": "align",
+     "desc": "the chip orientation found"
+    },
+    {
+     "n": "trim_roll",
+     "t": "i16",
+     "desc": "0.1 deg"
+    },
+    {
+     "n": "trim_pitch",
+     "t": "i16",
+     "desc": "0.1 deg"
+    },
+    {
+     "n": "trim_yaw",
+     "t": "i16",
+     "desc": "0.1 deg"
     }
    ]
   }

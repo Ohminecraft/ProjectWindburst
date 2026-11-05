@@ -537,6 +537,38 @@ static void t_level_trim() {
     b.shaking = true; r->run(0.5); CHECK(flat < 1.0f && r->command(CMD_LEVEL_TRIM).err == ERR_FAILED, "refused while the craft is being moved (it lies flat: %.2f deg)", flat); b.shaking = false;
 }
 
+// 0.44: the board alignment wizard (the Betaflight App's, run by the firmware: CMD_BOARD_ALIGN)
+static void t_board_align_fw() {
+    printf("[board align] the IMU chip turned 90 deg clockwise, set as CW0: flat, nose down, right side down find it\n");
+    auto r = fresh(); VirtualBoard& b = r->board; b.imu_align = ALIGN_CW90;
+    r->run(4.0);
+    b.rest(0, 30); r->run(3.0);
+    CHECK(fabsf(r->tel().roll) > 20.0f, "wrong orientation: nose down 30 reads as a roll (%.1f / %.1f)", r->tel().roll, r->tel().pitch);
+    CHECK(r->command(CMD_BOARD_ALIGN, {2}).err == ERR_BAD_STATE, "nose down before flat: BAD_STATE");
+    CHECK(r->command(CMD_BOARD_ALIGN, {4}).err == ERR_BAD_ARG, "step 4: BAD_ARG");
+    b.rest(0, 0); r->run(2.0); CHECK(r->command(CMD_BOARD_ALIGN, {1}).err == ERR_OK, "1: lying flat");
+    b.rest(0, 45); r->run(2.0); CHECK(r->command(CMD_BOARD_ALIGN, {2}).err == ERR_OK, "2: nose down");
+    b.rest(45, 0); r->run(2.0); const auto res = r->command(CMD_BOARD_ALIGN, {3});
+    const auto i16 = [&](int at) { return (int16_t)(res.data[at] | (res.data[at + 1] << 8)); };
+    CHECK(res.err == ERR_OK && res.data.size() == 8 && res.data[0] == BOARD_ALIGN_RESULT_OK && res.data[1] == ALIGN_CW90 && i16(2) == 0 && i16(4) == 0 && i16(6) == 0,
+          "3: right side down: CW90 found, no trims (err %d, reason %d, align %d, trims %d %d %d)", res.err, res.data.size() > 1 ? res.data[0] : -1, res.data.size() > 1 ? res.data[1] : -1,
+          res.data.size() == 8 ? i16(2) : 0, res.data.size() == 8 ? i16(4) : 0, res.data.size() == 8 ? i16(6) : 0);
+    S_general g; r->get_section(SEC_GENERAL, &g, sizeof(g));
+    CHECK(g.board_align == ALIGN_CW90, "in use at once (RAM; Save keeps it): general.board_align %d", g.board_align);
+    b.rest(15, 10); r->run(4.0);
+    CHECK(fabsf(r->tel().roll - 15) < 1.0f && fabsf(r->tel().pitch - 10) < 1.0f, "the attitude is right now: %.2f / %.2f (true 15 / 10)", r->tel().roll, r->tel().pitch);
+    // refusals: moving, the right gesture to the left, cancel
+    b.rest(0, 0); r->run(2.0); b.gyro_bias[2] = 60.0f; r->run(0.3);
+    { const auto m = r->command(CMD_BOARD_ALIGN, {1}); CHECK(m.err == ERR_FAILED && m.data.size() == 8 && m.data[0] == BOARD_ALIGN_RESULT_NOT_STILL, "turning: NOT_STILL"); }
+    b.gyro_bias[2] = 0.0f; r->run(0.5);
+    CHECK(r->command(CMD_BOARD_ALIGN, {1}).err == ERR_OK, "1 again");
+    b.rest(0, 45); r->run(2.0); r->command(CMD_BOARD_ALIGN, {2});
+    b.rest(-45, 0); r->run(2.0);
+    { const auto m = r->command(CMD_BOARD_ALIGN, {3}); r->get_section(SEC_GENERAL, &g, sizeof(g));
+      CHECK(m.err == ERR_FAILED && m.data.size() == 8 && m.data[0] == BOARD_ALIGN_RESULT_DIRECTION && g.board_align == ALIGN_CW90, "left side down instead: DIRECTION, nothing changed"); }
+    CHECK(r->command(CMD_BOARD_ALIGN, {0}).err == ERR_OK && r->command(CMD_BOARD_ALIGN, {3}).err == ERR_BAD_STATE, "0 cancels: the steps are gone");
+}
+
 static void rotate_everywhere(Rig& r, double seconds_per_pose = 0.03) {
     for (int yaw = 0; yaw < 360; yaw += 30) for (int roll = -180; roll < 180; roll += 30) for (int pitch = -60; pitch <= 60; pitch += 60) {
         r.board.plant.set_tilt((float)roll, (float)pitch, (float)yaw); r.board.plant.ground = true; r.board.plant.z = 0;
@@ -586,12 +618,12 @@ static void t_mag_autocal() {
     printf("[compass] automatic calibration: stick command, turned by hand, saved by itself\n");
     g_stub_us = 0; g_stub_delay_advances = true;
     Rig r; r.provision();
-    { wbp::Settings s; wbp::SettingsStore st(r.flash); st.load(s); s.sensors.mag_enabled = 1; st.save(s); }
+    { wbp::Settings s; wbp::SettingsStore st(r.flash); st.load(s); s.sensors.mag_enabled = 1; s.receiver.max_check = 1850; st.save(s); }   // (0.44: "high" is max_check)
     r.board.mag_hard[0] = 0.12; r.board.mag_hard[1] = -0.08; r.board.mag_hard[2] = 0.05;
     r.boot(); r.run(3.0); r.stream(STR_CALIBRATION, 20);
     CHECK(!(r.tel().health & HEALTH_MAG_CAL), "not calibrated at first");
     VirtualBoard& b = r.board; const uint32_t writes0 = (uint32_t)r.flash.writes;
-    b.rc[2] = 2000; b.rc[1] = 1000; r.run(0.6);
+    b.rc[2] = 1880; b.rc[1] = 1000; r.run(0.6);                       // (1880: high only because max_check is 1850)
     T_calibration c{}; r.latest(STR_CALIBRATION, c); CHECK(c.kind != CAL_KIND_MAG_AUTO, "half a second of the sticks: nothing yet");
     r.run(0.6); b.rc[2] = 1000; b.rc[1] = 1500; r.run(0.3); r.latest(STR_CALIBRATION, c);
     CHECK(c.kind == CAL_KIND_MAG_AUTO && c.state == CAL_STATE_RUNNING && c.progress == 0 && (r.tel().blockers & ARM_BLOCKER_CALIBRATING), "throttle high + pitch back for 1 s: the automatic calibration waits for the craft to move; arming is blocked");
@@ -1042,7 +1074,7 @@ static void t_blackbox() {
       if (ss.size() == 1) {
         const RSession& s = ss[0];
         char want[16]; snprintf(want, sizeof(want), "0x%08lX", (unsigned long)kSchemaHash);
-        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.43.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
+        CHECK(s.meta.at("firmware") == "Windburst RX (sim) 0.44.0" && s.meta.at("schema") == want && s.meta.at("loop_hz") == "4000" && s.meta.at("gyro_hz") == "4000" && s.meta.count("set.rates") == 1 && s.meta.at("rate_hz") == "500" && s.meta.at("motors") == "4" && s.meta.at("to") == "storage", "header: firmware, schema, rates, the settings (but not the WiFi section: its password stays out of the log)");
         { const std::string& hex = s.meta.at("set.rates"); S_rates live; r->get_section(SEC_RATES, &live, sizeof(live)); bool same = hex.size() == 2 * sizeof(live);
           for (size_t i = 0; same && i < sizeof(live); i++) if ((uint8_t)strtol(hex.substr(2 * i, 2).c_str(), nullptr, 16) != ((const uint8_t*)&live)[i]) same = false;
           CHECK(same, "header: the settings the flight was flown with (section rates matches the firmware's)"); }
@@ -1379,7 +1411,7 @@ static void t_tuning_stream() {
     CHECK(tu.air_state == AIR_STATE_AIR && abs((int)tu.gyro_lpf1_hz - (int)lroundf(fc::dyn_lpf_cutoff(q, 250, 500, 5))) <= 4 && abs((int)tu.dterm_lpf1_hz - (int)lroundf(fc::dyn_lpf_cutoff(q, 75, 150, 5))) <= 2,
           "hovering at %.0f %% throttle: state AIR, gyro low-pass 1 at %u Hz, D-term low-pass 1 at %u Hz (they follow the throttle)", thr * 100, tu.gyro_lpf1_hz, tu.dterm_lpf1_hz);
     CHECK(abs((int)tu.tpa - (int)lroundf(100 * (1 - fmaxf(thr - 0.35f, 0.0f)))) <= 2 && tu.anti_gravity < 300, "TPA %u %% at that throttle (65 %% less from 35 %% throttle on)", tu.tpa);
-    CHECK(abs((int)tu.hover - (int)lroundf(100 * (b.plant.hover_cmd() - 0.055f) / 0.945f)) <= 2, "the hover throttle the firmware measured: %u %% (this craft hovers at %.0f %% motor output = %.0f %% throttle)", tu.hover, 100 * b.plant.hover_cmd(), 100 * (b.plant.hover_cmd() - 0.055f) / 0.945f);
+    CHECK(abs((int)tu.hover - (int)lroundf(1000 + 1000 * (b.plant.hover_cmd() - 0.055f) / 0.945f)) <= 20, "the hover throttle the firmware measured: %u us (0.44: Betaflight's unit) (this craft hovers at %.0f %% motor output = %.0f %% throttle)", tu.hover, 100 * b.plant.hover_cmd(), 100 * (b.plant.hover_cmd() - 0.055f) / 0.945f);
     int16_t quiet = 0; for (int a = 0; a < 3; a++) quiet = (int16_t)std::max<int>(quiet, abs(tu.pid_sum[a]));
     b.rc[0] = 1800; int16_t peak = 0; for (int i = 0; i < 30; i++) { r->run(0.01); if (r->latest(STR_TUNING, tu)) peak = (int16_t)std::max<int>(peak, abs(tu.pid_sum[0])); } b.rc[0] = 1500; r->run(1.0);
     CHECK(quiet < 300 && peak > 2 * quiet + 200, "the PID sum of roll: %.1f in the steady hover, up to %.1f while the craft is rolled by the stick", quiet * 0.1, peak * 0.1);
@@ -2253,6 +2285,20 @@ static void t_ekf() {
       CHECK((r->tel().ekf_flags & EKF_FLAGS_USED_FOR_NAV) && far < 0.8f, "nav.ekf = NAV: Position Hold flies on the EKF's position and heading - within %.2f m for 10 s", far);
       b.rc[1] = 1750; r->run(2.5); const float vf = b.plant.v_forward(), vr = b.plant.v_right(); b.rc[1] = 1500; r->run(8.0);
       CHECK(vf > 1.5f && fabsf(vr) < 0.5f && hypotf(b.plant.vn, b.plant.ve) < 0.3f, "stick forwards: %.1f m/s along the nose (%.1f sideways); let go: stops", vf, vr); }
+    // the GPS solution jumps 12 m north (multipath, a new satellite set) and stays there: the estimators are reset to it after a
+    // while. The craft must stay where it is - a reset moves the hold target with the position (ArduPilot handle_ekf_xy_reset)
+    { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.nav.ekf = EKF_MODE_NAV; b.plant.set_tilt(0, 0, 60); }, false); VirtualBoard& b = r->board;
+      r->run(6.0); b.rc[7] = 2000; nav_takeoff(*r, 4.0); r->run(3.0);
+      const float n0 = b.plant.pn, e0 = b.plant.pe; b.gps_jump_n = 12.0; float far = 0; bool nav_ekf = true;
+      for (int i = 0; i < 200; i++) { r->run(0.1); far = fmaxf(far, hypotf(b.plant.pn - n0, b.plant.pe - e0)); nav_ekf &= (r->tel().ekf_flags & EKF_FLAGS_USED_FOR_NAV) != 0; }
+      CHECK(nav_ekf && far < 0.5f, "Position Hold on the EKF, the GPS jumps 12 m and stays: the craft stays within %.1f m (it does not fly to the old target)", far); }
+    { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { gps_compass(s, b); s.nav.ekf = EKF_MODE_NAV; s.general.fly_style = FLY_STYLE_FLYCAM; s.general.flycam_hold = FLYCAM_HOLD_LOITER; b.plant.set_tilt(0, 0, 60); }, false); VirtualBoard& b = r->board;
+      r->run(6.0); b.rc[2] = 1500; r->run(0.5); b.rc[4] = 2000; r->run(0.5);
+      b.rc[2] = 1800; for (int i = 0; i < 100 && b.plant.z < 3.0f; i++) r->run(0.05);
+      b.rc[2] = 1500; r->run(5.0);
+      const float n0 = b.plant.pn, e0 = b.plant.pe; b.gps_jump_n = 12.0; float far = 0; bool loiter = true;
+      for (int i = 0; i < 200; i++) { r->run(0.1); far = fmaxf(far, hypotf(b.plant.pn - n0, b.plant.pe - e0)); loiter &= ((r->tel().modes >> fc::M_LOITER) & 1u) && (r->tel().ekf_flags & EKF_FLAGS_USED_FOR_NAV); }
+      CHECK(loiter && b.plant.z > 1.5f && far < 0.5f, "the same in Loiter (Flycam): the craft stays within %.2f m", far); }
     { auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { s.sensors.mag_enabled = 0; s.nav.ekf = EKF_MODE_NAV; b.plant.set_tilt(0, 0, 60); }, false); VirtualBoard& b = r->board;
       r->run(6.0); nav_takeoff(*r, 4.0);                      // no compass: the usual estimators never know the heading, so Position Hold is refused
       T_nav n{}; b.rc[7] = 2000; r->run(0.5);
@@ -2923,6 +2969,69 @@ static void t_msp_configurator() {
       CHECK(ask(ml2, mt2, msp::FC_VARIANT) && memcmp(mt2.out.data() + 5, "WBRX", 4) == 0, "msp.identity WINDBURST: WBRX");
       const uint8_t p0 = q->fw->settings.pid.p[0];
       CHECK(!ask(ml2, mt2, msp::SET_PID, pid) && q->fw->settings.pid.p[0] == p0, "msp.writes off: SET_PID refused"); }
+    // 0.44: the Motors tab's test (MSP_SET_MOTOR) spins the virtual ESC through the firmware's own motor test
+    {   auto q = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.motors.protocol = ESC_PROTOCOL_DSHOT600; }); q->run(3.0);
+        MemTransport mt3; app::MspLink ml3(q->fw->host, mt3, &q->fw->settings); HostMotorHw* hw = VirtualBoard::host_hw(q->app());
+        auto setm = [&](uint16_t m2) { std::vector<uint8_t> f; for (int i = 0; i < 8; i++) { const uint16_t v = i == 1 ? m2 : 1000; f.push_back((uint8_t)v); f.push_back((uint8_t)(v >> 8)); } return ask(ml3, mt3, msp::SET_MOTOR, f); };
+        bool ok = true; for (int i = 0; i < 10; i++) { ok = ok && setm(1200); q->run(0.05); }
+        const int slot = q->app().motors.cfg().order[1];
+        CHECK(ok && hw->last.value[slot] > 400 && hw->last.value[slot] < 500 && hw->last.value[q->app().motors.cfg().order[0]] == 0,
+              "SET_MOTOR motor 2 at 1200 us: that ESC gets about 20 %% (DShot %u), the others stand", hw->last.value[slot]);
+        q->run(1.0); CHECK(hw->last.value[slot] == 0, "the App stops sending: the motor stops by itself (DShot %u)", hw->last.value[slot]);
+        for (int i = 0; i < 5; i++) { setm(1300); q->run(0.05); } setm(1000); q->run(0.05);
+        CHECK(hw->last.value[slot] == 0, "back to 1000 us: stopped at once"); }
+    // 0.44: the Betaflight App's CLI over MSP (app/msp_cli.h): STX, a line, ETX; the Ports tab assigns the serial ports with it
+    {   auto q = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.sensors.gps_enabled = 1; s.gps.provider = GPS_PROVIDER_UBLOX; s.receiver.protocol = RX_PROTOCOL_CRSF; s.ports.assign = PORT_ASSIGN_AUTO; });
+        q->run(2.0);
+        MemTransport mt4; app::MspLink ml4(q->fw->host, mt4, &q->fw->settings);
+        auto cli = [&](const char* line) {
+            mt4.out.clear(); ml4.on_byte(0x02); for (const char* p = line; *p; p++) ml4.on_byte((uint8_t)*p); ml4.on_byte('\n'); ml4.on_byte(0x03);
+            std::string t(mt4.out.begin(), mt4.out.end()); return t;
+        };
+        std::string t = cli("peripherals");
+        CHECK(t.size() > 2 && t.front() == 0x02 && t.back() == 0x03 && t.find("serial UART0: msp*") != std::string::npos && t.find("serial UART1: gps*") != std::string::npos
+              && t.find("serial UART2: rx*") != std::string::npos, "peripherals between STX and ETX: UART0 the app link, UART1 the GPS, UART2 the receiver (AUTO)");
+        t = cli("get gps_uart");
+        CHECK(t.find("gps_uart = UART1") != std::string::npos && t.find("Allowed values: NONE, UART1, UART2") != std::string::npos, "get gps_uart: UART1, and the values it takes");
+        t = cli("set gps_uart = UART2");
+        CHECK(t.find("###ERROR") == std::string::npos && q->fw->settings.ports.assign == PORT_ASSIGN_TABLE && q->fw->settings.ports.function[2] == app::PF_GPS && q->fw->settings.ports.function[1] == app::PF_NONE
+              && (q->fw->server.flags() & SF_DIRTY), "set gps_uart = UART2: the ports table (the receiver's UART2 handed over: the App warns of that first), unsaved");
+        t = cli("get rx_uart"); CHECK(t.find("rx_uart = NONE") != std::string::npos, "the receiver has lost its UART: rx_uart = NONE");
+        t = cli("set rx_uart = UART1"); t = cli("peripherals");
+        CHECK(t.find("serial UART1: rx*") != std::string::npos && t.find("serial UART2: gps*") != std::string::npos, "the two swapped");
+        t = cli("set gps_uart = UART0"); CHECK(t.find("###ERROR") != std::string::npos, "UART0 carries the app link: refused");
+        t = cli("get pid.p"); CHECK(t.find("pid.p") != std::string::npos, "this firmware's own commands as well (get pid.p)");
+        // a stray 0x02 inside a binary frame of the app's protocol is not taken for a command
+        mt4.out.clear(); ml4.on_byte(0x02); ml4.on_byte(0x81); ml4.on_byte('s'); ml4.on_byte(0x03);
+        CHECK(mt4.out.empty(), "STX followed by a byte that is not text: dropped, no answer");
+        const int boots = q->boots; t = cli("save"); q->run(0.5);
+        { wbp::Settings f; wbp::SettingsStore st(q->flash); st.load(f); CHECK(f.ports.function[1] == app::PF_SERIAL_RX && q->boots == boots + 1, "save: in the flash, then a restart (Betaflight's save)"); }
+    }
+    // 0.44: the Betaflight App's connect sequence (serial_backend.ts) against the firmware - every request answered '>', and the
+    // App holds the arming off while it is there (MSP_SET_ARMING_DISABLED, Betaflight's ARMING_DISABLED_MSP)
+    {   auto q = nav_rig([](wbp::Settings&, VirtualBoard&) {}); q->run(3.0); VirtualBoard& qb = q->board;
+        MemTransport m3; app::MspLink l3(q->fw->host, m3, &q->fw->settings);
+        auto ask2 = [&](uint16_t cmd, std::vector<uint8_t> p) {
+            std::vector<uint8_t> f = {'$', 'X', '<', 0, (uint8_t)cmd, (uint8_t)(cmd >> 8), (uint8_t)p.size(), (uint8_t)(p.size() >> 8)};
+            for (uint8_t b : p) f.push_back(b);
+            uint8_t c = 0; for (size_t i = 3; i < f.size(); i++) c = msp::crc8_dvb_s2(c, f[i]); f.push_back(c);
+            m3.out.clear(); for (uint8_t b : f) l3.on_byte(b); return m3.out.size() >= 9 && m3.out[2] == '>'; };
+        const uint8_t seq[] = {msp::API_VERSION, msp::FC_VARIANT, msp::FC_VERSION, msp::BUILD_INFO, msp::BOARD_INFO, msp::STATUS, msp::UID, msp::NAME};
+        int bad = 0; for (uint8_t c : seq) if (!ask(l3, m3, c)) bad++;
+        for (uint8_t t : {5, 2, 1}) if (!ask2(msp::TEXT_GET, {t})) bad++;
+        if (!ask(l3, m3, msp::SET_ARMING_DISABLED, {1})) bad++;
+        if (!ask(l3, m3, msp::SET_RTC, {0, 0, 0, 0, 0, 0})) bad++;
+        const uint8_t more[] = {msp::FEATURE_CONFIG, msp::BATTERY_CONFIG, msp::BLACKBOX_CONFIG, msp::DATAFLASH_SUMMARY, msp::SDCARD_SUMMARY, msp::ANALOG_DATA, msp::BATTERY_STATE, msp::BOXNAMES, msp::STATUS_EX, msp::RAW_GPS};
+        for (uint8_t c : more) if (!ask(l3, m3, c)) bad++;
+        CHECK(bad == 0, "the App's connect sequence: all %d requests answered (%d refused)", (int)(sizeof(seq) + 3 + 2 + sizeof(more)), bad);
+        qb.rc[4] = 2000; q->run(0.5);
+        CHECK(!q->tel().armed && (q->tel().blockers & ARM_BLOCKER_CONFIGURATOR), "the App connected: arming refused (CONFIGURATOR)");
+        qb.rc[4] = 1000; q->run(0.3); for (int k = 0; k < 10; k++) { ask(l3, m3, msp::STATUS); q->run(0.3); }
+        CHECK(q->tel().blockers & ARM_BLOCKER_CONFIGURATOR, "still held while the App polls (3 s)");
+        ask(l3, m3, msp::SET_ARMING_DISABLED, {0}); q->run(0.3); qb.rc[4] = 2000; q->run(0.5);
+        CHECK(q->tel().armed, "SET_ARMING_DISABLED 0 (the App leaving): it arms");
+        qb.rc[4] = 1000; q->run(0.5); ask(l3, m3, msp::SET_ARMING_DISABLED, {1}); q->run(3.5); qb.rc[4] = 2000; q->run(0.5);
+        CHECK(q->tel().armed, "the App gone without a word (3 s silent): arming allowed again"); }
 }
 
 // ---- the waypoint mission (0.37): a plan in the settings, the real firmware flies it on the virtual board
@@ -3245,6 +3354,32 @@ static void t_loiter_fw() {
 
 // 0.42: crash flip on the virtual board: a CRASHFLIP switch, the craft held upside down; the ESCs hear DShot 21 at the arming and
 // 20 after it, the sticks pick the motors; the settings reach the core (motor %, auto re-arm); a pulse protocol refuses it
+// 0.44: 3D on the virtual board (Betaflight feature 3D): the DShot values on the wire, the 3D switch from the settings
+static void t_mode3d_fw() {
+    printf("[3D] reversible motors on the virtual board: DShot 1048..2047 forward, 48..1047 reversed\n");
+    auto r = nav_rig([](wbp::Settings& s, VirtualBoard&) { s.motors.protocol = ESC_PROTOCOL_DSHOT600; s.motors.mode3d = 1;
+                                                          s.modes.mode[4] = MODE_3D; s.modes.aux[4] = 4; s.modes.lo[4] = 1700; s.modes.hi[4] = 2100; });
+    VirtualBoard& b = r->board; HostMotorHw* hw = VirtualBoard::host_hw(r->app()); b.plant.held = true; r->run(3.0);
+    auto all = [&](int lo, int hi) { for (int i = 0; i < 4; i++) if (hw->last.value[i] < lo || hw->last.value[i] > hi) return false; return true; };
+    b.rc[2] = 1000; b.rc[4] = 2000; r->run(0.4);
+    CHECK(!r->tel().armed && (r->tel().blockers & ARM_BLOCKER_THROTTLE_HIGH) && all(0, 0), "3D, the stick at the bottom (full reverse): arming refused, motors stopped (DShot 0)");
+    b.rc[4] = 1000; r->run(0.3); b.rc[2] = 1500; r->run(0.3); b.rc[4] = 2000; r->run(0.5);
+    CHECK(r->tel().armed && all(1048, 1200), "the stick centred: armed, the motors at idle forward (%u %u %u %u)", hw->last.value[0], hw->last.value[1], hw->last.value[2], hw->last.value[3]);
+    b.rc[2] = 1800; r->run(0.3);
+    CHECK(all(1300, 2047), "1800: forward (%u)", hw->last.value[0]);
+    b.rc[2] = 1200; r->run(0.3);
+    CHECK(all(250, 1047), "1200: reversed (%u)", hw->last.value[0]);
+    b.rc[2] = 1500; r->run(0.3);
+    CHECK(all(48, 200), "back to the centre: reversed idle (%u)", hw->last.value[0]);
+    b.rc[8] = 2000; b.rc[2] = 1200; r->run(0.3);
+    CHECK(all(1048, 1400), "the 3D switch on: 3D off, 1200 = a little forward (%u)", hw->last.value[0]);
+    b.rc[8] = 1000; b.rc[4] = 1000; r->run(0.3);
+    CHECK(!r->tel().armed && all(0, 0), "disarmed: DShot 0");
+    S_motors m; r->get_section(SEC_MOTORS, &m, sizeof(m)); m.protocol = ESC_PROTOCOL_DRONECAN; m.mode3d = 1; r->set_section(SEC_MOTORS, &m, sizeof(m));
+    S_motors back; r->get_section(SEC_MOTORS, &back, sizeof(back));
+    CHECK(back.mode3d == 0, "the app sets DroneCAN ESCs with 3D: 3D is turned off (the rule), and read back so");
+}
+
 static void t_crash_flip_fw() {
     printf("[crash flip] upside down on the virtual board: DShot 21, the sticks, DShot 20\n");
     auto flip_rig = [](uint8_t protocol, bool auto_rearm, uint8_t motor_pct, uint8_t rate = 0) {
@@ -3327,6 +3462,42 @@ static void t_flycam_fw() {
         CHECK(z > 1.0f && fabsf(b.plant.z - z) < 0.4f, "pushed up it took off; back in the middle it holds %.1f m (%.2f m later)", z, b.plant.z); }
     {   auto r = nav_rig([](wbp::Settings&, VirtualBoard&) {}); VirtualBoard& b = r->board; r->run(3.0); b.rc[2] = 1500; r->run(0.5); b.rc[4] = 2000; r->run(0.5);
         CHECK(!r->tel().armed && (r->tel().blockers & ARM_BLOCKER_THROTTLE_HIGH) && !((r->tel().modes >> fc::M_ALTHOLD) & 1u), "FPV (the default): the throttle in the middle refuses the arming, no mode forced"); }
+    // 0.44 general.flycam_attitude STABILIZE: the same Flycam on ArduPilot's attitude controller - holding, flying out, and the
+    // rescue bringing it home when the link is lost
+    {   auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { rescue_setup(s, b); s.general.fly_style = FLY_STYLE_FLYCAM; s.general.flycam_attitude = FLYCAM_ATTITUDE_STABILIZE; }, false);
+        VirtualBoard& b = r->board; T_nav n{}; r->run(6.0); b.rc[2] = 1500; r->run(0.5);
+        const uint32_t m = r->tel().modes;
+        CHECK(((m >> fc::M_STABILIZE) & 1u) && !((m >> fc::M_ANGLE) & 1u) && ((m >> fc::M_ALTHOLD) & 1u) && ((m >> fc::M_LOITER) & 1u), "flycam_attitude STABILIZE: Stabilize + Altitude Hold + Loiter (0x%x)", m);
+        b.rc[4] = 2000; r->run(0.5); b.rc[2] = 1800; for (int i = 0; i < 200 && b.plant.z < 5.0f; i++) r->run(0.05);
+        b.rc[2] = 1500; r->run(3.0); const float n0 = b.plant.pn, e0 = b.plant.pe; float far = 0;
+        for (int i = 0; i < 50; i++) { r->run(0.1); far = fmaxf(far, hypotf(b.plant.pn - n0, b.plant.pe - e0)); }
+        CHECK(r->tel().armed && b.plant.z > 3.0f && far < 1.0f, "it takes off and holds the place on GPS (%.2f m)", far);
+        b.rc[1] = 1800; r->run(8.0); b.rc[1] = 1500; r->run(4.0); const float d0 = hypotf(b.plant.pn, b.plant.pe);
+        b.tx_on = false; float closest = d0; for (int i = 0; i < 600 && r->tel().armed; i++) { r->run(0.1); closest = fminf(closest, hypotf(b.plant.pn, b.plant.pe)); }
+        CHECK(d0 > 15.0f && closest < 3.0f && !r->tel().armed && b.plant.z < 0.2f, "flown out %.0f m, link lost: the rescue brings it home on Stabilize (%.1f m from home) and lands", d0, closest); (void)n; }
+}
+
+// 0.44 the in-flight autotune on the virtual board: the AUTOTUNE switch in Altitude Hold, the progress on the tuning stream,
+// landed and disarmed with the switch on the result is in the pid section (sliders off) and in the flash
+static void t_autotune_fw() {
+    printf("[autotune] the AUTOTUNE switch on the virtual board: tuned in the air, saved at the disarm\n");
+    auto r = nav_rig([](wbp::Settings& s, VirtualBoard& b) { s.modes.mode[4] = MODE_AUTOTUNE; s.modes.aux[4] = 4; s.modes.lo[4] = 1700; s.modes.hi[4] = 2100;
+                                                             s.pid.autotune_axes = 1; b.plant.make_five_inch(); b.plant.delay_s = 0.005f; }, false);
+    VirtualBoard& b = r->board; r->run(3.0);
+    const uint8_t p0 = r->app().core.cfg.pid.p[0], slider0 = r->fw->settings.pid.slider_mode;
+    nav_takeoff(*r, 4.0); const float z0 = b.plant.z;
+    r->stream(STR_TUNING, 10); b.rc[8] = 2000; T_tuning tu{}; bool twitching = false; float zdev = 0; int i = 0;
+    for (; i < 3000; i++) { r->run(0.1); if (r->latest(STR_TUNING, tu)) { twitching |= tu.at_state == AUTOTUNE_STATE_TWITCHING; if (tu.at_state == AUTOTUNE_STATE_FINISHED || tu.at_state == AUTOTUNE_STATE_FAILED) break; } zdev = fmaxf(zdev, fabsf(b.plant.z - z0)); }
+    CHECK(z0 > 1.0f && twitching && tu.at_state == AUTOTUNE_STATE_FINISHED && (tu.at_done & 1u) && zdev < 1.5f,
+          "the switch on in Altitude Hold: TWITCHING on the tuning stream, roll FINISHED after %.0f s (state %u), the height held (%.2f m off)", i * 0.1, tu.at_state, zdev);
+    CHECK(r->app().core.cfg.pid.p[0] == p0, "flying on after the tune: the original gains until the disarm");
+    b.rc[2] = 1000; for (int k = 0; k < 300 && r->tel().armed; k++) r->run(0.1);
+    b.rc[4] = 1000; r->run(1.0);
+    const uint8_t p1 = r->app().core.cfg.pid.p[0];
+    CHECK(!r->tel().armed && p1 != p0 && r->fw->settings.pid.slider_mode == SLIDER_MODE_OFF && slider0 != SLIDER_MODE_OFF,
+          "landed, disarmed with the switch on: roll P %u -> %u in use, the sliders off (they would compute it away)", p0, p1);
+    r->run(2.0);
+    { wbp::Settings s; wbp::SettingsStore st(r->flash); st.load(s); CHECK(s.pid.p[0] == p1 && s.pid.slider_mode == SLIDER_MODE_OFF, "the flash holds it (P %u)", s.pid.p[0]); }
 }
 
 // 0.43: the tuning as MAVLink parameters on the virtual board (ELRS MAVLink link): the whole list, a PID changed from the ground
@@ -3387,8 +3558,10 @@ int main() {
         if (!strcmp(only, "mavlink")) { t_mavlink(); t_mavlink_rx(); t_mavlink_gcs(); }
         if (!strcmp(only, "loiter")) t_loiter_fw();
         if (!strcmp(only, "crashflip")) t_crash_flip_fw();
+        if (!strcmp(only, "mode3d")) t_mode3d_fw();
         if (!strcmp(only, "flowcal")) t_flow_cal_fw();
         if (!strcmp(only, "flycam")) t_flycam_fw();
+        if (!strcmp(only, "autotune")) t_autotune_fw();
         if (!strcmp(only, "params")) t_mav_params_fw();
         if (!strcmp(only, "osd")) t_osd();
         if (!strcmp(only, "switch")) t_switch_modes();
@@ -3411,6 +3584,7 @@ int main() {
     t_motor_test();
     t_acc_cal();
     t_level_trim();
+    t_board_align_fw();
     t_inflight_trim();
     t_runaway();
     t_tuning_stream();
@@ -3455,8 +3629,10 @@ int main() {
     t_mavlink_gcs();
     t_loiter_fw();
     t_crash_flip_fw();
+    t_mode3d_fw();
     t_flow_cal_fw();
     t_flycam_fw();
+    t_autotune_fw();
     t_mav_params_fw();
     t_esc_passthrough();
     t_ekf();

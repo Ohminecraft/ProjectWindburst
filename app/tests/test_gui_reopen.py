@@ -30,12 +30,16 @@ class Board:
         threading.Thread(target=back, daemon=True).start()
 
 
+from wbclient.schema import Schema
+
+
 class FakeClient:
     board = None
 
     def __init__(self, port, baud, schema=None, timeout=1.0):
         self.port_name, self.baud, self.info, self.lost = port, baud, None, False
         self.on_log = self.on_disconnect = self.on_raw = None
+        self.schema, self.schema_note = schema or Schema(), None     # (0.43: the gui takes the schema the client picked)
 
     def open(self, hello=True):
         if not self.board.present:
